@@ -1,0 +1,58 @@
+{
+ "repo": "Arize-ai/phoenix",
+ "number": 16002,
+ "url": "https://github.com/Arize-ai/phoenix/pull/16002",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-09-17T23:48:02Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-09-17T23:48:51Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-09-18T22:49:05Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-09-18T23:44:54Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "packages/phoenix-evals/src/phoenix/evals/llm/prompts.py",
+   "created_at": "2026-09-17T23:48:02Z",
+   "body": "`normalize_role(\"developer\")` returns `MessageRole.SYSTEM`, so `PromptTemplate.render()` loses the distinction between `\"developer\"` and `\"system\"`.\n\nThis breaks the LiteLLM path. `LiteLLMAdapter` deliberately preserves `\"developer\"` for routed OpenAI reasoning models, but rendered templates take the typed-message path and become `\"system\"`:\n\n```python\nrendered = PromptTemplate(\n    template=[{\"role\": \"developer\", \"content\": \"be strict\"}]\n).render({})\n\nadapter._build_messages(rendered)\n# [{\"role\": \"system\", \"content\": \"be strict\"}]\n\nadapter._build_messages([{\"role\": \"developer\", \"content\": \"be strict\"}])\n# [{\"role\": \"developer\", \"content\": \"be strict\"}]\n```\n\nCould we preserve `\"developer\"` as a distinct `MessageRole` through rendering, then map it explicitly in each adapter? We should also add a regression test covering `PromptTemplate.render()` followed by `LiteLLMAdapter._build_messages()`."
+  },
+  {
+   "role": "author",
+   "path": "packages/phoenix-evals/src/phoenix/evals/llm/prompts.py",
+   "created_at": "2026-09-18T22:49:05Z",
+   "body": "Fixed in d3e2cc8 — gave \"developer\" its own `MessageRole.DEVELOPER` instead of folding it into SYSTEM, so it survives `render()` and each adapter maps it explicitly:\n\n```python\nrendered = PromptTemplate(\n    template=[{\"role\": \"developer\", \"content\": \"be strict\"}]\n).render({})\n\nadapter._build_messages(rendered)\n# [{\"role\": \"developer\", \"content\": \"be strict\"}]\n```\n\nPer adapter:\n- **LiteLLM**: `DEVELOPER -> \"developer\"` explicitly — the one adapter where the wire distinction actually matters.\n- **OpenAI**: SYSTEM and DEVELOPER both defer to the existing model-aware `_system_role()`, matching current dict-path behavior (the caller's exact spelling doesn't override what the target model accepts).\n- **Anthropic/Google/LangChain**: DEVELOPER folds into the same system-extraction / `SystemMessage` path as SYSTEM — none of them have a separate wire role for it.\n\nAdded the regression test you asked for (`PromptTemplate.render()` -> `LiteLLMAdapter._build_messages()`), plus a typed `MessageRole.DEVELOPER` case for each of the other four adapters. Verified red against the pre-fix code: `DEVELOPER` didn't exist as an enum member, and LangChain's typed path would otherwise fall through to the \"unknown role\" `HumanMessage` default rather than `SystemMessage`.\n\nAlso found and fixed one more spot this touched: `phoenix_prompt_to_prompt_template` (used to convert stored Phoenix prompt versions) delegates to the same `normalize_role`, so a \"Developer\" role there was silently becoming \"system\" too — updated the existing test to assert it now stays \"developer\", consistent with the rest of the fix.\n\nFull `phoenix-evals` suite green: 702 passed, 1 skipped."
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-09-08T23:08:33Z",
+   "body": "All contributors have signed the CLA  ✍️ ✅<br/><sub>Posted by the ****CLA Assistant Lite bot****.</sub>"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-09-09T16:47:21Z",
+   "body": "I have read the CLA Document and I hereby sign the CLA"
+  }
+ ]
+}

@@ -1,0 +1,63 @@
+{
+ "repo": "deepset-ai/haystack",
+ "number": 12662,
+ "url": "https://github.com/deepset-ai/haystack/pull/12662",
+ "title": "fix: honour max_workers in the multi-retrievers' run_async",
+ "merged_at": "2026-09-23T06:55:52Z",
+ "files": [
+  {
+   "filename": "haystack/components/retrievers/multi_query_embedding_retriever.py",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 2,
+   "patch": "@@ -80,7 +80,8 @@ def __init__(self, *, retriever: EmbeddingRetriever, query_embedder: TextEmbedde\n \n         :param retriever: The embedding-based retriever to use for document retrieval.\n         :param query_embedder: The query embedder to convert text queries to embeddings.\n-        :param max_workers: Maximum number of worker threads for parallel processing.\n+        :param max_workers: Maximum number of worker threads in `run` and of concurrent retriever calls in\n+            `run_async`.\n         \"\"\"\n         self.retriever = retriever\n         self.query_embedder = query_embedder\n@@ -170,7 +171,14 @@ async def run_async(\n \n         await self.warm_up_async()\n \n-        tasks = [asyncio.create_task(self._run_one_async(query, retriever_kwargs)) for query in queries]\n+        # Bound concurrency to max_workers, mirroring the ThreadPoolExecutor in the sync `run`.\n+        semaphore = asyncio.Semaphore(max(1, self.max_workers))\n+\n+        async def _bounded_run_one(query: str) -> list[Document] | None:\n+            async with semaphore:\n+                return await self._run_one_async(query, retriever_kwargs)\n+\n+        tasks = [asyncio.create_task(_bounded_run_one(query)) for query in queries]\n         results = await _gather_tasks_with_cancel(tasks)\n         docs: list[Document] = [doc for result in results if result for doc in result]\n         docs = _deduplicate_documents(docs)"
+  },
+  {
+   "filename": "haystack/components/retrievers/multi_query_text_retriever.py",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 2,
+   "patch": "@@ -63,7 +63,8 @@ def __init__(self, *, retriever: TextRetriever, max_workers: int = 3) -> None:\n         Initialize MultiQueryTextRetriever.\n \n         :param retriever: The text-based retriever to use for document retrieval.\n-        :param max_workers: Maximum number of worker threads for parallel processing. Default is 3.\n+        :param max_workers: Maximum number of worker threads in `run` and of concurrent retriever calls in\n+            `run_async`. Default is 3.\n         \"\"\"\n         self.retriever = retriever\n         self.max_workers = max_workers\n@@ -148,7 +149,14 @@ async def run_async(\n \n         await self.warm_up_async()\n \n-        tasks = [asyncio.create_task(self._run_one_async(query, retriever_kwargs)) for query in queries]\n+        # Bound concurrency to max_workers, mirroring the ThreadPoolExecutor in the sync `run`.\n+        semaphore = asyncio.Semaphore(max(1, self.max_workers))\n+\n+        async def _bounded_run_one(query: str) -> list[Document] | None:\n+            async with semaphore:\n+                return await self._run_one_async(query, retriever_kwargs)\n+\n+        tasks = [asyncio.create_task(_bounded_run_one(query)) for query in queries]\n         results = await _gather_tasks_with_cancel(tasks)\n         docs: list[Document] = [doc for result in results if result for doc in result]\n         docs = _deduplicate_documents(docs)"
+  },
+  {
+   "filename": "haystack/components/retrievers/multi_retriever.py",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 6,
+   "patch": "@@ -104,7 +104,7 @@ def __init__(\n             `join_mode`) so that the combined list has a consistent global ranking before it is truncated to\n             `top_k`. If None, all results are returned.\n         :param max_workers:\n-            The maximum number of threads to use for parallel retrieval.\n+            The maximum number of threads in `run` and of concurrent retriever calls in `run_async`.\n         :param join_mode:\n             How to merge results from multiple retrievers. Available modes:\n             - `concatenate`: Combines all results into a single list and deduplicates.\n@@ -313,12 +313,16 @@ async def run_async(\n         if resolved_filters is not None:\n             run_kwargs[\"filters\"] = resolved_filters\n \n+        # Bound concurrency to max_workers, mirroring the ThreadPoolExecutor in the sync `run`.\n+        semaphore = asyncio.Semaphore(max(1, self.max_workers))\n+\n         async def _run_one(name: str, retriever: TextRetriever) -> list[Document]:\n-            try:\n-                result = await _execute_component_async(retriever, **run_kwargs)\n-                return result.get(\"documents\", [])\n-            except Exception as e:\n-                raise RuntimeError(f\"Retriever '{name}' failed: {e}\") from e\n+            async with semaphore:\n+                try:\n+                    result = await _execute_component_async(retriever, **run_kwargs)\n+                    return result.get(\"documents\", [])\n+                except Exception as e:\n+                    raise RuntimeError(f\"Retriever '{name}' failed: {e}\") from e\n \n         tasks = [asyncio.create_task(_run_one(name, retriever)) for name, retriever in retrievers_to_run.items()]\n         document_lists = await _gather_tasks_with_cancel(tasks)"
+  },
+  {
+   "filename": "releasenotes/notes/multi-retrievers-bound-async-concurrency-419ea994ae8c9f6d.yaml",
+   "status": "added",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,9 @@\n+---\n+fixes:\n+  - |\n+    ``MultiQueryTextRetriever``, ``MultiQueryEmbeddingRetriever`` and ``MultiRetriever`` now honour\n+    ``max_workers`` in their ``run_async`` methods. Previously only the synchronous ``run`` bounded fan-out\n+    (via a ``ThreadPoolExecutor``); ``run_async`` launched every sub-query / sub-retriever call at once,\n+    ignoring ``max_workers`` and risking rate limits or connection exhaustion against the underlying\n+    retriever or embedder. ``run_async`` now bounds concurrency with an ``asyncio.Semaphore``, matching the\n+    behaviour of the LLM extractors."
+  },
+  {
+   "filename": "test/components/retrievers/test_multi_query_embedding_retriever_async.py",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -187,6 +187,36 @@ async def run_async(\n \n         assert slow_cancelled is True\n \n+    @pytest.mark.asyncio\n+    async def test_run_async_bounds_concurrency_to_max_workers(self):\n+        state = {\"current\": 0, \"peak\": 0}\n+\n+        @component\n+        class TrackingRetriever:\n+            @component.output_types(documents=list[Document])\n+            def run(\n+                self, query_embedding: list[float], filters: dict[str, Any] | None = None, top_k: int | None = None\n+            ) -> dict[str, Any]:\n+                return {\"documents\": []}\n+\n+            @component.output_types(documents=list[Document])\n+            async def run_async(\n+                self, query_embedding: list[float], filters: dict[str, Any] | None = None, top_k: int | None = None\n+            ) -> dict[str, Any]:\n+                state[\"current\"] += 1\n+                state[\"peak\"] = max(state[\"peak\"], state[\"current\"])\n+                await asyncio.sleep(0.02)\n+                state[\"current\"] -= 1\n+                return {\"documents\": []}\n+\n+        multi_retriever = MultiQueryEmbeddingRetriever(\n+            retriever=TrackingRetriever(), query_embedder=MockTextEmbedder(), max_workers=2\n+        )\n+        await multi_retriever.run_async(queries=[f\"q{i}\" for i in range(8)])\n+\n+        assert state[\"peak\"] <= 2\n+        assert state[\"peak\"] > 1  # the queries do overlap; they are not serialized\n+\n     @pytest.fixture\n     def document_store_with_categorized_docs(self):\n         documents = ["
+  },
+  {
+   "filename": "test/components/retrievers/test_multi_query_text_retriever_async.py",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 0,
+   "patch": "@@ -152,6 +152,34 @@ async def run_async(\n \n         assert slow_cancelled is True\n \n+    @pytest.mark.asyncio\n+    async def test_run_async_bounds_concurrency_to_max_workers(self):\n+        state = {\"current\": 0, \"peak\": 0}\n+\n+        @component\n+        class TrackingRetriever:\n+            @component.output_types(documents=list[Document])\n+            def run(\n+                self, query: str, filters: dict[str, Any] | None = None, top_k: int | None = None\n+            ) -> dict[str, Any]:\n+                return {\"documents\": []}\n+\n+            @component.output_types(documents=list[Document])\n+            async def run_async(\n+                self, query: str, filters: dict[str, Any] | None = None, top_k: int | None = None\n+            ) -> dict[str, Any]:\n+                state[\"current\"] += 1\n+                state[\"peak\"] = max(state[\"peak\"], state[\"current\"])\n+                await asyncio.sleep(0.02)\n+                state[\"current\"] -= 1\n+                return {\"documents\": []}\n+\n+        multi_retriever = MultiQueryTextRetriever(retriever=TrackingRetriever(), max_workers=2)\n+        await multi_retriever.run_async(queries=[f\"q{i}\" for i in range(8)])\n+\n+        assert state[\"peak\"] <= 2\n+        assert state[\"peak\"] > 1  # the queries do overlap; they are not serialized\n+\n     @pytest.mark.asyncio\n     @pytest.mark.integration\n     async def test_run_async_with_filters(self, document_store_with_docs):"
+  },
+  {
+   "filename": "test/components/retrievers/test_multi_retriever.py",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 0,
+   "patch": "@@ -633,6 +633,34 @@ async def run_async(\n         assert len(result[\"documents\"]) == 1\n         assert result[\"documents\"][0].id == \"async1\"\n \n+    @pytest.mark.asyncio\n+    async def test_run_async_bounds_concurrency_to_max_workers(self):\n+        state = {\"current\": 0, \"peak\": 0}\n+\n+        @component\n+        class TrackingRetriever:\n+            @component.output_types(documents=list[Document])\n+            def run(\n+                self, query: str, filters: dict[str, Any] | None = None, top_k: int | None = None\n+            ) -> dict[str, Any]:\n+                return {\"documents\": []}\n+\n+            @component.output_types(documents=list[Document])\n+            async def run_async(\n+                self, query: str, filters: dict[str, Any] | None = None, top_k: int | None = None\n+            ) -> dict[str, Any]:\n+                state[\"current\"] += 1\n+                state[\"peak\"] = max(state[\"peak\"], state[\"current\"])\n+                await asyncio.sleep(0.02)\n+                state[\"current\"] -= 1\n+                return {\"documents\": []}\n+\n+        retriever = MultiRetriever(retrievers={f\"r{i}\": TrackingRetriever() for i in range(8)}, max_workers=2)\n+        await retriever.run_async(query=\"energy\")\n+\n+        assert state[\"peak\"] <= 2\n+        assert state[\"peak\"] > 1  # the retrievers do overlap; they are not serialized\n+\n     @pytest.mark.skipif(os.environ.get(\"OPENAI_API_KEY\", \"\") == \"\", reason=\"OPENAI_API_KEY is not set\")\n     @pytest.mark.integration\n     @pytest.mark.asyncio"
+  }
+ ],
+ "test_files": [
+  "test/components/retrievers/test_multi_query_embedding_retriever_async.py",
+  "test/components/retrievers/test_multi_query_text_retriever_async.py",
+  "test/components/retrievers/test_multi_retriever.py"
+ ]
+}

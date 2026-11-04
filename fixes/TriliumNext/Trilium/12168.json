@@ -1,0 +1,26 @@
+{
+ "repo": "TriliumNext/Trilium",
+ "number": 12168,
+ "url": "https://github.com/TriliumNext/Trilium/pull/12168",
+ "title": "fix(llm): use adaptive thinking for the Claude 5 models",
+ "merged_at": "2026-10-20T11:14:53Z",
+ "files": [
+  {
+   "filename": "packages/trilium-core/src/services/llm/providers/anthropic.spec.ts",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -234,6 +234,44 @@ describe(\"AnthropicProvider tool handling\", () => {\n             });\n         }\n     });\n+\n+    it(\"uses adaptive thinking on the Claude 5 generation, which rejects manual budgets\", () => {\n+        const provider = new AnthropicProvider(\"sk-ant-test\");\n+\n+        const models = [\n+            \"claude-opus-5\", \"claude-opus-5-5\", \"claude-sonnet-5-5\", \"claude-haiku-5-5\",\n+            \"claude-fable-5\", \"claude-fable-5-1\", \"claude-mythos-5-1\"\n+        ];\n+        for (const model of models) {\n+            streamTextMock.mockClear();\n+            provider.chat([{ role: \"user\", content: \"hi\" }], { model, enableExtendedThinking: true });\n+\n+            const opts = streamTextMock.mock.calls[0][0] as any;\n+            expect(opts.providerOptions.anthropic.thinking).toEqual({\n+                type: \"adaptive\",\n+                display: \"summarized\"\n+            });\n+        }\n+    });\n+\n+    it(\"keeps the manual budget on models that require it\", () => {\n+        const provider = new AnthropicProvider(\"sk-ant-test\");\n+\n+        const models = [\n+            \"claude-haiku-4-5-20251001\", \"claude-opus-4-5\", \"claude-sonnet-4-5-20250929\",\n+            \"claude-mythos-preview\"\n+        ];\n+        for (const model of models) {\n+            streamTextMock.mockClear();\n+            provider.chat([{ role: \"user\", content: \"hi\" }], { model, enableExtendedThinking: true });\n+\n+            const opts = streamTextMock.mock.calls[0][0] as any;\n+            expect(opts.providerOptions.anthropic.thinking).toEqual({\n+                type: \"enabled\",\n+                budgetTokens: 10000\n+            });\n+        }\n+    });\n });\n \n /**"
+  },
+  {
+   "filename": "packages/trilium-core/src/services/llm/providers/anthropic.ts",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 5,
+   "patch": "@@ -24,13 +24,15 @@ const BROWSER_ACCESS_HEADER = { \"anthropic-dangerous-direct-browser-access\": \"tr\n const CACHE_CONTROL = { anthropic: { cacheControl: { type: \"ephemeral\" as const } } };\n \n /**\n- * Models that support adaptive extended thinking. Opus 4.7 / 4.8 and Sonnet 5\n- * reject the manual `{ type: \"enabled\", budgetTokens }` form with a 400 and\n- * accept adaptive only; Opus 4.6 and Sonnet 4.6 accept both but prefer adaptive.\n- * Everything else (older Opus/Sonnet, Haiku 4.5) only supports the manual budget\n+ * Models that support adaptive extended thinking. Opus 4.7 / 4.8 and the whole\n+ * Claude 5 generation (Opus, Sonnet, Haiku, Fable, Mythos 5+) reject the manual\n+ * `{ type: \"enabled\", budgetTokens }` form with a 400 and accept adaptive only;\n+ * Opus 4.6 and Sonnet 4.6 accept both but prefer adaptive. Everything else\n+ * (older Opus/Sonnet, Haiku 4.5, Mythos Preview) only supports the manual budget\n  * form.\n  */\n-const ADAPTIVE_THINKING_MODELS = /^claude-(?:opus-4-[678]|sonnet-(?:4-6|5))/;\n+const ADAPTIVE_THINKING_MODELS =\n+    /^claude-(?:opus-4-[678]|sonnet-4-6|(?:opus|sonnet|haiku|mythos)-[5-9]|fable-)/;\n \n export class AnthropicProvider extends BaseProvider {\n     name = \"anthropic\";"
+  }
+ ],
+ "test_files": [
+  "packages/trilium-core/src/services/llm/providers/anthropic.spec.ts"
+ ]
+}

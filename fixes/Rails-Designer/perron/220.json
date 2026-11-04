@@ -1,0 +1,56 @@
+{
+ "repo": "Rails-Designer/perron",
+ "number": 220,
+ "url": "https://github.com/Rails-Designer/perron/pull/220",
+ "title": "Order feeds by the publication date, including one from the filename",
+ "merged_at": "2026-11-02T18:45:55Z",
+ "files": [
+  {
+   "filename": "lib/perron/site/builder/feeds/atom.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -32,7 +32,7 @@ def generate\n           def resources\n             (@resources || @collection.resources)\n               .reject { it.metadata.feed == false }\n-              .sort_by { it.metadata.published_at || it.metadata.updated_at || Time.current }\n+              .sort_by { it.published_at || it.metadata.updated_at || Time.current }\n               .reverse\n               .take(feed_configuration.max_items)\n           end"
+  },
+  {
+   "filename": "lib/perron/site/builder/feeds/json.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -32,7 +32,7 @@ def generate\n           def resources\n             (@resources || @collection.resources)\n               .reject { it.metadata.feed == false }\n-              .sort_by { it.metadata.published_at || it.metadata.updated_at || Time.current }\n+              .sort_by { it.published_at || it.metadata.updated_at || Time.current }\n               .reverse\n               .take(feed_configuration.max_items)\n           end"
+  },
+  {
+   "filename": "lib/perron/site/builder/feeds/rss.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -32,7 +32,7 @@ def generate\n           def resources\n             (@resources || @collection.resources)\n               .reject { it.metadata.feed == false }\n-              .sort_by { it.metadata.published_at || it.metadata.updated_at || Time.current }\n+              .sort_by { it.published_at || it.metadata.updated_at || Time.current }\n               .reverse\n               .take(feed_configuration.max_items)\n           end"
+  },
+  {
+   "filename": "test/perron/site/builder/feeds/atom_test.rb",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -33,6 +33,22 @@ class Perron::Site::Builder::Feeds::AtomTest < ActiveSupport::TestCase\n     end\n   end\n \n+  test \"orders by publication date, whether it comes from the filename or the frontmatter\" do\n+    directory = Rails.root.join(\"app/content/posts\")\n+    filename_dated = directory.join(\"2020-01-01-filename-dated.md\")\n+    frontmatter_dated = directory.join(\"frontmatter-dated.md\")\n+    File.write(filename_dated, \"---\\ntitle: Filename dated\\n---\\n\\nOld.\\n\")\n+    File.write(frontmatter_dated, \"---\\ntitle: Frontmatter dated\\npublished_at: 2025-12-01\\n---\\n\\nNew.\\n\")\n+\n+    resources = [filename_dated, frontmatter_dated].map { Content::Post.new(it.to_s) }\n+    builder = Perron::Site::Builder::Feeds::Atom.new(collection: @posts, resources: resources)\n+    atom = Nokogiri::XML(builder.generate).remove_namespaces!\n+\n+    assert_equal [\"Frontmatter dated\", \"Filename dated\"], atom.xpath(\"//entry/title\").map(&:text)\n+  ensure\n+    FileUtils.rm_f([filename_dated, frontmatter_dated])\n+  end\n+\n   test \"respects max_items configuration\" do\n     @posts.configuration.feeds.atom.stub(:max_items, 1) do\n       atom = Nokogiri::XML(@builder.generate).remove_namespaces!"
+  },
+  {
+   "filename": "test/perron/site/builder/feeds/json_test.rb",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -24,6 +24,22 @@ class Perron::Site::Builder::Feeds::JsonTest < ActiveSupport::TestCase\n     end\n   end\n \n+  test \"orders by publication date, whether it comes from the filename or the frontmatter\" do\n+    directory = Rails.root.join(\"app/content/posts\")\n+    filename_dated = directory.join(\"2020-01-01-filename-dated.md\")\n+    frontmatter_dated = directory.join(\"frontmatter-dated.md\")\n+    File.write(filename_dated, \"---\\ntitle: Filename dated\\n---\\n\\nOld.\\n\")\n+    File.write(frontmatter_dated, \"---\\ntitle: Frontmatter dated\\npublished_at: 2025-12-01\\n---\\n\\nNew.\\n\")\n+\n+    resources = [filename_dated, frontmatter_dated].map { Content::Post.new(it.to_s) }\n+    builder = Perron::Site::Builder::Feeds::Json.new(collection: @collection, resources: resources)\n+    json = JSON.parse(builder.generate)\n+\n+    assert_equal [\"Frontmatter dated\", \"Filename dated\"], json[\"items\"].map { it[\"title\"] }\n+  ensure\n+    FileUtils.rm_f([filename_dated, frontmatter_dated])\n+  end\n+\n   test \"configured feed name and description\" do\n     @collection.configuration.feeds.json.stub(:title, \"Custom JSON title\") do\n       json = JSON.parse(@builder.generate)"
+  },
+  {
+   "filename": "test/perron/site/builder/feeds/rss_test.rb",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -25,6 +25,22 @@ class Perron::Site::Builder::Feeds::RssTest < ActiveSupport::TestCase\n     end\n   end\n \n+  test \"orders by publication date, whether it comes from the filename or the frontmatter\" do\n+    directory = Rails.root.join(\"app/content/posts\")\n+    filename_dated = directory.join(\"2020-01-01-filename-dated.md\")\n+    frontmatter_dated = directory.join(\"frontmatter-dated.md\")\n+    File.write(filename_dated, \"---\\ntitle: Filename dated\\n---\\n\\nOld.\\n\")\n+    File.write(frontmatter_dated, \"---\\ntitle: Frontmatter dated\\npublished_at: 2025-12-01\\n---\\n\\nNew.\\n\")\n+\n+    resources = [filename_dated, frontmatter_dated].map { Content::Post.new(it.to_s) }\n+    builder = Perron::Site::Builder::Feeds::Rss.new(collection: @posts, resources: resources)\n+    rss = Nokogiri::XML(builder.generate).remove_namespaces!\n+\n+    assert_equal [\"Frontmatter dated\", \"Filename dated\"], rss.xpath(\"//item/title\").map(&:text)\n+  ensure\n+    FileUtils.rm_f([filename_dated, frontmatter_dated])\n+  end\n+\n   test \"respects max_items configuration\" do\n     @posts.configuration.feeds.rss.stub(:max_items, 1) do\n       rss = Nokogiri::XML(@builder.generate).remove_namespaces!"
+  }
+ ],
+ "test_files": [
+  "test/perron/site/builder/feeds/atom_test.rb",
+  "test/perron/site/builder/feeds/json_test.rb",
+  "test/perron/site/builder/feeds/rss_test.rb"
+ ]
+}

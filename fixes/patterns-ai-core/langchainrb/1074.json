@@ -1,0 +1,33 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1074,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1074",
+ "title": "Add Pinecone#remove_texts",
+ "merged_at": "2026-10-15T13:18:00Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n - [SECURITY]: A change which fixes a security vulnerability.\n \n ## [Unreleased]\n+- [FEATURE] [https://github.com/patterns-ai-core/langchainrb/pull/1074] Add `Langchain::Vectorsearch::Pinecone#remove_texts`.\n - [FEATURE] [https://github.com/patterns-ai-core/langchainrb/pull/1075] Add `Langchain::Vectorsearch::Hnswlib#update_texts` and `#remove_texts`.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1076] Accept `{role:, content:}` messages in `Langchain::LLM::GoogleGemini#chat` and `Langchain::LLM::GoogleVertexAI#chat`, converting them to `parts` with system messages as the system instruction; `OutputFixingParser`, `Vectorsearch#ask`, `Chunker::Semantic`, the Ragas evals and HyDE got a 400 from Google before.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1077] Send `temperature`, `seed`, `top_p`, `max_tokens` (as `num_predict`) and the other sampling parameters of `Langchain::LLM::Ollama#chat` in `options`, where Ollama reads them; at the top level they were ignored, including the default `temperature: 0.0`."
+  },
+  {
+   "filename": "lib/langchain/vectorsearch/pinecone.rb",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -97,6 +97,16 @@ def update_texts(texts:, ids:, namespace: \"\", metadata: nil)\n       end\n     end\n \n+    # Remove a list of texts from the index\n+    # @param ids [Array<Integer, String>] The ids of the texts to remove\n+    # @param namespace [String] The namespace to remove the texts from\n+    # @return [Hash] The response from the server\n+    def remove_texts(ids:, namespace: \"\")\n+      raise ArgumentError, \"ids must not be empty\" if Array(ids).empty?\n+\n+      index.delete(ids: Array(ids).map(&:to_s), namespace: namespace)\n+    end\n+\n     # Create the index with the default schema\n     # @return [Hash] The response from the server\n     def create_default_schema"
+  },
+  {
+   "filename": "spec/lib/langchain/vectorsearch/pinecone_spec.rb",
+   "status": "modified",
+   "additions": 26,
+   "deletions": 0,
+   "patch": "@@ -259,6 +259,32 @@\n     end\n   end\n \n+  describe \"#remove_texts\" do\n+    let(:vector) { double(Pinecone::Vector) }\n+\n+    before do\n+      allow(subject.client).to receive(:index).with(index_name).and_return(vector)\n+    end\n+\n+    it \"deletes the vectors by id, as strings\" do\n+      expect(vector).to receive(:delete).with(ids: [\"123\", \"456\"], namespace: \"\").and_return({})\n+\n+      expect(subject.remove_texts(ids: [123, \"456\"])).to eq({})\n+    end\n+\n+    it \"deletes from the given namespace\" do\n+      expect(vector).to receive(:delete).with(ids: [\"123\"], namespace: \"docs\").and_return({})\n+\n+      subject.remove_texts(ids: [123], namespace: \"docs\")\n+    end\n+\n+    it \"raises instead of sending a delete without ids\" do\n+      expect(vector).not_to receive(:delete)\n+\n+      expect { subject.remove_texts(ids: []) }.to raise_error(ArgumentError)\n+    end\n+  end\n+\n   describe \"#similarity_search_by_vector\" do\n     before do\n       allow(subject.llm).to receive_message_chain(:embed, :embedding).with(text: text).and_return(embedding)"
+  }
+ ],
+ "test_files": [
+  "spec/lib/langchain/vectorsearch/pinecone_spec.rb"
+ ]
+}

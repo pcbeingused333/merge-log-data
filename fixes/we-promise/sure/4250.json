@@ -1,0 +1,26 @@
+{
+ "repo": "we-promise/sure",
+ "number": 4250,
+ "url": "https://github.com/we-promise/sure/pull/4250",
+ "title": "Fix \"Create a bill\" from a transaction showing Content Missing",
+ "merged_at": "2026-10-16T21:33:13Z",
+ "files": [
+  {
+   "filename": "app/views/transactions/_mark_recurring.html.erb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -22,7 +22,8 @@\n     <%# The declare dialog is part of the preview-gated bills surface, so the\n         action only appears for someone who has opted into it. %>\n     <% if preview_features_enabled? %>\n-      <%= render DS::Button.new(\n+      <%# A link, not DS::Button: button_to POSTs, and the dialog is GET only. %>\n+      <%= render DS::Link.new(\n         text: t(\"transactions.show.create_bill\"),\n         variant: \"outline\",\n         icon: \"receipt\","
+  },
+  {
+   "filename": "test/controllers/transactions_controller_test.rb",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -50,6 +50,24 @@ class TransactionsControllerTest < ActionDispatch::IntegrationTest\n     assert_match(/für die am .* fällige Rechnung/, response.body)\n   end\n \n+  # The dialog route is GET only. Rendered as a button_to, \"Create a bill\"\n+  # POSTed to it and the modal frame showed \"Content Missing\".\n+  test \"create a bill opens the prefilled dialog with a GET\" do\n+    @user.update!(preferences: (@user.preferences || {}).merge(\"preview_features_enabled\" => true))\n+\n+    get transaction_url(@entry), headers: { \"Turbo-Frame\" => \"drawer\" }\n+\n+    assert_response :success\n+    href = new_recurring_transaction_path(entry_id: @entry.id)\n+    assert_select \"a[href=?][data-turbo-frame=modal]\", href, text: /Create a bill/\n+    assert_select \"form[action=?]\", href, count: 0\n+\n+    get href, headers: { \"Turbo-Frame\" => \"modal\" }\n+\n+    assert_response :success\n+    assert_select \"turbo-frame#modal\"\n+  end\n+\n   test \"the bill link-back stays hidden without preview access\" do\n     series = @user.family.recurring_transactions.create!(\n       account: accounts(:depository), name: \"Watson Property\", amount: 2000,"
+  }
+ ],
+ "test_files": [
+  "test/controllers/transactions_controller_test.rb"
+ ]
+}

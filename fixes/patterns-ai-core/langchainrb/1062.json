@@ -1,0 +1,33 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1062,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1062",
+ "title": "Return streamed Ollama tool calls from #chat",
+ "merged_at": "2026-10-13T15:10:10Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n - [SECURITY]: A change which fixes a security vulnerability.\n \n ## [Unreleased]\n+- [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1062] Return the tool calls of every streamed chunk from `Langchain::LLM::Ollama#chat` instead of only the last chunk's, which has none, so `Langchain::Assistant` runs tools with streaming on.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1061] Pass `max_completion_tokens` and `reasoning_effort` through `Langchain::LLM::OpenAI#chat` and `Langchain::LLM::Azure#chat` instead of dropping them; OpenAI's reasoning models reject `max_tokens`, so their output couldn't be capped.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1060] Find `functionCall` and text parts anywhere in a `GoogleGeminiResponse`, so a tool call that follows text is run instead of ending the `Langchain::Assistant` run, a text part after a call no longer raises `NoMethodError`, and `chat_completion` joins every text part and leaves out thought summaries.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1058] Pass Anthropic `thinking` and `redacted_thinking` blocks back, first and unchanged, in the assistant turn of `Langchain::Assistant`'s tool-use loop; dropping them made the request carrying the tool result fail whenever Claude thought before calling a tool."
+  },
+  {
+   "filename": "lib/langchain/llm/ollama.rb",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 3,
+   "patch": "@@ -303,12 +303,16 @@ def generate_final_completion_response(responses_stream, model)\n       Langchain::LLM::Response::OllamaResponse.new(final_response, model: model)\n     end\n \n-    # BUG: If streamed, this method does not currently return the tool_calls response.\n+    # Ollama streams each tool call in a chunk of its own, before the final `done` chunk, which has none.\n     def generate_final_chat_completion_response(responses_stream, model)\n       final_response = responses_stream.last\n-      final_response[\"message\"][\"content\"] = responses_stream.map { |resp| resp.dig(\"message\", \"content\") }.join\n+      message = final_response[\"message\"].merge(\n+        \"content\" => responses_stream.map { |resp| resp.dig(\"message\", \"content\") }.join\n+      )\n+      tool_calls = responses_stream.flat_map { |resp| Array(resp.dig(\"message\", \"tool_calls\")) }\n+      message[\"tool_calls\"] = tool_calls if tool_calls.any?\n \n-      Langchain::LLM::Response::OllamaResponse.new(final_response, model: model)\n+      Langchain::LLM::Response::OllamaResponse.new(final_response.merge(\"message\" => message), model: model)\n     end\n   end\n end"
+  },
+  {
+   "filename": "spec/lib/langchain/llm/ollama_spec.rb",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -150,6 +150,31 @@\n         expect(streamed_responses).to be_all { |resp| resp.is_a?(Langchain::LLM::Response::OllamaResponse) }\n         expect(streamed_responses.map(&:chat_completion).join).to include(\"I'm just a language model\")\n       end\n+\n+      context \"when the model calls tools\" do\n+        # Ollama streams each tool call in a chunk of its own, before the final `done` chunk, which has none.\n+        let(:chunks) do\n+          [\n+            {message: {role: \"assistant\", content: \"\", tool_calls: [{function: {name: \"weather__execute\", arguments: {city: \"Paris\"}}}]}, done: false},\n+            {message: {role: \"assistant\", content: \"\", tool_calls: [{function: {name: \"weather__execute\", arguments: {city: \"Rome\"}}}]}, done: false},\n+            {message: {role: \"assistant\", content: \"\"}, done_reason: \"stop\", done: true, prompt_eval_count: 10, eval_count: 5}\n+          ]\n+        end\n+\n+        before do\n+          body = chunks.map { |chunk| chunk.merge(model: \"llama3.2\").to_json }.join(\"\\n\")\n+          allow(client).to receive(:post).with(\"api/chat\", hash_including(stream: true)) do |&block|\n+            request = Struct.new(:options).new(Faraday::RequestOptions.new)\n+            block.call(request)\n+            request.options.on_data.call(body, body.bytesize)\n+          end\n+        end\n+\n+        it \"returns the tool calls from every chunk\" do\n+          expect(response.tool_calls.map { |call| call.dig(\"function\", \"arguments\", \"city\") }).to eq([\"Paris\", \"Rome\"])\n+          expect(response.completion_tokens).to eq(5)\n+        end\n+      end\n     end\n   end\n "
+  }
+ ],
+ "test_files": [
+  "spec/lib/langchain/llm/ollama_spec.rb"
+ ]
+}

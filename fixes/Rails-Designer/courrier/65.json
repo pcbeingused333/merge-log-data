@@ -1,0 +1,34 @@
+{
+ "repo": "Rails-Designer/courrier",
+ "number": 65,
+ "url": "https://github.com/Rails-Designer/courrier/pull/65",
+ "title": "Don't raise when a layout is set for only one of html/text",
+ "merged_at": "2026-10-12T09:22:26Z",
+ "files": [
+  {
+   "filename": "lib/courrier/email/layouts.rb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -20,13 +20,13 @@ def build\n       def no_layouts? = @email.class.layouts.nil?\n \n       def layouts\n-        FORMATS.map(&:to_sym).to_h do |format|\n+        FORMATS.map(&:to_sym).filter_map do |format|\n           template = @email.class.layouts[format]\n \n           next if template.nil?\n \n           [format, render(template)]\n-        end\n+        end.to_h\n       end\n \n       def render(template)"
+  },
+  {
+   "filename": "test/courrier/email/layouts_test.rb",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -31,4 +31,24 @@ def test_mixed_layouts\n \n     assert_equal expected, Courrier::Email::Layouts.new(email).build\n   end\n+\n+  def test_html_only_layout\n+    email = TestEmailWithHtmlOnlyLayout.new(\n+      from: \"devs@railsdesigner.com\",\n+      to: \"recipient@railsdesigner.com\"\n+    )\n+\n+    assert_equal [{ html: \"<html>%{content}</html>\" }], Courrier::Email::Layouts.new(email).build\n+    assert_equal \"<html><p>Body</p></html>\", email.options.html\n+  end\n+\n+  def test_text_only_layout\n+    email = TestEmailWithTextOnlyLayout.new(\n+      from: \"devs@railsdesigner.com\",\n+      to: \"recipient@railsdesigner.com\"\n+    )\n+\n+    assert_equal [{ text: \"%{content}\\n\\nThanks!\" }], Courrier::Email::Layouts.new(email).build\n+    assert_equal \"Body\\n\\nThanks!\", email.options.text\n+  end\n end"
+  },
+  {
+   "filename": "test/fixtures/test_email_with_single_format_layouts.rb",
+   "status": "added",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,13 @@\n+require \"courrier/email\"\n+\n+class TestEmailWithHtmlOnlyLayout < Courrier::Email\n+  layout html: \"<html>%{content}</html>\"\n+\n+  def html = \"<p>Body</p>\"\n+end\n+\n+class TestEmailWithTextOnlyLayout < Courrier::Email\n+  layout text: \"%{content}\\n\\nThanks!\"\n+\n+  def text = \"Body\"\n+end"
+  }
+ ],
+ "test_files": [
+  "test/courrier/email/layouts_test.rb",
+  "test/fixtures/test_email_with_single_format_layouts.rb"
+ ]
+}

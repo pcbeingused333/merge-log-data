@@ -1,0 +1,40 @@
+{
+ "repo": "posit-dev/chatlas",
+ "number": 455,
+ "url": "https://github.com/posit-dev/chatlas/pull/455",
+ "title": "fix(tools): iterate synchronous generator tools in async chats",
+ "merged_at": "2026-10-16T16:05:43Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0\n \n ### Bug fixes\n \n+* A tool written as a generator (see \"Progressive results\" in the tool-calling docs) now reports each yielded value in `.chat_async()` and `.stream_async()`, as it does in `.chat()`. A synchronous generator tool used to send the generator object itself (`<generator object ...>`) as its result. An `async def` generator tool now counts as an async tool, so `.chat()` raises the usual \"Cannot use async tools in a synchronous chat\" error instead of sending `<async_generator object ...>` as the result.\n * MCP tools registered with a `namespace` (in `.register_mcp_tools_http_stream_async()` or `.register_mcp_tools_stdio_async()`) can be called successfully. `Tool.from_mcp()` gains a `name` argument for setting the tool's name independently of the MCP tool's name. (#458)\n * The MCP client used by `.register_mcp_tools_http_stream_async()` and `.register_mcp_tools_stdio_async()` negotiates MCP protocol revision `2026-07-28` with servers that support it. (#456)\n * `ChatCloudflare()` no longer errors when a response (or a streamed chunk of one) consists only of a number, which Cloudflare sends as a JSON number instead of a string (e.g. `\"content\": 2`). The content is now coerced to a string instead of breaking text display, chunk merging, and final-turn assembly."
+  },
+  {
+   "filename": "chatlas/_chat.py",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 1,
+   "patch": "@@ -3337,7 +3337,8 @@ async def _invoke_tool_async(\n                 yield self._handle_tool_error_result(request, e)\n                 return\n \n-            if tool._is_async:\n+            # Awaiting an async generator function's call fails, so it goes through wrap_async()\n+            if tool._is_async and not inspect.isasyncgenfunction(tool.func):\n                 func = tool.func\n             else:\n                 func = wrap_async(tool.func)\n@@ -3350,6 +3351,10 @@ async def _invoke_tool_async(\n                     else:\n                         res = await func(request.arguments)\n \n+                # A synchronous generator tool reports progress the same way as an async one\n+                if inspect.isgenerator(res):\n+                    res = _iterate_async(res)\n+\n                 if inspect.isasyncgen(res):\n                     while True:\n                         try:\n@@ -3843,3 +3848,9 @@ def is_positron_notebook():\n         return mode == \"notebook\"\n     except Exception:\n         return False\n+\n+\n+async def _iterate_async(gen: Iterator[Any]) -> AsyncGenerator[Any, None]:\n+    \"\"\"Iterate a synchronous generator as an async one, one value per `__anext__()`.\"\"\"\n+    for x in gen:\n+        yield x"
+  },
+  {
+   "filename": "chatlas/_tools.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -79,7 +79,9 @@ def __init__(\n         self.name = name\n         self.func = func\n         self.annotations = annotations\n-        self._is_async = _utils.is_async_callable(func)\n+        # An async generator function isn't a coroutine function, but it is still async\n+        is_async_gen = inspect.isasyncgenfunction(func)\n+        self._is_async = _utils.is_async_callable(func) or is_async_gen\n         schema: \"ChatCompletionToolParam\" = {\n             \"type\": \"function\",\n             \"function\": {"
+  },
+  {
+   "filename": "tests/test_tools_enhanced.py",
+   "status": "modified",
+   "additions": 72,
+   "deletions": 0,
+   "patch": "@@ -883,6 +883,78 @@ async def async_multi_tool(count: int):\n             assert result.request == request\n             assert result.error is None\n \n+    @pytest.mark.asyncio\n+    async def test_sync_tool_yielding_multiple_results_in_async_chat(self):\n+        \"\"\"A synchronous generator tool also yields its results one by one in an async chat.\"\"\"\n+        chat = ChatOpenAI()\n+\n+        def multi_result_tool(count: int):\n+            \"\"\"Tool that yields multiple results.\"\"\"\n+            for i in range(count):\n+                yield f\"Result {i + 1}\"\n+\n+        chat.register_tool(multi_result_tool)\n+\n+        tool = chat._tools[\"multi_result_tool\"]\n+        request = ContentToolRequest(\n+            id=\"test-id\",\n+            name=\"multi_result_tool\",\n+            arguments={\"count\": 3},\n+            tool=ToolInfo.from_tool(tool),\n+        )\n+\n+        results = [result async for result in chat._invoke_tool_async(request)]\n+\n+        assert [result.value for result in results] == [\"Result 1\", \"Result 2\", \"Result 3\"]\n+        for result in results:\n+            assert result.request == request\n+            assert result.error is None\n+\n+    @pytest.mark.asyncio\n+    @pytest.mark.filterwarnings(\"ignore\")\n+    async def test_sync_tool_yielding_with_error_in_async_chat(self):\n+        \"\"\"An error raised mid-way through a synchronous generator tool is reported in an async chat.\"\"\"\n+        chat = ChatOpenAI()\n+\n+        def error_after_yield_tool(count: int):\n+            \"\"\"Tool that yields some results then raises an error.\"\"\"\n+            for i in range(count):\n+                if i == 2:\n+                    raise ValueError(\"Error after yielding 2 results\")\n+                yield f\"Result {i + 1}\"\n+\n+        chat.register_tool(error_after_yield_tool)\n+\n+        tool = chat._tools[\"error_after_yield_tool\"]\n+        request = ContentToolRequest(\n+            id=\"test-id\",\n+            name=\"error_after_yield_tool\",\n+            arguments={\"count\": 5},\n+            tool=ToolInfo.from_tool(tool),\n+        )\n+\n+        results = [result async for result in chat._invoke_tool_async(request)]\n+\n+        assert [result.value for result in results[:2]] == [\"Result 1\", \"Result 2\"]\n+        assert len(results) == 3\n+        assert results[2].error is not None\n+        assert \"Error after yielding 2 results\" in str(results[2].error)\n+\n+    def test_async_generator_tool_is_rejected_in_sync_chat(self):\n+        \"\"\"An async generator tool is an async tool, so a synchronous chat refuses it.\"\"\"\n+        chat = ChatOpenAI()\n+\n+        async def async_multi_tool(count: int):\n+            \"\"\"Async tool that yields multiple results.\"\"\"\n+            for i in range(count):\n+                yield f\"Async result {i + 1}\"\n+\n+        chat.register_tool(async_multi_tool)\n+\n+        assert chat._tools[\"async_multi_tool\"]._is_async\n+        with pytest.raises(ValueError, match=\"Cannot use async tools in a synchronous chat\"):\n+            chat.chat(\"Run the tool\", echo=\"none\")\n+\n     @pytest.mark.filterwarnings(\"ignore\")\n     def test_tool_yielding_with_error(self):\n         \"\"\"Test tool that yields some results then encounters an error.\"\"\""
+  }
+ ],
+ "test_files": [
+  "tests/test_tools_enhanced.py"
+ ]
+}

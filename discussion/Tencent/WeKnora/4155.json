@@ -1,0 +1,20 @@
+{
+ "repo": "Tencent/WeKnora",
+ "number": 4155,
+ "url": "https://github.com/Tencent/WeKnora/pull/4155",
+ "state": "merged",
+ "reviews": [],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "collaborator",
+   "created_at": "2026-10-11T07:26:16Z",
+   "body": "Thanks for tracing the failures back to the catalog. Disabling temperature for these six entries addresses the temperature-only internal pipelines described here, and keeping Sonnet 4.6 unchanged makes sense. I checked commit `7c9fcfec` and ran `go test ./internal/models/...`, `python3 scripts/model-catalog/generate.py --check`, and the diff whitespace check; all passed.\n\nThere is one related issue to address in this PR: please also set `supports_top_p: false` for all six entries and regenerate the catalog and parity baseline.\n\n`supports_top_p` already exists, and `DefaultAnthropicMessages()` defaults it to `true`. Unlike the OpenAI adapters, the Anthropic adapter does not use `supports_temperature` as a general sampling switch. In `internal/models/api/anthropicmessages/request.go:200–206`, disabling temperature allows the `else if` branch to send `top_p` when reasoning is not enabled.\n\nFor a concrete regression, use `claude-sonnet-5` with thinking off, `temperature=1`, and `top_p=0.9` (the model debug flow accepts both options). Before this change, temperature takes precedence, so only the accepted default temperature is sent. After this change, the request sends `top_p=0.9`, which Sonnet 5 rejects with a 400. Please add a request-body regression test covering both parameters together, with reasoning omitted and explicitly off where supported, and assert that neither sampling field is emitted for these models. The new resolution assertions and existing parity fixtures do not cover this combination.\n\nA small documentation correction as well: the current [parameter deprecation documentation](https://platform.claude.com/docs/en/docs/about-claude/model-deprecations) describes rejection of non-default sampling values for Opus 4.7 and later too, rather than unconditional rejection of the parameters. Omitting them is still the right behavior, but the PR description and facts comment should reflect that distinction.\n\nRegarding `claude-opus-5-5`, `claude-sonnet-5-5`, and `claude-haiku-5-5`: please send the proposed follow-up separately, with pinned pricing/limits and per-model thinking/sampling compatibility plus regression coverage. Keeping those catalog additions separate from this fix is reasonable."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-11T09:16:13Z",
+   "body": "Thanks for the review. All three points are in c8280a3:\n\n- The six entries now also set `supports_top_p: false`. The catalog and parity baseline are regenerated.\n- `TestClaudeNoSamplingRequestBody` builds the body from the resolved catalog entry, with `temperature=1, top_p=0.9`. It covers reasoning omitted and explicitly off (where the model supports off) and asserts that no `temperature`/`top_p`/`top_k` is sent. `claude-sonnet-4-6` still sends temperature. With the `supports_top_p` change reverted, 10 request-body cases fail on `top_p`.\n- The facts comment and the PR description now say \"reject non-default sampling values\" and link the deprecations page.\n\n`go test ./internal/models/...`, `generate.py --check`, `git diff --check`, `gofmt` and `golangci-lint --new-from-rev` all pass. I'll send the Opus 5.5 / Sonnet 5.5 / Haiku 5.5 catalog entries as a separate PR."
+  }
+ ]
+}

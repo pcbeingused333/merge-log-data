@@ -1,0 +1,77 @@
+{
+ "repo": "comet-ml/opik",
+ "number": 9009,
+ "url": "https://github.com/comet-ml/opik/pull/9009",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-17T19:54:49Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-18T05:37:25Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-19T23:00:17Z",
+   "body": "Thanks for the detailed repro in #9008 and for naming the Nova and gpt-oss gaps up front. The event list made it quick to check this branch against live Bedrock streams.\n\nIt holds up on live traffic: 12 recorded `invoke_model_with_response_stream` streams now aggregate to exactly what the anthropic SDK builds from the same events. One delta type is still dropped. With document citations enabled, `_apply_delta` has no branch for `citations_delta`, so cited text blocks keep the empty `\"citations\": []` copied from `content_block_start` (main had no `citations` key at all). Two-line suggestion inline; happy for it to be a follow-up if you'd rather keep this PR to tool_use and thinking.\n\n| live stream, us-east-1 | main `9ff7c16` | this branch `d50c765` | + suggestion |\n|---|---|---|---|\n| tool only, two tools, no-arg tool, cut off by `max_tokens` × Haiku 4.5 / Sonnet 4.6 (thinking) / Sonnet 5.5 | 0/12 match | 12/12 | 12/12 |\n| document with `citations: {\"enabled\": true}`, Haiku 4.5 + Sonnet 4.6: cited blocks kept | 0/4 | 0/4 | 4/4 |\n\nThe Haiku 4.5 citations stream on this branch:\n\n```\nevent: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"citations_delta\", \"citation\": {\"type\": \"char_location\", \"cited_text\": \"The sky is blue. \", ...}}}\nspan:  [{\"citations\": [], \"type\": \"text\", \"text\": \"The sky is blue.\"}, {\"type\": \"text\", \"text\": \" \"}, {\"citations\": [], \"type\": \"text\", \"text\": \"Water boils at 100 degrees Celsius at sea level.\"}]\nnon-streamed invoke_model, same body: 2 text blocks with citations\n```\n\n<details><summary>How I checked, a test for the suggestion, and what looked fine</summary>\n\nEach stream was recorded once with plain boto3 (the `chunk.bytes` items the stream wrapper collects), along with a non-streamed `invoke_model` call on the same body. The items were then replayed through `aggregate_chunks_to_dataclass` on main, on this branch, and on this branch plus the suggestion. \"Match\" means the same block list (type, text, thinking and signature, tool id/name/input) as `anthropic.lib.streaming._messages.accumulate_event` produces over the same events. In all 12, the non-streamed reply also has the same block types and tool name/input.\n\n```\nRED   main src + this PR's tests            4 failed, 8 passed\nGREEN this branch, tests/unit/integrations/bedrock   54 passed\nRED   this branch + test below              1 failed: {'citations': [], ...} != {..., 'citations': [{'type': 'char_location', ...}]}\nGREEN this branch + suggestion + test       55 passed\n      ruff 0.14.14 check/format clean, mypy 1.19.1 clean on claude.py\n```\n\n```python\n    def test_aggregate_chunks__text_with_citations__citations_logged(self):\n        citation = {\n            \"type\": \"char_location\",\n            \"cited_text\": \"The sky is blue. \",\n            \"document_index\": 0,\n            \"document_title\": \"Facts\",\n            \"start_char_index\": 20,\n            \"end_char_index\": 37,\n        }\n        events = [\n            {\n                \"type\": \"content_block_start\",\n                \"index\": 0,\n                \"content_block\": {\"citations\": [], \"type\": \"text\", \"text\": \"\"},\n            },\n            {\n                \"type\": \"content_block_delta\",\n                \"index\": 0,\n                \"delta\": {\"type\": \"citations_delta\", \"citation\": citation},\n            },\n            {\n                \"type\": \"content_block_delta\",\n                \"index\": 0,\n                \"delta\": {\"type\": \"text_delta\", \"text\": \"The sky is blue.\"},\n            },\n            {\"type\": \"content_block_stop\", \"index\": 0},\n        ]\n\n        response = chunks_aggregator.aggregate_chunks_to_dataclass(\n            _content_stream(events, stop_reason=\"end_turn\")\n        )\n\n        assert response.native_response[\"content\"] == [\n            {\"type\": \"text\", \"text\": \"The sky is blue.\", \"citations\": [citation]}\n        ]\n```\n\nLooked fine:\n\n- Cut off by `max_tokens`: for the truncated call Bedrock streamed only `partial_json: \"\"` (Haiku 4.5, Sonnet 4.6), so the span gets `input: {}`, which is also what the non-streamed reply returns. The raw-string fallback still covers a stream that is cut mid-JSON.\n- Sonnet 5.5 sent a signature-only thinking block (`\"thinking\": \"\"`). It is kept, since only empty text blocks are filtered.\n- 146 of 146 `content_block_*` events carried an int `index`.\n- #9011 calls the public `aggregate_converse_stream_chunks`, which this PR keeps. With both branches merged locally, `tests/unit/integrations/bedrock` gives 58 passed.\n\n</details>\n"
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-20T02:02:40Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-20T12:51:25Z",
+   "body": "Thank you, @pcbeingused333, for the clear repro in #9008 and the quick turnarounds, and thank you, @kimnamu, for checking it against live Bedrock streams and catching `citations_delta`. Rebuilding the blocks by index makes the streamed Claude output match the non-streamed one, and moving the tool-input parser into `bedrock/tool_input.py` keeps Converse and invoke_model consistent. The logic looks right to me; a few small things that would make the tests stronger:\n\n1. `test_claude_aggregator.py`: `test_aggregate_chunks__tool_call_without_arguments__input_is_empty_object` and `test_aggregate_chunks__tool_input_cut_off__raw_input_kept` check only `content[0][\"input\"]`. Comparing the whole `native_response` (role, content, stop_reason, usage) in these and the other new tests would also pin the stop reason and usage paths.\n2. A few cases the new code handles but no test covers:\n   - two tool_use blocks streamed in one turn (each accumulates its own `partial_json` by index)\n   - a `redacted_thinking` block (start event only, passed through as is)\n   - a delta that arrives without a `content_block_start` (the fallback at `claude.py:101`)\n   - an empty text block before a tool_use, which is dropped (`claude.py:159-165`)\n\nMinor:\n- `claude.py:102-104` stores a `tool_inputs` entry for every delta, including text and thinking blocks. It's harmless because of the type check at `:153`, but updating it only for `partial_json` deltas would read more clearly.\n- Random ids and names in the new tests, instead of fixed literals, would match how the rest of the suite builds data.\n- Since citations are now kept too, the title could say `keep tool_use, thinking and citation blocks in Bedrock invoke_model Claude streams`.\n"
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-20T19:39:37Z",
+   "body": "Thank you, @pcbeingused333, for taking every point on board so quickly, and thank you again, @kimnamu, for the live-stream check. The tests now pin the whole response and usage for each block shape (interleaved tool calls, redacted thinking, a delta without a start event, the dropped empty text block), and `tool_inputs` only tracks tool-call deltas. Approving.\n"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "sdks/python/src/opik/integrations/bedrock/invoke_model/chunks_aggregator/claude.py",
+   "created_at": "2026-10-17T19:54:49Z",
+   "body": "### Duplicate tool-input parser diverges across Bedrock APIs\n\n`_parse_tool_input` duplicates the Bedrock parser, so future fixes to streamed tool-input handling can diverge between APIs; move it to a shared Bedrock utility and import it from both aggregators, keeping only API-specific logging at the boundary.\n<!--\n_Finding type:_ `Code Dedup and Conventions`\n-->\n\n<picture><img src=\"https://baz.co/api/v2/badges?type=reviewer&content=Code%20Dedup%20and%20Conventions&severity=low\" alt=\"Severity\" height=\"24\" /></picture>\n\nWant Baz to fix this for you? [Activate Fixer](https://baz.co/agents/baz)"
+  },
+  {
+   "role": "author",
+   "path": "sdks/python/src/opik/integrations/bedrock/invoke_model/chunks_aggregator/claude.py",
+   "created_at": "2026-10-18T05:37:25Z",
+   "body": "Moved it to `bedrock/tool_input.py` in d50c765799; both aggregators import it and pass their own logger, so failures are still logged under the API they came from.\n"
+  },
+  {
+   "role": "contributor",
+   "path": "sdks/python/src/opik/integrations/bedrock/invoke_model/chunks_aggregator/claude.py",
+   "created_at": "2026-10-19T23:00:17Z",
+   "body": "A `citations_delta` (`{\"type\": \"citations_delta\", \"citation\": {...}}`) has no branch here and falls through to the debug log, so a cited block keeps the `\"citations\": []` from its `content_block_start`. Appending the citation, as the anthropic SDK's stream accumulator does, gives the non-streamed shape (4 of 4 cited blocks on the live streams in the summary):\n\n```suggestion\n    elif \"partial_json\" in delta:\n        tool_input += delta[\"partial_json\"]\n    elif \"citation\" in delta:\n        block[\"citations\"] = (block.get(\"citations\") or []) + [delta[\"citation\"]]\n```\n"
+  },
+  {
+   "role": "author",
+   "path": "sdks/python/src/opik/integrations/bedrock/invoke_model/chunks_aggregator/claude.py",
+   "created_at": "2026-10-20T02:02:40Z",
+   "body": "Thanks @kimnamu, good catch. Applied in 9e60ec3325: `_apply_delta` now appends each `citation` to the block's `citations`, and your test is added as `test_aggregate_chunks__text_with_citations__citations_logged`. It fails without the change and passes with it; `tests/unit/integrations/bedrock` gives 55 passed, and ruff check/format are clean.\n"
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-10-20T13:01:17Z",
+   "body": "Thanks for the review. Pushed in 87b267a:\n\n1. The tests in `TestClaudeStreamContentBlocks` now compare the whole `native_response` (role, content, stop_reason) and `response.usage`. Usage lives on the response rather than inside `native_response`, so each test asserts both.\n2. New cases: two `tool_use` blocks in one turn with interleaved deltas, a `redacted_thinking` block (start event only, passed through), a delta without a `content_block_start`, and an empty text block before a `tool_use` (dropped).\n3. `tool_inputs` is now updated only for `partial_json` deltas.\n4. Ids, names, text and arguments in these tests use `random_chars` from `tests/conftest.py`.\n\nTitle updated to mention citations. `tests/unit/integrations/bedrock`: 59 passed; ruff clean.\n"
+  }
+ ]
+}

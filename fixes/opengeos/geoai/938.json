@@ -1,0 +1,33 @@
+{
+ "repo": "opengeos/geoai",
+ "number": 938,
+ "url": "https://github.com/opengeos/geoai/pull/938",
+ "title": "fix(agents): replace retired default models",
+ "merged_at": "2026-10-23T13:40:03Z",
+ "files": [
+  {
+   "filename": "docs/examples/AI_agents.ipynb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -70,7 +70,7 @@\n     \"- `create_anthropic_model`: Create a model using Anthropic. You will need an Anthropic API key. Set it in the `ANTHROPIC_API_KEY` environment variable.\\n\",\n     \"- `create_gemini_model`: Create a model instance using Gemini. You will need a Gemini Google studio API key. Set it in the `GOOGLE_API_KEY` environment variable or set into a variable using a secret manager or Text (not recommended) in the method initialisation. Example - \\n\",\n     \"    ```\\n\",\n-    \"    model = create_gemini_model(model_id=\\\"gemini-2.5-flash\\\", api_key='your-google-key')\\n\",\n+    \"    model = create_gemini_model(model_id=\\\"gemini-3.8-flash\\\", api_key='your-google-key')\\n\",\n     \"    ```\\n\",\n     \"- `create_bedrock_model`: Create a model using Bedrock. You will need an AWS account and the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` environment variables set.\\n\"\n    ]"
+  },
+  {
+   "filename": "geoai/agents/geo_agents.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 4,
+   "patch": "@@ -147,15 +147,15 @@ def create_openai_model(\n \n \n def create_anthropic_model(\n-    model_id: str = \"claude-sonnet-4-20250514\",\n+    model_id: str = \"claude-sonnet-5-5\",\n     api_key: str = None,\n     client_args: dict = None,\n     **kwargs: Any,\n ) -> AnthropicModel:\n     \"\"\"Create an Anthropic model.\n \n     Args:\n-        model_id: Anthropic model ID. Defaults to \"claude-sonnet-4-20250514\".\n+        model_id: Anthropic model ID. Defaults to \"claude-sonnet-5-5\".\n             For a complete list of supported models,\n             see https://docs.claude.com/en/docs/about-claude/models/overview.\n         api_key: Anthropic API key.\n@@ -180,7 +180,7 @@ def create_anthropic_model(\n \n \n def create_bedrock_model(\n-    model_id: str = \"anthropic.claude-sonnet-4-20250514-v1:0\",\n+    model_id: str = \"global.anthropic.claude-sonnet-4-6\",\n     region_name: str = None,\n     boto_session: Optional[boto3.Session] = None,\n     boto_client_config: Optional[BotocoreConfig] = None,\n@@ -207,7 +207,7 @@ def create_bedrock_model(\n \n \n def create_gemini_model(\n-    model_id: str = \"gemini-2.5-flash\",\n+    model_id: str = \"gemini-3.8-flash\",\n     api_key: str = None,\n     client_args: dict = None,\n     **kwargs: Any,"
+  },
+  {
+   "filename": "tests/test_agents_default_models.py",
+   "status": "added",
+   "additions": 55,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,55 @@\n+#!/usr/bin/env python\n+\n+\"\"\"Tests for the default model IDs of the `geoai.agents` model factories.\"\"\"\n+\n+import ast\n+import os\n+import unittest\n+\n+# geo_agents.py has heavy dependencies (strands, leafmap, boto3, etc.), so the\n+# defaults are read from the source instead of importing the module.\n+_geo_agents_path = os.path.join(\n+    os.path.dirname(__file__), os.pardir, \"geoai\", \"agents\", \"geo_agents.py\"\n+)\n+\n+\n+def _default_model_id(func_name):\n+    \"\"\"Return the default value of the model_id parameter of a function.\"\"\"\n+    with open(_geo_agents_path, encoding=\"utf-8\") as f:\n+        tree = ast.parse(f.read())\n+    for node in ast.walk(tree):\n+        if isinstance(node, ast.FunctionDef) and node.name == func_name:\n+            args = node.args.args\n+            defaults = dict(\n+                zip(\n+                    [a.arg for a in args[-len(node.args.defaults) :]],\n+                    node.args.defaults,\n+                )\n+            )\n+            return ast.literal_eval(defaults[\"model_id\"])\n+    raise AssertionError(f\"{func_name} not found\")\n+\n+\n+class TestDefaultModelIds(unittest.TestCase):\n+    \"\"\"The default model IDs must be models the providers still serve.\"\"\"\n+\n+    def test_anthropic_default(self):\n+        \"\"\"Claude Sonnet 4 was retired on the Anthropic API on 2026-06-15.\"\"\"\n+        self.assertEqual(\n+            _default_model_id(\"create_anthropic_model\"), \"claude-sonnet-5-5\"\n+        )\n+\n+    def test_bedrock_default(self):\n+        \"\"\"Claude Sonnet 4 reached end of life on Amazon Bedrock on 2026-10-14.\"\"\"\n+        self.assertEqual(\n+            _default_model_id(\"create_bedrock_model\"),\n+            \"global.anthropic.claude-sonnet-4-6\",\n+        )\n+\n+    def test_gemini_default(self):\n+        \"\"\"New Gemini API keys get a 404 for gemini-2.5-flash.\"\"\"\n+        self.assertEqual(_default_model_id(\"create_gemini_model\"), \"gemini-3.8-flash\")\n+\n+\n+if __name__ == \"__main__\":\n+    unittest.main()"
+  }
+ ],
+ "test_files": [
+  "tests/test_agents_default_models.py"
+ ]
+}

@@ -1,0 +1,47 @@
+{
+ "repo": "Rails-Designer/courrier",
+ "number": 66,
+ "url": "https://github.com/Rails-Designer/courrier/pull/66",
+ "title": "Fix subscriber requests that address the wrong member via the URL",
+ "merged_at": "2026-10-12T09:25:52Z",
+ "files": [
+  {
+   "filename": "lib/courrier/subscriber/beehiiv.rb",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -1,5 +1,6 @@\n # frozen_string_literal: true\n \n+require \"uri\"\n require \"courrier/subscriber/base\"\n \n module Courrier\n@@ -27,7 +28,10 @@ def destroy(email)\n       private\n \n       def subscription_id(publication_id, email)\n-        response = request(:get, \"#{ENDPOINT_URL}/#{publication_id}/subscriptions?email=#{email}\")\n+        response = request(\n+          :get,\n+          \"#{ENDPOINT_URL}/#{publication_id}/subscriptions?email=#{URI.encode_www_form_component(email)}\"\n+        )\n \n         return nil unless response.success?\n "
+  },
+  {
+   "filename": "lib/courrier/subscriber/buttondown.rb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -1,5 +1,6 @@\n # frozen_string_literal: true\n \n+require \"uri\"\n require \"courrier/subscriber/base\"\n \n module Courrier\n@@ -12,7 +13,7 @@ def create(email)\n       end\n \n       def destroy(email)\n-        request(:delete, \"#{ENDPOINT_URL}/#{email}\")\n+        request(:delete, \"#{ENDPOINT_URL}/#{URI.encode_www_form_component(email)}\")\n       end\n \n       private"
+  },
+  {
+   "filename": "lib/courrier/subscriber/mailchimp.rb",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -1,5 +1,6 @@\n # frozen_string_literal: true\n \n+require \"digest\"\n require \"courrier/subscriber/base\"\n \n module Courrier\n@@ -23,11 +24,13 @@ def destroy(email)\n \n         raise Courrier::ConfigurationError, \"Mailchimp requires `dc` and `list_id` in subscriber configuration\" unless dc && list_id\n \n-        request(:delete, \"https://#{dc}.api.mailchimp.com/3.0/lists/#{list_id}/members/#{email}\")\n+        request(:delete, \"https://#{dc}.api.mailchimp.com/3.0/lists/#{list_id}/members/#{subscriber_hash(email)}\")\n       end\n \n       private\n \n+      def subscriber_hash(email) = Digest::MD5.hexdigest(email.downcase)\n+\n       def headers\n         {\n           \"Authorization\" => \"Bearer #{@api_key}\","
+  },
+  {
+   "filename": "lib/courrier/subscriber/mailerlite.rb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -1,5 +1,6 @@\n # frozen_string_literal: true\n \n+require \"uri\"\n require \"courrier/subscriber/base\"\n \n module Courrier\n@@ -12,7 +13,7 @@ def create(email)\n       end\n \n       def destroy(email)\n-        request(:delete, \"#{ENDPOINT_URL}/#{email}\")\n+        request(:delete, \"#{ENDPOINT_URL}/#{URI.encode_www_form_component(email)}\")\n       end\n \n       private"
+  },
+  {
+   "filename": "test/courrier/subscriber/url_encoding_test.rb",
+   "status": "added",
+   "additions": 63,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,63 @@\n+require \"digest\"\n+require \"test_helper\"\n+require \"courrier/subscriber/buttondown\"\n+require \"courrier/subscriber/mailerlite\"\n+require \"courrier/subscriber/beehiiv\"\n+require \"courrier/subscriber/mailchimp\"\n+\n+class Courrier::Subscriber::UrlEncodingTest < Minitest::Test\n+  EMAIL = \"subscriber+tag@example.com\"\n+  ENCODED = \"subscriber%2Btag%40example.com\"\n+\n+  def test_buttondown_encodes_the_email_in_the_delete_path\n+    request = capture_request(Courrier::Subscriber::Buttondown.new(api_key: \"k\")) { it.destroy(EMAIL) }\n+\n+    assert_equal :delete, request[:method]\n+    assert_equal \"https://api.buttondown.email/v1/subscribers/#{ENCODED}\", request[:url]\n+  end\n+\n+  def test_mailerlite_encodes_the_email_in_the_delete_path\n+    request = capture_request(Courrier::Subscriber::Mailerlite.new(api_key: \"k\")) { it.destroy(EMAIL) }\n+\n+    assert_equal :delete, request[:method]\n+    assert_equal \"https://connect.mailerlite.com/api/subscribers/#{ENCODED}\", request[:url]\n+  end\n+\n+  def test_beehiiv_encodes_the_email_in_the_lookup_query\n+    Courrier.configure { |c| c.subscriber = {publication_id: \"pub_1\"} }\n+\n+    request = capture_request(Courrier::Subscriber::Beehiiv.new(api_key: \"k\")) { it.destroy(EMAIL) }\n+\n+    assert_equal :get, request[:method]\n+    assert_equal(\n+      \"https://api.beehiiv.com/v2/publications/pub_1/subscriptions?email=#{ENCODED}\",\n+      request[:url]\n+    )\n+  end\n+\n+  def test_mailchimp_addresses_the_member_by_the_md5_of_the_lowercased_email\n+    Courrier.configure { it.subscriber = {dc: \"us1\", list_id: \"abc123\"} }\n+\n+    request = capture_request(Courrier::Subscriber::Mailchimp.new(api_key: \"k\")) { it.destroy(\"Subscriber@Example.com\") }\n+\n+    hash = Digest::MD5.hexdigest(\"subscriber@example.com\")\n+    assert_equal :delete, request[:method]\n+    assert_equal \"https://us1.api.mailchimp.com/3.0/lists/abc123/members/#{hash}\", request[:url]\n+  end\n+\n+  private\n+\n+  def capture_request(provider)\n+    request = nil\n+    result = Courrier::Subscriber::Result.new(response: Data.define(:code, :body).new(code: \"200\", body: \"{}\"))\n+\n+    handler = lambda do |method, url, body = nil|\n+      request = {method: method, url: url, body: body}\n+      result\n+    end\n+\n+    provider.stub(:request, handler) { yield provider }\n+\n+    request\n+  end\n+end"
+  }
+ ],
+ "test_files": [
+  "test/courrier/subscriber/url_encoding_test.rb"
+ ]
+}

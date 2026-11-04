@@ -1,0 +1,33 @@
+{
+ "repo": "deepset-ai/haystack-core-integrations",
+ "number": 3926,
+ "url": "https://github.com/deepset-ai/haystack-core-integrations/pull/3926",
+ "title": "fix: batch CohereDocumentEmbedder.run_async like the sync path",
+ "merged_at": "2026-09-10T06:12:22Z",
+ "files": [
+  {
+   "filename": "integrations/cohere/src/haystack_integrations/components/embedders/cohere/document_embedder.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -249,6 +249,8 @@ async def run_async(self, documents: list[Document]) -> dict[str, list[Document]\n             model_name=self.model,\n             input_type=self.input_type,\n             truncate=self.truncate,\n+            batch_size=self.batch_size,\n+            progress_bar=self.progress_bar,\n             embedding_type=self.embedding_type,\n         )\n "
+  },
+  {
+   "filename": "integrations/cohere/src/haystack_integrations/components/embedders/cohere/utils.py",
+   "status": "modified",
+   "additions": 26,
+   "deletions": 17,
+   "patch": "@@ -16,6 +16,8 @@ async def get_async_response(\n     model_name: str,\n     input_type: str,\n     truncate: str,\n+    batch_size: int = 32,\n+    progress_bar: bool = False,\n     embedding_type: EmbeddingTypes | None = None,\n ) -> tuple[list[list[float]], dict[str, Any]]:\n     \"\"\"\n@@ -27,6 +29,9 @@ async def get_async_response(\n     :param input_type: one of \"classification\", \"clustering\", \"search_document\", \"search_query\".\n         The type of input text provided to embed.\n     :param truncate: one of \"NONE\", \"START\", \"END\". How the API handles text longer than the maximum token length.\n+    :param batch_size: the batch size to use. The Cohere embed endpoint caps the number of texts per call, so the\n+        texts are sent in batches just like the synchronous path.\n+    :param progress_bar: if `True`, show a progress bar\n     :param embedding_type: the type of embeddings to return. Defaults to float embeddings.\n \n     :returns: A tuple of the embeddings and metadata.\n@@ -35,24 +40,28 @@ async def get_async_response(\n     \"\"\"\n     all_embeddings: list[list[float]] = []\n     metadata: dict[str, Any] = {}\n-\n     embedding_type = embedding_type or EmbeddingTypes.FLOAT\n-    response = await cohere_async_client.embed(\n-        texts=texts,\n-        model=model_name,\n-        input_type=input_type,\n-        truncate=truncate,\n-        embedding_types=[embedding_type.value],\n-    )\n-    if response.meta is not None:\n-        metadata = response.meta.model_dump()\n-    for emb_tuple in response.embeddings:\n-        # emb_tuple[0] is a str denoting the embedding type (e.g. \"float\", \"int8\", etc.)\n-        if emb_tuple[1] is not None:\n-            # ok we have embeddings for this type, let's take all\n-            # the embeddings (a list of embeddings) and break the loop\n-            all_embeddings.extend(emb_tuple[1])\n-            break\n+\n+    for i in tqdm(\n+        range(0, len(texts), batch_size),\n+        disable=not progress_bar,\n+        desc=\"Calculating embeddings\",\n+    ):\n+        batch = texts[i : i + batch_size]\n+        response = await cohere_async_client.embed(\n+            texts=batch,\n+            model=model_name,\n+            input_type=input_type,\n+            truncate=truncate,\n+            embedding_types=[embedding_type.value],\n+        )\n+        for emb_tuple in response.embeddings:\n+            # emb_tuple[0] is a str denoting the embedding type (e.g. \"float\", \"int8\", etc.)\n+            if emb_tuple[1] is not None:\n+                # ok we have embeddings for this type, let's take all the embeddings (a list of embeddings)\n+                all_embeddings.extend(emb_tuple[1])\n+        if response.meta is not None:\n+            metadata = response.meta.model_dump()\n \n     return all_embeddings, metadata\n "
+  },
+  {
+   "filename": "integrations/cohere/tests/test_document_embedder.py",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -247,6 +247,35 @@ async def test_run_async(self, mock_get_response):\n             assert doc_with_embedding.meta == doc.meta\n             assert doc_with_embedding.embedding == embedding\n \n+    @pytest.mark.asyncio\n+    @patch(\"haystack_integrations.components.embedders.cohere.document_embedder.AsyncClientV2\")\n+    async def test_run_async_sends_texts_in_batches(self, mock_async_client_cls):\n+        \"\"\"\n+        run_async must honour batch_size like run does. The Cohere embed endpoint caps the number of\n+        texts per call, so sending every text in a single request breaks on larger inputs.\n+        \"\"\"\n+        batch_sizes: list[int] = []\n+\n+        class _Response:\n+            def __init__(self, n: int) -> None:\n+                self.embeddings = [(\"float\", [[0.1, 0.2, 0.3]] * n)]\n+                self.meta = None\n+\n+        async def fake_embed(*, texts, **_kwargs):\n+            batch_sizes.append(len(texts))\n+            return _Response(len(texts))\n+\n+        mock_async_client_cls.return_value.embed = fake_embed\n+\n+        embedder = CohereDocumentEmbedder(api_key=Secret.from_token(\"test-api-key\"), batch_size=2)\n+        docs = [Document(content=f\"doc {i}\") for i in range(5)]\n+\n+        result = await embedder.run_async(docs)\n+\n+        assert batch_sizes == [2, 2, 1]\n+        assert len(result[\"documents\"]) == 5\n+        assert all(doc.embedding == [0.1, 0.2, 0.3] for doc in result[\"documents\"])\n+\n     @patch(\"haystack_integrations.components.embedders.cohere.document_embedder.get_response\")\n     def test_run_does_not_modify_original_documents(self, mock_get_response):\n         embedder = CohereDocumentEmbedder(api_key=Secret.from_token(\"test-api-key\"))"
+  }
+ ],
+ "test_files": [
+  "integrations/cohere/tests/test_document_embedder.py"
+ ]
+}

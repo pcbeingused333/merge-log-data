@@ -1,0 +1,108 @@
+{
+ "repo": "Rails-Designer/courrier",
+ "number": 62,
+ "url": "https://github.com/Rails-Designer/courrier/pull/62",
+ "title": "Send cc and bcc through the six providers that were dropping them",
+ "merged_at": "2026-09-07T10:18:01Z",
+ "files": [
+  {
+   "filename": "lib/courrier/email/providers/base.rb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -47,6 +47,8 @@ def address_list(value, as: :email)\n           list.map { |address| address_element(address, as) }\n         end\n \n+        def address_line(value) = address_list(value, as: :plain)&.join(\", \")\n+\n         def address_element(address, as)\n           case as\n           when :email then {\"email\" => address}"
+  },
+  {
+   "filename": "lib/courrier/email/providers/mailgun.rb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -13,6 +13,8 @@ def body\n             \"from\" => @options.from,\n \n             \"to\" => @options.to,\n+            \"cc\" => address_line(@options.cc),\n+            \"bcc\" => address_line(@options.bcc),\n             \"h:Reply-To\" => @options.reply_to,\n \n             \"subject\" => @options.subject,"
+  },
+  {
+   "filename": "lib/courrier/email/providers/mailjet.rb",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 5,
+   "patch": "@@ -16,11 +16,9 @@ def body\n                   \"Email\" => @options.from\n                 },\n \n-                \"To\" => [\n-                  {\n-                    \"Email\" => @options.to\n-                  }\n-                ],\n+                \"To\" => addresses(@options.to),\n+                \"Cc\" => addresses(@options.cc),\n+                \"Bcc\" => addresses(@options.bcc),\n                 \"ReplyTo\" => reply_to_object,\n \n                 \"Subject\" => @options.subject,\n@@ -39,6 +37,10 @@ def default_headers\n           }\n         end\n \n+        def addresses(value)\n+          address_list(value, as: :plain)&.map { |address| {\"Email\" => address} }\n+        end\n+\n         def reply_to_object\n           return if @options.reply_to.nil?\n "
+  },
+  {
+   "filename": "lib/courrier/email/providers/mailpace.rb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -11,6 +11,8 @@ def body\n             \"from\" => @options.from,\n \n             \"to\" => @options.to,\n+            \"cc\" => address_line(@options.cc),\n+            \"bcc\" => address_line(@options.bcc),\n             \"replyto\" => @options.reply_to,\n \n             \"subject\" => @options.subject,"
+  },
+  {
+   "filename": "lib/courrier/email/providers/postmark.rb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -13,6 +13,8 @@ def body\n             \"From\" => @options.from,\n \n             \"To\" => @options.to,\n+            \"Cc\" => address_line(@options.cc),\n+            \"Bcc\" => address_line(@options.bcc),\n             \"ReplyTo\" => @options.reply_to,\n \n             \"Subject\" => @options.subject,"
+  },
+  {
+   "filename": "lib/courrier/email/providers/sendgrid.rb",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 6,
+   "patch": "@@ -13,12 +13,10 @@ def body\n             },\n             \"personalizations\" => [\n               {\n-                \"to\" => [\n-                  {\n-                    \"email\" => @options.to\n-                  }\n-                ]\n-              }\n+                \"to\" => address_list(@options.to),\n+                \"cc\" => address_list(@options.cc),\n+                \"bcc\" => address_list(@options.bcc)\n+              }.compact\n             ],\n             \"reply_to\" => reply_to_object,\n "
+  },
+  {
+   "filename": "lib/courrier/email/providers/sparkpost.rb",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 8,
+   "patch": "@@ -13,15 +13,10 @@ def body\n               \"from\" => @options.from,\n               \"subject\" => @options.subject,\n               \"text\" => @options.text,\n-              \"html\" => @options.html\n+              \"html\" => @options.html,\n+              \"headers\" => cc_header\n             }.compact,\n-            \"recipients\" => [\n-              {\n-                \"address\" => {\n-                  \"email\" => @options.to\n-                }\n-              }\n-            ]\n+            \"recipients\" => recipients\n           }\n         end\n \n@@ -32,6 +27,26 @@ def default_headers\n             \"Authorization\" => @api_key\n           }\n         end\n+\n+        # SparkPost has no cc/bcc field: every copy is an entry in `recipients`, and only\n+        # the addresses repeated in the CC header are shown as copied. `header_to` keeps the\n+        # visible To line the same for all of them, so a bcc stays hidden and a cc is not\n+        # mistaken for a to.\n+        def recipients\n+          [@options.to, @options.cc, @options.bcc].flat_map { |value| recipients_for(value) }\n+        end\n+\n+        def recipients_for(value)\n+          Array(address_list(value, as: :plain)).map do |address|\n+            {\"address\" => {\"email\" => address, \"header_to\" => address_line(@options.to)}}\n+          end\n+        end\n+\n+        def cc_header\n+          cc = address_line(@options.cc)\n+\n+          {\"CC\" => cc} if cc\n+        end\n       end\n     end\n   end"
+  },
+  {
+   "filename": "test/courrier/email/providers/mailgun_test.rb",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 1,
+   "patch": "@@ -6,7 +6,9 @@ def setup\n       email = TestEmail.new(\n         from: \"devs@railsdesigner.com\",\n         to: \"first@example.com, second@example.com\",\n-        reply_to: \"support@railsdesigner.com\"\n+        reply_to: \"support@railsdesigner.com\",\n+        cc: \"copy@example.com, second-copy@example.com\",\n+        bcc: \"archive@example.com\"\n       )\n \n       @provider = provider_for(email)\n@@ -17,6 +19,8 @@ def test_formats_transactional_email\n         {\n           \"from\" => \"devs@railsdesigner.com\",\n           \"to\" => \"first@example.com, second@example.com\",\n+          \"cc\" => \"copy@example.com, second-copy@example.com\",\n+          \"bcc\" => \"archive@example.com\",\n           \"h:Reply-To\" => \"support@railsdesigner.com\",\n           \"subject\" => \"Test Subject\",\n           \"text\" => \"Test Body\",\n@@ -32,6 +36,13 @@ def test_omits_reply_to_when_not_set\n       refute_includes body.keys, \"h:Reply-To\"\n     end\n \n+    def test_omits_empty_address_fields\n+      body = provider_for(TestEmail.new(from: \"devs@railsdesigner.com\", to: \"first@example.com\", cc: \"\", bcc: \"  \")).body\n+\n+      refute_includes body.keys, \"cc\"\n+      refute_includes body.keys, \"bcc\"\n+    end\n+\n     def test_builds_endpoint_url_from_domain\n       assert_equal \"https://api.mailgun.net/v3/railsdesigner.com/messages\", @provider.send(:endpoint_url)\n     end"
+  },
+  {
+   "filename": "test/courrier/email/providers/mailjet_test.rb",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 3,
+   "patch": "@@ -5,8 +5,10 @@ class MailjetTest < Minitest::Test\n     def setup\n       email = TestEmail.new(\n         from: \"devs@railsdesigner.com\",\n-        to: \"first@example.com\",\n-        reply_to: \"support@railsdesigner.com\"\n+        to: \"first@example.com, second@example.com\",\n+        reply_to: \"support@railsdesigner.com\",\n+        cc: \"copy@example.com\",\n+        bcc: \"archive@example.com\"\n       )\n \n       @provider = provider_for(email)\n@@ -18,7 +20,9 @@ def test_formats_transactional_email\n           \"Messages\" => [\n             {\n               \"From\" => {\"Email\" => \"devs@railsdesigner.com\"},\n-              \"To\" => [{\"Email\" => \"first@example.com\"}],\n+              \"To\" => [{\"Email\" => \"first@example.com\"}, {\"Email\" => \"second@example.com\"}],\n+              \"Cc\" => [{\"Email\" => \"copy@example.com\"}],\n+              \"Bcc\" => [{\"Email\" => \"archive@example.com\"}],\n               \"ReplyTo\" => {\"Email\" => \"support@railsdesigner.com\"},\n               \"Subject\" => \"Test Subject\",\n               \"TextPart\" => \"Test Body\",\n@@ -36,6 +40,13 @@ def test_omits_reply_to_when_not_set\n       refute_includes body[\"Messages\"].first.keys, \"ReplyTo\"\n     end\n \n+    def test_omits_empty_address_fields\n+      message = provider_for(TestEmail.new(from: \"devs@railsdesigner.com\", to: \"first@example.com\", cc: \"\", bcc: \"  \")).body[\"Messages\"].first\n+\n+      refute_includes message.keys, \"Cc\"\n+      refute_includes message.keys, \"Bcc\"\n+    end\n+\n     def test_authenticates_with_api_key_and_secret\n       assert_equal(\n         {\"Authorization\" => \"Basic dGVzdF9rZXk6dGVzdF9zZWNyZXQ=\"},"
+  },
+  {
+   "filename": "test/courrier/email/providers/mailpace_test.rb",
+   "status": "added",
+   "additions": 47,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,47 @@\n+require \"test_helper\"\n+\n+module Courrier::Email::Providers\n+  class MailpaceTest < Minitest::Test\n+    def setup\n+      email = TestEmail.new(\n+        from: \"devs@railsdesigner.com\",\n+        to: \"first@example.com, second@example.com\",\n+        reply_to: \"support@railsdesigner.com\",\n+        cc: \"copy@example.com, second-copy@example.com\",\n+        bcc: \"archive@example.com\"\n+      )\n+\n+      @provider = Mailpace.new(api_key: \"test_key\", options: email.options)\n+    end\n+\n+    def test_formats_transactional_email\n+      assert_equal(\n+        {\n+          \"from\" => \"devs@railsdesigner.com\",\n+          \"to\" => \"first@example.com, second@example.com\",\n+          \"cc\" => \"copy@example.com, second-copy@example.com\",\n+          \"bcc\" => \"archive@example.com\",\n+          \"replyto\" => \"support@railsdesigner.com\",\n+          \"subject\" => \"Test Subject\",\n+          \"textbody\" => \"Test Body\",\n+          \"htmlbody\" => \"<p>Test HTML Body</p>\"\n+        },\n+        @provider.body\n+      )\n+    end\n+\n+    def test_omits_empty_address_fields\n+      body = Mailpace.new(\n+        api_key: \"test_key\",\n+        options: TestEmail.new(from: \"devs@railsdesigner.com\", to: \"first@example.com\", cc: \"\", bcc: \"  \").options\n+      ).body\n+\n+      refute_includes body.keys, \"cc\"\n+      refute_includes body.keys, \"bcc\"\n+    end\n+\n+    def test_authenticates_with_api_key\n+      assert_equal({\"MailPace-Server-Token\" => \"test_key\"}, @provider.send(:default_headers))\n+    end\n+  end\n+end"
+  },
+  {
+   "filename": "test/courrier/email/providers/postmark_test.rb",
+   "status": "added",
+   "additions": 51,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,51 @@\n+require \"test_helper\"\n+\n+module Courrier::Email::Providers\n+  class PostmarkTest < Minitest::Test\n+    def setup\n+      email = TestEmail.new(\n+        from: \"devs@railsdesigner.com\",\n+        to: \"first@example.com, second@example.com\",\n+        reply_to: \"support@railsdesigner.com\",\n+        cc: \"copy@example.com, second-copy@example.com\",\n+        bcc: \"archive@example.com\"\n+      )\n+\n+      @provider = Postmark.new(api_key: \"test_key\", options: email.options, provider_options: Courrier::Configuration::ProviderConfig.new)\n+    end\n+\n+    def test_formats_transactional_email\n+      assert_equal(\n+        {\n+          \"From\" => \"devs@railsdesigner.com\",\n+          \"To\" => \"first@example.com, second@example.com\",\n+          \"Cc\" => \"copy@example.com, second-copy@example.com\",\n+          \"Bcc\" => \"archive@example.com\",\n+          \"ReplyTo\" => \"support@railsdesigner.com\",\n+          \"Subject\" => \"Test Subject\",\n+          \"TextBody\" => \"Test Body\",\n+          \"HtmlBody\" => \"<p>Test HTML Body</p>\",\n+          \"MessageStream\" => \"outbound\"\n+        },\n+        @provider.body\n+      )\n+    end\n+\n+    def test_omits_empty_address_fields\n+      body = provider_for(TestEmail.new(from: \"devs@railsdesigner.com\", to: \"first@example.com\", cc: \"\", bcc: \"  \")).body\n+\n+      refute_includes body.keys, \"Cc\"\n+      refute_includes body.keys, \"Bcc\"\n+    end\n+\n+    def test_authenticates_with_api_key\n+      assert_equal({\"X-Postmark-Server-Token\" => \"test_key\"}, @provider.send(:default_headers))\n+    end\n+\n+    private\n+\n+    def provider_for(email)\n+      Postmark.new(api_key: \"test_key\", options: email.options, provider_options: Courrier::Configuration::ProviderConfig.new)\n+    end\n+  end\n+end"
+  },
+  {
+   "filename": "test/courrier/email/providers/sendgrid_test.rb",
+   "status": "added",
+   "additions": 58,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,58 @@\n+require \"test_helper\"\n+\n+module Courrier::Email::Providers\n+  class SendgridTest < Minitest::Test\n+    def setup\n+      email = TestEmail.new(\n+        from: \"devs@railsdesigner.com\",\n+        to: \"first@example.com, second@example.com\",\n+        reply_to: \"support@railsdesigner.com\",\n+        cc: \"copy@example.com\",\n+        bcc: \"archive@example.com\"\n+      )\n+\n+      @provider = Sendgrid.new(api_key: \"test_key\", options: email.options)\n+    end\n+\n+    def test_formats_transactional_email\n+      assert_equal(\n+        {\n+          \"from\" => {\"email\" => \"devs@railsdesigner.com\"},\n+          \"personalizations\" => [\n+            {\n+              \"to\" => [{\"email\" => \"first@example.com\"}, {\"email\" => \"second@example.com\"}],\n+              \"cc\" => [{\"email\" => \"copy@example.com\"}],\n+              \"bcc\" => [{\"email\" => \"archive@example.com\"}]\n+            }\n+          ],\n+          \"reply_to\" => {\"email\" => \"support@railsdesigner.com\"},\n+          \"subject\" => \"Test Subject\",\n+          \"content\" => [\n+            {\"type\" => \"text/plain\", \"value\" => \"Test Body\"},\n+            {\"type\" => \"text/html\", \"value\" => \"<p>Test HTML Body</p>\"}\n+          ]\n+        },\n+        @provider.body\n+      )\n+    end\n+\n+    def test_omits_empty_address_fields\n+      personalization = provider_for(cc: \"\", bcc: \"  \").body[\"personalizations\"].first\n+\n+      refute_includes personalization.keys, \"cc\"\n+      refute_includes personalization.keys, \"bcc\"\n+    end\n+\n+    def test_authenticates_with_api_key\n+      assert_equal({\"Authorization\" => \"Bearer test_key\"}, @provider.send(:default_headers))\n+    end\n+\n+    private\n+\n+    def provider_for(**options)\n+      email = TestEmail.new(from: \"devs@railsdesigner.com\", to: \"first@example.com\", **options)\n+\n+      Sendgrid.new(api_key: \"test_key\", options: email.options)\n+    end\n+  end\n+end"
+  },
+  {
+   "filename": "test/courrier/email/providers/sparkpost_test.rb",
+   "status": "added",
+   "additions": 74,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,74 @@\n+require \"test_helper\"\n+\n+module Courrier::Email::Providers\n+  class SparkpostTest < Minitest::Test\n+    def setup\n+      email = TestEmail.new(\n+        from: \"devs@railsdesigner.com\",\n+        to: \"first@example.com, second@example.com\",\n+        reply_to: \"support@railsdesigner.com\",\n+        cc: \"copy@example.com\",\n+        bcc: \"archive@example.com\"\n+      )\n+\n+      @provider = Sparkpost.new(api_key: \"test_key\", options: email.options)\n+    end\n+\n+    def test_formats_transactional_email\n+      assert_equal(\n+        {\n+          \"content\" => {\n+            \"reply_to\" => \"support@railsdesigner.com\",\n+            \"from\" => \"devs@railsdesigner.com\",\n+            \"subject\" => \"Test Subject\",\n+            \"text\" => \"Test Body\",\n+            \"html\" => \"<p>Test HTML Body</p>\",\n+            \"headers\" => {\"CC\" => \"copy@example.com\"}\n+          },\n+          \"recipients\" => [\n+            {\"address\" => {\"email\" => \"first@example.com\", \"header_to\" => \"first@example.com, second@example.com\"}},\n+            {\"address\" => {\"email\" => \"second@example.com\", \"header_to\" => \"first@example.com, second@example.com\"}},\n+            {\"address\" => {\"email\" => \"copy@example.com\", \"header_to\" => \"first@example.com, second@example.com\"}},\n+            {\"address\" => {\"email\" => \"archive@example.com\", \"header_to\" => \"first@example.com, second@example.com\"}}\n+          ]\n+        },\n+        @provider.body\n+      )\n+    end\n+\n+    def test_keeps_a_bcc_out_of_the_headers\n+      headers = @provider.body[\"content\"][\"headers\"]\n+\n+      refute_includes headers.to_s, \"archive@example.com\"\n+    end\n+\n+    def test_omits_the_cc_header_when_there_is_no_cc\n+      body = provider_for(bcc: \"archive@example.com\").body\n+\n+      refute_includes body[\"content\"].keys, \"headers\"\n+      assert_equal 2, body[\"recipients\"].size\n+    end\n+\n+    def test_omits_empty_address_fields\n+      body = provider_for(cc: \"\", bcc: \"  \").body\n+\n+      refute_includes body[\"content\"].keys, \"headers\"\n+      assert_equal(\n+        [{\"address\" => {\"email\" => \"first@example.com\", \"header_to\" => \"first@example.com\"}}],\n+        body[\"recipients\"]\n+      )\n+    end\n+\n+    def test_authenticates_with_api_key\n+      assert_equal({\"Authorization\" => \"test_key\"}, @provider.send(:default_headers))\n+    end\n+\n+    private\n+\n+    def provider_for(**options)\n+      email = TestEmail.new(from: \"devs@railsdesigner.com\", to: \"first@example.com\", **options)\n+\n+      Sparkpost.new(api_key: \"test_key\", options: email.options)\n+    end\n+  end\n+end"
+  }
+ ],
+ "test_files": [
+  "test/courrier/email/providers/mailgun_test.rb",
+  "test/courrier/email/providers/mailjet_test.rb",
+  "test/courrier/email/providers/mailpace_test.rb",
+  "test/courrier/email/providers/postmark_test.rb",
+  "test/courrier/email/providers/sendgrid_test.rb",
+  "test/courrier/email/providers/sparkpost_test.rb"
+ ]
+}

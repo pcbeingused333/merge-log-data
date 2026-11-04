@@ -1,0 +1,26 @@
+{
+ "repo": "donetick/donetick",
+ "number": 898,
+ "url": "https://github.com/donetick/donetick/pull/898",
+ "title": "fix(label): remove chore labels attached by another member",
+ "merged_at": "2026-10-18T13:37:02Z",
+ "files": [
+  {
+   "filename": "internal/label/repo/repository.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -77,7 +77,7 @@ func (r *LabelRepository) AssignLabelsToChore(ctx context.Context, choreID int,\n \t}\n \treturn r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {\n \t\tif len(toBeRemoved) > 0 {\n-\t\t\tif err := r.db.WithContext(ctx).Where(\"chore_id = ? AND user_id = ? AND label_id IN (?)\", choreID, userID, toBeRemoved).Delete(&chModel.ChoreLabels{}).Error; err != nil {\n+\t\t\tif err := r.db.WithContext(ctx).Where(\"chore_id = ? AND label_id IN (?)\", choreID, toBeRemoved).Delete(&chModel.ChoreLabels{}).Error; err != nil {\n \t\t\t\treturn err\n \t\t\t}\n \t\t}"
+  },
+  {
+   "filename": "internal/label/repo/repository_test.go",
+   "status": "added",
+   "additions": 40,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,40 @@\n+package chore\n+\n+import (\n+\t\"context\"\n+\t\"path/filepath\"\n+\t\"testing\"\n+\n+\t\"github.com/glebarez/sqlite\"\n+\t\"github.com/stretchr/testify/require\"\n+\t\"gorm.io/gorm\"\n+\n+\t\"donetick.com/core/config\"\n+\tchModel \"donetick.com/core/internal/chore/model\"\n+\t\"donetick.com/core/internal/database\"\n+\tlModel \"donetick.com/core/internal/label/model\"\n+)\n+\n+// A label shown on a chore can be removed by any member allowed to edit it,\n+// not only by the member who attached it.\n+func TestAssignLabelsToChoreRemovesLabelAddedByAnotherMember(t *testing.T) {\n+\tdb, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), \"labels.db\")), &gorm.Config{})\n+\trequire.NoError(t, err)\n+\trequire.NoError(t, database.Migration(db))\n+\trepo := NewLabelRepository(db, &config.Config{})\n+\tctx := context.Background()\n+\n+\tcircleID := 1\n+\tlabel := lModel.Label{Name: \"kitchen\", Color: \"#ff9800\", CircleID: &circleID, CreatedBy: 2}\n+\trequire.NoError(t, db.Create(&label).Error)\n+\tchore := chModel.Chore{Name: \"dishes\", FrequencyType: chModel.FrequencyTypeOnce,\n+\t\tAssignStrategy: chModel.AssignmentStrategyRandom, CircleID: circleID, CreatedBy: 2, IsActive: true}\n+\trequire.NoError(t, db.Create(&chore).Error)\n+\trequire.NoError(t, repo.AssignLabelsToChore(ctx, chore.ID, 2, circleID, []int{label.ID}, nil))\n+\n+\trequire.NoError(t, repo.AssignLabelsToChore(ctx, chore.ID, 1, circleID, nil, []int{label.ID}))\n+\n+\tvar count int64\n+\trequire.NoError(t, db.Model(&chModel.ChoreLabels{}).Where(\"chore_id = ?\", chore.ID).Count(&count).Error)\n+\trequire.Zero(t, count, \"the label is still attached to the chore\")\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/label/repo/repository_test.go"
+ ]
+}

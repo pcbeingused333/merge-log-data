@@ -1,0 +1,63 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1070,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1070",
+ "title": "Return FileSystem, Calculator and Weather errors to the LLM instead of raising",
+ "merged_at": "2026-10-13T21:15:00Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n - [SECURITY]: A change which fixes a security vulnerability.\n \n ## [Unreleased]\n+- [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1070] Return a message instead of raising from `Langchain::Tool::FileSystem` (reading a directory, listing a file, writing into a missing directory) and `Langchain::Tool::Calculator` (division by zero), and from `Langchain::Tool::Weather` when the weather request fails after the location lookup, which ended the `Langchain::Assistant` run in `:failed`.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1066] Read the fixed output with `#chat_completion` in `Langchain::OutputParsers::OutputFixingParser`; `#completion` is `nil` or not implemented on the Anthropic, Ollama, Mistral AI and Google Gemini chat responses, so fixing never succeeded there.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1068] Call the cohere-ruby 1.0 (v2 API) `chat` and `embed` from `Langchain::LLM::Cohere`, which raised `ArgumentError` with the gem version the gemspec requires; v1 `chat_history` messages are converted, and `CohereResponse` reads v2 and v1 bodies.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1065] Leave the tools out of the request when the Ollama assistant adapter gets `tool_choice: \"none\"`, and stop logging `tool_choice`/`parallel_tool_calls` warnings on every call for the Assistant's defaults."
+  },
+  {
+   "filename": "lib/langchain/tool/calculator.rb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -33,6 +33,8 @@ def execute(input:)\n       tool_response(content: result)\n     rescue Eqn::ParseError, Eqn::NoVariableValueError\n       tool_response(content: \"\\\"#{input}\\\" is an invalid mathematical expression\")\n+    rescue Eqn::ZeroDivisionError\n+      tool_response(content: \"\\\"#{input}\\\" divides by zero\")\n     end\n   end\n end"
+  },
+  {
+   "filename": "lib/langchain/tool/file_system.rb",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -27,19 +27,27 @@ def list_directory(directory_path:)\n       tool_response(content: Dir.entries(directory_path))\n     rescue Errno::ENOENT\n       tool_response(content: \"No such directory: #{directory_path}\")\n+    rescue Errno::ENOTDIR\n+      tool_response(content: \"Not a directory: #{directory_path}\")\n     end\n \n     def read_file(file_path:)\n       tool_response(content: File.read(file_path))\n     rescue Errno::ENOENT\n       tool_response(content: \"No such file: #{file_path}\")\n+    rescue Errno::EISDIR\n+      tool_response(content: \"Is a directory, not a file: #{file_path}\")\n     end\n \n     def write_to_file(file_path:, content:)\n       File.write(file_path, content)\n       tool_response(content: \"File written successfully\")\n     rescue Errno::EACCES\n       tool_response(content: \"Permission denied: #{file_path}\")\n+    rescue Errno::ENOENT\n+      tool_response(content: \"No such directory: #{File.dirname(file_path)}\")\n+    rescue Errno::EISDIR\n+      tool_response(content: \"Is a directory, not a file: #{file_path}\")\n     end\n   end\n end"
+  },
+  {
+   "filename": "lib/langchain/tool/weather.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -62,6 +62,7 @@ def fetch_current_weather(city:, state_code:, country_code:, units:)\n \n       params = params.merge(lat: location[\"lat\"], lon: location[\"lon\"]).except(:q)\n       weather_data = send_request(path: \"data/2.5/weather\", params: params)\n+      return tool_response(content: weather_data) if weather_data.is_a?(String) # Error occurred\n \n       tool_response(content: parse_weather_response(weather_data, units))\n     end"
+  },
+  {
+   "filename": "spec/lib/langchain/tool/calculator_spec.rb",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -18,4 +18,10 @@\n       expect(response.content).to eq(\"\\\"two plus two\\\" is an invalid mathematical expression\")\n     end\n   end\n+\n+  describe \"#execute with a division by zero\" do\n+    it \"returns an explanation instead of raising\" do\n+      expect(described_class.new.execute(input: \"1/0\").content).to eq(\"\\\"1/0\\\" divides by zero\")\n+    end\n+  end\n end"
+  },
+  {
+   "filename": "spec/lib/langchain/tool/file_system_spec.rb",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 0,
+   "patch": "@@ -61,4 +61,27 @@\n       end\n     end\n   end\n+\n+  describe \"errors the LLM can recover from\" do\n+    let(:dir) { Dir.mktmpdir }\n+\n+    after { FileUtils.remove_entry(dir) }\n+\n+    it \"returns an error instead of raising when listing a file\" do\n+      file = File.join(dir, \"a.txt\")\n+      File.write(file, \"a\")\n+\n+      expect(subject.list_directory(directory_path: file).content).to eq(\"Not a directory: #{file}\")\n+    end\n+\n+    it \"returns an error instead of raising when reading a directory\" do\n+      expect(subject.read_file(file_path: dir).content).to eq(\"Is a directory, not a file: #{dir}\")\n+    end\n+\n+    it \"returns an error instead of raising when the parent directory is missing\" do\n+      path = File.join(dir, \"missing\", \"a.txt\")\n+\n+      expect(subject.write_to_file(file_path: path, content: \"a\").content).to eq(\"No such directory: #{File.join(dir, \"missing\")}\")\n+    end\n+  end\n end"
+  },
+  {
+   "filename": "spec/lib/langchain/tool/weather_spec.rb",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -70,6 +70,18 @@\n         expect(result.content).to eq(\"API request failed: 404 - Not Found\")\n       end\n     end\n+\n+    context \"when the weather request fails after the location was found\" do\n+      before do\n+        allow(weather_tool).to receive(:send_request)\n+          .and_return([{\"lat\" => 40.7128, \"lon\" => -74.006}], \"API request failed: 429 - Too Many Requests\")\n+      end\n+\n+      it \"returns the error message instead of raising\" do\n+        result = weather_tool.get_current_weather(city: city, state_code: state_code)\n+        expect(result.content).to eq(\"API request failed: 429 - Too Many Requests\")\n+      end\n+    end\n   end\n \n   describe \"input validation\" do"
+  }
+ ],
+ "test_files": [
+  "spec/lib/langchain/tool/calculator_spec.rb",
+  "spec/lib/langchain/tool/file_system_spec.rb",
+  "spec/lib/langchain/tool/weather_spec.rb"
+ ]
+}

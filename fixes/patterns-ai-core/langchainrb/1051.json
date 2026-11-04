@@ -1,0 +1,26 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1051,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1051",
+ "title": "Skip unsupported files when loading a directory instead of returning an error object",
+ "merged_at": "2026-09-09T13:41:11Z",
+ "files": [
+  {
+   "filename": "lib/langchain/loader.rb",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 5,
+   "patch": "@@ -107,12 +107,16 @@ def load_from_path\n \n     # rubocop:disable Style/ArgumentsForwarding\n     def load_from_directory(&block)\n-      Dir.glob(File.join(@path, \"**/*\")).map do |file|\n-        # Only load and add to result files with supported extensions\n+      Dir.glob(File.join(@path, \"**/*\")).filter_map do |file|\n+        # `**/*` already yields every nested file, so skip the directory entries\n+        # rather than recursing into them and loading their contents twice.\n+        next if File.directory?(file)\n+\n         Langchain::Loader.new(file, @options).load(&block)\n-      rescue\n-        UnknownFormatError.new(\"Unknown format: #{source_type}\")\n-      end.flatten.compact\n+      rescue UnknownFormatError\n+        # Silently skip files with an unsupported extension.\n+        nil\n+      end.flatten\n     end\n     # rubocop:enable Style/ArgumentsForwarding\n "
+  },
+  {
+   "filename": "spec/lib/langchain/loader_spec.rb",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 0,
+   "patch": "@@ -1,5 +1,8 @@\n # frozen_string_literal: true\n \n+require \"tmpdir\"\n+require \"fileutils\"\n+\n RSpec.describe Langchain::Loader do\n   describe \"#load\" do\n     let(:status) { [\"200\", \"OK\"] }\n@@ -40,6 +43,26 @@\n       end\n     end\n \n+    context \"Directory with an unsupported file and a subdirectory\" do\n+      around do |example|\n+        Dir.mktmpdir do |dir|\n+          File.write(File.join(dir, \"notes.txt\"), \"hello\")\n+          File.write(File.join(dir, \"image.png\"), \"not really a png\")\n+          FileUtils.mkdir_p(File.join(dir, \"nested\"))\n+          File.write(File.join(dir, \"nested\", \"more.txt\"), \"world\")\n+          @dir = dir\n+          example.run\n+        end\n+      end\n+\n+      subject { described_class.new(@dir).load }\n+\n+      it \"returns only Data for the loadable files, skipping the rest\" do\n+        expect(subject).to all(be_a(Langchain::Data))\n+        expect(subject.map(&:value)).to contain_exactly(\"hello\", \"world\")\n+      end\n+    end\n+\n     context \"Text\" do\n       context \"from local file\" do\n         let(:path) { \"spec/fixtures/loaders/example.txt\" }"
+  }
+ ],
+ "test_files": [
+  "spec/lib/langchain/loader_spec.rb"
+ ]
+}

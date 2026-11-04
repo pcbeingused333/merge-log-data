@@ -1,0 +1,33 @@
+{
+ "repo": "PostHog/posthog-python",
+ "number": 1074,
+ "url": "https://github.com/PostHog/posthog-python/pull/1074",
+ "title": "fix(ai): take cumulative Anthropic stream usage from message_delta",
+ "merged_at": "2026-10-21T11:43:06Z",
+ "files": [
+  {
+   "filename": ".sampo/changesets/cumulative-anthropic-stream-usage.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+pypi/posthog: patch\n+---\n+\n+Streamed Anthropic generations now take the input and cache token counts from the final `message_delta` usage, which is cumulative. With server tools such as web search, those counts grow past the `message_start` values, so streamed calls under-reported input tokens and cache writes."
+  },
+  {
+   "filename": "posthog/ai/anthropic/_anthropic_stream.py",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -26,9 +26,34 @@ def __init__(self) -> None:\n         # web_search_tool_result, ...), so keep a list that lines up with it.\n         self._blocks_by_index: List[StreamingContentBlock] = []\n \n+    def _apply_cumulative_input_usage(self, usage: Any) -> None:\n+        # Usage on message_delta is cumulative. With server tools (web search,\n+        # web fetch, code execution) its input and cache counts grow past\n+        # message_start's, which is all the per-event merge records for them.\n+        # The totals never shrink, so keep the larger value; a field the event\n+        # omits leaves message_start's count in place.\n+        input_tokens = getattr(usage, \"input_tokens\", None)\n+        if isinstance(input_tokens, int):\n+            self.usage_stats[\"input_tokens\"] = max(\n+                self.usage_stats.get(\"input_tokens\") or 0, input_tokens\n+            )\n+        cache_creation = getattr(usage, \"cache_creation_input_tokens\", None)\n+        if isinstance(cache_creation, int):\n+            self.usage_stats[\"cache_creation_input_tokens\"] = max(\n+                self.usage_stats.get(\"cache_creation_input_tokens\") or 0,\n+                cache_creation,\n+            )\n+        cache_read = getattr(usage, \"cache_read_input_tokens\", None)\n+        if isinstance(cache_read, int):\n+            self.usage_stats[\"cache_read_input_tokens\"] = max(\n+                self.usage_stats.get(\"cache_read_input_tokens\") or 0, cache_read\n+            )\n+\n     def consume(self, event: Any) -> None:\n         event_usage = extract_anthropic_usage_from_event(event)\n         merge_usage_stats(self.usage_stats, event_usage)\n+        if getattr(event, \"type\", None) == \"message_delta\":\n+            self._apply_cumulative_input_usage(getattr(event, \"usage\", None))\n \n         if getattr(event, \"type\", None) == \"content_block_start\":\n             block, tool = handle_anthropic_content_block_start(event)"
+  },
+  {
+   "filename": "posthog/test/ai/anthropic/test_anthropic.py",
+   "status": "modified",
+   "additions": 83,
+   "deletions": 0,
+   "patch": "@@ -824,6 +824,89 @@ async def mock_async_create(**kwargs):\n     )\n \n \n+def anthropic_stream_with_server_tool_usage():\n+    # With server tools, message_delta reports cumulative usage that exceeds\n+    # message_start's (values from a recorded web search stream).\n+    return [\n+        RawMessageStartEvent(\n+            type=\"message_start\",\n+            message=Message(\n+                id=\"msg_1\",\n+                type=\"message\",\n+                role=\"assistant\",\n+                model=\"claude-haiku-4-5\",\n+                content=[],\n+                stop_reason=None,\n+                stop_sequence=None,\n+                usage=Usage(\n+                    input_tokens=2247,\n+                    output_tokens=26,\n+                    cache_creation_input_tokens=0,\n+                    cache_read_input_tokens=0,\n+                ),\n+            ),\n+        ),\n+        RawMessageDeltaEvent(\n+            type=\"message_delta\",\n+            delta=Delta(stop_reason=\"end_turn\", stop_sequence=None),\n+            usage=MessageDeltaUsage(\n+                input_tokens=2254,\n+                output_tokens=110,\n+                cache_creation_input_tokens=17269,\n+                cache_read_input_tokens=0,\n+            ),\n+        ),\n+        RawMessageStopEvent(type=\"message_stop\"),\n+    ]\n+\n+\n+def assert_cumulative_delta_usage(props):\n+    assert props[\"$ai_input_tokens\"] == 2254\n+    assert props[\"$ai_output_tokens\"] == 110\n+    assert props[\"$ai_cache_creation_input_tokens\"] == 17269\n+    assert props[\"$ai_cache_read_input_tokens\"] == 0\n+\n+\n+def test_streaming_takes_cumulative_message_delta_usage(mock_client):\n+    with patch(\n+        \"anthropic.resources.Messages.create\",\n+        return_value=iter(anthropic_stream_with_server_tool_usage()),\n+    ):\n+        client = Anthropic(api_key=\"test-key\", posthog_client=mock_client)\n+        response = client.messages.create(\n+            model=\"claude-haiku-4-5\",\n+            messages=[{\"role\": \"user\", \"content\": \"Hello\"}],\n+            stream=True,\n+        )\n+        list(response)\n+\n+    assert_cumulative_delta_usage(mock_client.capture.call_args.kwargs[\"properties\"])\n+\n+\n+@pytest.mark.asyncio\n+async def test_streaming_takes_cumulative_message_delta_usage_async(mock_client):\n+    async def mock_async_stream():\n+        for event in anthropic_stream_with_server_tool_usage():\n+            yield event\n+\n+    async def mock_async_create(**kwargs):\n+        return mock_async_stream()\n+\n+    with patch(\n+        \"anthropic.resources.messages.AsyncMessages.create\",\n+        side_effect=mock_async_create,\n+    ):\n+        client = AsyncAnthropic(api_key=\"test-key\", posthog_client=mock_client)\n+        response = await client.messages.create(\n+            model=\"claude-haiku-4-5\",\n+            messages=[{\"role\": \"user\", \"content\": \"Hello\"}],\n+            stream=True,\n+        )\n+        [event async for event in response]\n+\n+    assert_cumulative_delta_usage(mock_client.capture.call_args.kwargs[\"properties\"])\n+\n+\n def test_anthropic_bedrock_preserves_cache_creation_ttl_breakdown(\n     mock_client, mock_anthropic_response_with_cache_ttl\n ):"
+  }
+ ],
+ "test_files": [
+  "posthog/test/ai/anthropic/test_anthropic.py"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "we-promise/sure",
+ "number": 4274,
+ "url": "https://github.com/we-promise/sure/pull/4274",
+ "title": "Drop calculated holdings shadowed by a provider snapshot in any currency",
+ "merged_at": "2026-10-18T01:49:30Z",
+ "files": [
+  {
+   "filename": "app/models/holding/materializer.rb",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 2,
+   "patch": "@@ -182,7 +182,9 @@ def load_existing_holdings_map\n     end\n \n     # Remove only calculated holdings that collide with an authoritative provider snapshot\n-    # on the exact same key. This preserves reverse-calculated history for linked accounts.\n+    # for the same security and date. This preserves reverse-calculated history for linked accounts.\n+    # Currency is not part of the match: providers can report a position in its own currency while\n+    # calculated rows are always in the account currency, and keeping both counts the position twice.\n     def cleanup_shadowed_calculated_holdings\n       deleted_count = account.holdings\n         .where(account_provider_id: nil)\n@@ -193,7 +195,6 @@ def cleanup_shadowed_calculated_holdings\n             WHERE provider_holdings.account_id = holdings.account_id\n               AND provider_holdings.security_id = holdings.security_id\n               AND provider_holdings.date = holdings.date\n-              AND provider_holdings.currency = holdings.currency\n               AND provider_holdings.account_provider_id IS NOT NULL\n           )\n         SQL"
+  },
+  {
+   "filename": "test/models/holding/materializer_test.rb",
+   "status": "modified",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -267,6 +267,39 @@ class Holding::MaterializerTest < ActiveSupport::TestCase\n     assert_equal [ account_provider.id ], today_holdings.pluck(:account_provider_id)\n   end\n \n+  test \"cleans up calculated holdings on earlier provider snapshot dates when the snapshot is in another currency\" do\n+    [ Date.yesterday, Date.current ].each do |date|\n+      ExchangeRate.create!(from_currency: \"EUR\", to_currency: \"USD\", date: date, rate: 1.2)\n+    end\n+\n+    coinstats_item = @family.coinstats_items.create!(name: \"CoinStats\", api_key: \"test-key\")\n+    coinstats_account = coinstats_item.coinstats_accounts.create!(\n+      name: \"Brokerage\",\n+      currency: \"USD\"\n+    )\n+    account_provider = AccountProvider.create!(account: @account, provider: coinstats_account)\n+\n+    [ Date.yesterday, Date.current ].each do |date|\n+      Holding.create!(\n+        account: @account,\n+        security: @aapl,\n+        qty: 10,\n+        price: 200,\n+        amount: 2000,\n+        currency: \"EUR\",\n+        date: date,\n+        account_provider: account_provider\n+      )\n+    end\n+\n+    Holding::Materializer.new(@account, strategy: :reverse).materialize_holdings\n+\n+    yesterday_holdings = @account.holdings.where(security: @aapl, date: Date.yesterday)\n+\n+    assert_equal [ \"EUR\" ], yesterday_holdings.pluck(:currency)\n+    assert_equal [ account_provider.id ], yesterday_holdings.pluck(:account_provider_id)\n+  end\n+\n   test \"carries forward provider cost_basis to calculated rows past the provider snapshot date\" do\n     coinstats_item = @family.coinstats_items.create!(name: \"CoinStats\", api_key: \"test-key\")\n     coinstats_account = coinstats_item.coinstats_accounts.create!(name: \"Brokerage\", currency: \"USD\")"
+  }
+ ],
+ "test_files": [
+  "test/models/holding/materializer_test.rb"
+ ]
+}

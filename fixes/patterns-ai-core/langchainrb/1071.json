@@ -1,0 +1,33 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1071,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1071",
+ "title": "Pass the chunker to files loaded from a directory and match extensions case-insensitively",
+ "merged_at": "2026-10-14T02:10:06Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n - [SECURITY]: A change which fixes a security vulnerability.\n \n ## [Unreleased]\n+- [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1071] Use the loader's `chunker:` for every file of a directory loaded with `Langchain::Loader`, and match file extensions case-insensitively, so `NOTES.TXT` no longer raises `UnknownFormatError`.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1070] Return a message instead of raising from `Langchain::Tool::FileSystem` (reading a directory, listing a file, writing into a missing directory) and `Langchain::Tool::Calculator` (division by zero), and from `Langchain::Tool::Weather` when the weather request fails after the location lookup, which ended the `Langchain::Assistant` run in `:failed`.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1066] Read the fixed output with `#chat_completion` in `Langchain::OutputParsers::OutputFixingParser`; `#completion` is `nil` or not implemented on the Anthropic, Ollama, Mistral AI and Google Gemini chat responses, so fixing never succeeded there.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1068] Call the cohere-ruby 1.0 (v2 API) `chat` and `embed` from `Langchain::LLM::Cohere`, which raised `ArgumentError` with the gem version the gemspec requires; v1 `chat_history` messages are converted, and `CohereResponse` reads v2 and v1 bodies."
+  },
+  {
+   "filename": "lib/langchain/loader.rb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -112,7 +112,7 @@ def load_from_directory(&block)\n         # rather than recursing into them and loading their contents twice.\n         next if File.directory?(file)\n \n-        Langchain::Loader.new(file, @options).load(&block)\n+        Langchain::Loader.new(file, @options, chunker: @chunker).load(&block)\n       rescue UnknownFormatError\n         # Silently skip files with an unsupported extension.\n         nil\n@@ -151,7 +151,7 @@ def processors\n     end\n \n     def source_type\n-      url? ? @raw_data.content_type : File.extname(@path)\n+      url? ? @raw_data.content_type : File.extname(@path).downcase\n     end\n \n     def lookup_constant"
+  },
+  {
+   "filename": "spec/lib/langchain/loader_spec.rb",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -61,6 +61,26 @@\n         expect(subject).to all(be_a(Langchain::Data))\n         expect(subject.map(&:value)).to contain_exactly(\"hello\", \"world\")\n       end\n+\n+      it \"chunks every file with the chunker given to the loader\" do\n+        data = described_class.new(@dir, {}, chunker: Langchain::Chunker::Sentence).load\n+\n+        expect(data.map { |d| d.instance_variable_get(:@chunker_klass) }).to all(eq(Langchain::Chunker::Sentence))\n+      end\n+    end\n+\n+    context \"File with an upper-case extension\" do\n+      around do |example|\n+        Dir.mktmpdir do |dir|\n+          @path = File.join(dir, \"NOTES.TXT\")\n+          File.write(@path, \"hello\")\n+          example.run\n+        end\n+      end\n+\n+      it \"is loaded with the processor for the lower-case extension\" do\n+        expect(described_class.new(@path).load.value).to eq(\"hello\")\n+      end\n     end\n \n     context \"Text\" do"
+  }
+ ],
+ "test_files": [
+  "spec/lib/langchain/loader_spec.rb"
+ ]
+}

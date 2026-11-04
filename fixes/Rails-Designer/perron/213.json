@@ -1,0 +1,26 @@
+{
+ "repo": "Rails-Designer/perron",
+ "number": 213,
+ "url": "https://github.com/Rails-Designer/perron/pull/213",
+ "title": "Harden the `Paginate` constructor against missing/invalid config",
+ "merged_at": "2026-11-02T18:58:02Z",
+ "files": [
+  {
+   "filename": "lib/perron/paginate.rb",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 2,
+   "patch": "@@ -2,10 +2,14 @@\n \n module Perron\n   class Paginate\n-    def initialize(collection, page:, per_page:, base_path: nil, page_path_template: nil, use_query_params: false)\n+    def initialize(collection, page:, per_page:, base_path: \"/\", page_path_template: nil, use_query_params: false)\n+      unless per_page.is_a?(Integer) && per_page.positive?\n+        raise ArgumentError, \"per_page must be a positive integer, got #{per_page.inspect}\"\n+      end\n+\n       @collection = collection\n       @per_page = per_page\n-      @base_path = base_path\n+      @base_path = base_path || \"/\"\n       @page_path_template = page_path_template || \"/page/:page/\"\n       @use_query_params = use_query_params\n "
+  },
+  {
+   "filename": "test/perron/paginate_test.rb",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 0,
+   "patch": "@@ -193,4 +193,32 @@ class Perron::PaginateTest < ActiveSupport::TestCase\n \n     assert_equal \"/articles/?page=2\", paginate.previous\n   end\n+\n+  test \"next falls back to a root-relative path when base_path is omitted\" do\n+    paginate = Perron::Paginate.new((1..10).to_a, page: 1, per_page: 5)\n+\n+    assert_equal \"/page/2/\", paginate.next\n+  end\n+\n+  test \"previous falls back to root when base_path is omitted\" do\n+    paginate = Perron::Paginate.new((1..10).to_a, page: 2, per_page: 5)\n+\n+    assert_equal \"/\", paginate.previous\n+  end\n+\n+  test \"an explicit nil base_path is treated as root\" do\n+    paginate = Perron::Paginate.new((1..10).to_a, page: 1, per_page: 5, base_path: nil)\n+\n+    assert_equal \"/page/2/\", paginate.next\n+  end\n+\n+  test \"raises ArgumentError for a non-positive or non-integer per_page\" do\n+    [0, -5, nil, 2.5].each do |bad|\n+      error = assert_raises(ArgumentError) do\n+        Perron::Paginate.new((1..10).to_a, page: 1, per_page: bad)\n+      end\n+\n+      assert_match(/per_page must be a positive integer/, error.message)\n+    end\n+  end\n end"
+  }
+ ],
+ "test_files": [
+  "test/perron/paginate_test.rb"
+ ]
+}

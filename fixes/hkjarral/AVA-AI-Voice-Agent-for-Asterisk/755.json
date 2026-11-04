@@ -1,0 +1,33 @@
+{
+ "repo": "hkjarral/AVA-AI-Voice-Agent-for-Asterisk",
+ "number": 755,
+ "url": "https://github.com/hkjarral/AVA-AI-Voice-Agent-for-Asterisk/pull/755",
+ "title": "fix(cli): replace retired Claude model in troubleshoot",
+ "merged_at": "2026-10-20T04:12:09Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -33,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0\n   uncertain mutations blocked when reconciliation reads fail. Preserve structured\n   calendar outcomes and silent metadata continuation in OpenAI responses.\n \n+- **CLI troubleshoot with Anthropic:** `agent troubleshoot` LLM analysis used\n+  `claude-3-haiku-20240307`, which Anthropic retired on 2026-04-20, so every\n+  request failed. It now uses `claude-haiku-5-5` with thinking disabled and reads\n+  the first text block of the response.\n+\n - **Tools save/apply and navigation:** preserve drafts and calendar connection\n   state while moving between editors; merge background calendar results into the\n   latest draft, including Microsoft timezone/calendar fallback values edited"
+  },
+  {
+   "filename": "cli/internal/troubleshoot/llm.go",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 6,
+   "patch": "@@ -40,7 +40,7 @@ func NewLLMAnalyzer() (*LLMAnalyzer, error) {\n \t\tmodel = \"gpt-4o-mini\" // Fast and cost-effective\n \tcase \"anthropic\":\n \t\tapiKey = os.Getenv(\"ANTHROPIC_API_KEY\")\n-\t\tmodel = \"claude-3-haiku-20240307\" // Fast and cost-effective\n+\t\tmodel = \"claude-haiku-5-5\" // Fast and cost-effective\n \tdefault:\n \t\treturn nil, fmt.Errorf(\"unsupported provider: %s\", provider)\n \t}\n@@ -334,9 +334,12 @@ func (llm *LLMAnalyzer) callOpenAI(prompt string) (string, error) {\n \treturn content, nil\n }\n \n+// anthropicMessagesURL is a variable so tests can point it at a local server.\n+var anthropicMessagesURL = \"https://api.anthropic.com/v1/messages\"\n+\n // callAnthropic makes Anthropic API request\n func (llm *LLMAnalyzer) callAnthropic(prompt string) (string, error) {\n-\turl := \"https://api.anthropic.com/v1/messages\"\n+\turl := anthropicMessagesURL\n \n \trequestBody := map[string]interface{}{\n \t\t\"model\": llm.model,\n@@ -347,6 +350,8 @@ func (llm *LLMAnalyzer) callAnthropic(prompt string) (string, error) {\n \t\t\t},\n \t\t},\n \t\t\"max_tokens\": 800,\n+\t\t// Claude Haiku 5.5 thinks by default; keep the 800 tokens for the answer.\n+\t\t\"thinking\": map[string]string{\"type\": \"disabled\"},\n \t}\n \n \tjsonData, err := json.Marshal(requestBody)\n@@ -389,12 +394,18 @@ func (llm *LLMAnalyzer) callAnthropic(prompt string) (string, error) {\n \t\treturn \"\", fmt.Errorf(\"no content in response\")\n \t}\n \n-\ttext, ok := content[0].(map[string]interface{})[\"text\"].(string)\n-\tif !ok {\n-\t\treturn \"\", fmt.Errorf(\"invalid response format\")\n+\t// Read blocks by type: a response can start with a thinking block.\n+\tfor _, block := range content {\n+\t\tb, ok := block.(map[string]interface{})\n+\t\tif !ok || b[\"type\"] != \"text\" {\n+\t\t\tcontinue\n+\t\t}\n+\t\tif text, ok := b[\"text\"].(string); ok {\n+\t\t\treturn text, nil\n+\t\t}\n \t}\n \n-\treturn text, nil\n+\treturn \"\", fmt.Errorf(\"invalid response format\")\n }\n \n // LLMDiagnosis holds LLM analysis results"
+  },
+  {
+   "filename": "cli/internal/troubleshoot/llm_anthropic_test.go",
+   "status": "added",
+   "additions": 52,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,52 @@\n+package troubleshoot\n+\n+import (\n+\t\"encoding/json\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"testing\"\n+)\n+\n+// TestCallAnthropicUsesCurrentModelAndReadsTextBlock verifies the request settings\n+// and extracts the diagnosis when a thinking block precedes the text response.\n+func TestCallAnthropicUsesCurrentModelAndReadsTextBlock(t *testing.T) {\n+\tvar body map[string]interface{}\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tif err := json.NewDecoder(r.Body).Decode(&body); err != nil {\n+\t\t\tt.Errorf(\"decode request: %v\", err)\n+\t\t\treturn\n+\t\t}\n+\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t_, _ = w.Write([]byte(`{\"type\":\"message\",\"content\":[` +\n+\t\t\t`{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"sig\"},` +\n+\t\t\t`{\"type\":\"text\",\"text\":\"ROOT CAUSE: codec mismatch\"}]}`))\n+\t}))\n+\tdefer server.Close()\n+\n+\toldURL := anthropicMessagesURL\n+\tanthropicMessagesURL = server.URL\n+\tdefer func() { anthropicMessagesURL = oldURL }()\n+\n+\tt.Setenv(\"TROUBLESHOOT_LLM_PROVIDER\", \"anthropic\")\n+\tt.Setenv(\"ANTHROPIC_API_KEY\", \"test-key\")\n+\tllm, err := NewLLMAnalyzer()\n+\tif err != nil {\n+\t\tt.Fatalf(\"NewLLMAnalyzer: %v\", err)\n+\t}\n+\n+\ttext, err := llm.callAnthropic(\"diagnose\")\n+\tif err != nil {\n+\t\tt.Fatalf(\"callAnthropic: %v\", err)\n+\t}\n+\tif text != \"ROOT CAUSE: codec mismatch\" {\n+\t\tt.Fatalf(\"text=%q\", text)\n+\t}\n+\t// claude-3-haiku-20240307 was retired on 2026-04-20.\n+\tif body[\"model\"] != \"claude-haiku-5-5\" {\n+\t\tt.Fatalf(\"model=%v\", body[\"model\"])\n+\t}\n+\tthinking, _ := body[\"thinking\"].(map[string]interface{})\n+\tif thinking[\"type\"] != \"disabled\" {\n+\t\tt.Fatalf(\"thinking=%v\", body[\"thinking\"])\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "cli/internal/troubleshoot/llm_anthropic_test.go"
+ ]
+}

@@ -1,0 +1,48 @@
+{
+ "repo": "o19s/quepid",
+ "number": 1840,
+ "url": "https://github.com/o19s/quepid/pull/1840",
+ "title": "Make the Anthropic AI Judge work with current Claude models",
+ "merged_at": "2026-10-20T19:38:31Z",
+ "files": [
+  {
+   "filename": "app/models/llm_provider.rb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -224,11 +224,11 @@ class LlmProvider\n       adapter:             'LlmJudgeAdapters::Anthropic',\n       auth_style:          :x_api_key,\n       default_service_url: 'https://api.anthropic.com',\n-      default_model:       'claude-sonnet-4-5-20250514',\n+      default_model:       'claude-sonnet-5-5',\n       help_html:           <<~HTML.squish,\n         <strong>Anthropic</strong> &mdash; Direct Anthropic API access.<br>\n         <b>URL:</b> <code>https://api.anthropic.com</code><br>\n-        <b>Model:</b> e.g. <code>claude-opus-4-6</code>, <code>claude-sonnet-4-5-20250514</code><br>\n+        <b>Model:</b> e.g. <code>claude-opus-5-5</code>, <code>claude-sonnet-5-5</code><br>\n         <b>Key:</b> Your Anthropic API key (sent as <code>x-api-key</code> header)<br>\n         <b>API Version:</b> Leave blank\n       HTML"
+  },
+  {
+   "filename": "app/services/llm_judge_adapters/anthropic.rb",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 6,
+   "patch": "@@ -15,19 +15,23 @@ def body_for user_prompt, system_prompt\n       user_content = user_prompt.is_a?(Array) ? user_prompt.map { |part| content_block(part) } : user_prompt\n \n       {\n-        model:       options[:llm_model],\n-        max_tokens:  MAX_TOKENS,\n-        temperature: 0.7,\n-        system:      system_prompt,\n-        messages:    [\n+        model:      options[:llm_model],\n+        max_tokens: MAX_TOKENS,\n+        system:     system_prompt,\n+        messages:   [\n           { role: 'user', content: user_content }\n         ],\n       }\n     end\n \n+    # The answer is in the text blocks. Models that think by default (Claude Opus 5.5,\n+    # Sonnet 5.5) put a thinking block first, so the first block is not always text.\n     def content_from response_body\n+      blocks = Array(response_body['content']).select { |block| 'text' == block['type'] }\n+      return nil if blocks.empty?\n+\n       # Anthropic doesn't support response_format, so the model may wrap JSON in markdown code blocks\n-      strip_markdown_code_block(response_body.dig('content', 0, 'text'))\n+      strip_markdown_code_block(blocks.pluck('text').join)\n     end\n \n     private"
+  },
+  {
+   "filename": "app/services/llm_judge_adapters/open_ai.rb",
+   "status": "modified",
+   "additions": 0,
+   "deletions": 1,
+   "patch": "@@ -25,7 +25,6 @@ def path\n \n     def body_for user_prompt, system_prompt\n       {\n-        temperature:     0.7,\n         model:           options[:llm_model],\n         response_format: { type: 'json_object' },\n         messages:        ["
+  },
+  {
+   "filename": "test/models/llm_provider_test.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -16,7 +16,7 @@ class LlmProviderTest < ActiveSupport::TestCase\n                                        'https://RESOURCE.services.ai.azure.com/anthropic', '',\n                                        'claude-3-5-haiku-20241022' ],\n     'anthropic'                   => [ 'Anthropic', 'https://api.anthropic.com', '',\n-                                       'claude-sonnet-4-5-20250514' ],\n+                                       'claude-sonnet-5-5' ],\n     'google_gemini'               => [ 'Google Gemini',\n                                        'https://generativelanguage.googleapis.com/v1beta/openai', '',\n                                        'gemini-2.0-flash' ],"
+  },
+  {
+   "filename": "test/services/llm_judge_adapters_test.rb",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 4,
+   "patch": "@@ -44,7 +44,6 @@ def openai_body content\n \n       body = envelope[:body]\n \n-      assert_in_delta(0.7, body[:temperature])\n       assert_equal 'gpt-4o', body[:model]\n       assert_equal({ type: 'json_object' }, body[:response_format])\n       assert_equal 'Judge it.', body[:messages][0][:content]\n@@ -54,6 +53,12 @@ def openai_body content\n       assert_equal 'image_url', body[:messages][1][:content][1][:type]\n     end\n \n+    test 'sends no temperature, which reasoning models reject unless it is the default' do\n+      body = openai.request_envelope(query_doc_pair, system_prompt: 'Judge it.')[:body]\n+\n+      assert_not body.key?(:temperature)\n+    end\n+\n     test 'carries the book scale into the system prompt' do\n       envelope = openai.request_envelope(query_doc_pair, system_prompt: 'Judge it.',\n                                                          scale:         JudgeScale.for(books(:james_bond_movies)))\n@@ -82,7 +87,7 @@ def openai_body content\n \n   describe 'the Anthropic envelope' do\n     let(:anthropic) do\n-      LlmJudgeAdapters.for('a-key', { llm_provider: 'anthropic', llm_model: 'claude-sonnet-4-5-20250514' })\n+      LlmJudgeAdapters.for('a-key', { llm_provider: 'anthropic', llm_model: 'claude-sonnet-5-5' })\n     end\n \n     test 'is a Messages API request with the system prompt lifted out of the messages' do\n@@ -96,13 +101,31 @@ def openai_body content\n     end\n \n     test 'reads a judgement out of markdown fenced JSON' do\n-      body = { 'content' => [ { 'text' => \"```json\\n{\\\"judgment\\\": 2, \\\"explanation\\\": \\\"ok\\\"}\\n```\" } ] }\n+      body = { 'content' => [ { 'type' => 'text', 'text' => \"```json\\n{\\\"judgment\\\": 2, \\\"explanation\\\": \\\"ok\\\"}\\n```\" } ] }\n \n       anthropic.apply_response(judgement, body)\n \n       assert_in_delta(2.0, judgement.rating)\n       assert_equal 'ok', judgement.explanation\n     end\n+\n+    test 'reads the text block when a thinking block comes first' do\n+      body = { 'content' => [\n+        { 'type' => 'thinking', 'thinking' => '', 'signature' => 'sig' },\n+        { 'type' => 'text', 'text' => '{\"judgment\": 3, \"explanation\": \"close match\"}' }\n+      ] }\n+\n+      anthropic.apply_response(judgement, body)\n+\n+      assert_in_delta(3.0, judgement.rating)\n+      assert_equal 'close match', judgement.explanation\n+    end\n+\n+    test 'sends no temperature, which current Claude models reject' do\n+      body = anthropic.request_envelope(query_doc_pair, system_prompt: 'Judge it.')[:body]\n+\n+      assert_not body.key?(:temperature)\n+    end\n   end\n \n   describe 'attaching a document image' do\n@@ -170,7 +193,7 @@ def image_urls parts\n     end\n \n     test 'Anthropic gets a case thumb as a URL image source' do\n-      anthropic = LlmJudgeAdapters.for('a-key', { llm_provider: 'anthropic', llm_model: 'claude-sonnet-4-5-20250514' })\n+      anthropic = LlmJudgeAdapters.for('a-key', { llm_provider: 'anthropic', llm_model: 'claude-sonnet-5-5' })\n       pair = pair_with('title' => 'Han', 'thumb' => 'https://example.com/thumb.jpg')\n \n       content = anthropic.request_envelope(pair, system_prompt: 'Judge it.')[:body][:messages][0][:content]"
+  }
+ ],
+ "test_files": [
+  "test/models/llm_provider_test.rb",
+  "test/services/llm_judge_adapters_test.rb"
+ ]
+}

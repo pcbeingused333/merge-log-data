@@ -1,0 +1,82 @@
+{
+ "repo": "rubyforgood/human-essentials",
+ "number": 5656,
+ "url": "https://github.com/rubyforgood/human-essentials/pull/5656",
+ "title": "Alphabetize the Product Drive Participant drop-downs (#5593)",
+ "merged_at": "2026-10-11T14:59:33Z",
+ "files": [
+  {
+   "filename": "Gemfile",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -33,6 +33,8 @@ gem \"paper_trail\"\n gem \"rolify\", \"~> 6.0\"\n # Enforces \"safe\" migrations.\n gem \"strong_migrations\"\n+# Manages Postgres functions and triggers as versioned files.\n+gem \"fx\"\n # used in events\n gem 'dry-struct'\n # Use solid_cache as a cache store"
+  },
+  {
+   "filename": "Gemfile.lock",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -300,6 +300,9 @@ GEM\n     foreman (0.90.0)\n       thor (~> 1.4)\n     formatador (1.1.0)\n+    fx (0.11.0)\n+      activerecord (>= 7.2)\n+      railties (>= 7.2)\n     geocoder (1.8.6)\n       base64 (>= 0.1.0)\n       csv (>= 3.0.0)\n@@ -803,6 +806,7 @@ DEPENDENCIES\n   flipper-active_record\n   flipper-ui\n   foreman\n+  fx\n   geocoder\n   guard-rspec\n   icalendar"
+  },
+  {
+   "filename": "app/models/product_drive_participant.rb",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 1,
+   "patch": "@@ -30,7 +30,22 @@ class ProductDriveParticipant < ApplicationRecord\n   validates :business_name, presence: { message: \"Must provide a name or a business name\" }, if: proc { |pdp| pdp.contact_name.blank? }\n   validates :comment, length: { maximum: 500 }\n \n-  scope :alphabetized, -> { order(:contact_name) }\n+  # Orders on the name the drop-downs actually show - `display_name`, which is\n+  # `business_name` falling back to `contact_name` - rather than on the database\n+  # collation, which is not the same everywhere: a `C.UTF-8` cluster puts every\n+  # capitalised name before every lowercase one and the `en_US.utf8` image CI\n+  # runs does not.\n+  #\n+  # `leading_digit_sort_key` (db/functions/leading_digit_sort_key_v01.sql, added\n+  # via the `fx` gem) zero-pads a leading run of digits so \"2\" sorts before\n+  # \"10\" - it does not natural-sort a digit run in the middle of the name. That\n+  # scope was the deliberate tradeoff, over a fuller tokenizing version, agreed\n+  # on in https://github.com/rubyforgood/human-essentials/pull/5656.\n+  DISPLAY_NAME_ORDER = Arel.sql(\n+    \"leading_digit_sort_key(coalesce(NULLIF(business_name, ''), contact_name, ''))\"\n+  )\n+\n+  scope :alphabetized, -> { order(DISPLAY_NAME_ORDER) }\n   scope :by_business_name, ->(business_name) { where(\"business_name ILIKE ?\", \"%#{business_name}%\") }\n   scope :by_contact_name, ->(contact_name) { where(\"contact_name ILIKE ?\", \"%#{contact_name}%\") }\n   scope :with_volumes, -> {"
+  },
+  {
+   "filename": "app/views/donations/_donation_form.html.erb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -43,7 +43,7 @@\n                           collection: @product_drive_participants,\n                           selected: donation_form.product_drive_participant_id,\n                           include_blank: true,\n-                          label_method: lambda { |x| \"#{x.try(:business_name).presence || x.try(:contact_name)}\" },\n+                          label_method: :display_name,\n                           label: \"Product Drive Participant\",\n                           error: \"Which product drive participant was this from?\",\n                           wrapper: :input_group %>"
+  },
+  {
+   "filename": "app/views/donations/index.html.erb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -65,7 +65,7 @@\n                   <div class=\"form-group col-lg-3 col-md-4 col-sm-6 col-xs-12\">\n                     <%= filter_select(scope: :by_product_drive_participant,\n                                       collection: @donation_info.product_drive_participants,\n-                                      value: :business_name,\n+                                      value: :display_name,\n                                       selected: @donation_info.selected_product_drive_participant) %>\n                   </div>\n                 <% end %>"
+  },
+  {
+   "filename": "app/views/product_drive_participants/create.js.erb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -2,6 +2,6 @@\n $(\"#modal_new\").modal(\"hide\");\n $(\"#donation_product_drive_participant_id\").empty();\n $(\"#donation_product_drive_participant_id\").\n-html('<%= j options_from_collection_for_select(current_organization.product_drive_participants, :id, lambda { |p| p.business_name.present? ? p.business_name : p.contact_name }) %>');\n+html('<%= j options_from_collection_for_select(current_organization.product_drive_participants.alphabetized, :id, :display_name) %>');\n $(\"#donation_product_drive_participant_id\").append('<option value=\"\">---Create new Participant---</option>');\n $(\"#donation_product_drive_participant_id\").val('<%= @product_drive_participant[:id] %>');"
+  },
+  {
+   "filename": "db/functions/leading_digit_sort_key_v01.sql",
+   "status": "added",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,15 @@\n+-- Sort key that treats a run of digits *at the start* of the string as a\n+-- number instead of a sequence of characters, so \"2\" sorts before \"10\".\n+-- Anything past the leading digits (or the whole string, if it doesn't start\n+-- with a digit) is compared as plain lowercased text - a digit run elsewhere\n+-- in the string (e.g. \"Store 9\" vs. \"Store 10\") is not natural-sorted. That\n+-- narrower scope, instead of full natural sort, was the deliberate tradeoff\n+-- settled on in https://github.com/rubyforgood/human-essentials/pull/5656.\n+CREATE FUNCTION leading_digit_sort_key(value text) RETURNS text AS $$\n+  SELECT CASE\n+    WHEN lower(coalesce(value, '')) ~ '^[0-9]+'\n+    THEN lpad(substring(lower(value) from '^[0-9]+'), 20, '0')\n+         || substring(lower(value) from '^[0-9]+(.*)$')\n+    ELSE lower(coalesce(value, ''))\n+  END;\n+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;"
+  },
+  {
+   "filename": "db/migrate/20260921234706_create_function_leading_digit_sort_key.rb",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+class CreateFunctionLeadingDigitSortKey < ActiveRecord::Migration[8.1]\n+  def change\n+    create_function :leading_digit_sort_key\n+  end\n+end"
+  },
+  {
+   "filename": "db/schema.rb",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 1,
+   "patch": "@@ -10,7 +10,7 @@\n #\n # It's strongly recommended that you check this file into your version control system.\n \n-ActiveRecord::Schema[8.1].define(version: 2026_08_29_112930) do\n+ActiveRecord::Schema[8.1].define(version: 2026_09_21_234706) do\n   # These are extensions that must be enabled in order to support this database\n   enable_extension \"pg_catalog.plpgsql\"\n \n@@ -898,4 +898,19 @@\n   add_foreign_key \"tags\", \"organizations\"\n   add_foreign_key \"units\", \"organizations\"\n   add_foreign_key \"users\", \"users_roles\", column: \"last_role_id\", on_delete: :nullify\n+\n+  create_function :leading_digit_sort_key, sql_definition: <<-'SQL'\n+      CREATE OR REPLACE FUNCTION public.leading_digit_sort_key(value text)\n+       RETURNS text\n+       LANGUAGE sql\n+       IMMUTABLE PARALLEL SAFE\n+      AS $function$\n+        SELECT CASE\n+          WHEN lower(coalesce(value, '')) ~ '^[0-9]+'\n+          THEN lpad(substring(lower(value) from '^[0-9]+'), 20, '0')\n+               || substring(lower(value) from '^[0-9]+(.*)$')\n+          ELSE lower(coalesce(value, ''))\n+        END;\n+      $function$\n+  SQL\n end"
+  },
+  {
+   "filename": "spec/models/product_drive_participant_spec.rb",
+   "status": "modified",
+   "additions": 26,
+   "deletions": 0,
+   "patch": "@@ -71,6 +71,32 @@\n         expect(ProductDriveParticipant.by_contact_name(\"Shellstrop\")).to match_array([eleanor, donna])\n       end\n     end\n+\n+    describe \".alphabetized\" do\n+      it \"orders by the name that is displayed, falling back to contact name\" do\n+        zebra = create(:product_drive_participant, business_name: \"Zebra Foods\", contact_name: \"adam\")\n+        no_business = create(:product_drive_participant, business_name: nil, contact_name: \"molly\")\n+        aardvark = create(:product_drive_participant, business_name: \"Aardvark Supplies\", contact_name: \"zoe\")\n+\n+        expect(ProductDriveParticipant.alphabetized).to eq([aardvark, no_business, zebra])\n+      end\n+\n+      it \"orders a leading number by value rather than by digit\" do\n+        tenth = create(:product_drive_participant, business_name: \"10 Warehouse Way\")\n+        second = create(:product_drive_participant, business_name: \"2 Warehouse Way\")\n+        ninth = create(:product_drive_participant, business_name: \"9 Warehouse Way\")\n+\n+        expect(ProductDriveParticipant.alphabetized).to eq([second, ninth, tenth])\n+      end\n+\n+      it \"does not natural-sort a number in the middle of the name (leading-digit only, by design - see PR #5656)\" do\n+        tenth = create(:product_drive_participant, business_name: \"Store 10\")\n+        second = create(:product_drive_participant, business_name: \"Store 2\")\n+        ninth = create(:product_drive_participant, business_name: \"Store 9\")\n+\n+        expect(ProductDriveParticipant.alphabetized).to eq([tenth, second, ninth])\n+      end\n+    end\n   end\n \n   context \"Methods\" do"
+  }
+ ],
+ "test_files": [
+  "spec/models/product_drive_participant_spec.rb"
+ ]
+}

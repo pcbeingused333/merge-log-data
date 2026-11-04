@@ -1,0 +1,26 @@
+{
+ "repo": "Rails-Designer/fuik",
+ "number": 55,
+ "url": "https://github.com/Rails-Designer/fuik/pull/55",
+ "title": "Let dig take symbol keys like the other accessors",
+ "merged_at": "2026-11-02T19:09:13Z",
+ "files": [
+  {
+   "filename": "lib/fuik/dot_access.rb",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 1,
+   "patch": "@@ -22,7 +22,15 @@ def []=(key, value)\n       end\n \n       def dig(*keys)\n-        value = @payload.dig(*keys)\n+        value = keys.reduce(self) do |current, key|\n+          case current\n+          when nil then return nil\n+          when AccessPayload then current[key]\n+          when Hash then self.class.new(current)[key]\n+          when Array then current[key]\n+          else raise TypeError, \"#{current.class} does not have #dig method\"\n+          end\n+        end\n \n         value.is_a?(Hash) ? self.class.new(value) : value\n       end"
+  },
+  {
+   "filename": "test/lib/fuik/dot_access_test.rb",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -32,6 +32,21 @@ def setup\n       assert_equal \"premium\", @payload.dig(\"data\", \"object\", \"metadata\", \"plan\")\n     end\n \n+    test \"dig takes symbol keys for a payload with string keys\" do\n+      assert_equal \"user_456\", @payload.dig(:data, :object, :client_reference_id)\n+      assert_equal \"premium\", @payload.dig(:data, \"object\", :metadata, :plan)\n+      assert_equal \"premium\", @payload.dig(:data, :object).metadata.plan\n+    end\n+\n+    test \"dig goes through arrays and stops at a missing key\" do\n+      payload = { \"items\" => [ { \"price\" => { \"id\" => \"price_1\" } } ] }.to_dot\n+\n+      assert_equal \"price_1\", payload.dig(:items, 0, :price, :id)\n+      assert_equal \"price_1\", payload.dig(:items, 0, :price).id\n+      assert_nil payload.dig(:missing, :id)\n+      assert_nil payload.dig(:items, 1, :price)\n+    end\n+\n     test \"supports nested dot notation access\" do\n       assert_equal \"user_456\", @payload.data.object.client_reference_id\n       assert_equal \"premium\", @payload.data.object.metadata.plan"
+  }
+ ],
+ "test_files": [
+  "test/lib/fuik/dot_access_test.rb"
+ ]
+}

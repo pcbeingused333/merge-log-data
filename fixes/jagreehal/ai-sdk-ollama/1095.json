@@ -1,0 +1,33 @@
+{
+ "repo": "jagreehal/ai-sdk-ollama",
+ "number": 1095,
+ "url": "https://github.com/jagreehal/ai-sdk-ollama/pull/1095",
+ "title": "fix: abort the Ollama request when the stream is cancelled",
+ "merged_at": "2026-10-30T08:53:09Z",
+ "files": [
+  {
+   "filename": ".changeset/abort-cancelled-stream.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'ai-sdk-ollama': patch\n+---\n+\n+Abort the Ollama request when the stream returned by `doStream` is cancelled, so the server stops generating once the consumer stops reading."
+  },
+  {
+   "filename": "packages/ai-sdk-ollama/src/models/chat-language-model-stream.test.ts",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -298,6 +298,41 @@ describe('OllamaChatLanguageModel: doStream', () => {\n       await expect(model.doStream(options)).rejects.toThrow('Stream error');\n     });\n \n+    it('aborts the Ollama request when the stream is cancelled', async () => {\n+      const abort = vi.fn();\n+      let release: () => void = () => {};\n+      const aborted = new Promise<void>((resolve) => {\n+        release = resolve;\n+      });\n+      abort.mockImplementation(() => release());\n+      const mockStream: AbortableStream<ChatResponse> = {\n+        abort,\n+        async *[Symbol.asyncIterator]() {\n+          yield {\n+            model: 'llama3.2',\n+            created_at: new Date(),\n+            message: { role: 'assistant', content: 'Hello' },\n+            done: false,\n+          } as ChatResponse;\n+          // Ollama keeps generating until the request is aborted.\n+          await aborted;\n+        },\n+      };\n+      (mockChat as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(\n+        mockStream,\n+      );\n+\n+      const { stream } = await model.doStream({\n+        prompt: [{ role: 'user', content: [{ type: 'text', text: 'Hello' }] }],\n+      });\n+      const reader = stream.getReader();\n+      await reader.read(); // stream-start\n+      await reader.read(); // text-start\n+      await reader.cancel();\n+\n+      expect(abort).toHaveBeenCalledTimes(1);\n+    });\n+\n     it('should handle abort signal in streaming', async () => {\n       const abortController = new AbortController();\n       const mockAsyncIterable: AbortableStream<ChatResponse> = {"
+  },
+  {
+   "filename": "packages/ai-sdk-ollama/src/models/chat-language-model.ts",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -738,6 +738,10 @@ export class OllamaChatLanguageModel implements LanguageModelV4 {\n             controller.error(error);\n           }\n         },\n+        cancel() {\n+          // Stop the server-side generation when the consumer stops reading.\n+          stream.abort();\n+        },\n       });\n \n       return {"
+  }
+ ],
+ "test_files": [
+  "packages/ai-sdk-ollama/src/models/chat-language-model-stream.test.ts"
+ ]
+}

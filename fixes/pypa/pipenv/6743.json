@@ -1,0 +1,33 @@
+{
+ "repo": "pypa/pipenv",
+ "number": 6743,
+ "url": "https://github.com/pypa/pipenv/pull/6743",
+ "title": "Write one pylock.toml entry for packages locked in both default and develop",
+ "merged_at": "2026-10-18T05:45:09Z",
+ "files": [
+  {
+   "filename": "news/6743.bugfix.rst",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+Write a single ``pylock.toml`` entry for a package that ``Pipfile.lock`` lists in both ``default`` and ``develop``.\n+Previously both copies were written, so installing with the dev group failed: ``uv pip install -r pylock.toml --group dev``\n+reported multiple active entries, and Pipenv itself could not load the file (``has 2 entries that match the environment``)."
+  },
+  {
+   "filename": "pipenv/utils/pylock.py",
+   "status": "modified",
+   "additions": 44,
+   "deletions": 0,
+   "patch": "@@ -143,10 +143,29 @@ def from_lockfile(\n         dev_marker = \" or \".join(f\"'{g}' in dependency_groups\" for g in dev_groups)\n \n         # Process packages\n+        default_packages = lockfile_data.get(\"default\", {})\n+        default_entries = {}\n         for section in [\"default\", \"develop\"]:\n             packages = lockfile_data.get(section, {})\n             for name, package_data in packages.items():\n+                # Pipfile.lock repeats a shared dependency in both sections.\n+                # PEP 751 requires every install to narrow down to a single\n+                # entry per package, so fold the develop copy into the\n+                # default entry instead of writing a second one.\n+                if section == \"develop\" and _same_locked_package(\n+                    default_packages.get(name), package_data\n+                ):\n+                    _merge_develop_marker(\n+                        default_entries[name],\n+                        default_packages[name].get(\"markers\"),\n+                        package_data.get(\"markers\"),\n+                        dev_marker,\n+                    )\n+                    continue\n+\n                 package = {\"name\": name}\n+                if section == \"default\":\n+                    default_entries[name] = package\n \n                 # Add version if present and not a wildcard\n                 if \"version\" in package_data:\n@@ -949,6 +968,31 @@ def convert_to_pipenv_lockfile(\n         return lockfile\n \n \n+def _same_locked_package(default_data, develop_data) -> bool:\n+    \"\"\"Whether two Pipfile.lock entries pin the same artifact, ignoring markers.\"\"\"\n+    if not isinstance(default_data, dict) or not isinstance(develop_data, dict):\n+        return False\n+\n+    def without_markers(data):\n+        return {key: value for key, value in data.items() if key != \"markers\"}\n+\n+    return without_markers(default_data) == without_markers(develop_data)\n+\n+\n+def _merge_develop_marker(entry, default_markers, develop_markers, dev_marker):\n+    \"\"\"Widen a default entry's marker so it also covers the develop install.\"\"\"\n+    if not default_markers or develop_markers == default_markers:\n+        # The default entry already applies whenever the develop one would.\n+        return\n+    if not develop_markers:\n+        develop_condition = dev_marker\n+    elif \"dependency_groups\" in develop_markers:\n+        develop_condition = develop_markers\n+    else:\n+        develop_condition = f\"({dev_marker}) and ({develop_markers})\"\n+    entry[\"marker\"] = f\"({default_markers}) or ({develop_condition})\"\n+\n+\n def _files_for_lockfile_hashes(name, index_url, hashes, source=None):\n     \"\"\"Find actual distribution files for hashes in a Pipfile.lock entry.\n "
+  },
+  {
+   "filename": "tests/unit/test_pylock.py",
+   "status": "modified",
+   "additions": 53,
+   "deletions": 0,
+   "patch": "@@ -524,6 +524,59 @@ def test_from_lockfile_with_custom_dev_groups(tmp_path):\n     assert \"'development' in dependency_groups\" in pytest_pkg[\"marker\"]\n \n \n+@pytest.mark.parametrize(\n+    \"default_markers, develop_markers, expected_marker\",\n+    [\n+        (None, None, None),\n+        (\"python_version >= '3.9'\", \"python_version >= '3.9'\", \"python_version >= '3.9'\"),\n+        (\n+            \"sys_platform == 'win32'\",\n+            None,\n+            \"(sys_platform == 'win32') or ('dev' in dependency_groups)\",\n+        ),\n+        (\n+            \"sys_platform == 'win32'\",\n+            \"python_version >= '3.9'\",\n+            (\n+                \"(sys_platform == 'win32') or \"\n+                \"(('dev' in dependency_groups) and (python_version >= '3.9'))\"\n+            ),\n+        ),\n+    ],\n+)\n+def test_from_lockfile_package_in_default_and_develop_has_one_entry(\n+    tmp_path, default_markers, develop_markers, expected_marker\n+):\n+    \"\"\"A package locked in both sections must narrow down to one entry (PEP 751).\n+\n+    Pipfile.lock repeats a shared dependency in \"default\" and \"develop\".  Two\n+    pylock.toml entries for it both match when the dev group is selected.\n+    \"\"\"\n+    import json\n+\n+    default_entry = {\"version\": \"==26.3\"}\n+    develop_entry = {\"version\": \"==26.3\"}\n+    if default_markers:\n+        default_entry[\"markers\"] = default_markers\n+    if develop_markers:\n+        develop_entry[\"markers\"] = develop_markers\n+    lockfile_content = {\n+        \"_meta\": {\"sources\": [], \"requires\": {\"python_version\": \"3.13\"}},\n+        \"default\": {\"packaging\": default_entry},\n+        \"develop\": {\"packaging\": develop_entry, \"pytest\": {\"version\": \"==9.0.0\"}},\n+    }\n+    lockfile_path = tmp_path / \"Pipfile.lock\"\n+    lockfile_path.write_text(json.dumps(lockfile_content))\n+\n+    pylock = PylockFile.from_lockfile(lockfile_path)\n+\n+    entries = [p for p in pylock.packages if p[\"name\"] == \"packaging\"]\n+    assert len(entries) == 1\n+    assert entries[0].get(\"marker\") == expected_marker\n+    names = [p[\"name\"] for p in pylock._narrow_package_entries()]\n+    assert names.count(\"packaging\") == 1\n+\n+\n def test_from_lockfile_adds_package_index(tmp_path):\n     \"\"\"Test that from_lockfile adds packages.index field (PEP 751).\"\"\"\n     lockfile_content = {"
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_pylock.py"
+ ]
+}

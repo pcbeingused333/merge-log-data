@@ -1,0 +1,33 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1075,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1075",
+ "title": "Add Hnswlib#update_texts and #remove_texts",
+ "merged_at": "2026-10-15T13:15:13Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n - [SECURITY]: A change which fixes a security vulnerability.\n \n ## [Unreleased]\n+- [FEATURE] [https://github.com/patterns-ai-core/langchainrb/pull/1075] Add `Langchain::Vectorsearch::Hnswlib#update_texts` and `#remove_texts`.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1076] Accept `{role:, content:}` messages in `Langchain::LLM::GoogleGemini#chat` and `Langchain::LLM::GoogleVertexAI#chat`, converting them to `parts` with system messages as the system instruction; `OutputFixingParser`, `Vectorsearch#ask`, `Chunker::Semantic`, the Ragas evals and HyDE got a 400 from Google before.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1077] Send `temperature`, `seed`, `top_p`, `max_tokens` (as `num_predict`) and the other sampling parameters of `Langchain::LLM::Ollama#chat` in `options`, where Ollama reads them; at the top level they were ignored, including the default `temperature: 0.0`.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1073] Raise `Langchain::LLM::Anthropic`'s default `max_tokens` from 256 to 16,000; Claude Sonnet 5 and later, Haiku 5.5 and Opus 5 and later think by default within that cap, so they often stopped before writing any text and `#chat_completion` returned `nil`."
+  },
+  {
+   "filename": "lib/langchain/vectorsearch/hnswlib.rb",
+   "status": "modified",
+   "additions": 42,
+   "deletions": 1,
+   "patch": "@@ -51,7 +51,38 @@ def add_texts(texts:, ids:)\n       client.save_index(path_to_index)\n     end\n \n-    # TODO: Add update_texts method\n+    #\n+    # Update the texts stored under existing IDs\n+    #\n+    # @param texts [Array<String>] The list of texts to update\n+    # @param ids [Array<Integer>] The list of corresponding IDs (integers) to the texts\n+    # @return [Boolean] The response from the HNSW library\n+    #\n+    def update_texts(texts:, ids:)\n+      ensure_ids_exist(ids)\n+\n+      Array(texts).each_with_index do |text, i|\n+        # add_point with a label that is already in the index replaces its vector\n+        client.add_point(llm.embed(text: text).embedding, ids[i])\n+      end\n+\n+      client.save_index(path_to_index)\n+    end\n+\n+    #\n+    # Remove texts from the index by ID\n+    #\n+    # @param ids [Array<Integer>] The IDs of the texts to remove\n+    # @return [Boolean] The response from the HNSW library\n+    #\n+    def remove_texts(ids:)\n+      ensure_ids_exist(ids)\n+\n+      # HNSW can't delete a point: a marked one is left out of searches, and stays marked once saved\n+      Array(ids).each { |id| client.mark_deleted(id) }\n+\n+      client.save_index(path_to_index)\n+    end\n \n     #\n     # Search for similar texts\n@@ -92,6 +123,16 @@ def similarity_search_by_vector(\n \n     private\n \n+    #\n+    # Raises before the index is changed if an ID is not in it\n+    #\n+    # @param ids [Array<Integer>] The IDs to check\n+    #\n+    def ensure_ids_exist(ids)\n+      missing = Array(ids) - client.get_ids\n+      raise ArgumentError, \"IDs not in the index: #{missing.join(\", \")}\" if missing.any?\n+    end\n+\n     #\n     # Optionally resizes the index if there's no space for new data\n     #"
+  },
+  {
+   "filename": "spec/lib/langchain/vectorsearch/hnswlib_spec.rb",
+   "status": "modified",
+   "additions": 46,
+   "deletions": 0,
+   "patch": "@@ -45,6 +45,52 @@\n     end\n   end\n \n+  describe \"#update_texts\" do\n+    before do\n+      allow(subject.llm).to receive(:embed) do |text:|\n+        double(embedding: {\"one\" => [1.0, 0, 0], \"two\" => [0, 1.0, 0], \"new two\" => [0.9, 0.1, 0]}.fetch(text))\n+      end\n+      subject.add_texts(texts: [\"one\", \"two\"], ids: [1, 2])\n+    end\n+\n+    it \"replaces the vector stored under an ID\" do\n+      subject.update_texts(texts: [\"new two\"], ids: [2])\n+\n+      expect(subject.client.current_count).to eq(2)\n+      expect(subject.similarity_search_by_vector(embedding: [0.9, 0.1, 0], k: 1).first).to eq([2])\n+    end\n+\n+    it \"raises without changing the index when an ID is not in it\" do\n+      expect(subject.client).not_to receive(:add_point)\n+\n+      expect { subject.update_texts(texts: [\"new two\"], ids: [3]) }.to raise_error(ArgumentError, /3/)\n+    end\n+  end\n+\n+  describe \"#remove_texts\" do\n+    before do\n+      allow(subject.llm).to receive(:embed) do |text:|\n+        double(embedding: {\"one\" => [1.0, 0, 0], \"two\" => [0, 1.0, 0], \"three\" => [0, 0, 1.0]}.fetch(text))\n+      end\n+      subject.add_texts(texts: [\"one\", \"two\", \"three\"], ids: [1, 2, 3])\n+    end\n+\n+    it \"leaves the removed texts out of searches, also after the index is reloaded\" do\n+      subject.remove_texts(ids: [1, 3])\n+\n+      expect(subject.similarity_search_by_vector(embedding: [1.0, 0, 0], k: 3).first).to eq([2])\n+\n+      reloaded = described_class.new(llm: llm, path_to_index: \"./test.ann\")\n+      expect(reloaded.similarity_search_by_vector(embedding: [1.0, 0, 0], k: 3).first).to eq([2])\n+    end\n+\n+    it \"raises without removing anything when an ID is not in the index\" do\n+      expect { subject.remove_texts(ids: [1, 4]) }.to raise_error(ArgumentError, /4/)\n+\n+      expect(subject.similarity_search_by_vector(embedding: [1.0, 0, 0], k: 3).first).to contain_exactly(1, 2, 3)\n+    end\n+  end\n+\n   xdescribe \"#similarity_search_by_vector\" do\n   end\n "
+  }
+ ],
+ "test_files": [
+  "spec/lib/langchain/vectorsearch/hnswlib_spec.rb"
+ ]
+}

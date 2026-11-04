@@ -1,0 +1,47 @@
+{
+ "repo": "allenai/reward-bench",
+ "number": 290,
+ "url": "https://github.com/allenai/reward-bench/pull/290",
+ "title": "Fix the Anthropic judge on the 1.x SDK and with thinking blocks",
+ "merged_at": "2026-10-14T18:27:50Z",
+ "files": [
+  {
+   "filename": "pyproject.toml",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -62,7 +62,7 @@ dev = [\n # API-based LLM judges (fast install, no GPU required)\n api = [\n     \"openai\",\n-    \"anthropic\",\n+    \"anthropic<2\",\n     \"google-genai\",\n     \"google-generativeai\",\n     \"together\","
+  },
+  {
+   "filename": "rewardbench/generative.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 3,
+   "patch": "@@ -777,12 +777,13 @@ def chat_completion_anthropic(model, conv, temperature, max_tokens, api_dict=Non\n             response = c.messages.create(\n                 model=model,\n                 messages=conv.messages,\n-                stop_sequences=[anthropic.HUMAN_PROMPT],\n                 max_tokens=max_tokens,\n-                temperature=temperature,\n+                # anthropic 1.x dropped sampling kwargs from the SDK; the API still takes them for these models\n+                extra_body={\"temperature\": temperature},\n                 system=sys_msg,\n             )\n-            output = response.content[0].text\n+            # With thinking on, the first content block is a thinking block, not the answer\n+            output = next((block.text for block in response.content if block.type == \"text\"), API_ERROR_OUTPUT)\n             break\n         except anthropic.APIError as e:\n             print(type(e), e)"
+  },
+  {
+   "filename": "rewardbench/generative_v2.py",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 5,
+   "patch": "@@ -258,8 +258,11 @@ def chat_completion(\n \n             if model in ANTHROPIC_MODEL_LIST:\n                 # Anthropic API\n-                resp = _client.messages.create(**params)\n-                response = resp.content[0].text\n+                # anthropic 1.x dropped sampling kwargs from the SDK; the API still takes them for these models\n+                anthropic_params = {k: v for k, v in params.items() if k != \"temperature\"}\n+                resp = _client.messages.create(**anthropic_params, extra_body={\"temperature\": temperature})\n+                # With thinking on, the first content block is a thinking block, not the answer\n+                response = next((block.text for block in resp.content if block.type == \"text\"), API_ERROR_OUTPUT)\n             elif model in OPENAI_MODEL_LIST or model in GEMINI_MODEL_LIST:\n                 # OpenAI API\n                 resp = _client.chat.completions.create(**params)\n@@ -532,12 +535,13 @@ def chat_completion_anthropic(model, messages, temperature, max_tokens, api_dict\n             response = c.messages.create(\n                 model=model,\n                 messages=messages,\n-                stop_sequences=[anthropic.HUMAN_PROMPT],\n                 max_tokens=max_tokens,\n-                temperature=temperature,\n+                # anthropic 1.x dropped sampling kwargs from the SDK; the API still takes them for these models\n+                extra_body={\"temperature\": temperature},\n                 system=sys_msg,\n             )\n-            output = response.content[0].text\n+            # With thinking on, the first content block is a thinking block, not the answer\n+            output = next((block.text for block in response.content if block.type == \"text\"), API_ERROR_OUTPUT)\n             break\n         except anthropic.APIError as e:\n             print(type(e), e)"
+  },
+  {
+   "filename": "tests/test_anthropic_judge.py",
+   "status": "added",
+   "additions": 94,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,94 @@\n+import importlib.util\n+import sys\n+import types\n+from pathlib import Path\n+from unittest.mock import patch\n+\n+\n+def _load_generative_v2():\n+    module_path = Path(__file__).parents[1] / \"rewardbench\" / \"generative_v2.py\"\n+    spec = importlib.util.spec_from_file_location(\"rewardbench_generative_v2_anthropic\", module_path)\n+    module = importlib.util.module_from_spec(spec)\n+    spec.loader.exec_module(module)\n+    return module\n+\n+\n+def _fake_anthropic(content, calls):\n+    \"\"\"An `anthropic` module like the 1.x SDK: no HUMAN_PROMPT / AI_PROMPT constants.\"\"\"\n+    module = types.ModuleType(\"anthropic\")\n+\n+    class APIError(Exception):\n+        pass\n+\n+    class Messages:\n+        def create(self, **kwargs):\n+            calls.append(kwargs)\n+            return types.SimpleNamespace(content=content)\n+\n+    class Anthropic:\n+        def __init__(self, api_key=None):\n+            self.messages = Messages()\n+\n+    module.APIError = APIError\n+    module.Anthropic = Anthropic\n+    return module\n+\n+\n+def _block(type_, **fields):\n+    return types.SimpleNamespace(type=type_, **fields)\n+\n+\n+def test_anthropic_judge_works_without_text_completions_constants():\n+    calls = []\n+    fake = _fake_anthropic([_block(\"text\", text=\" [[A]] \")], calls)\n+    generative_v2 = _load_generative_v2()\n+\n+    with patch.dict(sys.modules, {\"anthropic\": fake}):\n+        output = generative_v2.chat_completion_anthropic(\n+            \"claude-sonnet-4-20250514\",\n+            [{\"role\": \"system\", \"content\": \"judge\"}, {\"role\": \"user\", \"content\": \"compare\"}],\n+            temperature=0,\n+            max_tokens=16,\n+            api_dict={\"api_key\": \"x\"},\n+        )\n+\n+    assert output == \"[[A]]\"\n+    assert \"stop_sequences\" not in calls[0]\n+    assert \"temperature\" not in calls[0]\n+    assert calls[0][\"extra_body\"] == {\"temperature\": 0}\n+    assert calls[0][\"system\"] == \"judge\"\n+\n+\n+def test_anthropic_judge_reads_the_text_block_after_a_thinking_block():\n+    fake = _fake_anthropic([_block(\"thinking\", thinking=\"...\", signature=\"s\"), _block(\"text\", text=\"[[B]]\")], [])\n+    generative_v2 = _load_generative_v2()\n+\n+    with patch.dict(sys.modules, {\"anthropic\": fake}):\n+        output = generative_v2.chat_completion_anthropic(\n+            \"claude-sonnet-4-20250514\",\n+            [{\"role\": \"user\", \"content\": \"compare\"}],\n+            temperature=0,\n+            max_tokens=16,\n+            api_dict={\"api_key\": \"x\"},\n+        )\n+\n+    assert output == \"[[B]]\"\n+\n+\n+def test_chat_completion_reads_the_text_block_after_a_thinking_block():\n+    calls = []\n+    fake = _fake_anthropic(\n+        [_block(\"thinking\", thinking=\"...\", signature=\"s\"), _block(\"text\", text=\"rated\\n\\n9\")], calls\n+    )\n+    generative_v2 = _load_generative_v2()\n+\n+    with patch.dict(sys.modules, {\"anthropic\": fake}):\n+        output = generative_v2.chat_completion(\n+            \"claude-sonnet-4-20250514\",\n+            [{\"role\": \"user\", \"content\": \"rate\"}],\n+            max_tokens=16,\n+        )\n+\n+    assert output == \"rated\\n\\n9\"\n+    assert \"temperature\" not in calls[0]\n+    assert calls[0][\"extra_body\"] == {\"temperature\": 0.0}"
+  },
+  {
+   "filename": "uv.lock",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -3633,7 +3633,7 @@ dev = [\n [package.metadata]\n requires-dist = [\n     { name = \"accelerate\" },\n-    { name = \"anthropic\", marker = \"extra == 'api'\" },\n+    { name = \"anthropic\", marker = \"extra == 'api'\", specifier = \"<2\" },\n     { name = \"bitsandbytes\" },\n     { name = \"black\", marker = \"extra == 'dev'\" },\n     { name = \"datasets\" },"
+  }
+ ],
+ "test_files": [
+  "tests/test_anthropic_judge.py"
+ ]
+}

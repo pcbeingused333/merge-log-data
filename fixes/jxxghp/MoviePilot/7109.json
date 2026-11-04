@@ -1,0 +1,48 @@
+{
+ "repo": "jxxghp/MoviePilot",
+ "number": 7109,
+ "url": "https://github.com/jxxghp/MoviePilot/pull/7109",
+ "title": "fix(setup): 更新 Google 默认模型并兼容 Gemini 3.8 思考级别",
+ "merged_at": "2026-10-20T10:41:58Z",
+ "files": [
+  {
+   "filename": "app/agent/llm/helper.py",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 2,
+   "patch": "@@ -984,6 +984,12 @@ def _build_google_thinking_kwargs(\n     ) -> dict[str, Any]:\n         \"\"\"\n         Gemini 3 使用 thinking_level；Gemini 2.5 使用 thinking_budget。\n+\n+        Gemini 3.8 Flash 不接受 minimal，也不能完全关闭思考，因此将关闭和最小映射到 low。\n+\n+        :param model_name: 已规范化的模型标识\n+        :param thinking_level: 用户选择的统一思考级别\n+        :return: 当前模型支持的 Google 原生思考参数\n         \"\"\"\n         if not model_name or thinking_level == \"auto\":\n             return {}\n@@ -1020,9 +1026,10 @@ def _build_google_thinking_kwargs(\n             )\n \n         if \"gemini-3\" in model_name:\n+            minimum_level = \"low\" if \"gemini-3.8-flash\" in model_name else \"minimal\"\n             level_map = {\n-                \"off\": \"minimal\",\n-                \"minimal\": \"minimal\",\n+                \"off\": minimum_level,\n+                \"minimal\": minimum_level,\n                 \"low\": \"low\",\n                 \"medium\": \"medium\",\n                 \"high\": \"high\","
+  },
+  {
+   "filename": "docs/cli.md",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -281,6 +281,7 @@ moviepilot setup --config-dir /path/to/moviepilot-config\n   与 `LLM_WEB_SEARCH_MODE`。联网搜索支持 MoviePilot 本地搜索、模型服务端搜索、\n   服务端优先自动回退与完全关闭；服务端模式仅在当前模型目录声明支持时生效。\n   向导会尝试读取当前提供商的模型目录；目录服务不可用时仍可手动输入模型 ID。\n+  Google 新配置默认使用 `gemini-3.8-flash`，已有的 `LLM_MODEL` 配置继续保留。\n   当前可识别 OpenAI、Anthropic Claude、Google Gemini、xAI Grok 与 DeepSeek\n   官方端点已公布的服务端联网搜索能力，第三方兼容端点不会被自动误判。\n - 下载目录按下载器内部路径原样保存，可用于远程下载器和路径映射；向导不会在本机解析或创建它。\n@@ -298,6 +299,9 @@ moviepilot setup --config-dir /path/to/moviepilot-config\n 显式填写 `0`、`1` 等数值仍按填写值发送。\n 清空后保存、重新进入设置页及重启均保留这一语义。\n \n+Gemini 3.8 Flash 不支持完全关闭思考，也不接受 `minimal`。选择“关闭思考”或“最小”时，\n+使用该模型支持的最低级别 `low`；自动及其他思考级别按原设置处理。\n+\n 如果希望在自动化安装时直接预设超级管理员，也可以在一键安装脚本中透传：\n \n ```shell"
+  },
+  {
+   "filename": "scripts/local_setup.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -76,7 +76,7 @@\n         \"base_url\": \"https://api.openai.com/v1\",\n     },\n     \"google\": {\n-        \"model\": \"gemini-2.5-flash\",\n+        \"model\": \"gemini-3.8-flash\",\n         \"base_url\": \"\",\n     },\n     \"anthropic\": {"
+  },
+  {
+   "filename": "tests/test_llm_thinking_options.py",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -114,9 +114,15 @@ def offline_runtime(monkeypatch):\n     clients = []\n \n     def reject_request(_request):\n+        \"\"\"\n+        拒绝任何意外的提供商网络调用。\n+        \"\"\"\n         raise AssertionError(\"思考级别序列化测试不得发起外部请求\")\n \n     def make_client(_proxy, *, async_client=False):\n+        \"\"\"\n+        创建仅使用离线传输器的客户端，并登记退出时的释放责任。\n+        \"\"\"\n         client_type = httpx.AsyncClient if async_client else httpx.Client\n         client = client_type(transport=httpx.MockTransport(reject_request))\n         clients.append(client)\n@@ -131,6 +137,36 @@ def make_client(_proxy, *, async_client=False):\n             client.close()\n \n \n+@pytest.mark.parametrize(\"model_name\", [\"gemini-3.8-flash\", \"models/gemini-3.8-flash\", \"gemini-3-flash-preview\"])\n+@pytest.mark.parametrize(\"level\", [\"off\", \"minimal\", \"low\", \"medium\", \"high\", \"max\", \"xhigh\", \"auto\"])\n+def test_google_thinking_payload_respects_model_minimum(monkeypatch, offline_runtime, model_name, level) -> None:\n+    \"\"\"\n+    原生 Google 请求对 Gemini 3.8 Flash 使用最低可用的 low，并保留旧模型的 minimal。\n+    \"\"\"\n+    from langchain_google_genai import chat_models\n+\n+    offline_runtime.resolve_runtime.return_value.update(\n+        provider_id=\"google\", runtime=\"google\", model_id=model_name, base_url=None,\n+    )\n+    monkeypatch.setattr(helper, \"_patch_gemini_thought_signature\", lambda: None)\n+    monkeypatch.setattr(chat_models, \"Client\", Mock(return_value=Mock(aio=None)))\n+\n+    model = asyncio.run(LLMHelper.get_llm(\n+        provider=\"google\", model=model_name, api_key=\"offline-key\", use_proxy=False,\n+        web_search_mode=\"disabled\", thinking_level=level, provider_runtime=offline_runtime,\n+    ))\n+    config = model._prepare_params(None).thinking_config\n+\n+    if level == \"auto\":\n+        assert config is None or config.thinking_level is None\n+        return\n+    expected = {\"off\": \"minimal\", \"max\": \"high\", \"xhigh\": \"high\"}.get(level, level)\n+    if \"gemini-3.8-flash\" in model_name and expected == \"minimal\":\n+        expected = \"low\"\n+    assert config.thinking_level.value.lower() == expected\n+    assert config.include_thoughts is False\n+\n+\n @pytest.mark.parametrize(\"protocol\", [\"chat_completions\", \"responses\"])\n @pytest.mark.parametrize(\"effort\", [\"max\", \"xhigh\"])\n @pytest.mark.parametrize(\"has_catalog\", [False, True])"
+  },
+  {
+   "filename": "tests/test_local_setup_llm_provider_prompt.py",
+   "status": "modified",
+   "additions": 32,
+   "deletions": 0,
+   "patch": "@@ -9,6 +9,8 @@\n from pathlib import Path\n from unittest.mock import patch\n \n+import pytest\n+\n MODULE_PATH = Path(__file__).resolve().parents[1] / \"scripts\" / \"local_setup.py\"\n \n \n@@ -296,3 +298,33 @@ def test_collect_agent_config_prompts_for_duplicate_base_url_presets() -> None:\n         base_url_preset=\"minimax-cn-coding\",\n         runtime_python=None,\n     )\n+\n+\n+@pytest.mark.parametrize(\"saved_model\", [None, \"gemini-2.5-flash\"])\n+def test_collect_agent_config_accepts_google_default_and_keeps_saved_model(saved_model) -> None:\n+    \"\"\"\n+    Google 向导回车使用新项目可访问的默认模型，同时保留用户已保存的模型。\n+    \"\"\"\n+    module = load_local_setup_module()\n+\n+    with (\n+        patch.object(module, \"print_step\"),\n+        patch.object(module, \"_prompt_yes_no\", side_effect=[True, False, True]),\n+        patch.object(module, \"_load_llm_provider_definitions\", return_value=[]),\n+        patch.object(module, \"_prompt_provider_choice\", return_value=\"google\"),\n+        patch.object(module, \"_prompt_text\", side_effect=lambda _prompt, **kwargs: kwargs[\"default\"]),\n+        patch.object(module, \"_prompt_secret_text\", return_value=\"offline-key\"),\n+        patch.object(module, \"_load_llm_models\", return_value=[]),\n+        patch.object(module, \"read_env_value\", return_value=None),\n+        patch.object(\n+            module, \"_env_default\",\n+            side_effect=lambda key, default=\"\": saved_model if key == \"LLM_MODEL\" and saved_model else default,\n+        ),\n+        patch.object(module, \"_env_bool\", side_effect=lambda _key, default: default),\n+        patch.object(module, \"_env_llm_thinking_level_default\", return_value=\"auto\"),\n+        patch.object(module, \"_prompt_choice\", side_effect=lambda _prompt, **kwargs: kwargs[\"default\"]),\n+    ):\n+        config = module._collect_agent_config()\n+\n+    assert config[\"LLM_PROVIDER\"] == \"google\"\n+    assert config[\"LLM_MODEL\"] == (saved_model or \"gemini-3.8-flash\")"
+  }
+ ],
+ "test_files": [
+  "tests/test_llm_thinking_options.py",
+  "tests/test_local_setup_llm_provider_prompt.py"
+ ]
+}

@@ -1,0 +1,84 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1058,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1058",
+ "title": "Pass Anthropic thinking blocks back in the Assistant's tool-use loop",
+ "merged_at": "2026-10-12T22:29:05Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n - [SECURITY]: A change which fixes a security vulnerability.\n \n ## [Unreleased]\n+- [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1058] Pass Anthropic `thinking` and `redacted_thinking` blocks back, first and unchanged, in the assistant turn of `Langchain::Assistant`'s tool-use loop; dropping them made the request carrying the tool result fail whenever Claude thought before calling a tool.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1059] Give a streamed `Langchain::LLM::Anthropic` tool call without arguments `input: {}` instead of `nil`, which made `Langchain::Assistant` end the run in `:failed` with streaming on.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1057] Rebuild `thinking` and `redacted_thinking` blocks in streamed `Langchain::LLM::Anthropic#chat` responses instead of leaving `nil` in the content, which made `chat_completion` raise `NoMethodError` whenever Claude thought (by default on Claude 5 models).\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1056] Format `PromptTemplate` and the `FewShotPromptTemplate` suffix in a single pass, so escaped `{{braces}}` stay literal, an inserted value is never expanded as another variable, and backslashes in values (`\\'`, `\\0`, `\\&`) are kept as-is."
+  },
+  {
+   "filename": "lib/langchain/assistant.rb",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 12,
+   "patch": "@@ -89,17 +89,7 @@ def initialize(\n     # @param tool_call_id [String] The ID of the tool call to include in the message\n     # @return [Array<Langchain::Message>] The messages\n     def add_message(role: \"user\", content: nil, image_url: nil, tool_calls: [], tool_call_id: nil)\n-      message = build_message(role: role, content: content, image_url: image_url, tool_calls: tool_calls, tool_call_id: tool_call_id)\n-\n-      # Call the callback with the message\n-      add_message_callback.call(message) if add_message_callback # rubocop:disable Style/SafeNavigation\n-\n-      # Prepend the message to the messages array\n-      messages << message\n-\n-      @state = :ready\n-\n-      messages\n+      append_message(build_message(role: role, content: content, image_url: image_url, tool_calls: tool_calls, tool_call_id: tool_call_id))\n     end\n \n     # Convert messages to an LLM APIs-compatible array of hashes\n@@ -319,7 +309,7 @@ def handle_user_or_tool_message\n       @turns += 1\n       response = chat_with_llm\n \n-      add_message(role: response.role, content: response.chat_completion, tool_calls: response.tool_calls)\n+      append_message(@llm_adapter.build_message_from_response(response))\n       record_used_tokens(response.prompt_tokens, response.completion_tokens, response.total_tokens)\n \n       set_state_for(response: response)\n@@ -427,6 +417,22 @@ def run_tool(tool_call)\n       end\n     end\n \n+    # Add a message that is already built\n+    #\n+    # @param message [Langchain::Assistant::Messages::Base] The message to add\n+    # @return [Array<Langchain::Message>] The messages\n+    def append_message(message)\n+      # Call the callback with the message\n+      add_message_callback.call(message) if add_message_callback # rubocop:disable Style/SafeNavigation\n+\n+      # Prepend the message to the messages array\n+      messages << message\n+\n+      @state = :ready\n+\n+      messages\n+    end\n+\n     # Build a message\n     #\n     # @param role [String] The role of the message"
+  },
+  {
+   "filename": "lib/langchain/assistant/llm/adapters/anthropic.rb",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -41,6 +41,16 @@ def build_message(role:, content: nil, image_url: nil, tool_calls: [], tool_call\n             Messages::AnthropicMessage.new(role: role, content: content, image_url: image_url, tool_calls: tool_calls, tool_call_id: tool_call_id)\n           end\n \n+          # Keeps the response's thinking blocks so they can be passed back on the next call\n+          def build_message_from_response(response)\n+            Messages::AnthropicMessage.new(\n+              role: response.role,\n+              content: response.chat_completion,\n+              tool_calls: response.tool_calls,\n+              thinking_blocks: response.thinking_blocks\n+            )\n+          end\n+\n           # Extract the tool call information from the Anthropic tool call hash\n           #\n           # @param tool_call [Hash] The tool call hash, format: {\"type\"=>\"tool_use\", \"id\"=>\"toolu_01TjusbFApEbwKPRWTRwzadR\", \"name\"=>\"news_retriever__get_top_headlines\", \"input\"=>{\"country\"=>\"us\", \"page_size\"=>10}}], \"stop_reason\"=>\"tool_use\"}"
+  },
+  {
+   "filename": "lib/langchain/assistant/llm/adapters/base.rb",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -43,6 +43,14 @@ def build_message(role:, content: nil, image_url: nil, tool_calls: [], tool_call\n             raise NotImplementedError, \"Subclasses must implement build_message\"\n           end\n \n+          # Build the assistant message for an LLM response\n+          #\n+          # @param response [Langchain::LLM::Response::BaseResponse] The LLM response\n+          # @return [Messages::Base] The message\n+          def build_message_from_response(response)\n+            build_message(role: response.role, content: response.chat_completion, tool_calls: response.tool_calls)\n+          end\n+\n           # Does this adapter accept messages with role=\"system\"?\n           #\n           # @return [Boolean] Whether the adapter supports system messages"
+  },
+  {
+   "filename": "lib/langchain/assistant/messages/anthropic_message.rb",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 2,
+   "patch": "@@ -18,12 +18,14 @@ class AnthropicMessage < Base\n         # @param content [String] The content of the message\n         # @param tool_calls [Array<Hash>] The tool calls made in the message\n         # @param tool_call_id [String] The ID of the tool call\n+        # @param thinking_blocks [Array<Hash>] The thinking blocks that preceded an assistant message\n         def initialize(\n           role:,\n           content: nil,\n           image_url: nil,\n           tool_calls: [],\n-          tool_call_id: nil\n+          tool_call_id: nil,\n+          thinking_blocks: []\n         )\n           raise ArgumentError, \"Role must be one of #{ROLES.join(\", \")}\" unless ROLES.include?(role)\n           raise ArgumentError, \"Tool calls must be an array of hashes\" unless tool_calls.is_a?(Array) && tool_calls.all? { |tool_call| tool_call.is_a?(Hash) }\n@@ -34,8 +36,11 @@ def initialize(\n           @image_url = image_url\n           @tool_calls = tool_calls\n           @tool_call_id = tool_call_id\n+          @thinking_blocks = thinking_blocks\n         end\n \n+        attr_reader :thinking_blocks\n+\n         # Convert the message to an Anthropic API-compatible hash\n         #\n         # @return [Hash] The message as an Anthropic API-compatible hash\n@@ -53,7 +58,9 @@ def to_hash\n         #\n         # @return [Hash] The message as an Anthropic API-compatible hash, with the role as \"assistant\"\n         def assistant_hash\n-          content_array = []\n+          # Thinking blocks go first and unchanged: in a tool-use loop with manual\n+          # extended thinking, the API rejects an assistant turn that drops them.\n+          content_array = thinking_blocks.dup\n           if content && !content.empty?\n             content_array << {type: \"text\", text: content}\n           end"
+  },
+  {
+   "filename": "lib/langchain/llm/response/anthropic_response.rb",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -19,6 +19,12 @@ def tool_calls\n       chat_completions&.select { |h| h[:type].to_s == \"tool_use\" }&.map(&:to_h) || []\n     end\n \n+    # The thinking and redacted_thinking blocks, which must be passed back unchanged\n+    # in the assistant turn of a tool-use loop\n+    def thinking_blocks\n+      chat_completions&.select { |h| %w[thinking redacted_thinking].include?(h[:type].to_s) }&.map(&:to_h) || []\n+    end\n+\n     def chat_completions\n       raw_response[:content]\n     end"
+  },
+  {
+   "filename": "lib/langchain/llm/response/aws_bedrock_anthropic_response.rb",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -24,6 +24,14 @@ def chat_completions\n       raw_response.dig(\"content\")\n     end\n \n+    # The thinking and redacted_thinking blocks, which must be passed back unchanged\n+    # in the assistant turn of a tool-use loop\n+    def thinking_blocks\n+      Array(chat_completions)\n+        .select { |h| %w[thinking redacted_thinking].include?(h[\"type\"]) }\n+        .map { |h| h.transform_keys(&:to_sym) }\n+    end\n+\n     def completions\n       [raw_response.dig(\"completion\")]\n     end"
+  },
+  {
+   "filename": "spec/lib/langchain/assistant/assistant_spec.rb",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -1530,6 +1530,41 @@ def now\n         end\n       end\n \n+      context \"when the response has thinking blocks\" do\n+        let(:thinking_block) { {type: \"thinking\", thinking: \"I should use the calculator.\", signature: \"EqQBCgIYAhIM\"} }\n+        let(:redacted_block) { {type: \"redacted_thinking\", data: \"EmwKAhgBEgy3va3pzix\"} }\n+        let(:raw_thinking_response) do\n+          raw_anthropic_response.merge(content: [thinking_block, redacted_block, *raw_anthropic_response[:content]])\n+        end\n+        let(:raw_final_response) do\n+          {role: \"assistant\", usage: {input_tokens: 10, output_tokens: 10}, content: [{type: \"text\", text: \"So 2 + 2 = 4.\"}]}\n+        end\n+\n+        it \"passes the thinking blocks back first in the assistant turn of the tool-use loop\" do\n+          allow(subject.tools[0]).to receive(:execute).with(input: \"2+2\").and_return(\"4.0\")\n+          sent = []\n+          allow(subject.llm).to receive(:chat) do |**params|\n+            sent << params[:messages]\n+            raw = (sent.size == 1) ? raw_thinking_response : raw_final_response\n+            Langchain::LLM::Response::AnthropicResponse.new(raw)\n+          end\n+\n+          subject.add_message(role: \"user\", content: \"Please calculate 2+2\")\n+          subject.run(auto_tool_execution: true)\n+\n+          expect(sent.size).to eq(2)\n+          assistant_turn = sent.last[1]\n+          expect(assistant_turn[:role]).to eq(\"assistant\")\n+          expect(assistant_turn[:content]).to eq([\n+            thinking_block,\n+            redacted_block,\n+            {type: \"text\", text: \"Sure, let's calculate it!\"},\n+            raw_anthropic_response[:content].last\n+          ])\n+          expect(subject.messages.last.content).to eq(\"So 2 + 2 = 4.\")\n+        end\n+      end\n+\n       context \"when messages are empty\" do\n         let(:instructions) { nil }\n "
+  },
+  {
+   "filename": "spec/lib/langchain/llm/response/anthropic_response_spec.rb",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -60,4 +60,18 @@\n       )\n     end\n   end\n+\n+  describe \"#thinking_blocks\" do\n+    it \"returns the thinking and redacted_thinking blocks unchanged, in order\" do\n+      thinking = {type: \"thinking\", thinking: \"Let me check.\", signature: \"EqQBCgIYAhIM\"}\n+      redacted = {type: \"redacted_thinking\", data: \"EmwKAhgBEgy3va3pzix\"}\n+      response = described_class.new({content: [thinking, redacted, {type: \"text\", text: \"Done.\"}]})\n+\n+      expect(response.thinking_blocks).to eq([thinking, redacted])\n+    end\n+\n+    it \"returns [] when the response has no thinking\" do\n+      expect(described_class.new({content: [{type: \"text\", text: \"Hi\"}]}).thinking_blocks).to eq([])\n+    end\n+  end\n end"
+  },
+  {
+   "filename": "spec/lib/langchain/llm/response/aws_bedrock_anthropic_response_spec.rb",
+   "status": "added",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,24 @@\n+# frozen_string_literal: true\n+\n+RSpec.describe Langchain::LLM::Response::AwsBedrockAnthropicResponse do\n+  describe \"#thinking_blocks\" do\n+    it \"returns the thinking and redacted_thinking blocks with symbol keys, in order\" do\n+      response = described_class.new({\n+        \"content\" => [\n+          {\"type\" => \"thinking\", \"thinking\" => \"Let me check.\", \"signature\" => \"EqQBCgIYAhIM\"},\n+          {\"type\" => \"redacted_thinking\", \"data\" => \"EmwKAhgBEgy3va3pzix\"},\n+          {\"type\" => \"text\", \"text\" => \"Done.\"}\n+        ]\n+      })\n+\n+      expect(response.thinking_blocks).to eq([\n+        {type: \"thinking\", thinking: \"Let me check.\", signature: \"EqQBCgIYAhIM\"},\n+        {type: \"redacted_thinking\", data: \"EmwKAhgBEgy3va3pzix\"}\n+      ])\n+    end\n+\n+    it \"returns [] when the response has no content\" do\n+      expect(described_class.new({}).thinking_blocks).to eq([])\n+    end\n+  end\n+end"
+  }
+ ],
+ "test_files": [
+  "spec/lib/langchain/assistant/assistant_spec.rb",
+  "spec/lib/langchain/llm/response/anthropic_response_spec.rb",
+  "spec/lib/langchain/llm/response/aws_bedrock_anthropic_response_spec.rb"
+ ]
+}

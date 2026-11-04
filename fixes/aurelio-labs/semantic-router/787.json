@@ -1,0 +1,26 @@
+{
+ "repo": "aurelio-labs/semantic-router",
+ "number": 787,
+ "url": "https://github.com/aurelio-labs/semantic-router/pull/787",
+ "title": "fix: PineconeIndex.aquery converts a dict sparse vector",
+ "merged_at": "2026-10-19T01:41:15Z",
+ "files": [
+  {
+   "filename": "semantic_router/index/pinecone.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -859,7 +859,9 @@ async def aquery(\n         sparse_vector_obj: dict[str, Any] | None = None\n         if sparse_vector is not None:\n             if isinstance(sparse_vector, dict):\n-                sparse_vector_obj = SparseEmbedding.from_dict(sparse_vector)\n+                sparse_vector_obj = SparseEmbedding.from_dict(\n+                    sparse_vector\n+                ).to_pinecone()\n             if isinstance(sparse_vector, SparseEmbedding):\n                 # unnecessary if-statement but mypy didn't like this otherwise\n                 sparse_vector_obj = sparse_vector.to_pinecone()"
+  },
+  {
+   "filename": "tests/integration/test_index_contract.py",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -178,6 +178,30 @@ async def test_aquery_finds_the_nearest_route(index):\n     assert names == [\"chitchat\"]\n \n \n+@pytest.mark.asyncio\n+@pytest.mark.parametrize(\n+    \"index_cls\", [HybridLocalIndex, PineconeIndex], ids=lambda c: c.__name__\n+)\n+async def test_query_and_aquery_take_a_sparse_vector_as_a_dict(index_cls, make_index):\n+    index = make_index(index_cls)\n+    kwargs = records(index, ROUTES)\n+    kwargs[\"sparse_embeddings\"] = [\n+        SparseEmbedding.from_dict({_seed(u) % 50: 1.0}) for u in kwargs[\"utterances\"]\n+    ]\n+    index.add(**kwargs)\n+    i = kwargs[\"utterances\"].index(\"how's the weather today?\")\n+    query: dict = {\n+        \"vector\": np.array(kwargs[\"embeddings\"][i]),\n+        \"top_k\": 1,\n+        \"sparse_vector\": kwargs[\"sparse_embeddings\"][i].to_dict(),\n+    }\n+\n+    _, names = index.query(**query)\n+    _, anames = await index.aquery(**query)\n+\n+    assert names == anames == [\"chitchat\"]\n+\n+\n def test_delete_index_then_add_recreates_it(index):\n     # IndexedRouter rebuilds the index this way when a fitted sparse encoder refits\n     index.add(**records(index, ROUTES))"
+  }
+ ],
+ "test_files": [
+  "tests/integration/test_index_contract.py"
+ ]
+}

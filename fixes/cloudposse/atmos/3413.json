@@ -1,0 +1,76 @@
+{
+ "repo": "cloudposse/atmos",
+ "number": 3413,
+ "url": "https://github.com/cloudposse/atmos/pull/3413",
+ "title": "fix(ai): use provider default models in --ai config hints",
+ "merged_at": "2026-10-26T15:18:22Z",
+ "files": [
+  {
+   "filename": "docs/prd/atmos-ai-global-flag.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -270,7 +270,7 @@ Hints:\n       default_provider: anthropic\n       providers:\n         anthropic:\n-          model: claude-sonnet-4-5-20250514\n+          model: claude-sonnet-4-5-20250929\n           api_key: !env ANTHROPIC_API_KEY\n \n   - See https://atmos.tools/cli/configuration/ai for full configuration options."
+  },
+  {
+   "filename": "docs/prd/atmos-ai.md",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 2,
+   "patch": "@@ -1043,7 +1043,8 @@ Atmos AI supports 7 AI providers, covering cloud, on-premises, and enterprise us\n #### 1. Anthropic (Claude)\n \n **Models:**\n-- `claude-sonnet-4-6` (default) - Most capable\n+- `claude-sonnet-4-5-20250929` (default)\n+- `claude-sonnet-4-6` - Most capable\n - `claude-haiku-4-5-20251001` - Fast and cost-effective\n - `claude-opus-4-6` - Maximum intelligence\n \n@@ -1152,7 +1153,8 @@ atmos ai chat\n #### 6. AWS Bedrock (Enterprise)\n \n **Models:**\n-- `anthropic.claude-sonnet-4-6` (default)\n+- `anthropic.claude-sonnet-4-5-20250929-v1:0` (default)\n+- `anthropic.claude-sonnet-4-6`\n - `anthropic.claude-haiku-4-5-20251001-v1:0`\n - `anthropic.claude-opus-4-6`\n "
+  },
+  {
+   "filename": "pkg/ai/analyze/analyze.go",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 9,
+   "patch": "@@ -9,6 +9,14 @@ import (\n \n \terrUtils \"github.com/cloudposse/atmos/errors\"\n \t\"github.com/cloudposse/atmos/pkg/ai\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/anthropic\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/azureopenai\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/bedrock\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/gemini\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/github\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/grok\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/ollama\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/openai\"\n \tlog \"github.com/cloudposse/atmos/pkg/logger\"\n \t\"github.com/cloudposse/atmos/pkg/perf\"\n \t\"github.com/cloudposse/atmos/pkg/schema\"\n@@ -49,15 +57,16 @@ var clientFactory func(cfg *schema.AtmosConfiguration) (messageSender, error) =\n var systemPrompt string\n \n // providerHintDefaults maps known providers to example model names and API key env vars.\n+// Models come from each provider's DefaultModel so the hints don't drift from it.\n var providerHintDefaults = map[string]struct{ model, envVar string }{\n-\t\"anthropic\":   {model: \"claude-sonnet-4-5-20250514\", envVar: \"ANTHROPIC_API_KEY\"},\n-\t\"openai\":      {model: \"gpt-4o\", envVar: \"OPENAI_API_KEY\"},\n-\t\"gemini\":      {model: \"gemini-2.0-flash\", envVar: \"GEMINI_API_KEY\"},\n-\t\"bedrock\":     {model: \"anthropic.claude-sonnet-4-5-20250514-v2:0\", envVar: \"AWS_ACCESS_KEY_ID\"},\n-\t\"azureopenai\": {model: \"gpt-4o\", envVar: \"AZURE_OPENAI_API_KEY\"},\n-\t\"ollama\":      {model: \"llama3\", envVar: \"OLLAMA_API_KEY\"},\n-\t\"grok\":        {model: \"grok-3\", envVar: \"GROK_API_KEY\"},\n-\t\"github\":      {model: \"openai/gpt-4o-mini\", envVar: \"GITHUB_TOKEN\"},\n+\t\"anthropic\":   {model: anthropic.DefaultModel, envVar: \"ANTHROPIC_API_KEY\"},\n+\t\"openai\":      {model: openai.DefaultModel, envVar: \"OPENAI_API_KEY\"},\n+\t\"gemini\":      {model: gemini.DefaultModel, envVar: \"GEMINI_API_KEY\"},\n+\t\"bedrock\":     {model: bedrock.DefaultModel, envVar: \"AWS_ACCESS_KEY_ID\"},\n+\t\"azureopenai\": {model: azureopenai.DefaultModel, envVar: \"AZURE_OPENAI_API_KEY\"},\n+\t\"ollama\":      {model: ollama.DefaultModel, envVar: \"OLLAMA_API_KEY\"},\n+\t\"grok\":        {model: grok.DefaultModel, envVar: \"GROK_API_KEY\"},\n+\t\"github\":      {model: github.DefaultModel, envVar: \"GITHUB_TOKEN\"},\n }\n \n // hintModel returns an example model name for the given provider.\n@@ -84,7 +93,7 @@ func ValidateAIConfig(atmosConfig *schema.AtmosConfiguration) error {\n \tif !atmosConfig.AI.Enabled {\n \t\treturn errUtils.Build(errUtils.ErrAINotEnabled).\n \t\t\tWithExplanation(\"The --ai flag requires AI to be enabled in your atmos.yaml configuration.\").\n-\t\t\tWithHint(\"Add the following to your atmos.yaml:\\n\\n```yaml\\nai:\\n  enabled: true\\n  default_provider: anthropic\\n  providers:\\n    anthropic:\\n      model: claude-sonnet-4-5-20250514\\n      api_key: !env ANTHROPIC_API_KEY\\n```\").\n+\t\t\tWithHintf(\"Add the following to your atmos.yaml:\\n\\n```yaml\\nai:\\n  enabled: true\\n  default_provider: anthropic\\n  providers:\\n    anthropic:\\n      model: %s\\n      api_key: !env ANTHROPIC_API_KEY\\n```\", anthropic.DefaultModel).\n \t\t\tWithHint(\"See https://atmos.tools/cli/configuration/ai for full configuration options.\").\n \t\t\tErr()\n \t}"
+  },
+  {
+   "filename": "pkg/ai/analyze/analyze_test.go",
+   "status": "modified",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -6,10 +6,19 @@ import (\n \t\"strings\"\n \t\"testing\"\n \n+\tcockroachErrors \"github.com/cockroachdb/errors\"\n \t\"github.com/stretchr/testify/assert\"\n \t\"github.com/stretchr/testify/require\"\n \n \tatmosErrors \"github.com/cloudposse/atmos/errors\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/anthropic\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/azureopenai\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/bedrock\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/gemini\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/github\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/grok\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/ollama\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/openai\"\n \t\"github.com/cloudposse/atmos/pkg/schema\"\n )\n \n@@ -559,3 +568,27 @@ func TestTruncateOutput_ExactlyOverLimit(t *testing.T) {\n \tassert.True(t, strings.HasSuffix(result, \"\\n... (output truncated)\"))\n \tassert.True(t, strings.HasPrefix(result, strings.Repeat(\"x\", 100)))\n }\n+\n+func TestHintModel_MatchesProviderDefaults(t *testing.T) {\n+\ttests := map[string]string{\n+\t\t\"anthropic\":   anthropic.DefaultModel,\n+\t\t\"openai\":      openai.DefaultModel,\n+\t\t\"gemini\":      gemini.DefaultModel,\n+\t\t\"bedrock\":     bedrock.DefaultModel,\n+\t\t\"azureopenai\": azureopenai.DefaultModel,\n+\t\t\"ollama\":      ollama.DefaultModel,\n+\t\t\"grok\":        grok.DefaultModel,\n+\t\t\"github\":      github.DefaultModel,\n+\t}\n+\tfor provider, want := range tests {\n+\t\tt.Run(provider, func(t *testing.T) {\n+\t\t\tassert.Equal(t, want, hintModel(provider))\n+\t\t})\n+\t}\n+}\n+\n+func TestValidateAIConfig_NotEnabledHintUsesAnthropicDefault(t *testing.T) {\n+\terr := ValidateAIConfig(&schema.AtmosConfiguration{})\n+\trequire.Error(t, err)\n+\tassert.Contains(t, strings.Join(cockroachErrors.GetAllHints(err), \"\\n\"), \"model: \"+anthropic.DefaultModel+\"\\n\")\n+}"
+  },
+  {
+   "filename": "pkg/ai/tui/chat.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 2,
+   "patch": "@@ -74,8 +74,7 @@ const (\n \tmarkdownSeparator = \"\\n\\n---\\n\\n\"\n \n \t// Default provider/model constants.\n-\tdefaultOpenAIModel = \"gpt-4o\"\n-\tproviderAnthropic  = \"anthropic\"\n+\tproviderAnthropic = \"anthropic\"\n )\n \n // availableProviders lists all AI providers that can be switched between during a session."
+  },
+  {
+   "filename": "pkg/ai/tui/chat_providers.go",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 9,
+   "patch": "@@ -8,6 +8,14 @@ import (\n \t\"github.com/charmbracelet/lipgloss\"\n \n \t\"github.com/cloudposse/atmos/pkg/ai\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/anthropic\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/azureopenai\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/bedrock\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/gemini\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/github\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/grok\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/ollama\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/openai\"\n \t\"github.com/cloudposse/atmos/pkg/ai/instructions\"\n \t\"github.com/cloudposse/atmos/pkg/ai/session\"\n \t\"github.com/cloudposse/atmos/pkg/ai/skills\"\n@@ -108,16 +116,28 @@ var providerDisplayNames = map[string]string{\n \t\"azureopenai\":     \"Azure OpenAI\",\n }\n \n+// providerDefaultModels maps each provider to the DefaultModel its client falls back to.\n+var providerDefaultModels = map[string]string{\n+\tproviderAnthropic: anthropic.DefaultModel,\n+\t\"openai\":          openai.DefaultModel,\n+\t\"gemini\":          gemini.DefaultModel,\n+\t\"github\":          github.DefaultModel,\n+\t\"grok\":            grok.DefaultModel,\n+\t\"ollama\":          ollama.DefaultModel,\n+\t\"bedrock\":         bedrock.DefaultModel,\n+\t\"azureopenai\":     azureopenai.DefaultModel,\n+}\n+\n // defaultProviderModels is the fallback list when no providers are configured.\n var defaultProviderModels = []ProviderWithModel{\n-\t{Name: providerAnthropic, DisplayName: \"Anthropic (Claude)\", Model: \"claude-sonnet-4-5-20250929\"},\n-\t{Name: \"openai\", DisplayName: \"OpenAI (GPT)\", Model: defaultOpenAIModel},\n-\t{Name: \"gemini\", DisplayName: \"Google (Gemini)\", Model: \"gemini-2.5-flash\"},\n-\t{Name: \"github\", DisplayName: \"GitHub Models\", Model: \"openai/gpt-4o-mini\"},\n-\t{Name: \"grok\", DisplayName: \"xAI (Grok)\", Model: \"grok-4\"},\n-\t{Name: \"ollama\", DisplayName: \"Ollama (Local)\", Model: \"llama3.3:70b\"},\n-\t{Name: \"bedrock\", DisplayName: \"AWS Bedrock\", Model: \"anthropic.claude-sonnet-4-5-20250929-v1:0\"},\n-\t{Name: \"azureopenai\", DisplayName: \"Azure OpenAI\", Model: defaultOpenAIModel},\n+\t{Name: providerAnthropic, DisplayName: \"Anthropic (Claude)\", Model: anthropic.DefaultModel},\n+\t{Name: \"openai\", DisplayName: \"OpenAI (GPT)\", Model: openai.DefaultModel},\n+\t{Name: \"gemini\", DisplayName: \"Google (Gemini)\", Model: gemini.DefaultModel},\n+\t{Name: \"github\", DisplayName: \"GitHub Models\", Model: github.DefaultModel},\n+\t{Name: \"grok\", DisplayName: \"xAI (Grok)\", Model: grok.DefaultModel},\n+\t{Name: \"ollama\", DisplayName: \"Ollama (Local)\", Model: ollama.DefaultModel},\n+\t{Name: \"bedrock\", DisplayName: \"AWS Bedrock\", Model: bedrock.DefaultModel},\n+\t{Name: \"azureopenai\", DisplayName: \"Azure OpenAI\", Model: azureopenai.DefaultModel},\n }\n \n // getConfiguredProvidersForCreate returns configured providers with their models from atmos.yaml.\n@@ -139,10 +159,16 @@ func (m *ChatModel) getConfiguredProvidersForCreate() []ProviderWithModel {\n \t\t\tdisplayName = provider.Name\n \t\t}\n \n+\t\t// An omitted model uses the provider's default, as the client does.\n+\t\tmodel := providerDefaultModels[provider.Name]\n+\t\tif providerConfig != nil && providerConfig.Model != \"\" {\n+\t\t\tmodel = providerConfig.Model\n+\t\t}\n+\n \t\tconfigured = append(configured, ProviderWithModel{\n \t\t\tName:        provider.Name,\n \t\t\tDisplayName: displayName,\n-\t\t\tModel:       providerConfig.Model,\n+\t\t\tModel:       model,\n \t\t})\n \t}\n "
+  },
+  {
+   "filename": "pkg/ai/tui/chat_test.go",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -13,6 +13,8 @@ import (\n \t\"github.com/stretchr/testify/assert\"\n \t\"github.com/stretchr/testify/require\"\n \n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/anthropic\"\n+\t\"github.com/cloudposse/atmos/pkg/ai/agent/grok\"\n \t\"github.com/cloudposse/atmos/pkg/ai/session\"\n \t\"github.com/cloudposse/atmos/pkg/ai/tools\"\n \t\"github.com/cloudposse/atmos/pkg/ai/types\"\n@@ -1156,6 +1158,31 @@ func TestGetConfiguredProvidersForCreate(t *testing.T) {\n \t\tassert.Equal(t, \"gpt-4-turbo\", providers[1].Model) // From atmos.yaml\n \t})\n \n+\tt.Run(\"uses the provider default when a configured provider omits model\", func(t *testing.T) {\n+\t\tmodel := &ChatModel{\n+\t\t\tatmosConfig: &schema.AtmosConfiguration{\n+\t\t\t\tAI: schema.AISettings{\n+\t\t\t\t\tProviders: map[string]*schema.AIProviderConfig{\n+\t\t\t\t\t\t\"anthropic\": {},\n+\t\t\t\t\t\t\"grok\":      nil,\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t},\n+\t\t}\n+\n+\t\tproviders := model.getConfiguredProvidersForCreate()\n+\n+\t\tassert.Len(t, providers, 2)\n+\t\tassert.Equal(t, anthropic.DefaultModel, providers[0].Model)\n+\t\tassert.Equal(t, grok.DefaultModel, providers[1].Model)\n+\t})\n+\n+\tt.Run(\"default providers use each provider's DefaultModel\", func(t *testing.T) {\n+\t\tfor _, p := range defaultProviderModels {\n+\t\t\tassert.Equal(t, providerDefaultModels[p.Name], p.Model, p.Name)\n+\t\t}\n+\t})\n+\n \tt.Run(\"returns default providers when no config\", func(t *testing.T) {\n \t\tmodel := &ChatModel{\n \t\t\tatmosConfig: nil,"
+  },
+  {
+   "filename": "website/docs/cli/commands/aws/security/analyze.mdx",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -209,7 +209,7 @@ ai:\n   default_provider: bedrock\n   providers:\n     bedrock:\n-      model: anthropic.claude-sonnet-4-6-20250514-v1:0\n+      model: anthropic.claude-sonnet-4-5-20250929-v1:0\n       base_url: us-east-1\n ```\n "
+  },
+  {
+   "filename": "website/docs/cli/configuration/ai/providers.mdx",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -42,7 +42,7 @@ Each provider in the `providers` map supports the following settings:\n \n <dl>\n   <dt>`model`</dt>\n-  <dd>Model identifier to use for this provider. Defaults vary by provider (see below).</dd>\n+  <dd>Model identifier to use for this provider. Defaults vary by provider (see below). If you omit `model`, Atmos uses the provider's built-in default. The `--ai` configuration hints use the same default. Set `model` explicitly to select a different model.</dd>\n \n   <dt>`api_key`</dt>\n   <dd>API key for the provider. Use the `!env` YAML function to read from an environment variable (e.g., `api_key: !env \"ANTHROPIC_API_KEY\"`). Not required for Ollama (local) or Bedrock (uses AWS credentials).</dd>\n@@ -60,7 +60,7 @@ Each provider in the `providers` map supports the following settings:\n ## Supported Providers\n \n <dl>\n-  <dt>**Anthropic (Claude)** — `claude-sonnet-4-6`</dt>\n+  <dt>**Anthropic (Claude)** — `claude-sonnet-4-5-20250929`</dt>\n   <dd>API Key authentication. Advanced reasoning, default choice.</dd>\n \n   <dt>**OpenAI (GPT)** — `gpt-4o`</dt>\n@@ -87,7 +87,7 @@ Each provider in the `providers` map supports the following settings:\n   <dt>**Ollama (Local)** — `llama4`</dt>\n   <dd>No authentication (local). Privacy, offline use, zero API costs.</dd>\n \n-  <dt>**AWS Bedrock** — `anthropic.claude-sonnet-4-6`</dt>\n+  <dt>**AWS Bedrock** — `anthropic.claude-sonnet-4-5-20250929-v1:0`</dt>\n   <dd>AWS Credentials authentication. Enterprise security, AWS integration.</dd>\n \n   <dt>**Azure OpenAI** — `gpt-4o`</dt>"
+  }
+ ],
+ "test_files": [
+  "pkg/ai/analyze/analyze_test.go",
+  "pkg/ai/tui/chat_test.go"
+ ]
+}

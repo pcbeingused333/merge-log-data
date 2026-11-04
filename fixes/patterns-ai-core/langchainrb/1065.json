@@ -1,0 +1,33 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1065,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1065",
+ "title": "Honor tool_choice \"none\" in the Ollama assistant adapter",
+ "merged_at": "2026-10-13T17:48:49Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n - [SECURITY]: A change which fixes a security vulnerability.\n \n ## [Unreleased]\n+- [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1065] Leave the tools out of the request when the Ollama assistant adapter gets `tool_choice: \"none\"`, and stop logging `tool_choice`/`parallel_tool_calls` warnings on every call for the Assistant's defaults.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1063] Send `tool_choice: \"auto\"` from `Langchain::Assistant` once a forced tool (`\"any\"` or a function name) has been called since the latest user message, so a run with a forced tool can finish instead of calling the tool until `max_turns`.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1064] Send `tool_choice: \"none\"` as the string `\"none\"` from the OpenAI and Mistral AI assistant adapters instead of a function named `none`, which the APIs rejected.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1062] Return the tool calls of every streamed chunk from `Langchain::LLM::Ollama#chat` instead of only the last chunk's, which has none, so `Langchain::Assistant` runs tools with streaming on."
+  },
+  {
+   "filename": "lib/langchain/assistant/llm/adapters/ollama.rb",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 4,
+   "patch": "@@ -20,11 +20,11 @@ def build_chat_params(\n             tool_choice:,\n             parallel_tool_calls:\n           )\n-            Langchain.logger.warn \"WARNING: `parallel_tool_calls:` is not supported by Ollama currently\" if parallel_tool_calls\n-            Langchain.logger.warn \"WARNING: `tool_choice:` is not supported by Ollama currently\" if tool_choice\n-\n+            # Ollama has no tool_choice parameter: \"none\" is honored by not sending the tools,\n+            # and \"auto\" is its default behavior. Assistant#run_tools runs one tool call at a\n+            # time when parallel_tool_calls is false.\n             params = {messages: messages}\n-            if tools.any?\n+            if tools.any? && tool_choice != \"none\"\n               params[:tools] = build_tools(tools)\n             end\n             params"
+  },
+  {
+   "filename": "spec/lib/langchain/assistant/llm/adapters/ollama_spec.rb",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 0,
+   "patch": "@@ -18,6 +18,27 @@\n     end\n   end\n \n+  describe \"#build_chat_params with tool_choice\" do\n+    let(:params) do\n+      {\n+        messages: [{role: \"user\", content: \"Hello\"}],\n+        instructions: \"Instructions\",\n+        tools: [Langchain::Tool::Calculator.new],\n+        parallel_tool_calls: true\n+      }\n+    end\n+\n+    it \"sends the tools for \\\"auto\\\" without logging a warning\" do\n+      expect(Langchain.logger).not_to receive(:warn)\n+\n+      expect(subject.build_chat_params(**params, tool_choice: \"auto\")).to include(:tools)\n+    end\n+\n+    it \"leaves the tools out for \\\"none\\\"\" do\n+      expect(subject.build_chat_params(**params, tool_choice: \"none\")).to eq(messages: [{role: \"user\", content: \"Hello\"}])\n+    end\n+  end\n+\n   describe \"#support_system_message?\" do\n     it \"returns true\" do\n       expect(subject.support_system_message?).to eq(true)"
+  }
+ ],
+ "test_files": [
+  "spec/lib/langchain/assistant/llm/adapters/ollama_spec.rb"
+ ]
+}

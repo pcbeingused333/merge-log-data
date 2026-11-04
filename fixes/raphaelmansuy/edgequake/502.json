@@ -1,0 +1,66 @@
+{
+ "repo": "raphaelmansuy/edgequake",
+ "number": 502,
+ "url": "https://github.com/raphaelmansuy/edgequake/pull/502",
+ "title": "fix: replace the gpt-4.1-nano OpenAI defaults before its 2026-10-23 shutdown",
+ "merged_at": "2026-10-20T07:41:32Z",
+ "files": [
+  {
+   "filename": "edgequake/crates/edgequake-api/src/handlers/parse/options.rs",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 1,
+   "patch": "@@ -141,9 +141,20 @@ impl ResolvedParseOptions {\n \n fn default_vision_model_for_provider(provider: &str) -> &'static str {\n     match provider.to_ascii_lowercase().as_str() {\n-        \"openai\" => \"gpt-4.1-nano\",\n+        \"openai\" => \"gpt-5.6-luna\",\n         \"ollama\" | \"lmstudio\" => \"gemma3:latest\",\n         \"mock\" => \"mock-vision\",\n         _ => \"gemma3:latest\",\n     }\n }\n+\n+#[cfg(test)]\n+mod tests {\n+    use super::*;\n+\n+    #[test]\n+    fn default_openai_vision_model_is_not_a_retired_model() {\n+        // gpt-4.1-nano is shut down on the OpenAI API on 2026-10-23.\n+        assert_eq!(default_vision_model_for_provider(\"openai\"), \"gpt-5.6-luna\");\n+    }\n+}"
+  },
+  {
+   "filename": "edgequake/crates/edgequake-api/src/handlers/pdf_upload/mod.rs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -77,8 +77,8 @@ mod tests {\n             vision_provider: Some(\"openai\".to_string()),\n             ..Default::default()\n         };\n-        // OODA-04: Updated from gpt-4o-mini to gpt-4.1-nano per mission directive\n-        assert_eq!(opts.vision_model(None, None), \"gpt-4.1-nano\");\n+        // gpt-4.1-nano is shut down on the OpenAI API on 2026-10-23.\n+        assert_eq!(opts.vision_model(None, None), \"gpt-5.6-luna\");\n \n         opts.vision_provider = Some(\"ollama\".to_string());\n         assert_eq!(opts.vision_model(None, None), \"gemma4:latest\");"
+  },
+  {
+   "filename": "edgequake/crates/edgequake-api/src/safety_limits.rs",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 2,
+   "patch": "@@ -1269,7 +1269,7 @@ pub fn is_model_provider_mismatch(provider_name: &str, model: &str) -> bool {\n /// Get the default model for a given provider name.\n pub fn default_model_for_provider(provider_name: &str) -> &'static str {\n     match provider_name.to_lowercase().as_str() {\n-        \"openai\" => \"gpt-4.1-nano\",\n+        \"openai\" => \"gpt-5.6-luna\",\n         \"anthropic\" => \"claude-sonnet-4-5-20250929\",\n         \"gemini\" => \"gemini-2.5-flash\",\n         \"xai\" => \"grok-4-1-fast\",\n@@ -1279,7 +1279,22 @@ pub fn default_model_for_provider(provider_name: &str) -> &'static str {\n         \"lmstudio\" | \"lm-studio\" | \"lm_studio\" => \"gemma-3n-e4b-it\",\n         \"minimax\" => \"MiniMax-M2.7\",\n         \"mock\" => \"mock-model\",\n-        _ => \"gpt-4.1-nano\",\n+        _ => \"gpt-5.6-luna\",\n+    }\n+}\n+\n+#[cfg(test)]\n+mod default_model_tests {\n+    use super::*;\n+\n+    #[test]\n+    fn openai_default_is_not_a_retired_model() {\n+        // gpt-4.1-nano is shut down on the OpenAI API on 2026-10-23.\n+        assert_eq!(default_model_for_provider(\"openai\"), \"gpt-5.6-luna\");\n+        assert_eq!(\n+            default_model_for_provider(\"unknown-provider\"),\n+            \"gpt-5.6-luna\"\n+        );\n     }\n }\n "
+  },
+  {
+   "filename": "edgequake/crates/edgequake-core/src/config.rs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -82,7 +82,7 @@ impl Default for LlmConfig {\n             provider: \"openai\".to_string(),\n             api_key: None,\n             base_url: None,\n-            model: \"gpt-4.1-nano\".to_string(),\n+            model: \"gpt-5.6-luna\".to_string(),\n             embedding_model: \"text-embedding-3-small\".to_string(),\n             embedding_dim: 1536,\n             max_tokens: 4096,\n@@ -278,6 +278,7 @@ mod tests {\n         let config = Config::default();\n         assert_eq!(config.api.port, 8080);\n         assert_eq!(config.llm.provider, \"openai\");\n+        assert_eq!(config.llm.model, \"gpt-5.6-luna\");\n         assert_eq!(config.pipeline.chunk_size, 1200);\n     }\n "
+  },
+  {
+   "filename": "edgequake/crates/edgequake-core/src/model_resolution.rs",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -181,7 +181,7 @@ pub fn env_vision_model() -> Option<String> {\n /// Compiled vision model default for a provider (Acc / startup leaf).\n pub fn compiled_vision_model_for(provider: &str) -> String {\n     match provider {\n-        \"openai\" => \"gpt-4.1-nano\".to_string(),\n+        \"openai\" => \"gpt-5.6-luna\".to_string(),\n         \"anthropic\" => \"claude-sonnet-4-20250514\".to_string(),\n         \"mistral\" => \"mistral-small-latest\".to_string(),\n         _ => \"gemma4:latest\".to_string(),\n@@ -499,4 +499,10 @@ mod tests {\n         assert_eq!(resolved.model, \"gpt-4.1-nano\");\n         assert_eq!(resolved.source, ModelResolutionSource::Request);\n     }\n+\n+    #[test]\n+    fn compiled_openai_vision_default_is_not_a_retired_model() {\n+        // gpt-4.1-nano is shut down on the OpenAI API on 2026-10-23.\n+        assert_eq!(compiled_vision_model_for(\"openai\"), \"gpt-5.6-luna\");\n+    }\n }"
+  },
+  {
+   "filename": "edgequake/crates/edgequake-pdf/src/image_guard.rs",
+   "status": "modified",
+   "additions": 62,
+   "deletions": 3,
+   "patch": "@@ -97,6 +97,33 @@ impl ImageGuardProvider {\n     }\n }\n \n+/// gpt-5.x and o-series models only accept the default temperature.\n+/// edgequake-llm's `model_requires_default_temperature` also lists gpt-4.1-*,\n+/// which accept one, so it is not reused here: that would drop the OCR\n+/// temperature on gpt-4.1-mini.\n+fn model_requires_default_temperature(model: &str) -> bool {\n+    let model = model.trim();\n+    let model = model\n+        .rsplit('/')\n+        .next()\n+        .unwrap_or(model)\n+        .to_ascii_lowercase();\n+    model.contains(\"gpt-5\")\n+        || model.starts_with(\"o1\")\n+        || model.starts_with(\"o3\")\n+        || model.starts_with(\"o4\")\n+}\n+\n+/// pdf2md page calls set `temperature: 0.1`; drop it for models that reject a\n+/// non-default temperature.\n+fn with_effective_temperature(model: &str, options: &CompletionOptions) -> CompletionOptions {\n+    let mut options = options.clone();\n+    if model_requires_default_temperature(model) {\n+        options.temperature = None;\n+    }\n+    options\n+}\n+\n fn guard_messages(\n     messages: &[ChatMessage],\n     max_bytes: usize,\n@@ -214,7 +241,8 @@ impl LLMProvider for ImageGuardProvider {\n         prompt: &str,\n         options: &CompletionOptions,\n     ) -> Result<LLMResponse> {\n-        self.inner.complete_with_options(prompt, options).await\n+        let options = with_effective_temperature(self.model(), options);\n+        self.inner.complete_with_options(prompt, &options).await\n     }\n \n     async fn chat(\n@@ -223,7 +251,8 @@ impl LLMProvider for ImageGuardProvider {\n         options: Option<&CompletionOptions>,\n     ) -> Result<LLMResponse> {\n         let guarded = self.guard_messages_async(messages).await;\n-        self.inner.chat(&guarded, options).await\n+        let options = options.map(|o| with_effective_temperature(self.model(), o));\n+        self.inner.chat(&guarded, options.as_ref()).await\n     }\n \n     async fn chat_with_tools(\n@@ -234,8 +263,9 @@ impl LLMProvider for ImageGuardProvider {\n         options: Option<&CompletionOptions>,\n     ) -> Result<LLMResponse> {\n         let guarded = self.guard_messages_async(messages).await;\n+        let options = options.map(|o| with_effective_temperature(self.model(), o));\n         self.inner\n-            .chat_with_tools(&guarded, tools, tool_choice, options)\n+            .chat_with_tools(&guarded, tools, tool_choice, options.as_ref())\n             .await\n     }\n \n@@ -268,6 +298,35 @@ impl LLMProvider for ImageGuardProvider {\n mod tests {\n     use super::*;\n \n+    #[test]\n+    fn drops_temperature_for_models_that_only_accept_the_default() {\n+        let options = CompletionOptions {\n+            temperature: Some(0.1),\n+            max_tokens: Some(4096),\n+            ..Default::default()\n+        };\n+        let gated = with_effective_temperature(\"gpt-5.6-luna\", &options);\n+        assert_eq!(gated.temperature, None);\n+        assert_eq!(gated.max_tokens, Some(4096));\n+\n+        assert_eq!(\n+            with_effective_temperature(\"o4-mini\", &options).temperature,\n+            None\n+        );\n+    }\n+\n+    #[test]\n+    fn keeps_temperature_for_gpt_4_1_and_other_models() {\n+        let options = CompletionOptions {\n+            temperature: Some(0.1),\n+            ..Default::default()\n+        };\n+        for model in [\"gpt-4.1-mini\", \"gpt-4.1-nano\", \"gemma4:latest\"] {\n+            let kept = with_effective_temperature(model, &options);\n+            assert_eq!(kept.temperature, Some(0.1), \"{model}\");\n+        }\n+    }\n+\n     /// Build a PNG of the given dimensions filled with pseudo-random noise\n     /// (noise compresses poorly → reliably exceeds the test budget).\n     fn noisy_png(w: u32, h: u32) -> Vec<u8> {"
+  },
+  {
+   "filename": "edgequake/docs/configuration.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -203,7 +203,7 @@ EDGEQUAKE_DEFAULT_LLM_MODEL=gemma4:latest\n \n # Vision: OpenAI for better OCR on scanned PDFs\n EDGEQUAKE_VISION_PROVIDER=openai\n-EDGEQUAKE_VISION_MODEL=gpt-4.1-nano\n+EDGEQUAKE_VISION_MODEL=gpt-5.6-luna\n OPENAI_API_KEY=sk-...\n ```\n "
+  },
+  {
+   "filename": "edgequake/models.toml",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 3,
+   "patch": "@@ -185,9 +185,10 @@ image_per_unit = 0.0\n name = \"gpt-4.1-nano\"\n display_name = \"GPT-4.1 Nano\"\n model_type = \"llm\"\n-description = \"Ultra-efficient model for simple tasks at lowest cost\"\n-deprecated = false\n-tags = [\"ultra-efficient\", \"fast\", \"lowest-cost\"]\n+description = \"Shut down on the OpenAI API on 2026-10-23, use GPT-5.6 Luna instead\"\n+deprecated = true\n+replacement = \"gpt-5.6-luna\"\n+tags = [\"legacy\"]\n \n [providers.models.capabilities]\n context_length = 1047576"
+  }
+ ],
+ "test_files": []
+}

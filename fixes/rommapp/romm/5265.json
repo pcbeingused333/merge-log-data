@@ -1,0 +1,26 @@
+{
+ "repo": "rommapp/romm",
+ "number": 5265,
+ "url": "https://github.com/rommapp/romm/pull/5265",
+ "title": "docs: list the ROM patcher env vars in env.template",
+ "merged_at": "2026-10-21T18:27:05Z",
+ "files": [
+  {
+   "filename": "backend/tests/test_env_template.py",
+   "status": "added",
+   "additions": 47,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,47 @@\n+\"\"\"Guards that env.template, which generates the docs' env var reference, lists every setting.\"\"\"\n+\n+import ast\n+from pathlib import Path\n+\n+import pytest\n+\n+REPO_ROOT = Path(__file__).resolve().parents[2]\n+CONFIG_MODULE = REPO_ROOT / \"backend\" / \"config\" / \"__init__.py\"\n+ENV_TEMPLATE = REPO_ROOT / \"env.template\"\n+\n+ENV_READERS = {\"_get_env\", \"_get_env_list\", \"_get_env_set\"}\n+# Set by pytest itself, not by users.\n+NOT_USER_SETTINGS = {\"PYTEST_VERSION\"}\n+\n+\n+def _env_vars_read_by_config() -> set[str]:\n+    names = set()\n+    for node in ast.walk(ast.parse(CONFIG_MODULE.read_text())):\n+        if (\n+            isinstance(node, ast.Call)\n+            and isinstance(node.func, ast.Name)\n+            and node.func.id in ENV_READERS\n+            and node.args\n+            and isinstance(node.args[0], ast.Constant)\n+            and isinstance(node.args[0].value, str)\n+        ):\n+            names.add(node.args[0].value)\n+    return names - NOT_USER_SETTINGS\n+\n+\n+def _env_vars_in_template() -> set[str]:\n+    names = set()\n+    for line in ENV_TEMPLATE.read_text().splitlines():\n+        key, sep, _ = line.lstrip(\"# \").partition(\"=\")\n+        if sep and key.isupper():\n+            names.add(key)\n+    return names\n+\n+\n+# The dev container only mounts backend/, so env.template isn't there.\n+@pytest.mark.skipif(\n+    not ENV_TEMPLATE.exists(), reason=\"env.template is not in this checkout\"\n+)\n+def test_env_template_lists_every_env_var_the_config_reads() -> None:\n+    missing = _env_vars_read_by_config() - _env_vars_in_template()\n+    assert not missing, f\"env.template is missing {sorted(missing)}\""
+  },
+  {
+   "filename": "env.template",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -103,6 +103,9 @@ SCAN_WORKERS=4  # How many ROMs a scan processes at once\n TASK_TIMEOUT=300  # Timeout for other background tasks in seconds\n TASK_RESULT_TTL=86400  # How long to keep task results in Valkey in seconds\n SEVEN_ZIP_TIMEOUT=180  # Timeout for 7-Zip operations in seconds\n+ROM_PATCHER_TIMEOUT=120  # Timeout for applying a ROM patch in seconds\n+ROM_PATCHER_MAX_FILE_SIZE_BYTES=4294967296  # Largest ROM or patch file the patcher accepts, in bytes (4 GiB)\n+ROM_PATCHER_MAX_CONCURRENCY=2  # How many ROM patches can run at once per API worker (minimum 1)\n ENABLE_RESCAN_ON_FILESYSTEM_CHANGE=false  # Re-scan the library automatically when the filesystem changes\n RESCAN_ON_FILESYSTEM_CHANGE_DELAY=5  # Delay in minutes before re-scanning after a filesystem change\n ENABLE_SCHEDULED_RESCAN=false  # Enable scheduled library re-scans"
+  }
+ ],
+ "test_files": [
+  "backend/tests/test_env_template.py"
+ ]
+}

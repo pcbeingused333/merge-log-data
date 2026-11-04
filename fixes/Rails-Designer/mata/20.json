@@ -1,0 +1,26 @@
+{
+ "repo": "Rails-Designer/mata",
+ "number": 20,
+ "url": "https://github.com/Rails-Designer/mata/pull/20",
+ "title": "Close live reload connections of closed tabs",
+ "merged_at": "2026-11-02T19:52:01Z",
+ "files": [
+  {
+   "filename": "lib/mata/broadcaster.rb",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 2,
+   "patch": "@@ -17,6 +17,8 @@ class Broadcaster\n       }\n     JS\n \n+    HEARTBEAT_INTERVAL = 15\n+\n     def initialize(options = {})\n       @clients = []\n       @clients_mutex = Mutex.new\n@@ -75,6 +77,8 @@ def broadcast_to_all(files)\n         stream << message\n       rescue\n         @clients_mutex.synchronize { @clients.delete(stream) }\n+\n+        hang_up(stream)\n       end\n     end\n \n@@ -89,7 +93,7 @@ def stand_down\n     def cleanup_periodically\n       Thread.new do\n         loop do\n-          sleep 60\n+          sleep HEARTBEAT_INTERVAL\n \n           cleanup_dead_clients\n         end\n@@ -100,13 +104,22 @@ def cleanup_periodically\n     def cleanup_dead_clients\n       @clients_mutex.synchronize do\n         @clients.reject! do |client|\n-          client << \"\"\n+          # an SSE comment; writing nothing never notices a closed tab\n+          client << \":\\n\\n\"\n \n           false\n         rescue\n+          hang_up(client)\n+\n           true\n         end\n       end\n     end\n+\n+    def hang_up(stream)\n+      stream.close\n+    rescue\n+      nil\n+    end\n   end\n end"
+  },
+  {
+   "filename": "test/test_broadcaster.rb",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -1,4 +1,5 @@\n require_relative \"test_helper\"\n+require \"socket\"\n \n class TestBroadcaster < Minitest::Test\n   include Rack::Test::Methods\n@@ -84,6 +85,43 @@ def test_broadcast_to_all_with_no_clients\n     @broadcaster.broadcast_to_all([\"file.txt\"])\n   end\n \n+  def test_cleanup_closes_clients_that_went_away\n+    stream, browser = UNIXSocket.pair\n+    _, _, stream_proc = @broadcaster.establish_contact({\"REQUEST_METHOD\" => \"GET\"})\n+    stream_proc.call(stream)\n+\n+    browser.close\n+    @broadcaster.send(:cleanup_dead_clients)\n+\n+    assert stream.closed?\n+    assert_empty @broadcaster.instance_variable_get(:@clients)\n+  end\n+\n+  def test_cleanup_keeps_live_clients\n+    stream, browser = UNIXSocket.pair\n+    _, _, stream_proc = @broadcaster.establish_contact({\"REQUEST_METHOD\" => \"GET\"})\n+    stream_proc.call(stream)\n+\n+    @broadcaster.send(:cleanup_dead_clients)\n+\n+    refute stream.closed?\n+    assert_includes browser.read_nonblock(1024), \":\\n\\n\"\n+  ensure\n+    browser&.close\n+  end\n+\n+  def test_broadcast_closes_clients_that_went_away\n+    stream, browser = UNIXSocket.pair\n+    _, _, stream_proc = @broadcaster.establish_contact({\"REQUEST_METHOD\" => \"GET\"})\n+    stream_proc.call(stream)\n+\n+    browser.close\n+    @broadcaster.broadcast_to_all([\"file.txt\"])\n+\n+    assert stream.closed?\n+    assert_empty @broadcaster.instance_variable_get(:@clients)\n+  end\n+\n   def test_stand_down_cleans_up\n     # Should not raise error\n     @broadcaster.stand_down"
+  }
+ ],
+ "test_files": [
+  "test/test_broadcaster.rb"
+ ]
+}

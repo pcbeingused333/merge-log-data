@@ -1,0 +1,33 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1066,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1066",
+ "title": "Read the fixed output with chat_completion in OutputFixingParser",
+ "merged_at": "2026-10-13T19:06:41Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n - [SECURITY]: A change which fixes a security vulnerability.\n \n ## [Unreleased]\n+- [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1066] Read the fixed output with `#chat_completion` in `Langchain::OutputParsers::OutputFixingParser`; `#completion` is `nil` or not implemented on the Anthropic, Ollama, Mistral AI and Google Gemini chat responses, so fixing never succeeded there.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1068] Call the cohere-ruby 1.0 (v2 API) `chat` and `embed` from `Langchain::LLM::Cohere`, which raised `ArgumentError` with the gem version the gemspec requires; v1 `chat_history` messages are converted, and `CohereResponse` reads v2 and v1 bodies.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1065] Leave the tools out of the request when the Ollama assistant adapter gets `tool_choice: \"none\"`, and stop logging `tool_choice`/`parallel_tool_calls` warnings on every call for the Assistant's defaults.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1063] Send `tool_choice: \"auto\"` from `Langchain::Assistant` once a forced tool (`\"any\"` or a function name) has been called since the latest user message, so a run with a forced tool can finish instead of calling the tool until `max_turns`."
+  },
+  {
+   "filename": "lib/langchain/output_parsers/output_fixing_parser.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -53,7 +53,7 @@ def parse(completion)\n                       completion: completion,\n                       error: e\n                     )}]\n-      ).completion\n+      ).chat_completion\n       parser.parse(new_completion)\n     end\n "
+  },
+  {
+   "filename": "spec/lib/langchain/output_parsers/fix_spec.rb",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 4,
+   "patch": "@@ -142,14 +142,28 @@\n   end\n \n   describe \"#parse\" do\n+    it \"reads the fixed output from a chat response that has no #completion (Anthropic, Ollama)\" do\n+      [\n+        [Langchain::LLM::Anthropic.new(api_key: \"123\"),\n+          Langchain::LLM::Response::AnthropicResponse.new({content: [{type: \"text\", text: json_text_response}]})],\n+        [Langchain::LLM::Ollama.new,\n+          Langchain::LLM::Response::OllamaResponse.new({\"message\" => {\"role\" => \"assistant\", \"content\" => json_text_response}, \"done\" => true})]\n+      ].each do |llm, response|\n+        parser = described_class.from_llm(llm: llm, parser: kwargs_example[:parser])\n+        allow(llm).to receive(:chat).and_return(response)\n+\n+        expect(parser.parse(\"Whoops I don't understand\")).to eq(json_response)\n+      end\n+    end\n+\n     it \"parses without need for fixing when completion text is already valid\" do\n       parser = described_class.new(**kwargs_example)\n       expect(parser.parse(json_text_response)).to eq(json_response)\n     end\n \n     it \"when completion text is invalid, sends fix prompt to llm and parses fixing response\" do\n       parser = described_class.new(**kwargs_example.merge(prompt: fix_prompt_template_example))\n-      allow(parser.llm).to receive_message_chain(:chat, :completion)\n+      allow(parser.llm).to receive_message_chain(:chat, :chat_completion)\n         .with(prompt: match(fix_prompt_matcher_example))\n         .with(no_args)\n         .and_return(json_text_response)\n@@ -159,7 +173,7 @@\n \n     it \"if fixing prompt is not provided, uses the naive fix prompt by default\" do\n       parser = described_class.from_llm(llm: kwargs_example[:llm], parser: kwargs_example[:parser])\n-      allow(parser.llm).to receive_message_chain(:chat, :completion)\n+      allow(parser.llm).to receive_message_chain(:chat, :chat_completion)\n         .with(prompt: match(naive_fix_prompt_matcher_example))\n         .with(no_args)\n         .and_return(json_text_response)\n@@ -169,7 +183,7 @@\n \n     it \"fails to parse llm fixing response if its borked\" do\n       parser = described_class.new(**kwargs_example.merge(prompt: fix_prompt_template_example))\n-      allow(parser.llm).to receive_message_chain(:chat, :completion)\n+      allow(parser.llm).to receive_message_chain(:chat, :chat_completion)\n         .with(prompt: match(fix_prompt_matcher_example))\n         .with(no_args)\n         .and_return(\"I still don't understand, I'm only a large language model :)\")\n@@ -179,7 +193,7 @@\n \n     it \"fails to parse llm fixing response if the json does not conform to the schema\" do\n       parser = described_class.new(**kwargs_example.merge(prompt: fix_prompt_template_example))\n-      allow(parser.llm).to receive_message_chain(:chat, :completion)\n+      allow(parser.llm).to receive_message_chain(:chat, :chat_completion)\n         .with(prompt: match(fix_prompt_matcher_example))\n         .with(no_args)\n         .and_return(invalid_schema_json_text_response)"
+  }
+ ],
+ "test_files": [
+  "spec/lib/langchain/output_parsers/fix_spec.rb"
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "deepset-ai/haystack",
+ "number": 12358,
+ "url": "https://github.com/deepset-ai/haystack/pull/12358",
+ "title": "fix: keep EmbeddingBasedDocumentSplitter.run_async on the async path",
+ "merged_at": "2026-08-17T08:10:45Z",
+ "files": [
+  {
+   "filename": "haystack/components/preprocessors/embedding_based_document_splitter.py",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 1,
+   "patch": "@@ -276,7 +276,7 @@ async def _split_document_async(self, doc: Document) -> list[Document]:\n         merged_splits = self._merge_small_splits(splits=splits)\n \n         # Recursively split splits larger than max_length\n-        final_splits = self._split_large_splits(splits=merged_splits)\n+        final_splits = await self._split_large_splits_async(splits=merged_splits)\n \n         # Create Document objects from the final splits\n         return EmbeddingBasedDocumentSplitter._create_documents_from_splits(splits=final_splits, original_doc=doc)\n@@ -456,6 +456,8 @@ def _split_large_splits(self, splits: list[str]) -> list[str]:\n         further splitting is possible.\n \n         This works because the threshold for splits is calculated dynamically based on the provided of embeddings.\n+\n+        Keep in sync with `_split_large_splits_async`.\n         \"\"\"\n         final_splits = []\n \n@@ -482,6 +484,41 @@ def _split_large_splits(self, splits: list[str]) -> list[str]:\n \n         return final_splits\n \n+    async def _split_large_splits_async(self, splits: list[str]) -> list[str]:\n+        \"\"\"\n+        Asynchronously and recursively split splits that are above max_length.\n+\n+        Mirrors `_split_large_splits`, but embeds through the async path so that the recursion does not block the\n+        event loop with synchronous embedder calls.\n+\n+        Keep in sync with `_split_large_splits`, which also documents why re-running the splitter on an oversized\n+        chunk can split it further.\n+        \"\"\"\n+        final_splits = []\n+\n+        for split in splits:\n+            if len(split) <= self.max_length:\n+                final_splits.append(split)\n+            else:\n+                # Recursively split large splits\n+                # We can reuse the same _split_text_async method to split the text into smaller chunks because the\n+                # threshold for splits is calculated dynamically based on embeddings from `split`.\n+                sub_splits = await self._split_text_async(text=split)\n+\n+                # Stop splitting if no further split is possible or continue with recursion\n+                if len(sub_splits) == 1:\n+                    logger.warning(\n+                        \"Could not split a chunk further below max_length={max_length}. \"\n+                        \"Returning chunk of length {length}.\",\n+                        max_length=self.max_length,\n+                        length=len(split),\n+                    )\n+                    final_splits.append(split)\n+                else:\n+                    final_splits.extend(await self._split_large_splits_async(splits=sub_splits))\n+\n+        return final_splits\n+\n     @staticmethod\n     def _create_documents_from_splits(splits: list[str], original_doc: Document) -> list[Document]:\n         \"\"\""
+  },
+  {
+   "filename": "releasenotes/notes/fix-embedding-splitter-async-recursion-7a1fa697999ddcfd.yaml",
+   "status": "added",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,7 @@\n+---\n+fixes:\n+  - |\n+    Fixed ``EmbeddingBasedDocumentSplitter.run_async`` embedding through the synchronous path while\n+    recursively splitting chunks longer than ``max_length``. Only the first pass was async: the recursion\n+    called the sync splitting helper, so the embedder's blocking ``run`` ran on the event loop for every\n+    over-long chunk. The recursion now embeds through ``run_async`` as well."
+  },
+  {
+   "filename": "test/components/preprocessors/test_embedding_based_document_splitter.py",
+   "status": "modified",
+   "additions": 32,
+   "deletions": 0,
+   "patch": "@@ -801,6 +801,38 @@ async def test_split_large_splits_actually_splits_async(self) -> None:\n             if i in [9, 10]:\n                 assert split_doc.meta[\"page_number\"] == 4\n \n+    @pytest.mark.asyncio\n+    async def test_recursive_split_of_large_chunks_stays_async(self) -> None:\n+        \"\"\"\n+        `run_async` must embed through the embedder's async path, including while recursively splitting\n+        chunks that came out longer than max_length. Reaching for the synchronous `run` there blocks the\n+        event loop on the embedder's network calls.\n+        \"\"\"\n+        calls = {\"sync\": 0, \"async\": 0}\n+\n+        def embed(documents: list[Document]) -> dict[str, list[Document]]:\n+            # Alternating embeddings so consecutive groups look unrelated and the text keeps splitting.\n+            return {\"documents\": [replace(doc, embedding=[float(i % 3), 1.0, 0.0]) for i, doc in enumerate(documents)]}\n+\n+        class RecordingEmbedder:\n+            def run(self, documents: list[Document]) -> dict[str, list[Document]]:\n+                calls[\"sync\"] += 1\n+                return embed(documents)\n+\n+            async def run_async(self, documents: list[Document]) -> dict[str, list[Document]]:\n+                calls[\"async\"] += 1\n+                return embed(documents)\n+\n+        text = \" \".join(f\"Sentence number {i} about topic {i % 4}.\" for i in range(40))\n+        splitter = EmbeddingBasedDocumentSplitter(document_embedder=RecordingEmbedder(), min_length=10, max_length=120)\n+        splitter.warm_up()\n+\n+        await splitter.run_async(documents=[Document(content=text)])\n+\n+        # The first pass is async, and the recursion into the over-long chunk has to be too.\n+        assert calls[\"async\"] > 1\n+        assert calls[\"sync\"] == 0\n+\n \n class TestComponentLifecycle:\n     def test_warm_up_builds_splitter_and_delegates_to_embedder(self):"
+  }
+ ],
+ "test_files": [
+  "test/components/preprocessors/test_embedding_based_document_splitter.py"
+ ]
+}

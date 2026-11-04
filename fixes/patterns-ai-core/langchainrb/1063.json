@@ -1,0 +1,33 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1063,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1063",
+ "title": "Send tool_choice auto once a forced tool has been called",
+ "merged_at": "2026-10-13T17:35:43Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n - [SECURITY]: A change which fixes a security vulnerability.\n \n ## [Unreleased]\n+- [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1063] Send `tool_choice: \"auto\"` from `Langchain::Assistant` once a forced tool (`\"any\"` or a function name) has been called since the latest user message, so a run with a forced tool can finish instead of calling the tool until `max_turns`.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1064] Send `tool_choice: \"none\"` as the string `\"none\"` from the OpenAI and Mistral AI assistant adapters instead of a function named `none`, which the APIs rejected.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1062] Return the tool calls of every streamed chunk from `Langchain::LLM::Ollama#chat` instead of only the last chunk's, which has none, so `Langchain::Assistant` runs tools with streaming on.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1061] Pass `max_completion_tokens` and `reasoning_effort` through `Langchain::LLM::OpenAI#chat` and `Langchain::LLM::Azure#chat` instead of dropping them; OpenAI's reasoning models reject `max_tokens`, so their output couldn't be capped."
+  },
+  {
+   "filename": "lib/langchain/assistant.rb",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 1,
+   "patch": "@@ -349,12 +349,24 @@ def chat_with_llm\n         instructions: @instructions,\n         messages: array_of_message_hashes,\n         tools: @tools,\n-        tool_choice: tool_choice,\n+        tool_choice: effective_tool_choice,\n         parallel_tool_calls: parallel_tool_calls\n       )\n       @llm.chat(**params, &@block)\n     end\n \n+    # A forced tool_choice (\"any\" or a function name) makes every response call a tool, so a\n+    # run could never reach a final answer. Once a tool has been called since the latest\n+    # user message, the following requests use \"auto\".\n+    #\n+    # @return [String] The tool_choice to send with the next request\n+    def effective_tool_choice\n+      return tool_choice if [\"auto\", \"none\"].include?(tool_choice)\n+\n+      tool_called = messages.reverse_each.take_while { |message| !message.user? }.any? { |message| message.llm? && message.tool_calls.any? }\n+      tool_called ? \"auto\" : tool_choice\n+    end\n+\n     # Run the tools automatically\n     #\n     # @param tool_calls [Array<Hash>] The tool calls to run"
+  },
+  {
+   "filename": "spec/lib/langchain/assistant/assistant_spec.rb",
+   "status": "modified",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -341,6 +341,55 @@\n         end\n       end\n \n+      context \"when tool_choice forces a tool\" do\n+        let(:raw_openai_final_response) do\n+          {\n+            \"id\" => \"chatcmpl-final\",\n+            \"object\" => \"chat.completion\",\n+            \"created\" => 1711313504,\n+            \"model\" => \"gpt-3.5-turbo-0125\",\n+            \"choices\" => [{\"index\" => 0, \"message\" => {\"role\" => \"assistant\", \"content\" => \"The result of 2 + 2 is 4.\"}, \"logprobs\" => nil, \"finish_reason\" => \"stop\"}],\n+            \"usage\" => {\"prompt_tokens\" => 121, \"completion_tokens\" => 13, \"total_tokens\" => 134}\n+          }\n+        end\n+\n+        before do\n+          subject.tool_choice = \"langchain_tool_calculator__execute\"\n+          allow(subject.tools[0]).to receive(:execute).with(input: \"2+2\").and_return(\"4.0\")\n+        end\n+\n+        it \"forces the tool once, then sends auto so the run completes (see #825)\" do\n+          expect(subject.llm).to receive(:chat)\n+            .with(hash_including(tool_choice: {\"type\" => \"function\", \"function\" => {\"name\" => \"langchain_tool_calculator__execute\"}}))\n+            .ordered\n+            .and_return(Langchain::LLM::Response::OpenAIResponse.new(raw_openai_response))\n+          expect(subject.llm).to receive(:chat)\n+            .with(hash_including(tool_choice: \"auto\"))\n+            .ordered\n+            .and_return(Langchain::LLM::Response::OpenAIResponse.new(raw_openai_final_response))\n+\n+          subject.add_message_and_run!(content: \"Please calculate 2+2\")\n+\n+          expect(subject.state).to eq(:completed)\n+          expect(subject.messages.last.content).to eq(\"The result of 2 + 2 is 4.\")\n+          expect(subject.tool_choice).to eq(\"langchain_tool_calculator__execute\")\n+        end\n+\n+        it \"forces the tool again for the next user message\" do\n+          subject.add_message(role: \"user\", content: \"Please calculate 2+2\")\n+          subject.add_message(role: \"assistant\", tool_calls: raw_openai_response[\"choices\"][0][\"message\"][\"tool_calls\"])\n+          subject.add_message(role: \"tool\", content: \"4.0\", tool_call_id: \"call_9TewGANaaIjzY31UCpAAGLeV\")\n+          subject.add_message(role: \"assistant\", content: \"4\")\n+          subject.add_message(role: \"user\", content: \"And 3+3?\")\n+\n+          expect(subject.llm).to receive(:chat)\n+            .with(hash_including(tool_choice: {\"type\" => \"function\", \"function\" => {\"name\" => \"langchain_tool_calculator__execute\"}}))\n+            .and_return(Langchain::LLM::Response::OpenAIResponse.new(raw_openai_final_response))\n+\n+          subject.run\n+        end\n+      end\n+\n       context \"when the response carries an explicit tool_calls: null (see #1011)\" do\n         let(:raw_openai_response_null_tool_calls) do\n           {"
+  }
+ ],
+ "test_files": [
+  "spec/lib/langchain/assistant/assistant_spec.rb"
+ ]
+}

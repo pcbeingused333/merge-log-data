@@ -1,0 +1,41 @@
+{
+ "repo": "valkey-io/valkey-py",
+ "number": 361,
+ "url": "https://github.com/valkey-io/valkey-py/pull/361",
+ "title": "Fix async pipeline error messages embedding the args tuple",
+ "merged_at": "2026-11-02T16:12:56Z",
+ "files": [
+  {
+   "filename": "tests/test_asyncio/test_cluster.py",
+   "status": "modified",
+   "additions": 37,
+   "deletions": 0,
+   "patch": "@@ -302,6 +302,43 @@ def ok_response(self, *args, **options):\n             assert prev_primary.server_type == REPLICA\n \n \n+class TestClusterPipelineErrorMessages:\n+    async def test_raise_on_error_message_uses_error_text(self) -> None:\n+        r = await get_mocked_valkey_client(host=default_host, port=default_port)\n+        try:\n+            node = r.get_node_from_key(\"foo\")\n+            mock_node_resp_exc(\n+                node,\n+                ResponseError(\n+                    \"WRONGTYPE Operation against a key holding the wrong kind of value\"\n+                ),\n+            )\n+\n+            async with r.pipeline() as pipe:\n+                with pytest.raises(ResponseError) as ex:\n+                    await pipe.get(\"foo\").execute()\n+            assert str(ex.value) == (\n+                \"Command # 1 (GET foo) of pipeline caused error: \"\n+                \"WRONGTYPE Operation against a key holding the wrong kind of value\"\n+            )\n+        finally:\n+            await r.aclose()\n+\n+    async def test_raise_on_error_keeps_argless_error(self) -> None:\n+        r = await get_mocked_valkey_client(host=default_host, port=default_port)\n+        try:\n+            mock_node_resp_exc(r.get_node_from_key(\"foo\"), ResponseError())\n+\n+            async with r.pipeline() as pipe:\n+                with pytest.raises(ResponseError) as ex:\n+                    await pipe.get(\"foo\").execute()\n+            assert str(ex.value) == (\n+                \"Command # 1 (GET foo) of pipeline caused error: ResponseError\"\n+            )\n+        finally:\n+            await r.aclose()\n+\n+\n class TestValkeyClusterObj:\n     \"\"\"\n     Tests for the ValkeyCluster class"
+  },
+  {
+   "filename": "tests/test_asyncio/test_pipeline.py",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 1,
+   "patch": "@@ -1,5 +1,6 @@\n import pytest\n import valkey\n+import valkey.asyncio\n from tests.conftest import skip_if_server_version_lt\n \n from .compat import aclosing, mock\n@@ -120,8 +121,9 @@ async def test_exec_error_raised(self, r):\n             pipe.set(\"a\", 1).set(\"b\", 2).lpush(\"c\", 3).set(\"d\", 4)\n             with pytest.raises(valkey.ResponseError) as ex:\n                 await pipe.execute()\n-            assert str(ex.value).startswith(\n+            assert str(ex.value) == (\n                 \"Command # 3 (LPUSH c 3) of pipeline caused error: \"\n+                \"WRONGTYPE Operation against a key holding the wrong kind of value\"\n             )\n \n             # make sure the pipe was restored to a working state\n@@ -458,3 +460,16 @@ async def test_pipeline_discard(self, r):\n             response = await pipe.execute()\n         assert response[0]\n         assert await r.get(\"foo\") == b\"bar\"\n+\n+\n+def test_annotate_exception_uses_error_text():\n+    pipe = valkey.asyncio.Valkey().pipeline()\n+    error = valkey.ResponseError(\"WRONGTYPE Operation against a key\", \"extra\")\n+\n+    pipe.annotate_exception(error, 3, (\"LPUSH\", \"c\", 3))\n+\n+    assert error.args == (\n+        \"Command # 3 (LPUSH c 3) of pipeline caused error: \"\n+        \"WRONGTYPE Operation against a key\",\n+        \"extra\",\n+    )"
+  },
+  {
+   "filename": "valkey/asyncio/client.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -1519,7 +1519,9 @@ def annotate_exception(\n         self, exception: Exception, number: int, command: Iterable[object]\n     ) -> None:\n         cmd = \" \".join(map(safe_str, command))\n-        msg = f\"Command # {number} ({cmd}) of pipeline caused error: {exception.args}\"\n+        msg = (\n+            f\"Command # {number} ({cmd}) of pipeline caused error: {exception.args[0]}\"\n+        )\n         exception.args = (msg,) + exception.args[1:]\n \n     async def parse_response("
+  },
+  {
+   "filename": "valkey/asyncio/cluster.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -1683,9 +1683,10 @@ async def _execute(\n                     result = cmd.result\n                     if isinstance(result, Exception):\n                         command = \" \".join(map(safe_str, cmd.args))\n+                        error = result.args[0] if result.args else type(result).__name__\n                         msg = (\n                             f\"Command # {cmd.position + 1} ({command}) of pipeline \"\n-                            f\"caused error: {result.args}\"\n+                            f\"caused error: {error}\"\n                         )\n                         result.args = (msg,) + result.args[1:]\n                         raise result"
+  }
+ ],
+ "test_files": [
+  "tests/test_asyncio/test_cluster.py",
+  "tests/test_asyncio/test_pipeline.py"
+ ]
+}

@@ -1,0 +1,70 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1076,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1076",
+ "title": "Accept {role:, content:} messages in Google Gemini and Vertex AI #chat",
+ "merged_at": "2026-10-15T13:07:59Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n - [SECURITY]: A change which fixes a security vulnerability.\n \n ## [Unreleased]\n+- [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1076] Accept `{role:, content:}` messages in `Langchain::LLM::GoogleGemini#chat` and `Langchain::LLM::GoogleVertexAI#chat`, converting them to `parts` with system messages as the system instruction; `OutputFixingParser`, `Vectorsearch#ask`, `Chunker::Semantic`, the Ragas evals and HyDE got a 400 from Google before.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1077] Send `temperature`, `seed`, `top_p`, `max_tokens` (as `num_predict`) and the other sampling parameters of `Langchain::LLM::Ollama#chat` in `options`, where Ollama reads them; at the top level they were ignored, including the default `temperature: 0.0`.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1073] Raise `Langchain::LLM::Anthropic`'s default `max_tokens` from 256 to 16,000; Claude Sonnet 5 and later, Haiku 5.5 and Opus 5 and later think by default within that cap, so they often stopped before writing any text and `#chat_completion` returned `nil`.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1072] Ask the LLM with `#chat` in `Langchain::Chunker::Semantic`, the Ragas evals and `Vectorsearch::Base#similarity_search_with_hyde`; they called `#complete`, which Google Gemini, Vertex AI and Mistral AI don't implement, and the semantic chunker passed `max_tokens_to_sample:`, which `Langchain::LLM::Anthropic#complete` rejected."
+  },
+  {
+   "filename": "README.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -130,7 +130,7 @@ Use the `chat` method to generate chat completions:\n messages = [\n   { role: \"system\", content: \"You are a helpful assistant.\" },\n   { role: \"user\", content: \"What's the weather like today?\" }\n-  # Google Gemini and Google VertexAI expect messages in a different format:\n+  # Google Gemini and Google VertexAI convert these to their own format, and also accept it directly:\n   # { role: \"user\", parts: [{ text: \"why is the sky blue?\" }]}\n ]\n response = llm.chat(messages: messages)"
+  },
+  {
+   "filename": "lib/langchain/llm/google_gemini.rb",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -4,6 +4,8 @@ module Langchain::LLM\n   # Usage:\n   #     llm = Langchain::LLM::GoogleGemini.new(api_key: ENV['GOOGLE_GEMINI_API_KEY'])\n   class GoogleGemini < Base\n+    include GoogleMessageFormat\n+\n     DEFAULTS = {\n       chat_model: \"gemini-1.5-pro-latest\",\n       embedding_model: \"text-embedding-004\",\n@@ -37,6 +39,7 @@ def initialize(api_key:, default_options: {})\n     # @param tool_choice [String] Specifies the mode in which function calling should execute. If unspecified, the default value will be set to AUTO. Possible values: AUTO, ANY, NONE\n     # @param system [String] Developer set system instruction\n     def chat(params = {})\n+      params = to_google_messages(params)\n       params[:system] = {parts: [{text: params[:system]}]} if params[:system]\n       params[:tools] = {function_declarations: params[:tools]} if params[:tools]\n "
+  },
+  {
+   "filename": "lib/langchain/llm/google_message_format.rb",
+   "status": "added",
+   "additions": 42,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,42 @@\n+# frozen_string_literal: true\n+\n+module Langchain::LLM\n+  # Lets Google Gemini and Vertex AI take messages in the `{role:, content:}` shape the rest of the\n+  # library sends (`Vectorsearch#ask`, `OutputFixingParser`, the Ragas evals...). The API only accepts\n+  # `{role:, parts: [...]}`, with \"model\" for the assistant and the system prompt outside `contents`.\n+  module GoogleMessageFormat\n+    private\n+\n+    # @param params [Hash] The #chat params\n+    # @return [Hash] The params with text messages converted, and system messages moved to :system\n+    def to_google_messages(params)\n+      messages = Array(params[:messages])\n+      system_texts, messages = messages.partition { |message| role_of(message) == \"system\" && text_content?(message) }\n+      system_texts = system_texts.map { |message| content_of(message) }\n+      system_texts.unshift(params[:system]) if params[:system]\n+\n+      params.merge(\n+        messages: messages.map { |message| text_content?(message) ? text_message(message) : message },\n+        system: system_texts.any? ? system_texts.join(\"\\n\\n\") : nil\n+      ).compact\n+    end\n+\n+    def text_message(message)\n+      role = (role_of(message) == \"assistant\") ? \"model\" : role_of(message)\n+      {role: role, parts: [{text: content_of(message)}]}\n+    end\n+\n+    # Only a String content is converted: messages already in Google's shape have :parts instead\n+    def text_content?(message)\n+      message.is_a?(Hash) && content_of(message).is_a?(String) && !(message.key?(:parts) || message.key?(\"parts\"))\n+    end\n+\n+    def role_of(message)\n+      (message[:role] || message[\"role\"]).to_s\n+    end\n+\n+    def content_of(message)\n+      message.key?(:content) ? message[:content] : message[\"content\"]\n+    end\n+  end\n+end"
+  },
+  {
+   "filename": "lib/langchain/llm/google_vertexai.rb",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -11,6 +11,8 @@ module Langchain::LLM\n   #     llm = Langchain::LLM::GoogleVertexAI.new(project_id: ENV[\"GOOGLE_VERTEX_AI_PROJECT_ID\"], region: \"us-central1\")\n   #\n   class GoogleVertexAI < Base\n+    include GoogleMessageFormat\n+\n     DEFAULTS = {\n       temperature: 0.1,\n       max_output_tokens: 1000,\n@@ -78,6 +80,7 @@ def embed(\n     # @param system [String] The system instruction to use\n     # @return [Langchain::LLM::Response::GoogleGeminiResponse] Response object\n     def chat(params = {})\n+      params = to_google_messages(params)\n       params[:system] = {parts: [{text: params[:system]}]} if params[:system]\n       params[:tools] = {function_declarations: params[:tools]} if params[:tools]\n "
+  },
+  {
+   "filename": "spec/lib/langchain/llm/google_gemini_spec.rb",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -91,6 +91,36 @@\n       subject.chat(params)\n     end\n \n+    context \"with messages in the {role:, content:} shape\" do\n+      let(:sent) { [] }\n+\n+      before do\n+        allow_any_instance_of(Net::HTTP::Post).to receive(:body=) { |_request, body| sent << JSON.parse(body) }\n+      end\n+\n+      it \"sends them as parts, with the assistant as model and system messages as the system instruction\" do\n+        subject.chat(messages: [\n+          {role: \"system\", content: \"Be brief.\"},\n+          {role: \"user\", content: \"How high is the sky?\"},\n+          {\"role\" => \"assistant\", \"content\" => \"Very high.\"},\n+          {role: \"user\", content: \"How high exactly?\"}\n+        ])\n+\n+        expect(sent.first[\"contents\"]).to eq([\n+          {\"role\" => \"user\", \"parts\" => [{\"text\" => \"How high is the sky?\"}]},\n+          {\"role\" => \"model\", \"parts\" => [{\"text\" => \"Very high.\"}]},\n+          {\"role\" => \"user\", \"parts\" => [{\"text\" => \"How high exactly?\"}]}\n+        ])\n+        expect(sent.first[\"system_instruction\"]).to eq({\"parts\" => [{\"text\" => \"Be brief.\"}]})\n+      end\n+\n+      it \"joins a system message to the system: param\" do\n+        subject.chat(system: \"You are a bot.\", messages: [{role: \"system\", content: \"Be brief.\"}, {role: \"user\", content: \"Hi\"}])\n+\n+        expect(sent.first[\"system_instruction\"]).to eq({\"parts\" => [{\"text\" => \"You are a bot.\\n\\nBe brief.\"}]})\n+      end\n+    end\n+\n     it \"configures the HTTP read timeout from the default options\" do\n       subject = described_class.new(api_key: \"123\", default_options: {read_timeout: 120})\n       http = instance_double(Net::HTTP)"
+  },
+  {
+   "filename": "spec/lib/langchain/llm/google_vertex_ai_spec.rb",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -69,6 +69,18 @@\n       expect(response.chat_completion).to eq(\"The sky is not a physical object with a defined height.\")\n     end\n \n+    it \"sends {role:, content:} messages as parts\" do\n+      expect(subject).to receive(:http_post).with(\n+        anything,\n+        hash_including(\n+          contents: [{role: \"user\", parts: [{text: \"How high is the sky?\"}]}],\n+          system_instruction: {parts: [{text: \"Be brief.\"}]}\n+        )\n+      ).and_call_original\n+\n+      subject.chat(messages: [{role: \"system\", content: \"Be brief.\"}, {role: \"user\", content: \"How high is the sky?\"}])\n+    end\n+\n     it \"uses default options if provided\" do\n       default_options = {\n         safety_settings: ["
+  },
+  {
+   "filename": "spec/lib/langchain/output_parsers/fix_spec.rb",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -156,6 +156,18 @@\n       end\n     end\n \n+    it \"fixes the output with Google Gemini, which only accepts messages as parts (#1015)\" do\n+      llm = Langchain::LLM::GoogleGemini.new(api_key: \"123\")\n+      parser = described_class.from_llm(llm: llm, parser: kwargs_example[:parser])\n+      gemini_body = {candidates: [{content: {role: \"model\", parts: [{text: json_text_response}]}}]}.to_json\n+      allow_any_instance_of(Net::HTTP).to receive(:request).and_return(double(body: gemini_body))\n+      sent = []\n+      allow_any_instance_of(Net::HTTP::Post).to receive(:body=) { |_request, body| sent << JSON.parse(body) }\n+\n+      expect(parser.parse(\"Whoops I don't understand\")).to eq(json_response)\n+      expect(sent.first[\"contents\"].first).to include(\"role\" => \"user\", \"parts\" => [hash_including(\"text\")])\n+    end\n+\n     it \"parses without need for fixing when completion text is already valid\" do\n       parser = described_class.new(**kwargs_example)\n       expect(parser.parse(json_text_response)).to eq(json_response)"
+  }
+ ],
+ "test_files": [
+  "spec/lib/langchain/llm/google_gemini_spec.rb",
+  "spec/lib/langchain/llm/google_vertex_ai_spec.rb",
+  "spec/lib/langchain/output_parsers/fix_spec.rb"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 210,
+ "url": "https://github.com/lofcz/LLMTornado/pull/210",
+ "title": "Return Microsoft.Extensions.AI text once when a reply has text parts",
+ "merged_at": "2026-10-20T07:40:44Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Microsoft.Extensions.AI/TypeConverters.cs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -162,8 +162,8 @@ public static ChatMessage ToLlmTornado(this global::Microsoft.Extensions.AI.Chat\n \n         List<AIContent> contents = [];\n \n-        // Add text content\n-        if (!string.IsNullOrEmpty(message.Content))\n+        // Add text content, unless text parts carry it (ChatEndpoint copies the first text part into Content)\n+        if (!string.IsNullOrEmpty(message.Content) && message.Parts?.Any(x => x.Type is ChatMessageTypes.Text) is not true)\n         {\n             contents.Add(new TextContent(message.Content));\n         }"
+  },
+  {
+   "filename": "src/LlmTornado.Tests/AnthropicParallelToolCallsTests.cs",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -134,6 +134,18 @@ public async Task ChatClient_ToolMessageWithSeveralResults_SendsEveryToolResult(\n         Assert.That(toolResults.Select(b => b[\"content\"]?.Value<string>()), Is.EqualTo(Cities.Select(c => $\"{c}: 18 C, cloudy\")));\n     }\n \n+    [Test]\n+    public async Task ChatClient_TextReply_ReturnsTextOnce()\n+    {\n+        using FakeAnthropicServer server = new FakeAnthropicServer(\"application/json\", FinalAnswerJson);\n+        IChatClient client = CreateClient(server.Port);\n+\n+        ChatResponse response = await client.GetResponseAsync(Prompt());\n+\n+        Assert.That(response.Text, Is.EqualTo(\"All three are cloudy.\"));\n+        Assert.That(response.Messages.Single().Contents.OfType<TextContent>().Count(), Is.EqualTo(1));\n+    }\n+\n     private static IChatClient CreateClient(int port)\n     {\n         TornadoApi api = new TornadoApi(new AnthropicEndpointProvider"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/AnthropicParallelToolCallsTests.cs"
+ ]
+}

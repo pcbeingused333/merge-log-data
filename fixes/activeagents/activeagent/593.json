@@ -1,0 +1,41 @@
+{
+ "repo": "activeagents/activeagent",
+ "number": 593,
+ "url": "https://github.com/activeagents/activeagent/pull/593",
+ "title": "Don't raise on citations_delta in Anthropic streaming",
+ "merged_at": "2026-10-20T18:12:09Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0\n \n ## [Unreleased]\n \n+### Fixed\n+\n+- **A streamed Anthropic answer with citations no longer raises.** Claude\n+  streams the citations of a text block as `citations_delta` deltas when it\n+  cites a document or a web search result, and the Anthropic provider raised\n+  `Unexpected delta type: citations_delta` on the first one. The delta is now\n+  skipped like `input_json_delta`: the full block, citations included, arrives\n+  at `content_block_stop`.\n+\n ## [1.9.1] - 2026-10-16\n \n Releases `activeagent` and `actionagent` 1.9.1, with the matching browser"
+  },
+  {
+   "filename": "lib/active_agent/providers/anthropic_provider.rb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -222,6 +222,8 @@ def process_stream_chunk(api_response_chunk)\n             # No-Op; Wait for Function call to be complete\n           when :thinking_delta, :signature_delta\n             # TODO: Add with thinking rendering support\n+          when :citations_delta\n+            # No-Op; the citations arrive with the full block at content_block_stop\n           else\n             raise \"Unexpected delta type: #{api_delta.type}\"\n           end"
+  },
+  {
+   "filename": "test/providers/anthropic/streaming_citations_test.rb",
+   "status": "added",
+   "additions": 70,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,70 @@\n+# frozen_string_literal: true\n+\n+require \"test_helper\"\n+require_relative \"../../../lib/active_agent/providers/anthropic_provider\"\n+\n+module Providers\n+  module Anthropic\n+    # A streamed answer that cites a document, end to end over the Messages\n+    # wire format: the citations_delta events are skipped while streaming, and\n+    # the citations reach the final message with the completed text block.\n+    class StreamingCitationsTest < ActiveSupport::TestCase\n+      include WebMock::API\n+\n+      ENDPOINT = \"https://api.anthropic.com/v1/messages\"\n+\n+      CITATION = {\n+        type: \"char_location\",\n+        cited_text: \"The grass is green.\",\n+        document_index: 0,\n+        document_title: \"Facts\",\n+        start_char_index: 0,\n+        end_char_index: 19\n+      }.freeze\n+\n+      def sse\n+        message = { id: \"msg_1\", type: \"message\", role: \"assistant\", model: \"claude-sonnet-4-5\", content: [],\n+                    stop_reason: nil, stop_sequence: nil, usage: { input_tokens: 20, output_tokens: 1 } }\n+        events = [\n+          [ \"message_start\", { type: \"message_start\", message: } ],\n+          [ \"content_block_start\", { type: \"content_block_start\", index: 0, content_block: { type: \"text\", text: \"\", citations: [] } } ],\n+          [ \"content_block_delta\", { type: \"content_block_delta\", index: 0, delta: { type: \"citations_delta\", citation: CITATION } } ],\n+          [ \"content_block_delta\", { type: \"content_block_delta\", index: 0, delta: { type: \"text_delta\", text: \"The grass is green.\" } } ],\n+          [ \"content_block_stop\", { type: \"content_block_stop\", index: 0 } ],\n+          [ \"message_delta\", { type: \"message_delta\", delta: { stop_reason: \"end_turn\", stop_sequence: nil }, usage: { output_tokens: 6 } } ],\n+          [ \"message_stop\", { type: \"message_stop\" } ]\n+        ]\n+\n+        events.map { |name, data| \"event: #{name}\\ndata: #{data.to_json}\\n\\n\" }.join\n+      end\n+\n+      test \"a streamed answer keeps its citations in the final message\" do\n+        stub_request(:post, ENDPOINT)\n+          .to_return(status: 200, headers: { \"Content-Type\" => \"text/event-stream\" }, body: sse)\n+\n+        closed_message = nil\n+        provider = ActiveAgent::Providers::AnthropicProvider.new(\n+          service: \"Anthropic\",\n+          model: \"claude-sonnet-4-5\",\n+          api_key: \"test-key\",\n+          stream: true,\n+          messages: [ { role: \"user\", content: \"What color is the grass?\" } ],\n+          stream_broadcaster: ->(message, _delta, event_type) { closed_message = message if event_type == :close }\n+        )\n+\n+        response = provider.prompt\n+\n+        assert_equal \"The grass is green.\", response.message.content\n+\n+        # The final provider message, handed over at stream close, has the\n+        # completed text block with its citations.\n+        text_block = closed_message.deep_symbolize_keys[:content].first\n+        assert_equal \"text\", text_block[:type].to_s\n+        assert_equal \"The grass is green.\", text_block[:text]\n+        assert_equal 1, text_block[:citations].size\n+        assert_equal \"The grass is green.\", text_block[:citations].first[:cited_text]\n+        assert_equal \"Facts\", text_block[:citations].first[:document_title]\n+      end\n+    end\n+  end\n+end"
+  },
+  {
+   "filename": "test/providers/anthropic/streaming_events_test.rb",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -34,6 +34,30 @@ def [](key)\n         end\n       end\n \n+      # Replies that cite a document or a web search result stream their\n+      # citations as `citations_delta` deltas on the text block.\n+      test \"handles a citations_delta without raising\" do\n+        event = ::Anthropic::Models::RawContentBlockDeltaEvent.new(\n+          type: :content_block_delta,\n+          index: 0,\n+          delta: {\n+            type: :citations_delta,\n+            citation: {\n+              type: :char_location,\n+              cited_text: \"The grass is green.\",\n+              document_index: 0,\n+              document_title: \"Facts\",\n+              start_char_index: 0,\n+              end_char_index: 19\n+            }\n+          }\n+        )\n+\n+        assert_nothing_raised do\n+          @provider.send(:process_stream_chunk, event)\n+        end\n+      end\n+\n       test \"handles :thinking event without raising\" do\n         event = MockEvent.new(type: :thinking)\n "
+  }
+ ],
+ "test_files": [
+  "test/providers/anthropic/streaming_citations_test.rb",
+  "test/providers/anthropic/streaming_events_test.rb"
+ ]
+}

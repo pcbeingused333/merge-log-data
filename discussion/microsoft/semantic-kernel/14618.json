@@ -1,0 +1,34 @@
+{
+ "repo": "microsoft/semantic-kernel",
+ "number": 14618,
+ "url": "https://github.com/microsoft/semantic-kernel/pull/14618",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-16T23:57:35Z",
+   "body": "<!-- ccr-overview-v2 -->\n\n### 🟢 Approval recommended\n\nThe focused conversion and streaming changes match the diagnostics contract, with regression coverage and no identified blocking issues.\n\n**No open issues** 🎉\n\n<details>\n<summary><strong>What changed in this PR</strong></summary>\n\nNormalizes Anthropic token usage to `CompletionUsage` so model diagnostics can report input and output token counts.\n\n**Changes:**\n- Includes cache-read and cache-creation tokens in prompt totals.\n- Preserves prompt usage when merging streaming output counts.\n- Adds regression tests for response metadata and telemetry.\n\n| File | Description |\r\n| ---- | ----------- |\r\n| python/​tests/​unit/​connectors/​ai/​anthropic/​services/​test_anthropic_chat_completion.py | Tests streaming and non-streaming usage reporting. |\r\n| python/​semantic_kernel/​connectors/​ai/​anthropic/​services/​anthropic_chat_completion.py | Converts Anthropic usage and preserves streaming prompt counts. |\n</details>\n\n<sub>Review effort: Balanced</sub>"
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-17T01:37:31Z",
+   "body": "I ran this end to end and the telemetry fix works. Setup: Python 3.13.3, anthropic SDK 1.15.0, opentelemetry-sdk with an in-memory exporter, `SEMANTICKERNEL_EXPERIMENTAL_GENAI_ENABLE_OTEL_DIAGNOSTICS=true`. The PR diff applied cleanly onto current main (fetched 2026-10-16) and I compared it with a clean main checkout.\n\nProbe: a local HTTP server that speaks the Anthropic Messages API. The response (and the SSE `message_start`) carries `input_tokens=10`, `cache_read_input_tokens=100`, `cache_creation_input_tokens=5`. The non-streaming `output_tokens` is 2, and the streaming `message_delta` carries `output_tokens=7`. A real `AsyncAnthropic(base_url=local)` is passed to `AnthropicChatCompletion`.\n\n| | main | PR |\n|---|---|---|\n| non-stream `metadata[\"usage\"]` | raw Anthropic `Usage(...)` | `CompletionUsage(prompt_tokens=115, cached_tokens=100, completion_tokens=2)` |\n| stream `metadata[\"usage\"]` | dicts `{'input_tokens': 10}` then `{'input_tokens': 10, 'output_tokens': 7}` | `CompletionUsage` with prompt 115, and completion 7 on the last chunk |\n| SK `chat claude-sonnet-4-5` span attributes (non-stream) | none | `gen_ai.usage.input_tokens=115`, `gen_ai.usage.output_tokens=2` |\n| SK `chat claude-sonnet-4-5` span attributes (stream) | none | input 115, output 7 |\n\nSo the missing token attributes are fixed, and the cached tokens are counted in the prompt side.\n\nEdge cases on the streaming path:\n- `message_delta` with `output_tokens` only (what I used above): prompt 115 is kept from `message_start`. Good.\n- `message_delta` with `input_tokens=10` and the two cache fields: prompt 115. Good.\n- `message_delta` with `input_tokens=10` but no cache fields (I made this up to test the code path): the final usage becomes `prompt_tokens=10`, `prompt_tokens_details=None`, so the 105 cache tokens from `message_start` are dropped. The code says \"use the delta counts when it reports `input_tokens`\". I do not know whether the real API ever sends `input_tokens` without the cache fields in a delta, so this may never happen. If you want to be safe, fall back to the `message_start` cache values when the delta leaves them out.\n\nTests: `tests/unit/connectors/ai/anthropic` gives 37 passed on the PR. When I copy the PR's test file onto main, the two new tests fail (`test_usage_is_reported_as_completion_usage`, `test_streaming_usage_is_reported_as_completion_usage`) and 35 pass.\n\nTwo notes. The PR text already says this is a behavior change for code that read `.input_tokens` from the old usage object. I did not search outside this repo for such code. Also, `PromptTokensDetails` has a `cache_write_tokens` field and the PR leaves it `None` even though `cache_creation_input_tokens` is known. That is optional.\n\nI ran only against a local server, not the real Anthropic API. I did not check how this combines with #14616, which edits nearby lines in the same file.\n"
+  },
+  {
+   "role": "member",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-26T12:46:10Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-10-20T08:25:41Z",
+   "body": "@microsoft-github-policy-service agree"
+  }
+ ]
+}

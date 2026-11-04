@@ -1,0 +1,33 @@
+{
+ "repo": "posit-dev/chatlas",
+ "number": 453,
+ "url": "https://github.com/posit-dev/chatlas/pull/453",
+ "title": "fix(anthropic): recognize Bedrock model IDs for native structured outputs",
+ "merged_at": "2026-10-16T16:21:22Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0\n \n ### Bug fixes\n \n+* `ChatBedrockAnthropic()` now uses native structured outputs for `data_model` on Claude 4.5 and later, as `ChatAnthropic()` does. Its Bedrock model IDs (`anthropic.claude-...`, `us.anthropic.claude-...`) weren't recognized, so it fell back to forcing a tool call, which Claude Opus 5.5 and Sonnet 5.5 reject with a 400.\n * A tool written as a generator (see \"Progressive results\" in the tool-calling docs) now reports each yielded value in `.chat_async()` and `.stream_async()`, as it does in `.chat()`. A synchronous generator tool used to send the generator object itself (`<generator object ...>`) as its result. An `async def` generator tool now counts as an async tool, so `.chat()` raises the usual \"Cannot use async tools in a synchronous chat\" error instead of sending `<async_generator object ...>` as the result.\n * MCP tools registered with a `namespace` (in `.register_mcp_tools_http_stream_async()` or `.register_mcp_tools_stdio_async()`) can be called successfully. `Tool.from_mcp()` gains a `name` argument for setting the tool's name independently of the MCP tool's name. (#458)\n * The MCP client used by `.register_mcp_tools_http_stream_async()` and `.register_mcp_tools_stdio_async()` negotiates MCP protocol revision `2026-07-28` with servers that support it. (#456)"
+  },
+  {
+   "filename": "chatlas/_provider_anthropic.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -119,8 +119,11 @@ def supports_structured_outputs(model: str) -> bool:\n     Check if the model supports the structured outputs API.\n \n     https://platform.claude.com/docs/en/build-with-claude/structured-outputs\n+\n+    The pattern isn't anchored to the start, so Bedrock IDs (`anthropic.claude-...`,\n+    or with a cross-region prefix such as `us.anthropic.claude-...`) match too.\n     \"\"\"\n-    return bool(re.match(r\"^claude-[a-z]+-(4-[5-9]|[5-9]|[1-9]\\d)(-|$)\", model))\n+    return bool(re.search(r\"claude-[a-z]+-(4-[5-9]|[5-9]|[1-9]\\d)(-|$)\", model))\n \n \n StructuredOutputMode = Literal[\"auto\", \"native\", \"tool\"]"
+  },
+  {
+   "filename": "tests/test_provider_anthropic.py",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -106,6 +106,12 @@ def test_normalize_finish_reason_handles_none():\n         (\"claude-opus-5\", True),\n         (\"claude-haiku-10\", True),\n         (\"claude-3-5-sonnet-20240620\", False),\n+        # Bedrock model IDs\n+        (\"anthropic.claude-sonnet-4-5-20250929-v1:0\", True),\n+        (\"us.anthropic.claude-sonnet-5-5-v1:0\", True),\n+        (\"global.anthropic.claude-opus-5-5-v1:0\", True),\n+        (\"us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0\", True),\n+        (\"anthropic.claude-3-5-sonnet-20240620-v1:0\", False),\n     ],\n )\n def test_supports_structured_outputs_for_supported_model_names(model, expected):"
+  }
+ ],
+ "test_files": [
+  "tests/test_provider_anthropic.py"
+ ]
+}

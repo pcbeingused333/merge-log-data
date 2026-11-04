@@ -1,0 +1,83 @@
+{
+ "repo": "sligter/LandPPT",
+ "number": 131,
+ "url": "https://github.com/sligter/LandPPT/pull/131",
+ "title": "fix: replace the retired gemini-1.5-flash default Google model",
+ "merged_at": "2026-10-20T11:11:10Z",
+ "files": [
+  {
+   "filename": ".env.example",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -49,7 +49,7 @@ ANTHROPIC_MAX_TOKENS=16384\n # Get your API key from: https://aistudio.google.com/app/apikey\n GOOGLE_API_KEY=your_google_api_key_here\n GOOGLE_BASE_URL=https://generativelanguage.googleapis.com\n-GOOGLE_MODEL=gemini-1.5-flash\n+GOOGLE_MODEL=gemini-3.8-flash\n \n # Azure OpenAI Configuration\n # Set up Azure OpenAI service and get your credentials"
+  },
+  {
+   "filename": "src/landppt/ai/providers.py",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 9,
+   "patch": "@@ -16,6 +16,7 @@\n \n from .base import AIProvider, AIMessage, AIResponse, MessageRole, TextContent, ImageContent, MessageContentType\n from ..core.config import ai_config, resolve_timeout_seconds\n+from ..services.provider_test_utils import google_model_accepts_sampling_params\n \n logger = logging.getLogger(__name__)\n \n@@ -1059,7 +1060,7 @@ def __init__(self, config: Dict[str, Any]):\n             genai.configure(api_key=config.get(\"api_key\"))\n \n             self.client = genai\n-            self.model_instance = genai.GenerativeModel(config.get(\"model\", \"gemini-1.5-flash\"))\n+            self.model_instance = genai.GenerativeModel(config.get(\"model\", \"gemini-3.8-flash\"))\n         except ImportError:\n             logger.warning(\"Google Generative AI library not installed. Install with: pip install google-generativeai\")\n             self.client = None\n@@ -1381,10 +1382,10 @@ async def chat_completion(self, messages: List[AIMessage], **kwargs) -> AIRespon\n                 raise RuntimeError(\"Google Gemini API key not configured\")\n \n             model = config.get(\"model\", self.model) or self.model\n-            generation_config: Dict[str, Any] = {\n-                \"temperature\": config.get(\"temperature\", 0.7),\n-                \"topP\": config.get(\"top_p\", 1.0),\n-            }\n+            generation_config: Dict[str, Any] = {}\n+            if google_model_accepts_sampling_params(model):\n+                generation_config[\"temperature\"] = config.get(\"temperature\", 0.7)\n+                generation_config[\"topP\"] = config.get(\"top_p\", 1.0)\n \n             prompt_text = self._messages_to_plaintext_prompt(messages)\n             data = await self._rest_generate_content(\n@@ -1409,10 +1410,10 @@ async def chat_completion(self, messages: List[AIMessage], **kwargs) -> AIRespon\n \n         try:\n             # Configure generation parameters\n-            generation_config = {\n-                \"temperature\": config.get(\"temperature\", 0.7),\n-                \"top_p\": config.get(\"top_p\", 1.0),\n-            }\n+            generation_config = {}\n+            if google_model_accepts_sampling_params(self.model_instance.model_name):\n+                generation_config[\"temperature\"] = config.get(\"temperature\", 0.7)\n+                generation_config[\"top_p\"] = config.get(\"top_p\", 1.0)\n             # 配置安全设置 - 设置为较宽松的安全级别以减少误拦截\n             safety_settings = [\n                 {"
+  },
+  {
+   "filename": "src/landppt/core/config.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -84,7 +84,7 @@ class AIConfig(BaseSettings):\n     # Google Gemini Configuration\n     google_api_key: Optional[str] = Field(default=None, env=\"GOOGLE_API_KEY\")\n     google_base_url: str = Field(default=\"https://generativelanguage.googleapis.com\", env=\"GOOGLE_BASE_URL\")\n-    google_model: str = Field(default=\"gemini-1.5-flash\", env=\"GOOGLE_MODEL\")\n+    google_model: str = Field(default=\"gemini-3.8-flash\", env=\"GOOGLE_MODEL\")\n     \n     # Ollama Configuration\n     ollama_base_url: str = Field(default=\"http://localhost:11434\", env=\"OLLAMA_BASE_URL\")"
+  },
+  {
+   "filename": "src/landppt/services/config_service.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -50,7 +50,7 @@ def __init__(self, env_file: str = \".env\"):\n \n             \"google_api_key\": {\"type\": \"password\", \"category\": \"ai_providers\"},\n             \"google_base_url\": {\"type\": \"url\", \"category\": \"ai_providers\", \"default\": \"https://generativelanguage.googleapis.com\"},\n-            \"google_model\": {\"type\": \"text\", \"category\": \"ai_providers\", \"default\": \"gemini-2.5-flash\"},\n+            \"google_model\": {\"type\": \"text\", \"category\": \"ai_providers\", \"default\": \"gemini-3.8-flash\"},\n             \n             \"ollama_base_url\": {\"type\": \"url\", \"category\": \"ai_providers\", \"default\": \"http://localhost:11434\"},\n             \"ollama_model\": {\"type\": \"text\", \"category\": \"ai_providers\", \"default\": \"llama2\"},"
+  },
+  {
+   "filename": "src/landppt/services/db_config_service.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -65,7 +65,7 @@ def __init__(self):\n \n             \"google_api_key\": {\"type\": \"password\", \"category\": \"ai_providers\"},\n             \"google_base_url\": {\"type\": \"url\", \"category\": \"ai_providers\", \"default\": \"https://generativelanguage.googleapis.com\"},\n-            \"google_model\": {\"type\": \"text\", \"category\": \"ai_providers\", \"default\": \"gemini-2.5-flash\"},\n+            \"google_model\": {\"type\": \"text\", \"category\": \"ai_providers\", \"default\": \"gemini-3.8-flash\"},\n             \n             \"ollama_base_url\": {\"type\": \"url\", \"category\": \"ai_providers\", \"default\": \"http://localhost:11434\"},\n             \"ollama_model\": {\"type\": \"text\", \"category\": \"ai_providers\", \"default\": \"llama2\"},"
+  },
+  {
+   "filename": "src/landppt/services/provider_test_utils.py",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 5,
+   "patch": "@@ -1,10 +1,11 @@\n from __future__ import annotations\n \n+import re\n from typing import Any, Dict, Tuple\n \n \n DEFAULT_GOOGLE_BASE_URL = \"https://generativelanguage.googleapis.com\"\n-DEFAULT_GOOGLE_MODEL = \"gemini-2.5-flash\"\n+DEFAULT_GOOGLE_MODEL = \"gemini-3.8-flash\"\n DEFAULT_ANTHROPIC_BASE_URL = \"https://api.anthropic.com\"\n DEFAULT_ANTHROPIC_MODEL = \"claude-3-5-sonnet-20241022\"\n \n@@ -40,13 +41,25 @@ def build_google_generate_content_url(base_url: str, model: str) -> str:\n     return f\"{normalized_base_url}/v1beta/models/{normalized_model}:generateContent\"\n \n \n-def build_google_test_payload(prompt: str) -> Dict[str, Any]:\n+def google_model_accepts_sampling_params(model: Any) -> bool:\n+    \"\"\"Gemini 3 and later deprecate temperature/top_p/top_k and ignore them.\n+\n+    See https://ai.google.dev/gemini-api/docs/generate-content/whats-new-gemini-3.8#migration-checklist\n+    Models whose name has no recognizable Gemini version keep the old behaviour.\n+    \"\"\"\n+    name = str(model or \"\").strip().lower().rsplit(\"/\", 1)[-1]\n+    match = re.match(r\"gemini-(\\d+)\", name)\n+    return not match or int(match.group(1)) < 3\n+\n+\n+def build_google_test_payload(prompt: str, model: str = DEFAULT_GOOGLE_MODEL) -> Dict[str, Any]:\n     \"\"\"Google 测试请求走原生 Gemini 格式，避免误用 OpenAI 兼容协议。\"\"\"\n+    generation_config: Dict[str, Any] = {}\n+    if google_model_accepts_sampling_params(model):\n+        generation_config[\"temperature\"] = 0\n     return {\n         \"contents\": [{\"parts\": [{\"text\": prompt}]}],\n-        \"generationConfig\": {\n-            \"temperature\": 0,\n-        },\n+        \"generationConfig\": generation_config,\n     }\n \n "
+  },
+  {
+   "filename": "src/landppt/web/route_modules/config_routes.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -678,7 +678,7 @@ async def test_provider_connection(\n             # Google/Gemini 和 Anthropic 不是 OpenAI 兼容协议，必须按原生接口测试。\n             if provider == \"google\":\n                 request_url = build_google_generate_content_url(base_url, model)\n-                payload = build_google_test_payload(\"Hi\")\n+                payload = build_google_test_payload(\"Hi\", model)\n                 logger.info(\"Testing %s connection at: %s (transport=gemini_generate_content)\", provider, request_url)\n \n                 primary_status = None"
+  },
+  {
+   "filename": "src/landppt/web/templates/components/settings/ai_config/content_1.html",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -287,7 +287,7 @@ <h3 class=\"section-heading\" style=\"text-align: center; margin-bottom: 20px;\">AI\n                                 <label\n                                     style=\"font-size: 0.85em; color: #555; margin-bottom: 4px; display: block;\">默认模型</label>\n                                 <input type=\"text\" name=\"google_model\"\n-                                    value=\"{{ current_config.get('google_model', '') }}\" placeholder=\"gemini-2.5-flash\"\n+                                    value=\"{{ current_config.get('google_model', '') }}\" placeholder=\"gemini-3.8-flash\"\n                                     style=\"width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 0.9em;\">\n                             </div>\n                             {% elif provider == \"ollama\" %}"
+  },
+  {
+   "filename": "tests/test_google_default_model.py",
+   "status": "added",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,10 @@\n+from landppt.core.config import AIConfig\n+\n+\n+def test_google_model_default_is_a_served_model(monkeypatch):\n+    monkeypatch.delenv(\"GOOGLE_MODEL\", raising=False)\n+\n+    config = AIConfig(_env_file=None)\n+\n+    assert config.google_model == \"gemini-3.8-flash\"\n+    assert config.get_provider_config(\"google\")[\"model\"] == \"gemini-3.8-flash\""
+  },
+  {
+   "filename": "tests/test_google_sampling_params.py",
+   "status": "added",
+   "additions": 108,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,108 @@\n+import pytest\n+\n+from landppt.services.provider_test_utils import build_google_test_payload\n+\n+\n+class FakeResponse:\n+    async def __aenter__(self):\n+        return self\n+\n+    async def __aexit__(self, exc_type, exc, tb):\n+        return False\n+\n+    status = 200\n+\n+    async def json(self):\n+        return {\n+            \"candidates\": [{\"content\": {\"parts\": [{\"text\": \"ok\"}]}, \"finishReason\": \"STOP\"}],\n+            \"usageMetadata\": {\"promptTokenCount\": 1, \"candidatesTokenCount\": 2, \"totalTokenCount\": 3},\n+        }\n+\n+    async def text(self):\n+        return \"\"\n+\n+\n+@pytest.fixture\n+def rest_calls(monkeypatch):\n+    import aiohttp\n+\n+    calls = []\n+\n+    class FakeSession:\n+        def __init__(self, *args, **kwargs):\n+            pass\n+\n+        async def __aenter__(self):\n+            return self\n+\n+        async def __aexit__(self, exc_type, exc, tb):\n+            return False\n+\n+        def post(self, url, *, params=None, json=None, headers=None):\n+            calls.append(json)\n+            return FakeResponse()\n+\n+    monkeypatch.setattr(aiohttp, \"ClientSession\", FakeSession)\n+    return calls\n+\n+\n+def _google_provider(model, base_url=\"https://mirror.example.com/prefix\"):\n+    from landppt.ai.providers import GoogleProvider\n+\n+    # A base_url with a path prefix forces the REST transport; the official\n+    # endpoint uses the SDK.\n+    return GoogleProvider({\"api_key\": \"test-key\", \"base_url\": base_url, \"model\": model})\n+\n+\n+@pytest.mark.asyncio\n+@pytest.mark.parametrize(\"model\", [\"gemini-3.8-flash\", \"gemini-3.6-pro\", \"models/gemini-3.8-flash\"])\n+async def test_rest_request_omits_sampling_params_for_gemini_3(rest_calls, model):\n+    await _google_provider(model).text_completion(\"hello\", temperature=0.2, top_p=0.9)\n+\n+    generation_config = rest_calls[0][\"generationConfig\"]\n+    assert \"temperature\" not in generation_config\n+    assert \"topP\" not in generation_config\n+\n+\n+@pytest.mark.asyncio\n+async def test_rest_request_keeps_sampling_params_for_older_models(rest_calls):\n+    await _google_provider(\"gemini-2.5-flash\").text_completion(\"hello\", temperature=0.2, top_p=0.9)\n+\n+    assert rest_calls[0][\"generationConfig\"] == {\"temperature\": 0.2, \"topP\": 0.9}\n+\n+\n+@pytest.mark.asyncio\n+@pytest.mark.parametrize(\n+    (\"model\", \"expected\"),\n+    [\n+        (\"gemini-3.8-flash\", {}),\n+        (\"gemini-2.5-flash\", {\"temperature\": 0.2, \"top_p\": 0.9}),\n+    ],\n+)\n+async def test_sdk_request_sampling_params_follow_the_model(model, expected):\n+    provider = _google_provider(model, base_url=\"https://generativelanguage.googleapis.com\")\n+    if provider.model_instance is None:\n+        pytest.skip(\"google-generativeai is not installed\")\n+    captured = {}\n+\n+    async def fake_generate(prompt, generation_config, *args, **kwargs):\n+        captured.update(generation_config)\n+        raise RuntimeError(\"stop after the request is built\")\n+\n+    provider._generate_async = fake_generate\n+    with pytest.raises(Exception):\n+        await provider.text_completion(\"hello\", temperature=0.2, top_p=0.9)\n+\n+    assert captured == expected\n+\n+\n+def test_connection_test_payload_omits_temperature_for_gemini_3():\n+    payload = build_google_test_payload(\"Hi\", \"gemini-3.8-flash\")\n+\n+    assert payload[\"generationConfig\"] == {}\n+\n+\n+def test_connection_test_payload_keeps_temperature_for_older_models():\n+    payload = build_google_test_payload(\"Hi\", \"gemini-2.5-flash\")\n+\n+    assert payload[\"generationConfig\"] == {\"temperature\": 0}"
+  }
+ ],
+ "test_files": [
+  "tests/test_google_default_model.py",
+  "tests/test_google_sampling_params.py"
+ ]
+}

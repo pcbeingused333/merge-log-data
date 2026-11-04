@@ -1,0 +1,33 @@
+{
+ "repo": "CherryHQ/cherry-studio",
+ "number": 21939,
+ "url": "https://github.com/CherryHQ/cherry-studio/pull/21939",
+ "title": "fix(model-parameters): omit sampling params for all Claude models that reject them",
+ "merged_at": "2026-10-19T01:47:40Z",
+ "files": [
+  {
+   "filename": "src/main/ai/utils/__tests__/modelParameters.test.ts",
+   "status": "modified",
+   "additions": 41,
+   "deletions": 0,
+   "patch": "@@ -304,6 +304,26 @@ describe('getTemperature', () => {\n     const model = makeModel({ id: 'anthropic::claude-opus-4-7-20260101', providerId: 'anthropic' })\n     expect(getTemperature(a, model, OMIT_REASONING)).toBeUndefined()\n   })\n+\n+  it.each([\n+    'anthropic::claude-opus-4-8',\n+    'anthropic::claude-opus-5',\n+    'anthropic::claude-sonnet-5',\n+    'anthropic::claude-fable-5-1',\n+    'aws-bedrock::anthropic.claude-opus-4-8-v1:0',\n+    'openrouter::anthropic/claude-sonnet-5'\n+  ] as const)('disables temperature for newer Claude model %s', (id) => {\n+    const a = makeSampling({ temperature: 0.8 })\n+    expect(getTemperature(a, makeModel({ id }), OMIT_REASONING)).toBeUndefined()\n+  })\n+\n+  it.each(['anthropic::claude-opus-4-6', 'anthropic::claude-sonnet-4-6', 'anthropic::claude-opus-4-20250514'] as const)(\n+    'keeps temperature for %s',\n+    (id) => {\n+      const a = makeSampling({ temperature: 0.8 })\n+      expect(getTemperature(a, makeModel({ id }), OMIT_REASONING)).toBe(0.8)\n+    }\n+  )\n })\n \n describe('getTopP', () => {\n@@ -366,6 +386,18 @@ describe('getTopP', () => {\n     const model = makeModel({ id: 'anthropic::claude-opus-4-7-20260101', providerId: 'anthropic' })\n     expect(getTopP(a, model, OMIT_REASONING)).toBeUndefined()\n   })\n+\n+  it.each([\n+    'anthropic::claude-opus-4-8',\n+    'anthropic::claude-opus-5',\n+    'anthropic::claude-sonnet-5',\n+    'anthropic::claude-fable-5-1',\n+    'aws-bedrock::anthropic.claude-opus-4-8-v1:0',\n+    'openrouter::anthropic/claude-sonnet-5'\n+  ] as const)('disables topP for newer Claude model %s', (id) => {\n+    const a = makeSampling({ enableTemperature: false, enableTopP: true, topP: 0.8 })\n+    expect(getTopP(a, makeModel({ id }), OMIT_REASONING)).toBeUndefined()\n+  })\n })\n \n describe('filterStandardParams', () => {\n@@ -379,6 +411,15 @@ describe('filterStandardParams', () => {\n     expect(filterStandardParams({ topK: 40, frequencyPenalty: 0.1 }, model)).toEqual({ frequencyPenalty: 0.1 })\n   })\n \n+  it.each(['anthropic::claude-opus-4-8', 'anthropic::claude-sonnet-5-5', 'anthropic::claude-fable-5-1'] as const)(\n+    'drops topK for newer Claude model %s',\n+    (id) => {\n+      expect(filterStandardParams({ topK: 40, frequencyPenalty: 0.1 }, makeModel({ id }))).toEqual({\n+        frequencyPenalty: 0.1\n+      })\n+    }\n+  )\n+\n   it('keeps topK for other models', () => {\n     const input = { topK: 40 }\n     expect(filterStandardParams(input, makeModel())).toBe(input)"
+  },
+  {
+   "filename": "src/main/ai/utils/modelParameters.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 5,
+   "patch": "@@ -12,7 +12,7 @@ import type { SamplingSettings } from '@main/ai/types'\n import { ENDPOINT_TYPE, type EndpointType, type Model } from '@shared/data/types/model'\n import type { AiSdkParam } from '@shared/types/aiSdk'\n import {\n-  isClaude47SeriesModel,\n+  isClaudeFixedSamplingModel,\n   isClaudeReasoningModel,\n   isGemini3Model,\n   isGemini4Model,\n@@ -33,7 +33,7 @@ export type GatedSampling = Pick<SamplingSettings, 'temperature' | 'enableTemper\n \n /** Registry support plus the existing family policies for omitting explicit sampling. */\n function modelAcceptsSamplingParam(model: Model, key: 'temperature' | 'topP'): boolean {\n-  if (isGemini3Model(model) || isClaude47SeriesModel(model)) return false\n+  if (isGemini3Model(model) || isClaudeFixedSamplingModel(model)) return false\n   return key === 'temperature' ? isSupportTemperatureModel(model) : isSupportTopPModel(model)\n }\n \n@@ -97,7 +97,7 @@ export function getTemperature(\n \n   if (!settings.enableTemperature) return undefined\n \n-  if (isClaude47SeriesModel(model)) {\n+  if (isClaudeFixedSamplingModel(model)) {\n     logger.info(`Model ${model.id} rejects sampling parameters, disabling temperature`)\n     return undefined\n   }\n@@ -139,7 +139,7 @@ export function getTopP(\n \n   if (!settings.enableTopP) return undefined\n \n-  if (isClaude47SeriesModel(model)) {\n+  if (isClaudeFixedSamplingModel(model)) {\n     logger.info(`Model ${model.id} rejects sampling parameters, disabling topP`)\n     return undefined\n   }\n@@ -177,7 +177,7 @@ export function filterStandardParams(\n     return rest\n   }\n \n-  if (isClaude47SeriesModel(model) && 'topK' in standardParams) {\n+  if (isClaudeFixedSamplingModel(model) && 'topK' in standardParams) {\n     const { topK, ...rest } = standardParams\n     logger.info(`Model ${model.id} rejects sampling parameters, dropping topK=${topK} from custom params`)\n     return rest"
+  },
+  {
+   "filename": "src/shared/utils/model.ts",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -327,6 +327,14 @@ export const isClaude47SeriesModel = (model: Model): boolean => {\n   return /(?:anthropic\\.)?claude-opus-4[.-]7(?:[@\\-:][\\w\\-:]+)?$/i.test(id)\n }\n \n+/** Check if model rejects temperature/top_p/top_k: Claude Opus 4.7+, Claude 5.x, Fable and Mythos. */\n+export const isClaudeFixedSamplingModel = (model: Model): boolean => {\n+  const id = getLowerBaseModelName(getRawModelId(model), '/')\n+  return /(?:anthropic\\.)?claude-(?:opus-4[.-](?:[7-9]|1\\d)|(?:opus|sonnet|haiku|fable|mythos)-[5-9](?:[.-]\\d+)?|(?:fable|mythos)-(?:latest|preview))(?:[@\\-:][\\w\\-:]+)?$/i.test(\n+    id\n+  )\n+}\n+\n /** Check if model is Claude 4.5 reasoning */\n export const isClaude45ReasoningModel = (model: Model): boolean => {\n   const id = getLowerBaseModelName(getRawModelId(model), '/')"
+  }
+ ],
+ "test_files": [
+  "src/main/ai/utils/__tests__/modelParameters.test.ts"
+ ]
+}

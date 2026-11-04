@@ -1,0 +1,33 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 215,
+ "url": "https://github.com/lofcz/LLMTornado/pull/215",
+ "title": "Keep every content block of a single-reply Microsoft.Extensions.AI response",
+ "merged_at": "2026-10-20T09:18:27Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Microsoft.Extensions.AI/TornadoChatClient.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -85,7 +85,7 @@ public TornadoChatClient(TornadoApi api, string defaultModel, ChatRequest? defau\n                 throw new InvalidOperationException(\"Chat completion returned null result.\");\n             }\n \n-            ChatResponse completion = result.ToChatCompletion();\n+            ChatResponse completion = result.ToChatCompletion(mergeChoices: (request.NumChoicesPerMessage ?? 1) <= 1);\n \n             activity?.SetTag(\"llm.response.id\", completion.ResponseId);\n             activity?.SetTag(\"llm.response.finish_reason\", completion.FinishReason?.ToString());"
+  },
+  {
+   "filename": "src/LlmTornado.Microsoft.Extensions.AI/TypeConverters.cs",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 2,
+   "patch": "@@ -320,14 +320,34 @@ public static void ApplyToRequest(this ChatOptions? options, ChatRequest request\n     /// <summary>\n     /// Converts LlmTornado ChatResult to Microsoft.Extensions.AI ChatCompletion.\n     /// </summary>\n-    public static ChatResponse ToChatCompletion(this ChatResult result)\n+    /// <param name=\"result\">The result to convert.</param>\n+    /// <param name=\"mergeChoices\">\n+    /// When true, the contents of every choice go into the single returned message. Use it when the request asked for one\n+    /// reply: some providers (Anthropic) return each content block of that reply as its own choice.\n+    /// </param>\n+    public static ChatResponse ToChatCompletion(this ChatResult result, bool mergeChoices = false)\n     {\n         List<ChatChoice> choices = result.Choices ?? [];\n         ChatChoice? choice = choices.FirstOrDefault();\n \n         ChatMessage message = choice?.Message ?? new ChatMessage(ChatMessageRoles.Assistant, \"\");\n+        global::Microsoft.Extensions.AI.ChatMessage converted = message.ToMicrosoftAI();\n+\n+        if (mergeChoices)\n+        {\n+            foreach (ChatChoice extra in choices.Skip(1))\n+            {\n+                if (extra.Message is not null)\n+                {\n+                    foreach (AIContent content in extra.Message.ToMicrosoftAI().Contents)\n+                    {\n+                        converted.Contents.Add(content);\n+                    }\n+                }\n+            }\n+        }\n         \n-        ChatResponse completion = new ChatResponse(message.ToMicrosoftAI())\n+        ChatResponse completion = new ChatResponse(converted)\n         {\n             ResponseId = result.Id,\n             ModelId = result.Model,"
+  },
+  {
+   "filename": "src/LlmTornado.Tests/AnthropicParallelToolCallsTests.cs",
+   "status": "modified",
+   "additions": 40,
+   "deletions": 0,
+   "patch": "@@ -67,6 +67,18 @@ public class AnthropicParallelToolCallsTests\n          \"usage\":{\"input_tokens\":600,\"output_tokens\":30}}\n         \"\"\";\n \n+    private const string TextThenToolUseJson = \"\"\"\n+        {\"id\":\"msg_mixed\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"stop_reason\":\"tool_use\",\"stop_sequence\":null,\n+         \"content\":[{\"type\":\"text\",\"text\":\"Let me check.\"},{\"type\":\"tool_use\",\"id\":\"toolu_paris\",\"name\":\"get_weather\",\"input\":{\"city\":\"Paris\"}}],\n+         \"usage\":{\"input_tokens\":600,\"output_tokens\":20}}\n+        \"\"\";\n+\n+    private const string TwoTextBlocksJson = \"\"\"\n+        {\"id\":\"msg_two\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\n+         \"content\":[{\"type\":\"text\",\"text\":\"Paris is cloudy.\"},{\"type\":\"text\",\"text\":\"London is cloudy.\"}],\n+         \"usage\":{\"input_tokens\":600,\"output_tokens\":12}}\n+        \"\"\";\n+\n     private static readonly string[] ToolUseIds = [\"toolu_paris\", \"toolu_london\", \"toolu_tokyo\"];\n     private static readonly string[] Cities = [\"Paris\", \"London\", \"Tokyo\"];\n \n@@ -165,6 +177,34 @@ public async Task ChatClient_ThinkingReply_ReturnsReasoningOnce()\n         Assert.That(response.Text, Is.EqualTo(\"All three are cloudy.\"));\n     }\n \n+    [Test]\n+    public async Task ChatClient_TextThenToolUse_ReturnsTextAndToolCall()\n+    {\n+        using FakeAnthropicServer server = new FakeAnthropicServer(\"application/json\", TextThenToolUseJson);\n+        IChatClient client = CreateClient(server.Port);\n+\n+        ChatResponse response = await client.GetResponseAsync(Prompt(), Options());\n+\n+        List<AIContent> contents = response.Messages.Single().Contents.ToList();\n+        Assert.That(contents.OfType<TextContent>().Select(x => x.Text), Is.EqualTo(new[] { \"Let me check.\" }));\n+        FunctionCallContent call = contents.OfType<FunctionCallContent>().Single();\n+        Assert.That(call.CallId, Is.EqualTo(\"toolu_paris\"));\n+        Assert.That(call.Name, Is.EqualTo(\"get_weather\"));\n+        Assert.That(response.FinishReason, Is.EqualTo(ChatFinishReason.ToolCalls));\n+    }\n+\n+    [Test]\n+    public async Task ChatClient_TwoTextBlocks_ReturnsBothBlocks()\n+    {\n+        using FakeAnthropicServer server = new FakeAnthropicServer(\"application/json\", TwoTextBlocksJson);\n+        IChatClient client = CreateClient(server.Port);\n+\n+        ChatResponse response = await client.GetResponseAsync(Prompt());\n+\n+        Assert.That(response.Messages.Single().Contents.OfType<TextContent>().Select(x => x.Text),\n+            Is.EqualTo(new[] { \"Paris is cloudy.\", \"London is cloudy.\" }));\n+    }\n+\n     private static IChatClient CreateClient(int port)\n     {\n         TornadoApi api = new TornadoApi(new AnthropicEndpointProvider"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/AnthropicParallelToolCallsTests.cs"
+ ]
+}

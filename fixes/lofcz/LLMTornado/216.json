@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 216,
+ "url": "https://github.com/lofcz/LLMTornado/pull/216",
+ "title": "Report token usage from Microsoft.Extensions.AI streaming responses",
+ "merged_at": "2026-10-20T16:27:38Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Microsoft.Extensions.AI/TornadoChatClient.cs",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -129,6 +129,7 @@ public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(\n         int chunkIndex = 0;\n         string accumulatedText = \"\";\n         List<ToolCall> accumulatedToolCalls = [];\n+        ChatUsage? lastUsage = null;\n \n         // Execute streaming request\n         await foreach (ChatResult? chunk in _api.Chat.StreamChatEnumerable(request).WithCancellation(cancellationToken))\n@@ -139,6 +140,9 @@ public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(\n             {\n                 continue;\n             }\n+\n+            // providers repeat the running totals on several chunks, so only the last one is reported\n+            lastUsage = chunk.Usage ?? lastUsage;\n             \n             if (chunk.StreamInternalKind is not null)\n             {\n@@ -249,6 +253,21 @@ public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(\n             yield return update;\n         }\n \n+        if (lastUsage is not null)\n+        {\n+            chunkIndex++;\n+            yield return new ChatResponseUpdate\n+            {\n+                Role = ChatRole.Assistant,\n+                Contents = [ new UsageContent(new UsageDetails\n+                {\n+                    InputTokenCount = lastUsage.PromptTokens,\n+                    OutputTokenCount = lastUsage.CompletionTokens,\n+                    TotalTokenCount = lastUsage.TotalTokens\n+                }) ]\n+            };\n+        }\n+\n         activity?.SetTag(\"llm.response.chunks\", chunkIndex);\n     }\n "
+  },
+  {
+   "filename": "src/LlmTornado.Tests/AnthropicParallelToolCallsTests.cs",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -140,6 +140,23 @@ public async Task ChatClient_ToolMessageWithSeveralResults_SendsEveryToolResult(\n         Assert.That(toolResults.Select(b => b[\"content\"]?.Value<string>()), Is.EqualTo(Cities.Select(c => $\"{c}: 18 C, cloudy\")));\n     }\n \n+    [Test]\n+    public async Task ChatClient_Streaming_ReportsUsageOnce()\n+    {\n+        using FakeAnthropicServer server = new FakeAnthropicServer(\"text/event-stream\", ParallelToolUseSse);\n+        IChatClient client = CreateClient(server.Port);\n+\n+        List<ChatResponseUpdate> updates = [];\n+        await foreach (ChatResponseUpdate update in client.GetStreamingResponseAsync(Prompt(), Options()))\n+        {\n+            updates.Add(update);\n+        }\n+\n+        UsageDetails usage = updates.SelectMany(x => x.Contents).OfType<UsageContent>().Single().Details;\n+        Assert.That(usage.InputTokenCount, Is.EqualTo(400));\n+        Assert.That(usage.OutputTokenCount, Is.EqualTo(90));\n+    }\n+\n     [Test]\n     public async Task ChatClient_TextReply_ReturnsTextOnce()\n     {"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/AnthropicParallelToolCallsTests.cs"
+ ]
+}

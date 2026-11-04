@@ -1,0 +1,33 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1055,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1055",
+ "title": "Stop sending the default temperature in Anthropic#chat (400 on current Claude models)",
+ "merged_at": "2026-10-11T04:54:26Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n - [SECURITY]: A change which fixes a security vulnerability.\n \n ## [Unreleased]\n+- [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1055] Stop sending the default `temperature` (0.0) from `Langchain::LLM::Anthropic#chat`; Claude Opus 4.7+ and Sonnet 5+ reject it with a 400. A temperature set in `default_options` or passed to `#chat` is still sent.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1052] Return every `tool_use` block from `AnthropicResponse#tool_calls` instead of only the first, so parallel tool calls from Claude are no longer silently dropped.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1051] Skip unsupported and non-file directory entries when loading a directory instead of returning an `UnknownFormatError` object into the results array.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1050] Return `[]` from `#tool_calls` on `OpenAIResponse`, `MistralAIResponse` and `GoogleGeminiResponse` when the response has no usable choices, instead of raising `NoMethodError`."
+  },
+  {
+   "filename": "lib/langchain/llm/anthropic.rb",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -31,7 +31,10 @@ def initialize(api_key:, llm_options: {}, default_options: {})\n       @defaults = DEFAULTS.merge(default_options)\n       chat_parameters.update(\n         model: {default: @defaults[:chat_model]},\n-        temperature: {default: @defaults[:temperature]},\n+        # Only a temperature the caller set is sent: Claude Opus 4.7 and later reject `temperature`,\n+        # and Claude Sonnet 5 and later reject non-default values, so DEFAULTS[:temperature] would\n+        # make every chat request with a current model fail with a 400.\n+        temperature: {default: default_options[:temperature]},\n         max_tokens: {default: @defaults[:max_tokens]},\n         metadata: {},\n         system: {},"
+  },
+  {
+   "filename": "spec/lib/langchain/llm/anthropic_spec.rb",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 1,
+   "patch": "@@ -80,13 +80,39 @@\n     let(:fixture) { File.read(\"spec/fixtures/llm/anthropic/chat.json\") }\n     let(:response) { JSON.parse(fixture, symbolize_names: true) }\n \n+    context \"with temperature\" do\n+      it \"does not send the library's default temperature, which current Claude models reject\" do\n+        expect(subject.client.messages).to receive(:create)\n+          .with(hash_excluding(:temperature))\n+          .and_return(response)\n+\n+        subject.chat(messages: messages)\n+      end\n+\n+      it \"sends a temperature set in default_options\" do\n+        llm = described_class.new(api_key: \"123\", default_options: {temperature: 0.2})\n+        expect(llm.client.messages).to receive(:create)\n+          .with(hash_including(temperature: 0.2))\n+          .and_return(response)\n+\n+        llm.chat(messages: messages)\n+      end\n+\n+      it \"sends a temperature passed to #chat\" do\n+        expect(subject.client.messages).to receive(:create)\n+          .with(hash_including(temperature: 0.7))\n+          .and_return(response)\n+\n+        subject.chat(messages: messages, temperature: 0.7)\n+      end\n+    end\n+\n     context \"with no additional parameters\" do\n       before do\n         allow(subject.client.messages).to receive(:create)\n           .with({\n             model: described_class::DEFAULTS[:chat_model],\n             messages: messages,\n-            temperature: described_class::DEFAULTS[:temperature],\n             max_tokens: described_class::DEFAULTS[:max_tokens],\n             stop_sequences: [\"beep\"]\n           })"
+  }
+ ],
+ "test_files": [
+  "spec/lib/langchain/llm/anthropic_spec.rb"
+ ]
+}

@@ -1,0 +1,88 @@
+{
+ "repo": "deepset-ai/haystack",
+ "number": 12358,
+ "url": "https://github.com/deepset-ai/haystack/pull/12358",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "none",
+   "state": "COMMENTED",
+   "submitted_at": "2026-08-15T15:51:34Z",
+   "body": "Ran the branch: 38 passed, 10 skipped in `test_embedding_based_document_splitter.py` (the skips are the `OPENAI_API_KEY` ones, unrelated).\n\nChecked the new test isn't vacuous — reverting just the one call in `_split_document_async` back to `self._split_large_splits(...)` makes `test_recursive_split_of_large_chunks_stays_async` fail, so it genuinely pins the behaviour rather than passing either way. That's the bit that matters for a fix like this, and it's easy to write a test that doesn't.\n\nI also diffed `_split_large_splits_async` against `_split_large_splits` line by line. Ignoring the docstring, the only differences are the two you'd want:\n\n```\n-  sub_splits = self._split_text(text=split)\n+  sub_splits = await self._split_text_async(text=split)\n-  final_splits.extend(self._split_large_splits(splits=sub_splits))\n+  final_splits.extend(await self._split_large_splits_async(splits=sub_splits))\n```\n\nso the control flow, the `len(sub_splits) == 1` stop condition and the warning are all preserved exactly. Good — a subtly-diverging async twin is the usual failure mode here.\n\nOne thought, take it or leave it: this is now the second pair of near-identical sync/async recursive methods in the class, and they have to stay in step by hand. The `# Recursively split large splits` comment block explaining *why* reusing `_split_text` is valid (dynamic threshold from embeddings) only survives in the sync copy, so a future reader of the async one loses that rationale, and any fix to the recursion logic has to be applied twice. Not worth restructuring for this PR, but might be worth a `# keep in sync with _split_large_splits` note on the async version so the coupling is visible.\n\nNothing blocking.\n"
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-08-17T06:02:22Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-08-17T07:57:15Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-08-17T08:10:37Z",
+   "body": "Thanks!"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "releasenotes/notes/fix-embedding-splitter-async-recursion-7a1fa697999ddcfd.yaml",
+   "created_at": "2026-08-17T06:02:23Z",
+   "body": "we use restructured text markdown for our release notes for inline comments please make sure to use double backticks \n```suggestion\n    Fixed ``EmbeddingBasedDocumentSplitter.run_async`` embedding through the synchronous path while\n```"
+  },
+  {
+   "role": "contributor",
+   "path": "releasenotes/notes/fix-embedding-splitter-async-recursion-7a1fa697999ddcfd.yaml",
+   "created_at": "2026-08-17T07:57:15Z",
+   "body": "```suggestion\n    Fixed ``EmbeddingBasedDocumentSplitter.run_async`` embedding through the synchronous path while\n    recursively splitting chunks longer than ``max_length``. Only the first pass was async: the recursion\n    called the sync splitting helper, so the embedder's blocking ``run`` ran on the event loop for every\n    over-long chunk. The recursion now embeds through ``run_async`` as well.\n```"
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-08-15T01:22:34Z",
+   "body": "Someone is attempting to deploy a commit to the **deepset** Team on [Vercel](https://vercel.com).\n\nA member of the Team first needs to [authorize it](https://vercel.com/git/authorize?team=deepset&slug=deepset-ai&teamId=team_hGnZRfk9LNGNCGLNPQ1EVuL5&type=github&job=%7B%22headInfo%22%3A%7B%22sha%22%3A%22104dfe5b144144ffa369e4941d3c43b8c82718a8%22%7D%2C%22id%22%3A%22QmaaNh4gPsCGCkrxR82q7MZBY7nK441XesS5JAjAFsFyrw%22%2C%22org%22%3A%22deepset-ai%22%2C%22prId%22%3A12358%2C%22repo%22%3A%22haystack%22%7D).\n\n"
+  },
+  {
+   "role": "none",
+   "created_at": "2026-08-15T01:22:37Z",
+   "body": "[![CLA assistant check](https://cla-assistant.io/pull/badge/signed)](https://cla-assistant.io/deepset-ai/haystack?pullRequest=12358) <br/>All committers have signed the CLA."
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-08-15T02:37:42Z",
+   "body": "<!-- cla-draft-gate {\"reviewers\":[\"sjrl\"],\"team_reviewers\":[]} -->\nHi @pcbeingused333, thanks a lot for your contribution! :pray:\n\nWe noticed that the **Contributor License Agreement (CLA)** check (`license/cla`) hasn't passed yet, so we've temporarily moved this PR to **draft** and paused the review assignment.\n\nTo get your PR reviewed, please sign the CLA via the link in the `license/cla` check below (or in the CLA bot comment). As soon as the check turns green, this PR will automatically be marked ready for review again and a reviewer will be re-assigned."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-08-15T03:56:30Z",
+   "body": "recheck"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-08-15T04:29:24Z",
+   "body": "Thanks for signing the CLA, @pcbeingused333! :tada: This PR is now ready for review again and the reviewer has been re-assigned."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-08-16T02:09:25Z",
+   "body": "Good catch on the comment loss — added a `keep in sync` note on both docstrings (the coupling runs both ways: a fix to the recursion has to be applied twice, and someone editing the sync copy needs the same warning), plus the dynamic-threshold rationale restored on the async side. 99418238, comments only."
+  },
+  {
+   "role": "none",
+   "created_at": "2026-08-16T16:14:36Z",
+   "body": "Checked out `9941823` — that's exactly it, and making the note bidirectional is better than what I suggested. A reader arriving at either copy now learns the other exists, which is the failure mode I was actually worried about (someone fixes the recursion in one and never learns there's a twin).\n\nRestoring the dynamic-threshold rationale on the async side matters too: \"we can reuse the same `_split_text_async` because the threshold is computed from `split`'s own embeddings\" is the non-obvious bit that makes the recursion correct, and it was only in the sync copy before.\n\nRe-ran the suite on this commit: still 38 passed, 10 skipped, and `test_recursive_split_of_large_chunks_stays_async` still fails if I revert the one-line call in `_split_document_async`, so the coverage is unchanged by the docs commit. Nothing further from me.\n"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-08-17T08:06:20Z",
+   "body": "## Coverage report\n\n\n<img title=\"Coverage for the whole project went from 95.31% to 95.35%\" src=\"https://img.shields.io/badge/Coverage%20evolution-95%25%20%3E%2095%25-brightgreen.svg\"> <img title=\"88.88% of the statement lines added by this PR are covered\" src=\"https://img.shields.io/badge/PR%20Coverage-88%25-orange.svg\"><details><summary>Click to see where and how coverage changed</summary><table><thead>\n  <tr><th>File</th><th>Statements</th><th>Missing</th><th>Coverage</th><th>Coverage<br>(new stmts)</th><th>Lines missing</th></tr>\n</thead>\n<tbody><tr>\n<td colspan=\"6\">&nbsp;&nbsp;<b>haystack/components/preprocessors</b></td><tr>\n<td>&nbsp;&nbsp;<a href=\"https://github.com/deepset-ai/haystack/pull/12358/files#diff-75a7b3e504b7a3275783db0e34b076710a3ffb6310f4d837dccff3e5875e8ceb\">embedding_based_document_splitter.py</a></td>\n\n<td align=\"center\"><a href=\"https://github.com/deepset-ai/haystack/pull/12358/files#diff-75a7b3e504b7a3275783db0e34b076710a3ffb6310f4d837dccff3e5875e8ceb\"><img title=\"This PR adds 11 to the number of statements in haystack/components/preprocessors/embedding_based_document_splitter.py, taking it from 215 to 226.\" src=\"https://img.shields.io/badge/226-%28%2B11%29-007ec6.svg\"></a></td><td align=\"center\"><a href=\"https://github.com/deepset-ai/haystack/pull/12358/files#diff-75a7b3e504b7a3275783db0e34b076710a3ffb6310f4d837dccff3e5875e8ceb\"><img title=\"This PR removes 7 from the number of statements missing coverage in haystack/components/preprocessors/embedding_based_document_splitter.py, taking it from 19 to 12.\" src=\"https://img.shields.io/badge/12-%28--7%29-brightgreen.svg\"></a></td><td align=\"center\"><a href=\"https://github.com/deepset-ai/haystack/pull/12358/files#diff-75a7b3e504b7a3275783db0e34b076710a3ffb6310f4d837dccff3e5875e8ceb\"><img title=\"This PR adds 3.53 percentage points to the coverage rate in haystack/components/preprocessors/embedding_based_document_splitter.py, taking it from 91.16% (196/215) to 94.69% (214/226).\" src=\"https://img.shields.io/badge/94%25-%28196/215%20%3E%20214/226%29-brightgreen.svg\"></a></td><td align=\"center\"><a href=\"https://github.com/deepset-ai/haystack/pull/12358/files#diff-75a7b3e504b7a3275783db0e34b076710a3ffb6310f4d837dccff3e5875e8ceb\"><img title=\"In this PR, 18 new statements are added to haystack/components/preprocessors/embedding_based_document_splitter.py, 16 of which are covered (88.88%).\" src=\"https://img.shields.io/badge/88%25-%2816/18%29-orange.svg\"></a></td><td><a href=\"https://github.com/deepset-ai/haystack/pull/12358/files#diff-75a7b3e504b7a3275783db0e34b076710a3ffb6310f4d837dccff3e5875e8cebR501-R501\">501</a>, <a href=\"https://github.com/deepset-ai/haystack/pull/12358/files#diff-75a7b3e504b7a3275783db0e34b076710a3ffb6310f4d837dccff3e5875e8cebR518-R518\">518</a></td></tbody>\n<tfoot>\n<tr>\n<td><b>Project Total</b></td>\n\n<td align=\"center\"><a href=\"https://github.com/deepset-ai/haystack/pull/12358/files#diff-4b0bf2efa3367c0072ac2bf1e234e703dc46b47aaa4fe9d3b01737b1a15752b1\"><img title=\"This PR adds 11 to the number of statements in the whole project, taking it from 16772 to 16783.\" src=\"https://img.shields.io/badge/17k-%28%2B11%29-007ec6.svg\"></a></td><td align=\"center\"><a href=\"https://github.com/deepset-ai/haystack/pull/12358/files#diff-4b0bf2efa3367c0072ac2bf1e234e703dc46b47aaa4fe9d3b01737b1a15752b1\"><img title=\"This PR removes 7 from the number of statements missing coverage in the whole project, taking it from 786 to 779.\" src=\"https://img.shields.io/badge/779-%28--7%29-brightgreen.svg\"></a></td><td align=\"center\"><a href=\"https://github.com/deepset-ai/haystack/pull/12358/files#diff-4b0bf2efa3367c0072ac2bf1e234e703dc46b47aaa4fe9d3b01737b1a15752b1\"><img title=\"This PR adds 0.04 percentage points to the coverage rate in the whole project, taking it from 95.31% (15986/16772) to 95.35% (16004/16783).\" src=\"https://img.shields.io/badge/95%25-%2816k/17k%20%3E%2016k/17k%29-brightgreen.svg\"></a></td><td align=\"center\"><a href=\"https://github.com/deepset-ai/haystack/pull/12358/files#diff-4b0bf2efa3367c0072ac2bf1e234e703dc46b47aaa4fe9d3b01737b1a15752b1\"><img title=\"In this PR, 18 new statements are added to the whole project, 16 of which are covered (88.88%).\" src=\"https://img.shields.io/badge/88%25-%2816/18%29-orange.svg\"></a></td><td>&nbsp;</td>\n</tr>\n</tfoot>\n</table>\n\n<sub>\n\nThis report was generated by [python-coverage-comment-action](https://github.com/py-cov-action/python-coverage-comment-action)\n\n</sub>\n</details>\n\n\n\n<!-- This comment was produced by python-coverage-comment-action -->"
+  }
+ ]
+}

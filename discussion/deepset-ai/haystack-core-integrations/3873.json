@@ -1,0 +1,52 @@
+{
+ "repo": "deepset-ai/haystack-core-integrations",
+ "number": 3873,
+ "url": "https://github.com/deepset-ai/haystack-core-integrations/pull/3873",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-09-23T11:05:25Z",
+   "body": "Looks good, thanks @pcbeingused333!"
+  }
+ ],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-08-31T03:17:11Z",
+   "body": "**Heads-up for maintainers**\n\nThis PR is from a fork and touches integrations whose integration tests require API keys.\nThose tests are **skipped** in CI because fork PRs don't have access to repo secrets for security reasons.\n\nAffected integrations:\n- amazon_bedrock\n- transformers\n\nPlease run the integration tests locally (`hatch run test:integration` inside each folder) before approving.\n<!-- Sticky Pull Request Commentfork-pr-api-keys -->"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-08-31T03:18:09Z",
+   "body": "## Coverage report (amazon_bedrock)\n\n\n<img title=\"Coverage for the whole project went from 93.68% to 93.68%\" src=\"https://img.shields.io/badge/Coverage%20evolution-93%25%20%3E%2093%25-brightgreen.svg\"> <img title=\"100% of the statement lines added by this PR are covered\" src=\"https://img.shields.io/badge/PR%20Coverage-100%25-brightgreen.svg\">\n\n_This PR does not seem to contain any modification to coverable code._\n\n<!-- This comment was produced by python-coverage-comment-action (id: amazon_bedrock) -->"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-08-31T03:23:09Z",
+   "body": "## Coverage report (transformers)\n\n\n<img title=\"Coverage for the whole project went from 91.39% to 91.39%\" src=\"https://img.shields.io/badge/Coverage%20evolution-91%25%20%3E%2091%25-red.svg\"> <img title=\"100% of the statement lines added by this PR are covered\" src=\"https://img.shields.io/badge/PR%20Coverage-100%25-brightgreen.svg\">\n\n_This PR does not seem to contain any modification to coverable code._\n\n<!-- This comment was produced by python-coverage-comment-action (id: transformers) -->"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-08-31T03:23:34Z",
+   "body": "Note on CI coverage: `Test / transformers` and `Test / amazon-bedrock` ran and are green, but there is no `google_vertex` workflow in `.github/workflows/`, so that third of the PR is not covered by CI here. Verified locally instead — `pytest integrations/google_vertex/tests/test_text_embedder.py`: 10 passed, and 3 of them fail if I revert only the `to_dict` change:\n\n```\nFAILED tests/test_text_embedder.py::test_to_dict\nFAILED tests/test_text_embedder.py::test_task_type_survives_a_serialization_round_trip\nFAILED tests/test_text_embedder.py::test_progress_bar_and_truncate_dim_survive_a_serialization_round_trip\n```\n\nHappy to split google_vertex into its own PR if you would rather land the two CI-covered integrations first."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-08-31T03:35:33Z",
+   "body": "Ran the integration tests locally as the bot asks, with `hatch`, from inside each integration folder.\n\n**transformers** — the two integration tests in the file this PR touches pass (real models downloaded, no key needed):\n\n```\n$ cd integrations/transformers && hatch run test:integration -q -k extractive\ntests/test_extractive_reader.py::test_t5 PASSED\ntests/test_extractive_reader.py::test_roberta PASSED\n2 passed, 136 deselected in 93.59s\n```\n\n**amazon_bedrock** — the five `S3Downloader` integration tests need a real bucket, so they skip here, with their own reason:\n\n```\n$ cd integrations/amazon_bedrock && hatch run test:integration -q -k s3_downloader -rs\n5 skipped, 415 deselected\nSKIPPED [5] Export an env var called `S3_DOWNLOADER_BUCKET` containing the S3 bucket to run this test.\n```\n\n`hatch run test:unit` in that integration: 352 passed, 68 deselected.\n\nWorth saying plainly: this PR only adds keys to `to_dict`, which no integration test exercises — they all call `run()` against a live service. The unit tests are the ones that cover it, and I verified each fails without its one-line change.\n\n**google_vertex** — while getting local evidence for the third integration I found that it has no workflow at all in `.github/workflows/`, and its suite is already red on `main` for an unrelated reason (`haystack-ai` 3.1.0 added `async_function` to `Tool`). Filed separately as #3874 so it does not get mixed up with this PR. With those two pre-existing failures excluded, `hatch run test:unit` in `google_vertex` is 64 passed, including the three that cover this change."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-08-31T05:53:30Z",
+   "body": "@sjrl pointed out on #3874 that `google_vertex` is discontinued and archived — it is in the status table of the top-level README, which I had not checked. **I have removed that third of this PR** (`c5312c1`); a serialization fix in an archived integration is churn, not a fix.\n\nThat is the same reasoning I used to leave `NvidiaGenerator` out of this PR for being deprecated, so I should have caught it. The README table is the check I was missing, and it also retires the CI-coverage caveat I raised earlier: everything left here is covered.\n\n**What remains, both integrations active and both green in this PR's CI:**\n\n| Component | Dropped from `to_dict` | Already serialized by |\n|---|---|---|\n| `TransformersExtractiveReader` | `overlap_threshold` | — |\n| `S3Downloader` | `boto3_config` | `AmazonBedrockGenerator`, `AmazonBedrockChatGenerator`, and the three Bedrock embedders |\n\nTwo one-line changes, each with a round-trip test that fails without it. Integration tests run locally and reported above: `transformers` 2 passed, `amazon_bedrock` skipped for want of a real bucket, unit suites 35 and 352 passed.\n\nTitle updated to match. Happy to split the two remaining integrations apart as well if you would rather review them separately."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-09-11T00:47:52Z",
+   "body": "Following up — this has been quiet for ~10 days. After dropping the archived `google_vertex` portion, it's a focused `to_dict` fix for two components, each an init param that is accepted, stored and used but left out of `to_dict` so it reverts to default on `from_dict`:\n\n- `TransformersExtractiveReader` — `overlap_threshold` (changes which overlapping answers `run` deduplicates, so the answer set differs after a round trip)\n- `S3Downloader` — `boto3_config` (builds the botocore `Config`: timeouts, retries, proxies)\n\nOne line per parameter in `to_dict`, no `from_dict` change needed. Regression tests per integration, verified red by reverting only the `to_dict` change. CI is green and the branch is up to date. Ready for review whenever there's capacity.\n"
+  }
+ ]
+}

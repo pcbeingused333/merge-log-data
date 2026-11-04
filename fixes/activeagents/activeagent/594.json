@@ -1,0 +1,33 @@
+{
+ "repo": "activeagents/activeagent",
+ "number": 594,
+ "url": "https://github.com/activeagents/activeagent/pull/594",
+ "title": "Handle refusal and logprobs events in OpenAI chat streaming",
+ "merged_at": "2026-10-20T18:12:09Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0\n \n ## [Unreleased]\n \n+### Fixed\n+\n+- **A streamed OpenAI Chat refusal, or a stream with logprobs, no longer\n+  raises.** The openai gem's chat stream emits `refusal.delta` and\n+  `refusal.done` when the model refuses, and `logprobs.*` events when the\n+  request sets `logprobs`, and the Chat provider failed on them with\n+  `Unexpected Response Event Type`. They are now handled, and `refusal.done`\n+  ends the generation, since a refused message never gets a `content.done`.\n+\n ## [1.9.1] - 2026-10-16\n \n Releases `activeagent` and `actionagent` 1.9.1, with the matching browser"
+  },
+  {
+   "filename": "lib/active_agent/providers/open_ai/chat_provider.rb",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -143,6 +143,13 @@ def process_stream_chunk(api_response_event)\n             # => {type: :\"tool_calls.function.arguments.delta\", name: \"get_current_weather\", index: 0, arguments: \"\", parsed: nil, arguments_delta: \"\"}\n           when :\"tool_calls.function.arguments.done\"\n             # => => {type: :\"tool_calls.function.arguments.done\", index: 0, name: \"get_current_weather\", arguments: \"{\\\"location\\\":\\\"Boston, MA\\\"}\", parsed: nil}\n+          when :\"refusal.delta\"\n+            # No-Op; the refusal is merged into the message from the :chunk event\n+          when :\"refusal.done\"\n+            # A refused message ends here, with no content.done\n+            self.stream_completion_pending = true\n+          when :\"logprobs.content.delta\", :\"logprobs.content.done\", :\"logprobs.refusal.delta\", :\"logprobs.refusal.done\"\n+            # No-Op; sent when the request asks for logprobs\n           else\n             fail \"Unexpected Response Event Type: #{api_response_event.type}\"\n           end"
+  },
+  {
+   "filename": "test/providers/open_ai/chat/streaming_lifecycle_test.rb",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -44,6 +44,42 @@ def deep_to_h\n         MockChunkEvent = Struct.new(:type, :chunk, keyword_init: true)\n         MockContentDoneEvent = Struct.new(:type, :content, :parsed, keyword_init: true)\n \n+        test \"process_stream_chunk handles refusal events and completes on refusal.done\" do\n+          [\n+            ::OpenAI::Helpers::Streaming::ChatRefusalDeltaEvent.new(\n+              type: :\"refusal.delta\", delta: \"I can't help with that.\", snapshot: \"I can't help with that.\"\n+            ),\n+            ::OpenAI::Helpers::Streaming::ChatRefusalDoneEvent.new(\n+              type: :\"refusal.done\", refusal: \"I can't help with that.\"\n+            )\n+          ].each do |event|\n+            assert_nothing_raised { @provider.send(:process_stream_chunk, event) }\n+          end\n+\n+          # A refused message has no content.done, so refusal.done must end it\n+          assert @provider.send(:stream_completion_pending)\n+        end\n+\n+        test \"process_stream_chunk handles logprobs events\" do\n+          logprob = { token: \"Hi\", logprob: -0.1, bytes: [ 72, 105 ], top_logprobs: [] }\n+          [\n+            ::OpenAI::Helpers::Streaming::ChatLogprobsContentDeltaEvent.new(\n+              type: :\"logprobs.content.delta\", content: [ logprob ], snapshot: [ logprob ]\n+            ),\n+            ::OpenAI::Helpers::Streaming::ChatLogprobsContentDoneEvent.new(\n+              type: :\"logprobs.content.done\", content: [ logprob ]\n+            ),\n+            ::OpenAI::Helpers::Streaming::ChatLogprobsRefusalDeltaEvent.new(\n+              type: :\"logprobs.refusal.delta\", refusal: [ logprob ], snapshot: [ logprob ]\n+            ),\n+            ::OpenAI::Helpers::Streaming::ChatLogprobsRefusalDoneEvent.new(\n+              type: :\"logprobs.refusal.done\", refusal: [ logprob ]\n+            )\n+          ].each do |event|\n+            assert_nothing_raised { @provider.send(:process_stream_chunk, event) }\n+          end\n+        end\n+\n         test \"process_stream_chunk emits :open event on first chunk\" do\n           chunk = MockChunk.new(\n             choices: [ MockChoice.new(index: 0, delta: MockDelta.new(content: \"Hi\", role: \"assistant\")) ]"
+  }
+ ],
+ "test_files": [
+  "test/providers/open_ai/chat/streaming_lifecycle_test.rb"
+ ]
+}

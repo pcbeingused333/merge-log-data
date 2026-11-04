@@ -1,0 +1,93 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1072,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1072",
+ "title": "Ask the LLM with chat in Chunker::Semantic, the Ragas evals and HyDE",
+ "merged_at": "2026-10-15T00:40:38Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n - [SECURITY]: A change which fixes a security vulnerability.\n \n ## [Unreleased]\n+- [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1072] Ask the LLM with `#chat` in `Langchain::Chunker::Semantic`, the Ragas evals and `Vectorsearch::Base#similarity_search_with_hyde`; they called `#complete`, which Google Gemini, Vertex AI and Mistral AI don't implement, and the semantic chunker passed `max_tokens_to_sample:`, which `Langchain::LLM::Anthropic#complete` rejected.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1069] Honor `tables:` and `exclude_tables:` in `Langchain::Tool::Database#list_tables` and `#dump_schema`, list the key columns of a composite primary key, and drop the trailing comma from the schema of a table without a primary key.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1071] Use the loader's `chunker:` for every file of a directory loaded with `Langchain::Loader`, and match file extensions case-insensitively, so `NOTES.TXT` no longer raises `UnknownFormatError`.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1070] Return a message instead of raising from `Langchain::Tool::FileSystem` (reading a directory, listing a file, writing into a missing directory) and `Langchain::Tool::Calculator` (division by zero), and from `Langchain::Tool::Weather` when the weather request fails after the location lookup, which ended the `Langchain::Assistant` run in `:failed`."
+  },
+  {
+   "filename": "lib/langchain/chunker/semantic.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 2,
+   "patch": "@@ -25,8 +25,7 @@ def initialize(text, llm:, prompt_template: nil)\n       def chunks\n         prompt = prompt_template.format(text: text)\n \n-        # Replace static 50k limit with dynamic limit based on text length (max_tokens_to_sample)\n-        completion = llm.complete(prompt: prompt, max_tokens_to_sample: 50000).completion\n+        completion = llm.chat(messages: [{role: \"user\", content: prompt}]).chat_completion\n         completion\n           .gsub(\"Here are the paragraphs split by topic:\\n\\n\", \"\")\n           .split(\"---\")"
+  },
+  {
+   "filename": "lib/langchain/evals/ragas/answer_relevance.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -28,7 +28,7 @@ def score(question:, answer:)\n               question: question,\n               answer: answer\n             )\n-            generated_questions << llm.complete(prompt: prompt).completion\n+            generated_questions << llm.chat(messages: [{role: \"user\", content: prompt}]).chat_completion\n           end\n \n           scores = generated_questions.map do |generated_question|"
+  },
+  {
+   "filename": "lib/langchain/evals/ragas/context_relevance.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -22,7 +22,7 @@ def score(question:, context:)\n             question: question,\n             context: context\n           )\n-          sentences = llm.complete(prompt: prompt).completion\n+          sentences = llm.chat(messages: [{role: \"user\", content: prompt}]).chat_completion\n \n           (sentence_count(sentences).to_f / sentence_count(context).to_f)\n         end"
+  },
+  {
+   "filename": "lib/langchain/evals/ragas/faithfulness.rb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -55,15 +55,15 @@ def statements_verification(statements:, context:)\n             statements: statements,\n             context: context\n           )\n-          llm.complete(prompt: prompt).completion\n+          llm.chat(messages: [{role: \"user\", content: prompt}]).chat_completion\n         end\n \n         def statements_extraction(question:, answer:)\n           prompt = statements_extraction_prompt_template.format(\n             question: question,\n             answer: answer\n           )\n-          llm.complete(prompt: prompt).completion\n+          llm.chat(messages: [{role: \"user\", content: prompt}]).chat_completion\n         end\n \n         # @return [PromptTemplate] PromptTemplate instance"
+  },
+  {
+   "filename": "lib/langchain/vectorsearch/base.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -138,7 +138,7 @@ def similarity_search(...)\n     # @param k [Integer] The number of results to return\n     # @return [String] Response\n     def similarity_search_with_hyde(query:, k: 4)\n-      hyde_completion = llm.complete(prompt: generate_hyde_prompt(question: query)).completion\n+      hyde_completion = llm.chat(messages: [{role: \"user\", content: generate_hyde_prompt(question: query)}]).chat_completion\n       similarity_search(query: hyde_completion, k: k)\n     end\n "
+  },
+  {
+   "filename": "spec/lib/langchain/chunker/semantic_spec.rb",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 3,
+   "patch": "@@ -9,11 +9,20 @@\n \n   describe \"#chunks\" do\n     it \"returns an array of chunks\" do\n-      expect(llm).to receive_message_chain(:complete, :completion).and_return(\n-        \" Here are the paragraphs split by topic:\\n\\n---\\nOn July 1, 1867, Canada became a self-governing dominion of Great Britain and a federation of four provinces: Nova Scotia; New Brunswick; Ontario; and Quebec.\\nThe anniversary of this date was called Dominion Day until 1982.\\n---\\nNicotine is named after the tobacco plant Nicotiana tabacum, which in turn is named after the French ambassador in Portugal, Jean Nicot de Villemain, who sent tobacco and seeds to Paris in 1560, and who promoted their medicinal use.\\n---\\nWell, it turns out that killer whales have been known to prey on sharks. Orcas have also been known to eat mako sharks and several other species. \\nWhen hunting sharks, killer whales always end up flipping the shark upside down, regardless of how the attack starts.\\n---\\nThe Lincoln cent or Lincoln penny is a cent coin (or penny) (1/100 of a dollar) that has been struck by the United States Mint since 1909.\\nThe obverse or heads side was designed by Victor David Brenner, as was the original reverse.\\n---\\nThe Undertaker and John Cena are the only two Superstars that have entered the Royal Rumble Match at No. 30 and won.\\nThese victories also occurred back-to-back in 2007 and 2008, respectively.\\n---\\nThe Gobi is a large desert region in northern China and southern Mongolia.\\nThe desert basins of the Gobi are bounded by the Altai mountains and the grasslands and steppes of Mongolia on the north, by the Tibetan Plateau to the southwest, and by the North China Plain to the southwest.\"\n-      )\n+      expect(llm).to receive(:chat).with(messages: [{role: \"user\", content: a_string_including(text)}]).and_return(double(chat_completion:\n+        \" Here are the paragraphs split by topic:\\n\\n---\\nOn July 1, 1867, Canada became a self-governing dominion of Great Britain and a federation of four provinces: Nova Scotia; New Brunswick; Ontario; and Quebec.\\nThe anniversary of this date was called Dominion Day until 1982.\\n---\\nNicotine is named after the tobacco plant Nicotiana tabacum, which in turn is named after the French ambassador in Portugal, Jean Nicot de Villemain, who sent tobacco and seeds to Paris in 1560, and who promoted their medicinal use.\\n---\\nWell, it turns out that killer whales have been known to prey on sharks. Orcas have also been known to eat mako sharks and several other species. \\nWhen hunting sharks, killer whales always end up flipping the shark upside down, regardless of how the attack starts.\\n---\\nThe Lincoln cent or Lincoln penny is a cent coin (or penny) (1/100 of a dollar) that has been struck by the United States Mint since 1909.\\nThe obverse or heads side was designed by Victor David Brenner, as was the original reverse.\\n---\\nThe Undertaker and John Cena are the only two Superstars that have entered the Royal Rumble Match at No. 30 and won.\\nThese victories also occurred back-to-back in 2007 and 2008, respectively.\\n---\\nThe Gobi is a large desert region in northern China and southern Mongolia.\\nThe desert basins of the Gobi are bounded by the Altai mountains and the grasslands and steppes of Mongolia on the north, by the Tibetan Plateau to the southwest, and by the North China Plain to the southwest.\"))\n \n       expect(subject.chunks.count).to eq(6)\n     end\n+\n+    context \"with an LLM that only implements chat\" do\n+      let(:llm) { Langchain::LLM::GoogleGemini.new(api_key: \"123\") }\n+\n+      it \"returns an array of chunks\" do\n+        expect(llm).to receive(:chat).and_return(double(chat_completion: \"---\\nFirst topic.\\n---\\nSecond topic.\"))\n+\n+        expect(subject.chunks.map(&:text)).to eq([\"First topic.\", \"Second topic.\"])\n+      end\n+    end\n   end\n end"
+  },
+  {
+   "filename": "spec/lib/langchain/evals/ragas/answer_relevance_spec.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -12,7 +12,7 @@\n     let(:generated_question) { \"What is the purpose of the PSLV-C56 mission?\" }\n \n     before do\n-      allow(subject.llm).to receive(:complete).and_return(double(\"Langchain::LLM::Response::OpenAIResponse\", completion: generated_question))\n+      allow(subject.llm).to receive(:chat).with(messages: [{role: \"user\", content: a_string_including(answer)}]).and_return(double(\"Langchain::LLM::Response::OpenAIResponse\", chat_completion: generated_question))\n       allow(subject).to receive(:calculate_similarity)\n         .with(original_question: question, generated_question: generated_question)\n         .and_return(score)"
+  },
+  {
+   "filename": "spec/lib/langchain/evals/ragas/context_relevance_spec.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -12,7 +12,7 @@\n     let(:sentences) { \"It was completed in 1896 and named in memory of Chimnabai I (1864–1885), a queen and the first wife of Sayajirao Gaekwad III of Baroda State.\" }\n \n     before do\n-      allow(subject.llm).to receive(:complete).and_return(double(\"Langchain::LLM::Response::OpenAIResponse\", completion: sentences))\n+      allow(subject.llm).to receive(:chat).with(messages: [{role: \"user\", content: a_string_including(context)}]).and_return(double(\"Langchain::LLM::Response::OpenAIResponse\", chat_completion: sentences))\n     end\n \n     it \"generates the context_relevance score\" do"
+  },
+  {
+   "filename": "spec/lib/langchain/evals/ragas/faithfulness_spec.rb",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -21,6 +21,23 @@\n       expect(subject.score(question: question, answer: answer, context: context)).to eq(0.5)\n     end\n \n+    context \"when the statements come from the LLM\" do\n+      before do\n+        allow(subject).to receive(:statements_extraction).and_call_original\n+        allow(subject).to receive(:statements_verification).and_call_original\n+        allow(subject.llm).to receive(:chat)\n+          .with(messages: [{role: \"user\", content: a_string_including(answer)}])\n+          .and_return(double(chat_completion: statements))\n+        allow(subject.llm).to receive(:chat)\n+          .with(messages: [{role: \"user\", content: a_string_including(context)}])\n+          .and_return(double(chat_completion: verifications))\n+      end\n+\n+      it \"asks the LLM through chat\" do\n+        expect(subject.score(question: question, answer: answer, context: context)).to eq(0.5)\n+      end\n+    end\n+\n     context \"when no verified statements are found\" do\n       before do\n         allow(subject).to receive(:statements_verification).and_return(\"No verified statements found.\")"
+  },
+  {
+   "filename": "spec/lib/langchain/vectorsearch/base_spec.rb",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 2,
+   "patch": "@@ -61,11 +61,13 @@\n \n   describe \"#similarity_search_with_hyde\" do\n     before do\n-      allow(subject.llm).to receive_message_chain(:complete, :completion).and_return(\"fictional passage\")\n+      allow(subject.llm).to receive(:chat)\n+        .with(messages: [{role: \"user\", content: subject.generate_hyde_prompt(question: \"sci-fi\")}])\n+        .and_return(double(chat_completion: \"fictional passage\"))\n     end\n \n     it \"raises an error\" do\n-      expect(subject).to receive(:similarity_search).once\n+      expect(subject).to receive(:similarity_search).with(query: \"fictional passage\", k: 4).once\n       subject.similarity_search_with_hyde(query: \"sci-fi\", k: 4)\n     end\n   end"
+  }
+ ],
+ "test_files": [
+  "spec/lib/langchain/chunker/semantic_spec.rb",
+  "spec/lib/langchain/evals/ragas/answer_relevance_spec.rb",
+  "spec/lib/langchain/evals/ragas/context_relevance_spec.rb",
+  "spec/lib/langchain/evals/ragas/faithfulness_spec.rb",
+  "spec/lib/langchain/vectorsearch/base_spec.rb"
+ ]
+}

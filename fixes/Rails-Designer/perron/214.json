@@ -1,0 +1,26 @@
+{
+ "repo": "Rails-Designer/perron",
+ "number": 214,
+ "url": "https://github.com/Rails-Designer/perron/pull/214",
+ "title": "Sort `nil` values last in `Relation#order` instead of raising",
+ "merged_at": "2026-10-12T09:36:46Z",
+ "files": [
+  {
+   "filename": "lib/perron/relation.rb",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 2,
+   "patch": "@@ -34,9 +34,11 @@ def order(attribute, direction = :asc)\n         attribute, direction = attribute.first\n       end\n \n-      sorted = sort_by { it.public_send(attribute) }\n+      present, missing = partition { !it.public_send(attribute).nil? }\n+      present = present.sort_by { it.public_send(attribute) }\n+      present = present.reverse if direction == :desc\n \n-      Relation.new((direction == :desc) ? sorted.reverse : sorted, @model_class)\n+      Relation.new(present + missing, @model_class)\n     end\n \n     def pluck(*attributes)"
+  },
+  {
+   "filename": "test/perron/relation_test.rb",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -124,4 +124,13 @@ class Perron::RelationTest < ActiveSupport::TestCase\n     assert_instance_of Perron::Relation, result\n     assert_equal 0, result.size\n   end\n+\n+  test \"#order sorts nil values last instead of raising\" do\n+    record = Struct.new(:id, :position)\n+    relation = Perron::Relation.new([record.new(1, 30), record.new(2, nil), record.new(3, 10), record.new(4, nil)])\n+\n+    assert_equal [3, 1, 2, 4], relation.order(:position).map(&:id)\n+    assert_equal [1, 3, 2, 4], relation.order(:position, :desc).map(&:id)\n+    assert_instance_of Perron::Relation, relation.order(:position)\n+  end\n end"
+  }
+ ],
+ "test_files": [
+  "test/perron/relation_test.rb"
+ ]
+}

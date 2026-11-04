@@ -1,0 +1,253 @@
+{
+ "repo": "BerriAI/litellm",
+ "number": 44795,
+ "url": "https://github.com/BerriAI/litellm/pull/44795",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-06T04:51:48Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-11T05:12:22Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-17T23:51:05Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-18T05:23:20Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-18T05:30:14Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-18T06:18:28Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-18T06:19:54Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-18T07:23:15Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-18T07:26:53Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-18T07:38:09Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-18T08:11:57Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-18T19:07:53Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-19T07:33:09Z",
+   "body": "<!-- BUGBOT_REVIEW -->\n✅ Bugbot reviewed your changes and found no new issues!\n\n_Comment `@cursor review` or `bugbot run` to trigger another review on this PR_\n\n<sup>Reviewed by [Cursor Bugbot](https://cursor.com/bugbot) for commit 775a52354ff10f658326549b8d1be9794f8b46d2. Configure [here](https://www.cursor.com/dashboard/bugbot).</sup>"
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-19T08:10:41Z",
+   "body": "LGTM. Thanks for the contribution!"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "litellm/proxy/pass_through_endpoints/llm_provider_handlers/vertex_passthrough_logging_handler.py",
+   "created_at": "2026-10-06T04:51:43Z",
+   "body": "<a href=\"#\"><img alt=\"P2\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p2.svg?v=9\" align=\"top\"></a> **Python line exceeds limit** The new assignment is 139 characters long and violates the repository's 120-character Python line limit. Please wrap it before merging.\n\n```suggestion\n        litellm_model_response._hidden_params[  # pyright: ignore[reportPrivateUsage]  # no public accessor\n            \"response_cost\"\n        ] = response_cost\n```\n\n**Context Used:** AGENTS.md ([source](https://github.com/berriai/litellm/blob/main/AGENTS.md))\n\nNote: If this suggestion doesn't match your team's coding style, reply to this and let me know. I'll remember it for next time!"
+  },
+  {
+   "role": "author",
+   "path": "litellm/proxy/pass_through_endpoints/llm_provider_handlers/vertex_passthrough_logging_handler.py",
+   "created_at": "2026-10-11T05:12:22Z",
+   "body": "Wrapped the assignment under 120 chars in b1eecf3f5d, and merged main to clear the conflict that was blocking CI"
+  },
+  {
+   "role": "bot",
+   "path": "litellm/proxy/pass_through_endpoints/llm_provider_handlers/vertex_passthrough_logging_handler.py",
+   "created_at": "2026-10-17T23:51:05Z",
+   "body": "<!-- litereview:1f2dd1569b3041d8b1216157b60a3c9a:job:d3ee3b075045436cb439ae34db3816fd:finding:0 -->\n\n#### High · Custom-priced Vertex pass-through deployments are billed at the list price\n\n1. An operator configures a router deployment for a Vertex Gemini model with custom `input_cost_per_token`/`output_cost_per_token`. The router copies those rates into the deployment's `model_info`.\n2. A caller sends a non-streamed `:generateContent` request to `/vertex_ai/.../models/&lt;that model>`. `vertex_proxy_route` resolves the deployment, and `_init_kwargs_for_pass_through_endpoint` puts its `model_info` into `metadata`. At that point `use_custom_pricing_for_model` returns `True`.\n3. `_create_vertex_response_logging_payload_for_generate_content` prices the response with `litellm.completion_cost(model=..., vertex_location=...)`. That call does not receive custom pricing or the deployment id. This PR now stamps the result into `_hidden_params[\"response_cost\"]`.\n4. `Logging._process_hidden_params_and_response_cost` and `response_cost_calculator` return any stamped `response_cost` before they consider `custom_pricing`. The spend row therefore records the cost-map price instead of the deployment's custom rate. Before this PR, the non-streamed path fell through to the calculator and used the custom rate.\n\nThe same helper serves the interactions and `rawPredict` handlers, so those paths change the same way. I confirmed the before/after values by calling the handler directly with a local reproducer. I did not run a full proxy.\n\nSmallest fix: skip the stamp when `use_custom_pricing_for_model(logging_obj.litellm_params)` is true. Alternatively, pass `custom_pricing` and `router_model_id` into the helper's `completion_cost` call so the stamped value already honours the deployment rate.\n\n<details>\n<summary>Evidence</summary>\n\nLocal reproducer `/tmp/repro.py`: a `Logging` object with `litellm_params={\"metadata\": {\"model_info\": {\"id\": \"dep-1\", \"input_cost_per_token\": 1e-9, \"output_cost_per_token\": 1e-9}}}`, `litellm.model_cost[\"dep-1\"]` registered the way the router does it, `gemini-2.5-flash`, 1000 prompt and 1000 completion tokens, `locations/global`.\n\nHead 8278397: `non-stream -> 0.0028`, `model_call_details response_cost: 0.0028` (list price).\n\nSame script with the added `set_hidden_param` line removed (base behaviour): `non-stream -> 2.0000000000000003e-06`, `model_call_details response_cost: 2.0000000000000003e-06` (custom price).\n\nlitellm_logging.py `response_cost_calculator`: `if not ignore_stamped_cost and \"response_cost\" in hidden_params and hidden_params[\"response_cost\"] is not None: ... return hidden_params[\"response_cost\"]` runs before `custom_pricing = self._custom_pricing_for(...)`.\n\nlitellm_logging.py `_process_hidden_params_and_response_cost`: `elif \"response_cost\" in hidden_params: self.model_call_details[\"response_cost\"] = hidden_params[\"response_cost\"]`.\n\nllm_passthrough_endpoints.py `_resolve_vertex_model_from_router` returns `deployment_model_info`, which `vertex_proxy_route` stores on `request.state`. pass_through_endpoints.py then copies it to `_metadata[\"model_info\"]`.\n\nrouter.py around line 9920 copies `CustomPricingLiteLLMParams` fields into `_model_info` and calls `_register_deployment_in_model_cost(model_id=deployment.model_info.id, ...)`.\n\nThe streamed path already showed the list price at base (0.0028) for this setup, so the regression is specific to non-streamed calls.\n\n</details>\n\n[Latest summary by code-review](https://github.com/BerriAI/litellm/pull/44795#issuecomment-6243362071) · [View this review](https://litereview.onrender.com/runs/1f2dd1569b3041d8b1216157b60a3c9a) · Reviewed `827839794ff4`"
+  },
+  {
+   "role": "author",
+   "path": "litellm/proxy/pass_through_endpoints/llm_provider_handlers/vertex_passthrough_logging_handler.py",
+   "created_at": "2026-10-18T05:23:20Z",
+   "body": "Confirmed and fixed in 46f5573409: the stamp now uses deployment custom pricing via completion_cost, with a test covering streamed and non-streamed spend\n"
+  },
+  {
+   "role": "bot",
+   "path": "litellm/proxy/pass_through_endpoints/llm_provider_handlers/vertex_passthrough_logging_handler.py",
+   "created_at": "2026-10-18T05:30:14Z",
+   "body": "**Medium: Client metadata can select the billing model**\n\n`init_kwargs_for_pass_through_endpoint()` retains client `metadata.model_info` when no router deployment was resolved, such as Vertex requests using default credentials: an authenticated caller can invoke `gemini-2.5-pro` with `{\"metadata\":{\"model_info\":{\"id\":\"gemini-2.5-flash-lite\",\"input_cost_per_token\":0}}}` to activate custom pricing and stamp Flash Lite's cheaper registered cost, undercounting spend against their budget. Derive both the custom-pricing flag and deployment ID only from server-resolved deployment data, and ignore client pricing metadata when that data is absent."
+  },
+  {
+   "role": "author",
+   "path": "litellm/proxy/pass_through_endpoints/llm_provider_handlers/vertex_passthrough_logging_handler.py",
+   "created_at": "2026-10-18T06:18:28Z",
+   "body": "pass_through_request strips client metadata.model_info with _strip_client_pricing_overrides before init_kwargs_for_pass_through_endpoint runs, unless the key or team sets allow_client_pricing_override\n"
+  },
+  {
+   "role": "bot",
+   "path": "litellm/proxy/pass_through_endpoints/llm_provider_handlers/vertex_passthrough_logging_handler.py",
+   "created_at": "2026-10-18T06:19:54Z",
+   "body": "Thanks for the detail. I can't automatically confirm this is safe to dismiss, so I'm leaving the thread open for a maintainer to make the call."
+  },
+  {
+   "role": "contributor",
+   "path": "litellm/proxy/pass_through_endpoints/llm_provider_handlers/vertex_passthrough_logging_handler.py",
+   "created_at": "2026-10-18T07:23:15Z",
+   "body": "Superseded by 429e29e10f, which drops the builder's location-blind cost instead of stamping one, so the logger applies the deployment's custom price in both modes"
+  },
+  {
+   "role": "bot",
+   "path": "litellm/proxy/pass_through_endpoints/llm_provider_handlers/vertex_passthrough_logging_handler.py",
+   "created_at": "2026-10-18T07:26:53Z",
+   "body": "<!-- litereview:12d53544a1234f68909afd16ba6cb1b8:reply -->\n\n**Finding withdrawn**\n\nThe reply is correct. At head `429e29e1`, `_create_vertex_response_logging_payload_for_generate_content` only writes the location-aware cost into `kwargs[\"response_cost\"]`. It no longer stamps `_hidden_params`. The streamed path also calls `_drop_location_blind_stream_builder_cost`, which pops the builder's cost. Because no `response_cost` reaches the hidden params, `Logging.response_cost_calculator` skips its stamped-cost early return. It then reaches `_custom_pricing_for` and prices with the deployment's `model_info` rates. This now holds for both streamed and non-streamed calls. The unit tests check the custom price at the logger for both modes, and they fail when the old stamp is put back.\n\n<details>\n<summary>Evidence</summary>\n\n`vertex_passthrough_logging_handler.py:790-798` (head): the cost goes only into `kwargs[\"response_cost\"]`. There is no `set_hidden_param` or `_hidden_params` write.\n\n`vertex_passthrough_logging_handler.py:672-681`: `_drop_location_blind_stream_builder_cost` pops `response_cost` from the hidden params of the `stream_chunk_builder` result.\n\n`litellm_logging.py:1945-1956`: the stamped-cost return only fires when `hidden_params[\"response_cost\"]` is present and not `None`, which no longer happens on these paths.\n\n`tests/unit/.../test_vertex_passthrough_logging_handler.py:221-235` and `305-324`: the custom-price tests pass `model_info={\"id\": deployment, input/output rates}` and assert that the logger records `7*input + 1*output` at the custom rates, for streamed and non-streamed calls.\n\nRun on head: 22 passed. With the stamp temporarily put back after line 797, all 6 `custom_price` cases failed (`comparison failed`). I restored the file afterwards.\n\n`tests/integration/spend/test_vertex_passthrough_regional_uplift_spend.py` also asserts the custom price at the proxy level for finished and cut-off streams. I did not run this proxy test.\n\n</details>\n\nGitHub does not allow this App to resolve this thread. A repository maintainer must do it manually.\n\nReviewed `429e29e10f71` · [View follow-up](https://litereview.onrender.com/runs/12d53544a1234f68909afd16ba6cb1b8)"
+  },
+  {
+   "role": "bot",
+   "path": "tests/unit/proxy/pass_through_endpoints/test_streaming_handler.py",
+   "created_at": "2026-10-18T07:38:09Z",
+   "body": "<a href=\"#\"><img alt=\"P2\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p2.svg?v=9\" align=\"top\"></a> **New tests miss coding requirements**\n\nNew tests omit required `Final` annotations and parameter types. `url_route` also exceeds 120 characters. Follow these `AGENTS.md` requirements before merging\n\n**Context Used:** AGENTS.md ([source](https://github.com/berriai/litellm/blob/main/AGENTS.md))\n\nNote: If this suggestion doesn't match your team's coding style, reply to this and let me know. I'll remember it for next time!"
+  },
+  {
+   "role": "contributor",
+   "path": "tests/unit/proxy/pass_through_endpoints/test_streaming_handler.py",
+   "created_at": "2026-10-18T08:11:57Z",
+   "body": "Added Final, parameter and return types, and wrapped the long lines in the new tests in 833df09c37"
+  },
+  {
+   "role": "bot",
+   "path": "litellm/proxy/pass_through_endpoints/llm_provider_handlers/vertex_passthrough_logging_handler.py",
+   "created_at": "2026-10-18T19:07:53Z",
+   "body": "## CodeQL / Incomplete URL substring sanitization\n\nThe string [generativelanguage.googleapis.com](1) may be at an arbitrary position in the sanitized URL.\n\n[Show more details](https://github.com/BerriAI/litellm/security/code-scanning/15123)"
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-10-06T04:51:39Z",
+   "body": "<!-- greptile_summary -->\n\n<h2><a href=\"https://app.greptile.com/api/retrigger?id=75349192\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://greptile-static-assets.s3.amazonaws.com/badges/RetriggerDark.svg?v=2\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://greptile-static-assets.s3.amazonaws.com/badges/Retrigger.svg?v=2\"><img alt=\"Retrigger\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/Retrigger.svg?v=2\" align=\"right\"></picture></a><a href=\"https://app.greptile.com/litellm/github/berriai/litellm/-/pull/44795\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://greptile-static-assets.s3.amazonaws.com/badges/ViewInGreptileDark.svg?v=2\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://greptile-static-assets.s3.amazonaws.com/badges/ViewInGreptile.svg?v=2\"><img alt=\"View in Greptile\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/ViewInGreptile.svg?v=2\" align=\"right\"></picture></a>Confidence Score: 5/5</h2>\n\n**[Critical impact]** The PR appears safe to merge, with no new actionable issues found\n\n<h3>Summary</h3>\n\nThe PR lets the logger price streamed Vertex calls using the endpoint’s region and deployment prices. It also passes the deployment’s location into native Google calls and prices interrupted streams through the logger\n\nSince the previous review, non-streamed Gemini calls also leave pricing to the logger. New tests compare streamed and non-streamed Gemini prices, and the earlier test-style finding is fixed\n\n- Vertex streams use the logger’s regional and deployment prices.\n- Interrupted Vertex streams use logger pricing for partial usage.\n- Google GenAI logging uses the deployment’s Vertex location.\n- Gemini pass-through calls leave their final price to the logger.\n\n<!-- greptile_confidence_score:5 -->\n\n<sub>Reviews (3) · Last reviewed commit: [\"fix(proxy): let the logger price non-str...\"](https://github.com/berriai/litellm/commit/833df09c37e794496ac3cc0a703b279e939a0dad) · [Reviewed by Greptile](https://www.greptile.com/?utm_source=greptile_review&utm_medium=github&utm_campaign=review_public&utm_content=berriai/litellm)</sub>"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-06T04:56:40Z",
+   "body": "<!-- __CODSPEED_PERFORMANCE_REPORT_COMMENT__ -->\n## Merging this PR will **not alter performance**\n\n<details>\n<summary>:warning: <b>1 benchmark spent significant time in system calls</b></summary>\n\n> System calls cannot be consistently instrumented, so they are not included in the measure, which understates the real cost. Please switch to [the Walltime instrument](https://codspeed.io/docs/instruments/walltime?utm_source=github&utm_medium=comment-v2&utm_content=significant_sys_time) to accurately measure system calls.\n>\n> [Measurement and system calls](https://codspeed.io/docs/instruments/cpu?utm_source=github&utm_medium=comment-v2&utm_content=significant_sys_time#system-calls)\n>\n> - [`` test_completion_streaming ``](https://app.codspeed.io/BerriAI/litellm/branches/pcbeingused333%3Afix-vertex-passthrough-stream-regional-cost?uri=tests%2Fbenchmarks%2Ftest_inference_benchmarks.py%3A%3Atest_completion_streaming&runnerMode=Simulation&utm_source=github&utm_medium=comment-v2&utm_content=benchmark)\n\n</details>\n\n`✅ 32` untouched benchmarks  \n\n\n\n\n\n---\n\n<sub>Comparing <code>pcbeingused333:fix-vertex-passthrough-stream-regional-cost</code> (775a523) with <code>main</code> (581b7d1)</sub>\n\n<a href=\"https://app.codspeed.io/BerriAI/litellm/branches/pcbeingused333%3Afix-vertex-passthrough-stream-regional-cost?utm_source=github&utm_medium=comment-v2&utm_content=button\">\n  <picture>\n    <source media=\"(prefers-color-scheme: dark)\" srcset=\"https://codspeed.io/pr-report/open-in-codspeed-dark.svg\">\n    <source media=\"(prefers-color-scheme: light)\" srcset=\"https://codspeed.io/pr-report/open-in-codspeed-light.svg\">\n    <img alt=\"Open in CodSpeed\" src=\"https://codspeed.io/pr-report/open-in-codspeed-light.svg\" width=\"169\" height=\"32\">\n  </picture>\n</a>\n\n"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-06T04:57:18Z",
+   "body": "## [Codecov](https://app.codecov.io/gh/BerriAI/litellm/pull/44795?dropdown=coverage&src=pr&el=h1&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=BerriAI) Report\n:white_check_mark: All modified and coverable lines are covered by tests.\n\n:loudspeaker: Thoughts on this report? [Let us know!](https://github.com/codecov/feedback/issues/255)"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-10-17T23:41:11Z",
+   "body": "@litereview code-review"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-17T23:51:01Z",
+   "body": "<!-- litereview:summary:b0732bd229e5663f9efcbb152151b7d4ce3ca8f35c5981456cd9adf27d49f2f3 -->\n\n### ⚠️ code-review\n\n## Review incomplete\n\nScope: full · Full PR review.\n\n**Review incomplete.**\n\nThe review could not complete.\n\n**Couldn’t complete**\n\n- The model request failed (HTTP 400).\n- Review harness exit code: 1.\n- Real testing evidence: The reviewer did not provide evidence for this saved rule.\n- Compatibility requirements: The reviewer did not provide evidence for this saved rule.\n- Changed behavior and result consistency: The reviewer did not provide evidence for this saved rule.\n\n<details>\n<summary>Checks and execution details</summary>\n\n- **Not run · Real testing evidence** (required): The reviewer did not provide evidence for this saved rule.\n- **Not run · Compatibility requirements** (required): The reviewer did not provide evidence for this saved rule.\n- **Not run · Changed behavior and result consistency** (required): The reviewer did not provide evidence for this saved rule.\n\n</details>\n\n---\n[View review](https://litereview.onrender.com/runs/5df0ccb18759415e902b39581e50fc04) · Reviewed [`775a52354ff1`](https://github.com/BerriAI/litellm/commit/775a52354ff10f658326549b8d1be9794f8b46d2)"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-18T05:30:22Z",
+   "body": "### PR overview\n\nAll previously flagged issues have been addressed. No open security concerns remain on this pull request.\n\n### Security review\n\nNo open security issues remain on this pull request.\n\n**Fixed/addressed:** 1 · **PR risk:** 0/10"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-10-18T07:23:14Z",
+   "body": "@pcbeingused333 thanks for 46f5573409. I merged it but kept the version that drops the builder's stale cost, so the logger applies custom pricing everywhere"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-10-18T07:23:22Z",
+   "body": "@litereview code-review"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-10-18T07:32:41Z",
+   "body": "@greptileai"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-10-18T08:08:53Z",
+   "body": "@litereview code-review"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-10-18T08:21:17Z",
+   "body": "@greptileai"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-10-18T19:01:56Z",
+   "body": "@litereview code-review"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-10-18T19:08:54Z",
+   "body": "@litereview code-review"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-10-18T19:36:09Z",
+   "body": "@litereview code-review"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-10-19T07:26:49Z",
+   "body": "@litereview code-review"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-10-19T07:28:42Z",
+   "body": "bugbot run"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-10-19T07:36:25Z",
+   "body": "@litereview code-review"
+  }
+ ]
+}

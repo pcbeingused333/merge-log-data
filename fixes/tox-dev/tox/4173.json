@@ -1,0 +1,40 @@
+{
+ "repo": "tox-dev/tox",
+ "number": 4173,
+ "url": "https://github.com/tox-dev/tox/pull/4173",
+ "title": "🐛 fix(pylock): use default-groups when no dependency group is selected",
+ "merged_at": "2026-10-18T06:56:30Z",
+ "files": [
+  {
+   "filename": "docs/changelog/4173.bugfix.rst",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+Installing from a ``pylock.toml`` with no :ref:`dependency_groups` selected now uses the lock file's ``default-groups``,\n+as :PEP:`751` specifies. Previously packages marked ``'default' in dependency_groups`` (as written by ``pdm export -f\n+pylock``) were skipped - by :user:`pcbeingused333`."
+  },
+  {
+   "filename": "docs/explanation.rst",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -253,7 +253,8 @@ exact versions, markers, and artifact URLs for every package.\n per-package markers like ``'docs' in extras`` or ``'dev' in dependency_groups``. Use the existing :ref:`extras` and\n :ref:`dependency_groups` settings to select which groups to include — tox evaluates these markers together with platform\n markers (``sys_platform``, ``python_version``, etc.) against the **target** Python interpreter (not the host running\n-tox) to filter packages at install time.\n+tox) to filter packages at install time. When no dependency groups are selected, the groups listed in the lock file's\n+``default-groups`` are used, as :PEP:`751` specifies.\n \n **How it works today:** pip does not yet support installing from ``pylock.toml`` directly. tox parses the lock file\n using the ``packaging.pylock`` module, evaluates markers to filter packages, transpiles matching packages to a temporary"
+  },
+  {
+   "filename": "src/tox/tox_env/python/pylock.py",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 5,
+   "patch": "@@ -2,7 +2,7 @@\n \n import tomllib\n from dataclasses import dataclass, field\n-from typing import TYPE_CHECKING\n+from typing import TYPE_CHECKING, Final\n \n from packaging.pylock import Package, PylockValidationError\n from packaging.pylock import Pylock as PackagingPylock\n@@ -32,19 +32,23 @@ def install_lines(self) -> list[str]:\n         except PylockValidationError as exc:\n             msg = f\"invalid pylock file {self.path}: {exc}\"\n             raise Fail(msg) from exc\n-        entries = [self._to_entry(pkg) for pkg in parsed.packages if self._is_active(pkg)]\n+        # PEP 751: when no dependency groups are selected, the lock's default-groups apply\n+        groups: Final[frozenset[str]] = self.groups or frozenset(parsed.default_groups or ())\n+        entries: Final[list[tuple[str, list[str]]]] = [\n+            self._to_entry(pkg) for pkg in parsed.packages if self._is_active(pkg, groups)\n+        ]\n         if all(hashes for _, hashes in entries):\n             # pip's hash-checking mode is all-or-nothing for a requirements file: verify when every line can carry\n             # a hash, otherwise fall back to unverified installs (directory/VCS sources cannot be hashed)\n             return [f\"{line} {' '.join(f'--hash={h}' for h in hashes)}\" for line, hashes in entries]\n         return [line for line, _ in entries]\n \n-    def _is_active(self, pkg: Package) -> bool:\n+    def _is_active(self, pkg: Package, groups: frozenset[str]) -> bool:\n         env: dict[str, str | frozenset[str]] = {**self.marker_env}\n         if self.extras:\n             env[\"extras\"] = self.extras\n-        if self.groups:\n-            env[\"dependency_groups\"] = self.groups\n+        if groups:\n+            env[\"dependency_groups\"] = groups\n         if pkg.marker is not None and not pkg.marker.evaluate(env, context=\"lock_file\"):\n             return False\n         full_version = self.marker_env.get(\"python_full_version\")"
+  },
+  {
+   "filename": "tests/tox_env/python/test_pylock.py",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -243,6 +243,26 @@ def test_pylock_no_reinstall_on_rerun(tox_project: ToxProjectCreator) -> None:\n             \"alpha==1.0.0 --hash=sha256:abc\\nruff==0.5.0 --hash=sha256:def\",\n             id=\"dependency-groups\",\n         ),\n+        pytest.param(\n+            \"\",\n+            'dependency-groups = [\"dev\"]\\ndefault-groups = [\"default\"]\\n',\n+            [\n+                (\"six\", \"1.17.0\", \"abc\", \"'default' in dependency_groups\"),\n+                (\"ruff\", \"0.5.0\", \"def\", \"'dev' in dependency_groups\"),\n+            ],\n+            \"six==1.17.0 --hash=sha256:abc\",\n+            id=\"default-groups-when-none-selected\",\n+        ),\n+        pytest.param(\n+            'dependency_groups = [\"dev\"]',\n+            'dependency-groups = [\"dev\"]\\ndefault-groups = [\"default\"]\\n',\n+            [\n+                (\"six\", \"1.17.0\", \"abc\", \"'default' in dependency_groups\"),\n+                (\"ruff\", \"0.5.0\", \"def\", \"'dev' in dependency_groups\"),\n+            ],\n+            \"ruff==0.5.0 --hash=sha256:def\",\n+            id=\"selected-group-excludes-default\",\n+        ),\n     ],\n )\n def test_pylock_filters_by_selected_group("
+  }
+ ],
+ "test_files": [
+  "tests/tox_env/python/test_pylock.py"
+ ]
+}

@@ -1,0 +1,57 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1077,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1077",
+ "title": "Send Ollama chat sampling parameters in options",
+ "merged_at": "2026-10-15T12:00:51Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n - [SECURITY]: A change which fixes a security vulnerability.\n \n ## [Unreleased]\n+- [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1077] Send `temperature`, `seed`, `top_p`, `max_tokens` (as `num_predict`) and the other sampling parameters of `Langchain::LLM::Ollama#chat` in `options`, where Ollama reads them; at the top level they were ignored, including the default `temperature: 0.0`.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1073] Raise `Langchain::LLM::Anthropic`'s default `max_tokens` from 256 to 16,000; Claude Sonnet 5 and later, Haiku 5.5 and Opus 5 and later think by default within that cap, so they often stopped before writing any text and `#chat_completion` returned `nil`.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1072] Ask the LLM with `#chat` in `Langchain::Chunker::Semantic`, the Ragas evals and `Vectorsearch::Base#similarity_search_with_hyde`; they called `#complete`, which Google Gemini, Vertex AI and Mistral AI don't implement, and the semantic chunker passed `max_tokens_to_sample:`, which `Langchain::LLM::Anthropic#complete` rejected.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1069] Honor `tables:` and `exclude_tables:` in `Langchain::Tool::Database#list_tables` and `#dump_schema`, list the key columns of a composite primary key, and drop the trailing comma from the schema of a table without a primary key."
+  },
+  {
+   "filename": "lib/langchain/llm/ollama.rb",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -21,6 +21,19 @@ class Ollama < Base\n       options: {}\n     }.freeze\n \n+    # Unified chat parameters that Ollama only reads from `options`, with their Ollama names\n+    CHAT_OPTIONS = {\n+      temperature: :temperature,\n+      top_p: :top_p,\n+      top_k: :top_k,\n+      seed: :seed,\n+      stop: :stop,\n+      max_tokens: :num_predict,\n+      frequency_penalty: :frequency_penalty,\n+      presence_penalty: :presence_penalty,\n+      repetition_penalty: :repeat_penalty\n+    }.freeze\n+\n     EMBEDDING_SIZES = {\n       codellama: 4_096,\n       \"dolphin-mixtral\": 4_096,\n@@ -182,6 +195,7 @@ def complete(\n     #   images (optional): a list of images to include in the message (for multimodal models such as llava)\n     def chat(messages:, model: nil, **params, &block)\n       parameters = chat_parameters.to_params(params.merge(messages:, model:, stream: block_given?)) # rubocop:disable Performance/BlockGivenWithExplicitBlock\n+      parameters = move_chat_options(parameters)\n       responses_stream = []\n \n       client.post(\"api/chat\", parameters) do |req|\n@@ -286,6 +300,17 @@ def auth_headers\n       {\"Authorization\" => \"Bearer #{@api_key}\"}\n     end\n \n+    # Ollama ignores sampling parameters at the top level of /api/chat, like #complete and #embed\n+    # already send them. Values given in `options:` win over the unified parameters.\n+    def move_chat_options(parameters)\n+      options = CHAT_OPTIONS.each_with_object({}) do |(param, option), moved|\n+        moved[option] = parameters.delete(param) if parameters.key?(param)\n+      end\n+      return parameters if options.empty?\n+\n+      parameters.merge(options: options.merge(parameters[:options] || {}))\n+    end\n+\n     def json_responses_chunk_handler(&block)\n       proc do |chunk, _size|\n         chunk.split(\"\\n\").each do |chunk_line|"
+  },
+  {
+   "filename": "spec/fixtures/vcr_cassettes/Langchain_LLM_Ollama_chat_returns_a_chat_completion.yml",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -5,7 +5,7 @@ http_interactions:\n     uri: http://localhost:11434/api/chat\n     body:\n       encoding: UTF-8\n-      string: '{\"messages\":[{\"role\":\"user\",\"content\":\"Hey! How are you?\"}],\"model\":\"llama3.2\",\"stream\":false,\"temperature\":0.0}'\n+      string: '{\"messages\":[{\"role\":\"user\",\"content\":\"Hey! How are you?\"}],\"model\":\"llama3.2\",\"stream\":false,\"options\":{\"temperature\":0.0}}'\n     headers:\n       User-Agent:\n       - Faraday v2.12.0"
+  },
+  {
+   "filename": "spec/fixtures/vcr_cassettes/Langchain_LLM_Ollama_chat_when_passing_a_block_returns_a_chat_completion.yml",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -5,7 +5,7 @@ http_interactions:\n     uri: http://localhost:11434/api/chat\n     body:\n       encoding: UTF-8\n-      string: '{\"messages\":[{\"role\":\"user\",\"content\":\"Hey! How are you?\"}],\"model\":\"llama3.2\",\"stream\":true,\"temperature\":0.0}'\n+      string: '{\"messages\":[{\"role\":\"user\",\"content\":\"Hey! How are you?\"}],\"model\":\"llama3.2\",\"stream\":true,\"options\":{\"temperature\":0.0}}'\n     headers:\n       User-Agent:\n       - Faraday v2.12.0"
+  },
+  {
+   "filename": "spec/fixtures/vcr_cassettes/Langchain_LLM_Ollama_initialize_when_default_options_are_passed_get_passed_to_consecutive_chat_call.yml",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -6,7 +6,7 @@ http_interactions:\n     body:\n       encoding: UTF-8\n       string: '{\"messages\":[{\"role\":\"user\",\"content\":\"Return data from the following\n-        sentence: John is a 30 year old software engineer living in SF.\"}],\"model\":\"llama3.2\",\"stream\":true,\"temperature\":0.0,\"options\":{\"num_ctx\":8192},\"format\":\"json\"}'\n+        sentence: John is a 30 year old software engineer living in SF.\"}],\"model\":\"llama3.2\",\"stream\":true,\"options\":{\"temperature\":0.0,\"num_ctx\":8192},\"format\":\"json\"}'\n     headers:\n       User-Agent:\n       - Faraday v2.12.0"
+  },
+  {
+   "filename": "spec/lib/langchain/llm/ollama_spec.rb",
+   "status": "modified",
+   "additions": 43,
+   "deletions": 1,
+   "patch": "@@ -37,7 +37,7 @@\n       end\n \n       it \"get passed to consecutive chat() call\", vcr: {record: :once} do\n-        expect(client).to receive(:post).with(\"api/chat\", hash_including(format: \"json\", options: {num_ctx: 8_192})).and_call_original\n+        expect(client).to receive(:post).with(\"api/chat\", hash_including(format: \"json\", options: {temperature: 0.0, num_ctx: 8_192})).and_call_original\n         expect(JSON.parse(response.chat_completion)).to eq({\"name\" => \"John\", \"age\" => 30, \"occupation\" => \"software engineer\", \"location\" => \"SF\"})\n       end\n     end\n@@ -130,6 +130,48 @@\n       response\n     end\n \n+    context \"with sampling parameters\" do\n+      include WebMock::API\n+\n+      let(:body) { {\"model\" => \"llama3.2\", \"message\" => {\"role\" => \"assistant\", \"content\" => \"Hi\"}, \"done\" => true}.to_json }\n+      let(:sent) { [] }\n+\n+      # Outside a cassette the suite disables WebMock; this stubs the endpoint for these examples only\n+      around do |example|\n+        WebMock.enable!\n+        example.run\n+      ensure\n+        WebMock.reset!\n+        WebMock.disable!\n+      end\n+\n+      before do\n+        stub_request(:post, \"#{default_url}/api/chat\").to_return do |request|\n+          sent << JSON.parse(request.body)\n+          {body: body}\n+        end\n+      end\n+\n+      it \"sends them in options, where Ollama reads them\" do\n+        subject.chat(messages: messages, temperature: 0.4, seed: 7, top_p: 0.9, max_tokens: 50, stop: [\"\\n\"])\n+\n+        expect(sent.first).not_to include(\"temperature\", \"seed\", \"top_p\", \"max_tokens\", \"stop\")\n+        expect(sent.first[\"options\"]).to eq(\"temperature\" => 0.4, \"seed\" => 7, \"top_p\" => 0.9, \"num_predict\" => 50, \"stop\" => [\"\\n\"])\n+      end\n+\n+      it \"sends the default temperature in options\" do\n+        subject.chat(messages: messages)\n+\n+        expect(sent.first[\"options\"]).to eq(\"temperature\" => 0.0)\n+      end\n+\n+      it \"lets options: override them\" do\n+        subject.chat(messages: messages, temperature: 0.4, options: {temperature: 0.9, num_ctx: 4096})\n+\n+        expect(sent.first[\"options\"]).to eq(\"temperature\" => 0.9, \"num_ctx\" => 4096)\n+      end\n+    end\n+\n     context \"when passing a block\" do\n       let(:response) { subject.chat(messages: messages) { |resp| streamed_responses << resp } }\n       let(:streamed_responses) { [] }"
+  }
+ ],
+ "test_files": [
+  "spec/fixtures/vcr_cassettes/Langchain_LLM_Ollama_chat_returns_a_chat_completion.yml",
+  "spec/fixtures/vcr_cassettes/Langchain_LLM_Ollama_chat_when_passing_a_block_returns_a_chat_completion.yml",
+  "spec/fixtures/vcr_cassettes/Langchain_LLM_Ollama_initialize_when_default_options_are_passed_get_passed_to_consecutive_chat_call.yml",
+  "spec/lib/langchain/llm/ollama_spec.rb"
+ ]
+}

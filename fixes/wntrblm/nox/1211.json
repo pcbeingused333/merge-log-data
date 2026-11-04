@@ -1,0 +1,26 @@
+{
+ "repo": "wntrblm/nox",
+ "number": 1211,
+ "url": "https://github.com/wntrblm/nox/pull/1211",
+ "title": "fix: read script metadata after a UTF-8 BOM",
+ "merged_at": "2026-10-20T20:12:11Z",
+ "files": [
+  {
+   "filename": "nox/project.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -100,7 +100,8 @@ def _load_toml_file(filepath: Path) -> dict[str, Any]:\n def _load_script_block(filepath: Path, *, missing_ok: bool) -> dict[str, Any]:\n     name = \"script\"\n     try:\n-        script = filepath.read_text(encoding=\"utf-8\")\n+        # Decode like Python does, skipping a UTF-8 BOM that would hide a block on the first line.\n+        script = filepath.read_text(encoding=\"utf-8-sig\")\n     except FileNotFoundError:\n         if missing_ok:\n             return {}"
+  },
+  {
+   "filename": "tests/test_toml.py",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -52,6 +52,24 @@ def test_load_script_block(tmp_path: Path, example: str) -> None:\n     assert toml[\"dependencies\"] == [\"requests<3\", \"rich\"]\n \n \n+def test_load_script_block_after_bom(tmp_path: Path) -> None:\n+    filepath = tmp_path / \"example.py\"\n+    filepath.write_text(\n+        textwrap.dedent(\n+            \"\"\"\\\n+            # /// script\n+            # dependencies = [\"rich\"]\n+            # ///\n+            import rich\n+            \"\"\"\n+        ),\n+        encoding=\"utf-8-sig\",\n+    )\n+\n+    toml = nox.project.load_toml(filepath)\n+    assert toml[\"dependencies\"] == [\"rich\"]\n+\n+\n def test_load_no_script_block(tmp_path: Path) -> None:\n     filepath = tmp_path / \"example.py\"\n     filepath.write_text("
+  }
+ ],
+ "test_files": [
+  "tests/test_toml.py"
+ ]
+}

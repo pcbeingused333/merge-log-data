@@ -1,0 +1,141 @@
+{
+ "repo": "rubyforgood/human-essentials",
+ "number": 5656,
+ "url": "https://github.com/rubyforgood/human-essentials/pull/5656",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-09-04T19:22:22Z",
+   "body": ""
+  },
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-09-13T14:45:46Z",
+   "body": ""
+  },
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-09-13T14:46:57Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-09-13T21:42:35Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-09-13T21:42:37Z",
+   "body": ""
+  },
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-09-18T19:19:53Z",
+   "body": ""
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-09-25T19:03:02Z",
+   "body": "Passes tech review - over to QA @janeewheatley @ruestitch "
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "collaborator",
+   "path": "app/models/product_drive_participant.rb",
+   "created_at": "2026-09-04T19:20:49Z",
+   "body": "I feel like adding a Postgres function with something like this would be more generally useful. We know we want to apply this ordering to other places. You can look at something like [fx](https://github.com/teoljungberg/fx) to handle it."
+  },
+  {
+   "role": "collaborator",
+   "path": "app/models/product_drive_participant.rb",
+   "created_at": "2026-09-04T19:22:18Z",
+   "body": "I'm not sure that was part of the original requirements (only if the string starts with a number, not if there's a number in the middle of the string). @ruestitch thoughts? That might simplify this function."
+  },
+  {
+   "role": "collaborator",
+   "path": "app/models/product_drive_participant.rb",
+   "created_at": "2026-09-13T14:45:46Z",
+   "body": "Agreed that the Postgres solution is better long term, do we want a step in the right direction first? What's the LOE for the optimal shared function in Postgres? "
+  },
+  {
+   "role": "collaborator",
+   "path": "app/models/product_drive_participant.rb",
+   "created_at": "2026-09-13T14:46:57Z",
+   "body": "From reviewing this a few times with others, the solution seems like it should work for natural sorting \r\n\r\nAgree, store 9 should come before store 10, requiring number and letter sort to be distinct, and to sort numerically in cases of numbers \r\n\r\nBUT this is complicated for delivering a sustainable solution across all use cases, which may include alphanumeric and instances of 2nd, 4th type entries, so we should compare this value add to the long view of the Postgres solution you mentioned, @dorner "
+  },
+  {
+   "role": "author",
+   "path": "app/models/product_drive_participant.rb",
+   "created_at": "2026-09-13T21:42:35Z",
+   "body": "LOE for the two versions is genuinely different, which is why I'd frame this as staged:\n\n- **Leading-digit-only** (`business_name` starts with a number): collapses to one expression, roughly `CASE WHEN business_name ~ '^[0-9]' THEN ... END`, wrapped as a single `fx`-managed function. Half a day including the migration and updating both call sites.\n- **Full natural sort** (digit runs anywhere in the string — what this PR's Ruby implementation actually does, verified by the \"Store 2\"/\"Store 9\"/\"Store 10\" specs): doesn't reduce to a one-liner. It needs to tokenize the string into alternating text/number spans and build a sortable key from them, which in plain SQL means a plpgsql function looping over `regexp_matches`, not an expression. Different order of effort, and I'd rather not build it twice.\n\nGiven that gap: this PR as the interim step (Ruby-level, already green at 11/11), then the Postgres function once the scope question in the other thread is settled. I can start the full version now if that's the target, or the leading-digit one if that's enough."
+  },
+  {
+   "role": "author",
+   "path": "app/models/product_drive_participant.rb",
+   "created_at": "2026-09-13T21:42:37Z",
+   "body": "That matches what I'd propose: scope this to what the current data actually needs rather than full generality (alphanumeric, \"2nd\"/\"4th\", etc.), since there's no evidence any of that appears in `business_name` today — only the digit-run case (\"Store 9\" vs \"Store 10\") is covered by the existing specs. If mid-name digit runs turn out to be the only real case, that's also the simpler of the two Postgres options in the other thread — happy to build to whichever scope you land on."
+  },
+  {
+   "role": "collaborator",
+   "path": "app/models/product_drive_participant.rb",
+   "created_at": "2026-09-18T19:19:53Z",
+   "body": "Sorry @ruestitch not sure I understood your comment - are you saying that \"Store 9\" should come before \"Store 10\"? Because in that case the number is in the middle of the string, not the beginning, which means the first Postgres solution will _not_ work."
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-08-29T00:45:00Z",
+   "body": "Pushed a fix for the Brakeman failure — it was mine, and it had been red since I opened this.\n\n`NaturallySortable#natural_order` interpolated its argument into `Arel.sql`, which Brakeman flags as SQL injection (Medium confidence). Rather than add the fingerprint to `config/brakeman.ignore`, I removed the cause: the expression is now a literal constant `DISPLAY_NAME_ORDER` on `ProductDriveParticipant`, with no interpolation, so nothing can carry a value in. The concern is gone — it only ever had one consumer, so it was an abstraction ahead of its need.\n\nI also rebased onto current `main`, which clears a second Brakeman warning: this branch still carried Rails 8.0.2.1 and `main` is on 8.1.3.1.\n\nVerified locally with Brakeman 8.0.5 — `Security Warnings: 0`, exit 0, same as `main`. The ordering behaviour is unchanged and the existing specs still cover both cases (fallback to `contact_name`, and \"Store 2\" / \"Store 9\" / \"Store 10\").\n\nThe workflows are currently showing `action_required`, so they'll need an approval to run.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-09-02T21:43:08Z",
+   "body": "Quick update now that CI is green here — 11/11 on d3a1ffb4. This PR had been showing a Brakeman failure from the run before my fix, so anyone glancing at it would have seen it as unverified. That's resolved.\n\nFlagging the current state of main rather than the history: `ProductDriveParticipant` still has\n\n```ruby\nscope :alphabetized, -> { order(:contact_name) }\n```\n\nso the two drop-downs from #5593 — new donation, and the donations filter — are still ordered by a field the user never sees. This PR orders by `business_name`, which is what the drop-down displays, with natural ordering for numbers, as a literal constant so Brakeman stays clean.\n\n@dorner, this is the \"fix the ones we know about\" half of what you outlined on Aug 14; the survey of the rest is in the issue thread. Happy to rebase or split it if that's easier to review.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-09-06T03:45:27Z",
+   "body": "Thanks @dorner.\n\nOn the Postgres function: agreed. If this ordering is going to be reused in other places, a function is a better home for it than a scope literal per model, and `fx` would handle the migration and the schema-dump side.\n\nThe open question is the one you raised with @ruestitch, and it decides how the function is written. The current version natural-sorts digit runs *anywhere* in the string (`\"Store 9\"` before `\"Store 10\"`, even mid-name). If the requirement is only \"starts with a number\", the function collapses to something much simpler. I'd rather build it around the answer than build it twice, so I'll hold the implementation until that's settled — or, if you'd prefer to iterate on a live PR, I can push the leading-digits-only version now and adjust.\n\nMinor flag: `fx` hooks the schema dumper, and the current diff notes the schema is maintained as `schema.rb`. Assuming a `create_function` migration is fine here, which I expect it is.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-09-09T16:43:05Z",
+   "body": "@dorner @ruestitch — this is only waiting on the sort-scope question so I build the function once: natural-sort on any digit run in the string (`\"Store 9\"` before `\"Store 10\"`, even mid-name), or only when the name starts with a number? The leading-digits case collapses the Postgres function to roughly a `CASE WHEN business_name ~ '^[0-9]'` branch.\n\nOnce you pick, I'll push it as a `create_function` migration via `fx`. CI is green (11/11 on `d3a1ffb4`)."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-09-11T00:55:04Z",
+   "body": "@dorner @ruestitch — still just waiting on the sort-scope call: natural-sort on any digit run, or only when `business_name` starts with a number. Once you pick, I'll push the `fx` `create_function` migration the same day.\n\nCI has been green here since Sep 2 (11/11 on `d3a1ffb4`); `ProductDriveParticipant.alphabetized` is still `order(:contact_name)` on `main`.\n"
+  },
+  {
+   "role": "collaborator",
+   "created_at": "2026-09-11T18:46:20Z",
+   "body": "@pcbeingused333 we're all volunteers and we'll get to this when we can. There's no need to continue bumping it."
+  },
+  {
+   "role": "collaborator",
+   "created_at": "2026-09-20T14:16:36Z",
+   "body": "@pcbeingused333 we've aligned on using the simple (leading digit only) approach, we don't need to tokenize things. Thank you!"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-09-21T23:55:39Z",
+   "body": "@dorner @ruestitch — pushed the Postgres function on `6361fe3d9` (rebased onto current `main`).\n\n`leading_digit_sort_key(text)` (`db/functions/leading_digit_sort_key_v01.sql`, managed via `fx`) zero-pads a run of digits only when it *leads* the string, per the scope from the thread above — a one-line `CASE`, not a tokenizing loop, so it's a plain function other `alphabetized` scopes can call directly.\n\n```sql\nCREATE FUNCTION leading_digit_sort_key(value text) RETURNS text AS $$\n  SELECT CASE\n    WHEN lower(coalesce(value, '')) ~ '^[0-9]+'\n    THEN lpad(substring(lower(value) from '^[0-9]+'), 20, '0')\n         || substring(lower(value) from '^[0-9]+(.*)$')\n    ELSE lower(coalesce(value, ''))\n  END;\n$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;\n```\n\nOne consequence worth flagging explicitly: with this scope, a digit run in the *middle* of the name no longer natural-sorts — `\"Store 9\"` sorts before `\"Store 10\"` alphabetically now, not numerically, since the `9`/`10` isn't at position 0. That's the tradeoff @dorner's Sep 18 comment was pointing at. I split the old combined spec in two: one for a leading digit (`\"2 Warehouse Way\"` before `\"10 Warehouse Way\"`), and one that pins the mid-string case as a documented limitation rather than leaving it to silently regress.\n\nVerified on `6361fe3d9`: `rspec spec/models/product_drive_participant_spec.rb spec/models/view/product_drive_participants_spec.rb spec/requests/product_drive_participants_requests_spec.rb` — 38/38. `rubocop` and `brakeman` both clean. `schema.rb` carries the function definition via `fx`'s schema dumper, so `db:schema:load` recreates it — no `structure.sql` switch needed.\n"
+  },
+  {
+   "role": "collaborator",
+   "created_at": "2026-10-11T14:59:16Z",
+   "body": "Looks good to me on those specific filters called out in the issue.  Note: this does not alphabetize our other dropdowns like the source dropdown on our New Donation page @ruestitch \r\n<img width=\"790\" height=\"441\" alt=\"image\" src=\"https://github.com/user-attachments/assets/a53ddb4b-3732-4608-b926-dcfcf6c2a673\" />\r\n"
+  }
+ ]
+}

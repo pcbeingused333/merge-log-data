@@ -1,0 +1,33 @@
+{
+ "repo": "pyfenn/fenn",
+ "number": 277,
+ "url": "https://github.com/pyfenn/fenn/pull/277",
+ "title": "Add .docx support to RAG document loader",
+ "merged_at": "2026-08-06T17:10:48Z",
+ "files": [
+  {
+   "filename": "fenn/agents/rag/loader.py",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -6,6 +6,7 @@\n     \".txt\",\n     \".md\",\n     \".pdf\",\n+    \".docx\",\n     \".json\",\n     \".py\",\n     \".js\",\n@@ -95,6 +96,8 @@ def _read_file(path):\n     try:\n         if path.suffix == \".pdf\":\n             return _read_pdf(path)\n+        if path.suffix == \".docx\":\n+            return _read_docx(path)\n         return path.read_text(encoding=\"utf-8\")\n     except (OSError, UnicodeDecodeError, ValueError, RuntimeError) as e:\n         logger.error(f\"[cofone] read error {path.name}: {e}\")\n@@ -124,6 +127,33 @@ def _read_pdf(path):\n         )\n \n \n+def _read_docx(path):\n+    \"\"\"\n+    Extract text from a Word (.docx) file using python-docx.\n+    Reads both paragraphs and table cells.\n+    Requires: pip install \"cofone[docx]\"  or  pip install python-docx\n+    \"\"\"\n+    try:\n+        import docx\n+\n+        document = docx.Document(str(path))\n+        parts = [p.text for p in document.paragraphs]\n+        for table in document.tables:\n+            for row in table.rows:\n+                parts.append(\"\\t\".join(cell.text for cell in row.cells))\n+        text = \"\\n\".join(parts).strip()\n+        if not text:\n+            logger.warning(\n+                f\"[cofone] warning: DOCX '{path.name}' returned no text (empty document)\"\n+            )\n+        return text or None\n+    except ImportError:\n+        raise ImportError(\n+            \"[cofone] python-docx not installed.\\n\"\n+            'Run: pip install \"cofone[docx]\"  or  pip install python-docx'\n+        )\n+\n+\n def _load_url(url):\n     \"\"\"\n     Fetch a web page and return its visible text content."
+  },
+  {
+   "filename": "pyproject.toml",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -107,11 +107,13 @@ llms = [\n ]\n \n rag-pdf   = [\"pypdf>=4.0.0\"]\n+rag-docx  = [\"python-docx>=1.0.0\"]\n rag-faiss = [\"faiss-cpu>=1.7.0\", \"sentence-transformers>=2.0.0\"]\n rag-web   = [\"wikipedia>=1.4.0\", \"youtube-transcript-api>=0.6.0\"]\n \n rag-all  = [\n     \"pypdf>=4.0.0\",\n+    \"python-docx>=1.0.0\",\n     \"faiss-cpu>=1.7.0\",\n     \"sentence-transformers>=2.0.0\",\n     \"wikipedia>=1.4.0\","
+  },
+  {
+   "filename": "tests/unit/agents/test_docx_loader.py",
+   "status": "added",
+   "additions": 72,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,72 @@\n+\"\"\"Tests for the .docx loader in fenn/agents/rag/loader.py\n+\n+Place at: tests/unit/agents/test_docx_loader.py\n+(or merge these cases into tests/unit/agents/test_rag_components.py).\n+\"\"\"\n+\n+from unittest.mock import patch\n+\n+import pytest\n+\n+from fenn.agents.rag.loader import (\n+    _read_docx,\n+    _read_file,\n+    load_documents,\n+)\n+\n+\n+def _make_docx(path, paragraphs=(\"Hello from docx\", \"second line\"), table=None):\n+    docx = pytest.importorskip(\"docx\")\n+    d = docx.Document()\n+    for p in paragraphs:\n+        d.add_paragraph(p)\n+    if table:\n+        t = d.add_table(rows=len(table), cols=len(table[0]))\n+        for r, row in enumerate(table):\n+            for c, val in enumerate(row):\n+                t.rows[r].cells[c].text = val\n+    d.save(str(path))\n+    return path\n+\n+\n+class TestReadDocx:\n+    def test_reads_paragraphs(self, tmp_path):\n+        f = _make_docx(tmp_path / \"doc.docx\")\n+        assert _read_docx(f) == \"Hello from docx\\nsecond line\"\n+\n+    def test_reads_table_cells(self, tmp_path):\n+        f = _make_docx(\n+            tmp_path / \"t.docx\",\n+            paragraphs=(\"Prices:\",),\n+            table=[[\"Item\", \"Price\"], [\"Coffee\", \"3.00\"]],\n+        )\n+        text = _read_docx(f)\n+        assert \"Item\\tPrice\" in text\n+        assert \"Coffee\\t3.00\" in text\n+\n+    def test_empty_docx_returns_none(self, tmp_path):\n+        docx = pytest.importorskip(\"docx\")\n+        d = docx.Document()\n+        d.save(str(tmp_path / \"empty.docx\"))\n+        assert _read_docx(tmp_path / \"empty.docx\") is None\n+\n+    def test_read_file_delegates_docx(self, tmp_path):\n+        f = _make_docx(tmp_path / \"d.docx\")\n+        assert _read_file(f) == \"Hello from docx\\nsecond line\"\n+\n+    def test_load_documents_reads_docx(self, tmp_path):\n+        f = _make_docx(tmp_path / \"d.docx\")\n+        assert load_documents(str(f)) == [\"Hello from docx\\nsecond line\"]\n+\n+    def test_missing_python_docx_raises_importerror(self, tmp_path):\n+        f = _make_docx(tmp_path / \"d.docx\")\n+        real_import = __import__\n+\n+        def fake_import(name, *args, **kwargs):\n+            if name == \"docx\":\n+                raise ImportError(\"no docx\")\n+            return real_import(name, *args, **kwargs)\n+\n+        with patch(\"builtins.__import__\", side_effect=fake_import):\n+            with pytest.raises(ImportError, match=\"python-docx\"):\n+                _read_docx(f)"
+  }
+ ],
+ "test_files": [
+  "tests/unit/agents/test_docx_loader.py"
+ ]
+}

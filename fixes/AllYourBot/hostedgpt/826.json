@@ -1,0 +1,211 @@
+{
+ "repo": "AllYourBot/hostedgpt",
+ "number": 826,
+ "url": "https://github.com/AllYourBot/hostedgpt/pull/826",
+ "title": "Show Claude's extended thinking with the RubyLLM backend",
+ "merged_at": "2026-10-14T19:47:38Z",
+ "files": [
+  {
+   "filename": "app/controllers/settings/language_models_controller.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -63,6 +63,6 @@ def set_system_language_model\n   end\n \n   def language_model_params\n-    params.require(:language_model).permit(:api_name, :name, :supports_images, :supports_tools, :api_service_id, :supports_system_message, :supports_pdf)\n+    params.require(:language_model).permit(:api_name, :name, :supports_images, :supports_tools, :supports_thinking, :api_service_id, :supports_system_message, :supports_pdf)\n   end\n end"
+  },
+  {
+   "filename": "app/controllers/settings/people_controller.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -19,7 +19,7 @@ def update\n   def person_params\n     h = params.require(:person).permit(:email, personable_attributes: [\n       :id, :first_name, :last_name, :password, :profile_picture, :remove_profile_picture,\n-      :dark_mode, preferences: [feature: [:use_ruby_llm]],\n+      :dark_mode, :show_thinking, preferences: [feature: [:use_ruby_llm]],\n       credentials_attributes: [ :id, :type, :password ]\n     ]).to_h\n "
+  },
+  {
+   "filename": "app/models/language_model.rb",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -2,6 +2,16 @@\n class LanguageModel < ApplicationRecord\n   include Export\n \n+  # Claude models that take adaptive thinking on the Anthropic API.\n+  ADAPTIVE_THINKING_PREFIXES = %w[\n+    claude-opus-4-6 claude-sonnet-4-6 claude-opus-4-7 claude-opus-4-8\n+    claude-opus-5 claude-sonnet-5 claude-haiku-5 claude-fable-5\n+  ].freeze\n+\n+  def self.adaptive_thinking?(api_name)\n+    api_name.to_s.start_with?(*ADAPTIVE_THINKING_PREFIXES)\n+  end\n+\n   belongs_to :user\n   belongs_to :api_service\n "
+  },
+  {
+   "filename": "app/models/language_model/export.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -7,6 +7,7 @@ module LanguageModel::Export\n     api_service_name\n     supports_images\n     supports_tools\n+    supports_thinking\n     supports_system_message\n     supports_pdf\n   ]"
+  },
+  {
+   "filename": "app/models/user.rb",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 1,
+   "patch": "@@ -39,7 +39,7 @@ class User < ApplicationRecord\n \n   accepts_nested_attributes_for :credentials\n   serialize :preferences, coder: JsonSerializer\n-  store_accessor :preferences, :dark_mode, :nav_closed\n+  store_accessor :preferences, :dark_mode, :nav_closed, :show_thinking\n \n   def preferences\n     attributes[\"preferences\"] || {}\n@@ -53,6 +53,14 @@ def nav_closed=(value)\n     super(value.nil? ? nil : value.to_b)\n   end\n \n+  def show_thinking?\n+    show_thinking.nil? || show_thinking.to_b\n+  end\n+\n+  def show_thinking=(value)\n+    super(value.nil? ? nil : value.to_b)\n+  end\n+\n   def features\n     User::Features.new(self)\n   end"
+  },
+  {
+   "filename": "app/services/ai_backend/ruby_llm.rb",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 2,
+   "patch": "@@ -7,6 +7,12 @@ class ToolCallIntercepted < StandardError; end\n \n   IMAGE_MODEL = \"gpt-image-2.5-flare\"\n \n+  # \"high\" is the API's own default effort. Thinking counts toward max_tokens, so\n+  # the 4096 RubyLLM falls back to for an assumed model can be spent before the\n+  # answer starts.\n+  THINKING_EFFORT = \"high\"\n+  THINKING_MAX_TOKENS = 16_000\n+\n   CONFIGURATION_ERRORS = [\n     ::RubyLLM::UnauthorizedError, ::RubyLLM::ConfigurationError,\n     ::RubyLLM::BadRequestError, ::RubyLLM::ForbiddenError,\n@@ -124,6 +130,7 @@ def stream_next_conversation_message(&chunk_handler)\n     chat.with_instructions(conversation_instructions(instructions)) if instructions.present?\n     preceding_conversation_messages.each { |msg| chat.add_message(msg) }\n     chat.with_tools(*tool_instances) if tools_enabled?\n+    chat.with_adaptive_thinking(effort: THINKING_EFFORT, max_tokens: THINKING_MAX_TOKENS) if thinking_enabled?\n \n     begin\n       chat.complete { |chunk| stream_handler.call(chunk, chunk_handler) }\n@@ -176,6 +183,13 @@ def stream_handler\n         @message.output_token_count = output_tokens\n       end\n \n+      thinking = chunk.respond_to?(:thinking) ? chunk.thinking : nil\n+      if thinking\n+        @message.thinking_text = \"#{@message.thinking_text}#{thinking.text}\" if thinking.text.present?\n+        @message.thinking_signature ||= thinking.signature.presence\n+        chunk_handler.call(\"\") # lets the job broadcast the thinking so far and check for a cancel\n+      end\n+\n       if chunk.respond_to?(:content) && chunk.content.present?\n         @stream_response_text += chunk.content\n         chunk_handler.call(chunk.content)\n@@ -206,16 +220,26 @@ def preceding_conversation_messages\n           role: :assistant,\n           content: sanitize_content(message),\n           tool_calls: tool_calls_hash(message),\n-        }\n+          thinking: thinking_for(message),\n+        }.compact\n       else\n         {\n           role: message.role,\n           content: sanitize_content(message),\n-        }\n+          thinking: (thinking_for(message) if message.assistant?),\n+        }.compact\n       end\n     end.compact\n   end\n \n+  # Anthropic verifies replayed thinking by its signature, so thinking without one\n+  # (a cancelled response) is left out.\n+  def thinking_for(message)\n+    return if message.thinking_signature.blank?\n+\n+    ::RubyLLM::Thinking.build(text: message.thinking_text, signature: message.thinking_signature)\n+  end\n+\n   # RubyLLM formats each attachment for the provider: a PDF becomes Anthropic's document block,\n   # OpenAI's file part, or Gemini's inline data.\n   def user_message(message, documents, with_time:)\n@@ -281,6 +305,10 @@ def tools_enabled?\n     @assistant.language_model.supports_tools?\n   end\n \n+  def thinking_enabled?\n+    provider_slug == :anthropic && @assistant.language_model.supports_thinking?\n+  end\n+\n   def tool_instances\n     Toolbox.tools.map do |tool|\n       AIBackend::RubyLLM::InterceptedTool.new("
+  },
+  {
+   "filename": "app/services/ai_backend/ruby_llm/intercepted_chat.rb",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -7,6 +7,26 @@\n # pinlocked to ~> 1.16.0; InterceptedTool#execute remains as a safety net so a\n # registered-name call still halts even if this override is renamed upstream.\n class AIBackend::RubyLLM::InterceptedChat < ::RubyLLM::Chat\n+  # Anthropic adaptive thinking for a model whose LanguageModel says it can think.\n+  #\n+  # Chats are built with assume_model_exists, so the model is Model::Info.default,\n+  # which declares no reasoning options, and with_thinking would raise \"Anthropic\n+  # thinking effort is not supported\" (RubyLLM 1.16's registry has no Claude 5\n+  # model at all). LanguageModel#supports_thinking is the source of truth here,\n+  # so the effort option is declared on the model before thinking is enabled.\n+  #\n+  # display: \"summarized\" opts in to readable thinking: on Claude Opus 4.7 and\n+  # later it defaults to \"omitted\", which streams an empty thinking field with\n+  # only the signature. RubyLLM deep-merges params into the request body.\n+  def with_adaptive_thinking(effort:, max_tokens:)\n+    unless @model.reasoning_option(\"effort\")\n+      @model = ::RubyLLM::Model::Info.new(@model.to_h.merge(reasoning_options: [{ type: \"effort\" }]))\n+    end\n+\n+    with_thinking(effort:)\n+    with_params(**params, max_tokens:, thinking: { display: \"summarized\" })\n+  end\n+\n   private\n \n   def handle_tool_calls(_response, &)"
+  },
+  {
+   "filename": "app/services/language_model/refresh_from_ruby_llm.rb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -58,7 +58,8 @@ def refresh_api_service(api_service, models_by_provider)\n         supports_images: model.modalities.input.include?(\"image\"),\n         supports_pdf: model.modalities.input.include?(\"pdf\"),\n         supports_system_message: true,\n-        supports_tools: model.supports_functions?\n+        supports_tools: model.supports_functions?,\n+        supports_thinking: provider == \"anthropic\" && LanguageModel.adaptive_thinking?(model.id)\n       )\n \n       existing_api_names << model.id"
+  },
+  {
+   "filename": "app/views/messages/_message.html.erb",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -73,6 +73,14 @@ end %>\n           data-thinking=\"<%= !!thinking %>\"\n         ><%= format_for_speaking message.content_text %></div>\n \n+        <% if message.assistant? && message.thinking_text.present? && conversation.user.show_thinking? %>\n+          <%# open while the reply streams in, collapsed once it is done %>\n+          <details data-role=\"thinking-text\" class=\"mb-2 text-sm text-gray-500 dark:text-gray-400\" <%= \"open\" if thinking %>>\n+            <summary class=\"cursor-pointer select-none\"><%= t(\"app.messages.thinking\") %></summary>\n+            <div class=\"mt-1 pl-3 border-l-2 border-gray-200 dark:border-gray-600 whitespace-pre-wrap break-words\"><%= message.thinking_text %></div>\n+          </details>\n+        <% end %>\n+\n         <div\n           data-role=\"content-text\"\n           class=\"prose break-words leading-normal dark:[&_*]:text-gray-100 dark:marker:text-gray-100\""
+  },
+  {
+   "filename": "app/views/settings/language_models/_form.html.erb",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -62,6 +62,10 @@\n     <%= form.check_box :supports_tools %>\n     <%= form.label :supports_tools, t(\"app.settings.language_models.form.supports_tools\") %>\n   </div>\n+  <div class=\"my-5\">\n+    <%= form.check_box :supports_thinking %>\n+    <%= form.label :supports_thinking, t(\"app.settings.language_models.form.supports_thinking\") %>\n+  </div>\n   <div class=\"my-5\">\n     <%= form.check_box :supports_system_message %>\n     <%= form.label :supports_system_message, t(\"app.settings.language_models.form.supports_system_message\") %>"
+  },
+  {
+   "filename": "app/views/settings/people/_form.html.erb",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -118,6 +118,11 @@\n       </div>\n     </div>\n \n+    <div class=\"my-5 flex items-center gap-2\">\n+      <%= user_fields.check_box :show_thinking, checked: person.personable.show_thinking? %>\n+      <%= user_fields.label :show_thinking, t(\"app.settings.people.form.show_thinking\") %>\n+    </div>\n+\n     <div class=\"my-5\">\n       <span class=\"block mb-2\"><%= t(\"app.settings.people.form.ai_backends\") %></span>\n       <p class=\"text-sm text-gray-500 dark:text-gray-400\">"
+  },
+  {
+   "filename": "config/locales/de.yml",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -119,6 +119,7 @@ de:\n           api_service: \"API-Dienst\"\n           supports_images: \"Unterstützt Bilder?\"\n           supports_tools: \"Unterstützt Tools (Function Calling)?\"\n+          supports_thinking: \"Unterstützt erweitertes Denken (Anthropic)?\"\n           supports_system_message: \"Unterstützt Systemnachricht (Anweisungen)?\"\n           supports_pdf: \"Unterstützt PDFs?\"\n           test: \"Test\"\n@@ -165,6 +166,7 @@ de:\n             dark: \"Dunkel\"\n             light: \"Hell\"\n             system: \"System\"\n+          show_thinking: \"Erweitertes Denken von Claude anzeigen\"\n           ai_backends: \"KI-Backends\"\n           ai_backends_description: \"Welche Implementierung jeden Anbieter bedient. Standard folgt der globalen Einstellung (aktuell %{current}).\"\n           backend_choice_default: \"Standard\"\n@@ -209,6 +211,7 @@ de:\n       next_version: \"Nächste\"\n       read_aloud: \"Vorlesen\"\n       pdf_document: \"PDF-Dokument - Zum Öffnen klicken\"\n+      thinking: \"Denkprozess\"\n       editing_title: \"Nachricht bearbeiten\"\n       form:\n         save_and_submit: \"Speichern & Senden (⌘ RETURN)\""
+  },
+  {
+   "filename": "config/locales/en.yml",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -148,6 +148,7 @@ en:\n           api_service: \"API Service\"\n           supports_images: \"Supports Images?\"\n           supports_tools: \"Supports Tools (Function Calling)?\"\n+          supports_thinking: \"Supports Extended Thinking (Anthropic)?\"\n           supports_system_message: \"Supports System Message (Instructions)?\"\n           supports_pdf: \"Supports PDFs?\"\n           test: \"Test\"\n@@ -194,6 +195,7 @@ en:\n             dark: \"Dark\"\n             light: \"Light\"\n             system: \"System\"\n+          show_thinking: \"Show Claude's extended thinking\"\n           ai_backends: \"AI backends\"\n           ai_backends_description: \"Which implementation handles each provider. Default follows the site-wide setting (currently %{current}).\"\n           backend_choice_default: \"Default\"\n@@ -238,6 +240,7 @@ en:\n       next_version: \"Next\"\n       read_aloud: \"Read aloud\"\n       pdf_document: \"PDF Document - Click to open\"\n+      thinking: \"Thinking\"\n       editing_title: \"Editing message\"\n       form:\n         save_and_submit: \"Save & Submit (⌘ RETURN)\""
+  },
+  {
+   "filename": "db/migrate/20261012120000_add_thinking_to_messages_and_language_models.rb",
+   "status": "added",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,25 @@\n+class AddThinkingToMessagesAndLanguageModels < ActiveRecord::Migration[8.1]\n+  def change\n+    add_column :messages, :thinking_text, :text\n+    add_column :messages, :thinking_signature, :text\n+    add_column :language_models, :supports_thinking, :boolean, default: false, null: false\n+\n+    reversible do |dir|\n+      dir.up do\n+        # Claude models that take adaptive thinking on the Anthropic API.\n+        execute <<-END_SQL\n+          UPDATE language_models\n+          SET supports_thinking = true\n+          WHERE api_name LIKE 'claude-opus-4-6%' OR\n+            api_name LIKE 'claude-sonnet-4-6%' OR\n+            api_name LIKE 'claude-opus-4-7%' OR\n+            api_name LIKE 'claude-opus-4-8%' OR\n+            api_name LIKE 'claude-opus-5%' OR\n+            api_name LIKE 'claude-sonnet-5%' OR\n+            api_name LIKE 'claude-haiku-5%' OR\n+            api_name LIKE 'claude-fable-5%';\n+        END_SQL\n+      end\n+    end\n+  end\n+end"
+  },
+  {
+   "filename": "db/schema.rb",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -10,7 +10,7 @@\n #\n # It's strongly recommended that you check this file into your version control system.\n \n-ActiveRecord::Schema[8.1].define(version: 2026_10_06_130000) do\n+ActiveRecord::Schema[8.1].define(version: 2026_10_12_120000) do\n   # These are extensions that must be enabled in order to support this database\n   enable_extension \"pg_catalog.plpgsql\"\n \n@@ -186,6 +186,7 @@\n     t.boolean \"supports_images\", null: false\n     t.boolean \"supports_pdf\", default: false, null: false\n     t.boolean \"supports_system_message\", default: false\n+    t.boolean \"supports_thinking\", default: false, null: false\n     t.boolean \"supports_tools\", default: false\n     t.datetime \"updated_at\", null: false\n     t.bigint \"user_id\", null: false\n@@ -224,6 +225,8 @@\n     t.string \"role\", null: false\n     t.bigint \"run_id\"\n     t.boolean \"spoken\", default: false, null: false\n+    t.text \"thinking_signature\"\n+    t.text \"thinking_text\"\n     t.string \"tool_call_id\"\n     t.datetime \"updated_at\", null: false\n     t.integer \"version\", null: false"
+  },
+  {
+   "filename": "models.yml",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -18,13 +18,15 @@ models:\n   name: Claude Sonnet 5 (latest)\n   supports_images: true\n   supports_tools: true\n+  supports_thinking: true\n   supports_system_message: true\n   supports_pdf: true\n   api_service_name: Anthropic\n - api_name: claude-opus-5\n   name: Claude Opus 5 (latest)\n   supports_images: true\n   supports_tools: true\n+  supports_thinking: true\n   supports_system_message: true\n   supports_pdf: true\n   api_service_name: Anthropic"
+  },
+  {
+   "filename": "test/controllers/messages_controller_test.rb",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -220,6 +220,28 @@ class MessagesControllerTest < ActionDispatch::IntegrationTest\n     assert_select '[data-controller~=\"stream-watchdog\"]'\n   end\n \n+  test \"index shows an assistant's thinking collapsed once the reply is done\" do\n+    latest_message = @conversation.latest_message_for_version(:latest)\n+    latest_message.update! thinking_text: \"Let me work through this...\", thinking_signature: \"sig-abc\"\n+\n+    get conversation_messages_url(@conversation, version: latest_message.version)\n+    assert_select \"details[data-role='thinking-text']:not([open])\", text: /Let me work through this\\.\\.\\./\n+  end\n+\n+  test \"index hides an assistant's thinking when the user turned it off\" do\n+    latest_message = @conversation.latest_message_for_version(:latest)\n+    latest_message.update! thinking_text: \"Let me work through this...\", thinking_signature: \"sig-abc\"\n+    @conversation.user.update!(show_thinking: false)\n+\n+    get conversation_messages_url(@conversation, version: latest_message.version)\n+    assert_select \"details[data-role='thinking-text']\", false\n+  end\n+\n+  test \"index shows no thinking block for a message without thinking\" do\n+    get conversation_messages_url(@conversation, version: 1)\n+    assert_select \"details[data-role='thinking-text']\", false\n+  end\n+\n   test \"index shows no retry button for a message which generated successfully\" do\n     get conversation_messages_url(@conversation, version: 1)\n     assert_select '[data-role=\"retry\"]', false"
+  },
+  {
+   "filename": "test/controllers/settings/language_models_controller_test.rb",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -131,6 +131,17 @@ class Settings::LanguageModelsControllerTest < ActionDispatch::IntegrationTest\n     assert language_model.reload.supports_tools?\n   end\n \n+  test \"should update supports_thinking\" do\n+    refute @language_model.supports_thinking?\n+    patch settings_language_model_url(@language_model), params: { language_model: { supports_thinking: true } }\n+    assert @language_model.reload.supports_thinking?\n+  end\n+\n+  test \"edit should have a supports_thinking checkbox\" do\n+    get edit_settings_language_model_url(@language_model)\n+    assert_select 'input[name=\"language_model[supports_thinking]\"]'\n+  end\n+\n   test \"should not update other user's language_model\" do\n     original_params = language_models(:alpaca).slice(:api_name, :name)\n     params = {\"api_name\": \"New Name\", \"name\": \"New Desc\"}"
+  },
+  {
+   "filename": "test/controllers/settings/people_controller_test.rb",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -177,6 +177,26 @@ class Settings::PeopleControllerTest < ActionDispatch::IntegrationTest\n     end\n   end\n \n+  test \"turning off show_thinking keeps the other preferences\" do\n+    @user.update!(dark_mode: \"dark\", nav_closed: true)\n+\n+    params = person_params\n+    params[\"personable_attributes\"][\"show_thinking\"] = \"0\"\n+\n+    patch settings_person_url, params: { person: params }\n+    assert_redirected_to edit_settings_person_url\n+\n+    @user.reload\n+    refute @user.show_thinking?\n+    assert_equal \"dark\", @user.dark_mode\n+    assert_equal true, @user.nav_closed\n+  end\n+\n+  test \"the settings form shows the show_thinking checkbox checked by default\" do\n+    get edit_settings_person_url\n+    assert_select \"input[type=checkbox][name='person[personable_attributes][show_thinking]'][checked]\"\n+  end\n+\n   test \"updating dark_mode leaves nav_closed and feature opinions intact\" do\n     @user.update!(nav_closed: true)\n     @user.update!(preferences: @user.preferences.merge(feature: { openai_backend: \"sdk\" }))"
+  },
+  {
+   "filename": "test/jobs/get_next_ai_message_job_ruby_llm_test.rb",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -192,4 +192,23 @@ class GetNextAIMessageJobRubyLLMTest < ActiveJob::TestCase\n     assert_includes @message.content_text, \"You are using OpenAI so go here https://platform.openai.com/account/billing/overview\"\n     assert @message.failed?, \"The message should have been marked failed so a Retry button is offered\"\n   end\n+\n+  test \"saves the thinking and its signature alongside the reply\" do\n+    @assistant.language_model.api_service.update!(driver: \"anthropic\")\n+    @assistant.language_model.update!(supports_thinking: true)\n+    thinking = ::RubyLLM::Thinking.build(text: \"Let me work through this...\", signature: \"sig-abc\")\n+\n+    stub_features(use_ruby_llm: true) do\n+      TestClient::RubyLLM::Chat.stub :thinking, thinking do\n+        TestClient::RubyLLM::Chat.stub :text, \"The answer is 42.\" do\n+          assert GetNextAIMessageJob.perform_now(@user.id, @message.id, @assistant.id)\n+        end\n+      end\n+    end\n+\n+    @message.reload\n+    assert_equal \"The answer is 42.\", @message.content_text\n+    assert_equal \"Let me work through this...\", @message.thinking_text\n+    assert_equal \"sig-abc\", @message.thinking_signature\n+  end\n end"
+  },
+  {
+   "filename": "test/models/language_model/export_test.rb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -21,7 +21,7 @@ class LanguageModel::ExportTest < ActiveSupport::TestCase\n     assert File.exist?(path)\n     storage = JSON.load_file(path)\n     models = storage[\"models\"]\n-    assert_equal models.first.keys.sort, %w[api_name name supports_images supports_tools supports_system_message supports_pdf api_service_name].sort\n+    assert_equal models.first.keys.sort, %w[api_name name supports_images supports_tools supports_thinking supports_system_message supports_pdf api_service_name].sort\n   end\n \n   test \"export_to_file yaml\" do\n@@ -30,7 +30,7 @@ class LanguageModel::ExportTest < ActiveSupport::TestCase\n     assert File.exist?(path)\n     storage = YAML.load_file(path)\n     models = storage[\"models\"]\n-    assert_equal models.first.keys.sort, %w[api_name name supports_images supports_tools supports_system_message supports_pdf api_service_name].sort\n+    assert_equal models.first.keys.sort, %w[api_name name supports_images supports_tools supports_thinking supports_system_message supports_pdf api_service_name].sort\n   end\n \n   test \"import_from_file with only new models\" do"
+  },
+  {
+   "filename": "test/models/user/preference_test.rb",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -39,6 +39,18 @@ class User::PreferenceTest < ActiveSupport::TestCase\n     assert_equal \"system\", new_user.dark_mode\n   end\n \n+  test \"show_thinking defaults to on and takes a form checkbox value\" do\n+    user = User.create!(first_name: \"First\", last_name: \"Last\")\n+    assert user.show_thinking?\n+\n+    user.update!(show_thinking: \"0\")\n+    refute user.reload.show_thinking?\n+    assert_equal false, user.preferences[:show_thinking]\n+\n+    user.update!(show_thinking: \"1\")\n+    assert user.reload.show_thinking?\n+  end\n+\n   test \"accessor writes persist through the reworked preferences getter\" do\n     user = User.create!(first_name: \"First\", last_name: \"Last\")\n     assert_nil user.preferences[:dark_mode]"
+  },
+  {
+   "filename": "test/services/ai_backend/ruby_llm/intercepted_chat_test.rb",
+   "status": "added",
+   "additions": 89,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,89 @@\n+require \"test_helper\"\n+\n+# Runs the real RubyLLM gem against a stubbed Anthropic endpoint, so these check\n+# the request body that would go out, not the TestClient double.\n+class AIBackend::RubyLLM::InterceptedChatTest < ActiveSupport::TestCase\n+  ANTHROPIC_URL = \"https://api.anthropic.com/v1/messages\"\n+\n+  setup do\n+    WebMock.enable!\n+    @requests = []\n+    stub_request(:post, ANTHROPIC_URL).to_return do |request|\n+      @requests << JSON.parse(request.body)\n+      {\n+        status: 200,\n+        headers: { \"Content-Type\" => \"application/json\" },\n+        body: {\n+          id: \"msg_1\", type: \"message\", role: \"assistant\", model: \"claude-opus-5-5\",\n+          content: [\n+            { type: \"thinking\", thinking: \"Let me work through this...\", signature: \"sig-abc\" },\n+            { type: \"text\", text: \"The answer is 42.\" },\n+          ],\n+          stop_reason: \"end_turn\",\n+          usage: { input_tokens: 10, output_tokens: 20 },\n+        }.to_json,\n+      }\n+    end\n+  end\n+\n+  def build_chat(model = \"claude-opus-5-5\")\n+    context = RubyLLM.context { |c| c.anthropic_api_key = \"test-key\" }\n+    AIBackend::RubyLLM::InterceptedChat.new(model:, provider: :anthropic, assume_model_exists: true, context:)\n+  end\n+\n+  test \"plain with_thinking is rejected for an assumed model, which is why with_adaptive_thinking exists\" do\n+    chat = build_chat.with_thinking(effort: \"high\")\n+    chat.add_message(role: :user, content: \"What is 6 x 7?\")\n+\n+    error = assert_raises(ArgumentError) { chat.complete }\n+    assert_match \"not supported\", error.message\n+  end\n+\n+  test \"with_adaptive_thinking sends adaptive thinking with summarized display, the effort and max_tokens\" do\n+    chat = build_chat.with_adaptive_thinking(effort: \"high\", max_tokens: 16_000)\n+    chat.add_message(role: :user, content: \"What is 6 x 7?\")\n+    response = chat.complete\n+\n+    body = @requests.sole\n+    assert_equal({ \"type\" => \"adaptive\", \"display\" => \"summarized\" }, body[\"thinking\"])\n+    assert_equal \"high\", body.dig(\"output_config\", \"effort\")\n+    assert_equal 16_000, body[\"max_tokens\"]\n+    assert_equal \"The answer is 42.\", response.content\n+    assert_equal \"Let me work through this...\", response.thinking.text\n+    assert_equal \"sig-abc\", response.thinking.signature\n+  end\n+\n+  test \"with_adaptive_thinking keeps params that were set before it\" do\n+    chat = build_chat.with_params(metadata: { user_id: \"u1\" })\n+    chat.with_adaptive_thinking(effort: \"high\", max_tokens: 16_000)\n+    chat.add_message(role: :user, content: \"Hi\")\n+    chat.complete\n+\n+    assert_equal({ \"user_id\" => \"u1\" }, @requests.sole[\"metadata\"])\n+  end\n+\n+  test \"a replayed tool call carries its thinking block, signature included, ahead of the tool_use\" do\n+    chat = build_chat.with_adaptive_thinking(effort: \"high\", max_tokens: 16_000)\n+    chat.add_message(role: :user, content: \"Weather in Austin?\")\n+    chat.add_message(\n+      role: :assistant,\n+      content: \"\",\n+      tool_calls: { \"call_1\" => RubyLLM::ToolCall.new(id: \"call_1\", name: \"get_weather\", arguments: { city: \"Austin\" }) },\n+      thinking: RubyLLM::Thinking.build(text: \"I should look it up.\", signature: \"sig-tool\"),\n+    )\n+    chat.add_message(role: :tool, content: \"Sunny\", tool_call_id: \"call_1\")\n+    chat.complete\n+\n+    assistant = @requests.sole[\"messages\"].find { |m| m[\"role\"] == \"assistant\" }\n+    assert_equal({ \"type\" => \"thinking\", \"thinking\" => \"I should look it up.\", \"signature\" => \"sig-tool\" }, assistant[\"content\"].first)\n+    assert_equal \"tool_use\", assistant[\"content\"].last[\"type\"]\n+  end\n+\n+  test \"without with_adaptive_thinking no thinking is requested\" do\n+    chat = build_chat\n+    chat.add_message(role: :user, content: \"Hi\")\n+    chat.complete\n+\n+    assert_nil @requests.sole[\"thinking\"]\n+  end\n+end"
+  },
+  {
+   "filename": "test/services/ai_backend/ruby_llm_test.rb",
+   "status": "modified",
+   "additions": 152,
+   "deletions": 0,
+   "patch": "@@ -1025,4 +1025,156 @@ def backend_replying_to_pdf(assistant, filename, pdf_bytes)\n \n     AIBackend::RubyLLM.new(@user, assistant, conversation, reply)\n   end\n+\n+  # Extended thinking\n+\n+  def thinking_message\n+    @conversation.messages.create!(\n+      role: :assistant,\n+      content_text: nil,\n+      assistant: @assistant,\n+      index: @conversation.messages.maximum(:index).to_i + 1,\n+      version: :latest\n+    )\n+  end\n+\n+  test \"stream_next_conversation_message turns on adaptive thinking for an Anthropic model that supports it\" do\n+    @assistant.language_model.api_service.update!(driver: \"anthropic\")\n+    @assistant.language_model.update!(supports_tools: false, supports_thinking: true)\n+\n+    backend = AIBackend::RubyLLM.new(@user, @assistant, @conversation, thinking_message)\n+    TestClient::RubyLLM::Chat.stub :text, \"Claude streaming\" do\n+      backend.stream_next_conversation_message { |_| }\n+    end\n+\n+    assert_equal({ effort: \"high\", max_tokens: 16_000 }, TestClient::RubyLLM::Chat.thinking_config)\n+  end\n+\n+  test \"stream_next_conversation_message leaves thinking off for a model that doesn't support it\" do\n+    @assistant.language_model.api_service.update!(driver: \"anthropic\")\n+    @assistant.language_model.update!(supports_tools: false, supports_thinking: false)\n+\n+    backend = AIBackend::RubyLLM.new(@user, @assistant, @conversation, thinking_message)\n+    TestClient::RubyLLM::Chat.stub :text, \"Claude streaming\" do\n+      backend.stream_next_conversation_message { |_| }\n+    end\n+\n+    assert_nil TestClient::RubyLLM::Chat.thinking_config\n+  end\n+\n+  test \"stream_next_conversation_message leaves thinking off for a provider other than Anthropic\" do\n+    @assistant.language_model.update!(supports_tools: false, supports_thinking: true)\n+\n+    backend = AIBackend::RubyLLM.new(@user, @assistant, @conversation, thinking_message)\n+    TestClient::RubyLLM::Chat.stub :text, \"GPT streaming\" do\n+      backend.stream_next_conversation_message { |_| }\n+    end\n+\n+    assert_nil TestClient::RubyLLM::Chat.thinking_config\n+  end\n+\n+  test \"stream_next_conversation_message keeps thinking out of the content and stores it with its signature\" do\n+    @assistant.language_model.api_service.update!(driver: \"anthropic\")\n+    @assistant.language_model.update!(supports_tools: false, supports_thinking: true)\n+    message = thinking_message\n+\n+    backend = AIBackend::RubyLLM.new(@user, @assistant, @conversation, message)\n+    thinking = ::RubyLLM::Thinking.build(text: \"Let me work through this...\", signature: \"sig-abc\")\n+    chunks = []\n+    TestClient::RubyLLM::Chat.stub :thinking, thinking do\n+      TestClient::RubyLLM::Chat.stub :text, \"The answer is 42.\" do\n+        backend.stream_next_conversation_message { |c| chunks << c }\n+      end\n+    end\n+\n+    assert_equal [\"\", \"The answer is 42.\"], chunks\n+    assert_equal \"Let me work through this...\", message.thinking_text\n+    assert_equal \"sig-abc\", message.thinking_signature\n+  end\n+\n+  test \"stream_handler appends thinking deltas and keeps the first signature\" do\n+    message = thinking_message\n+    backend = AIBackend::RubyLLM.new(@user, @assistant, @conversation, message)\n+    backend.instance_variable_set(:@stream_response_text, \"\")\n+    handler = backend.send(:stream_handler)\n+\n+    chunks = []\n+    handler.call(OpenStruct.new(content: nil, thinking: ::RubyLLM::Thinking.build(text: \"Let me \")), ->(c) { chunks << c })\n+    handler.call(OpenStruct.new(content: nil, thinking: ::RubyLLM::Thinking.build(text: \"think.\")), ->(c) { chunks << c })\n+    handler.call(OpenStruct.new(content: nil, thinking: ::RubyLLM::Thinking.build(signature: \"sig-abc\")), ->(c) { chunks << c })\n+    handler.call(OpenStruct.new(content: \"Done.\", thinking: nil), ->(c) { chunks << c })\n+\n+    assert_equal \"Let me think.\", message.thinking_text\n+    assert_equal \"sig-abc\", message.thinking_signature\n+    assert_equal [\"\", \"\", \"\", \"Done.\"], chunks\n+  end\n+\n+  test \"stream_next_conversation_message keeps the thinking that preceded a tool call\" do\n+    @assistant.language_model.api_service.update!(driver: \"anthropic\")\n+    @assistant.language_model.update!(supports_tools: true, supports_thinking: true)\n+    message = thinking_message\n+\n+    backend = AIBackend::RubyLLM.new(@user, @assistant, @conversation, message)\n+    thinking = ::RubyLLM::Thinking.build(text: \"I should look up the weather.\", signature: \"sig-tool\")\n+    result = nil\n+    TestClient::RubyLLM::Chat.stub :thinking, thinking do\n+      TestClient::RubyLLM::Chat.stub :function, \"helloworld_hi\" do\n+        result = backend.stream_next_conversation_message { |_| }\n+      end\n+    end\n+\n+    assert_equal \"helloworld_hi\", result.first.dig(:function, :name)\n+    assert_equal \"I should look up the weather.\", message.thinking_text\n+    assert_equal \"sig-tool\", message.thinking_signature\n+  end\n+\n+  test \"preceding_conversation_messages replays signed thinking on a tool call and on a text reply\" do\n+    @assistant.language_model.update!(supports_tools: true)\n+    @conversation.messages.create!(\n+      role: :assistant,\n+      content_text: nil,\n+      assistant: @assistant,\n+      thinking_text: \"I should look it up.\",\n+      thinking_signature: \"sig-tool\",\n+      content_tool_calls: [\n+        { type: \"function\", id: \"call_123\", function: { name: \"helloworld_hi\", arguments: '{\"name\":\"Keith\"}' } },\n+      ]\n+    )\n+    @conversation.messages.create!(\n+      role: :assistant,\n+      content_text: \"Hi Keith\",\n+      assistant: @assistant,\n+      thinking_text: \"Now I can answer.\",\n+      thinking_signature: \"sig-text\"\n+    )\n+    follow_up = @conversation.messages.create!(role: :assistant, content_text: nil, assistant: @assistant, version: :latest)\n+\n+    backend = AIBackend::RubyLLM.new(@user, @assistant, @conversation, follow_up)\n+    msgs = backend.send(:preceding_conversation_messages)\n+\n+    tool_call_replay = msgs.find { |m| m[:role] == :assistant && m[:tool_calls].present? }\n+    assert_equal \"I should look it up.\", tool_call_replay[:thinking].text\n+    assert_equal \"sig-tool\", tool_call_replay[:thinking].signature\n+\n+    text_replay = msgs.find { |m| m[:content] == \"Hi Keith\" }\n+    assert_equal \"sig-text\", text_replay[:thinking].signature\n+  end\n+\n+  test \"preceding_conversation_messages doesn't replay thinking that never got its signature\" do\n+    @conversation.messages.create!(\n+      role: :assistant,\n+      content_text: \"Partial\",\n+      assistant: @assistant,\n+      thinking_text: \"Cut off before the signature\",\n+      thinking_signature: nil\n+    )\n+    follow_up = @conversation.messages.create!(role: :assistant, content_text: nil, assistant: @assistant, version: :latest)\n+\n+    backend = AIBackend::RubyLLM.new(@user, @assistant, @conversation, follow_up)\n+    msgs = backend.send(:preceding_conversation_messages)\n+\n+    replay = msgs.find { |m| m[:content] == \"Partial\" }\n+    refute replay.key?(:thinking)\n+    msgs.each { |m| refute m.key?(:thinking) }\n+  end\n end"
+  },
+  {
+   "filename": "test/services/toolbox/open_meteo_test.rb",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -13,6 +13,12 @@ class Toolbox::OpenMeteoTest < ActiveSupport::TestCase\n     @open_meteo = Toolbox::OpenMeteo.new\n   end\n \n+  # The live API tests below turn WebMock off; turn it back on so it doesn't stay\n+  # off for every test that runs after them in the same process.\n+  teardown do\n+    WebMock.enable!\n+  end\n+\n   test \"filter_by_country filters locations by country with a fuzzy match\" do\n     filtered_locations = @open_meteo.send(:filter_by_country, \"US\", locations: @locations)\n "
+  },
+  {
+   "filename": "test/support/test_client/ruby_llm.rb",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 1,
+   "patch": "@@ -5,6 +5,7 @@ class Chat\n \n       def initialize(model:, provider: nil, assume_model_exists: nil, context: nil)\n         @@model = model\n+        self.class.instance_variable_set(:@thinking_config, nil)\n         @headers = {}\n         @messages = []\n         @last_response = nil\n@@ -25,6 +26,11 @@ def with_params(**params)\n         self\n       end\n \n+      def with_adaptive_thinking(effort:, max_tokens:)\n+        self.class.instance_variable_set(:@thinking_config, { effort:, max_tokens: })\n+        self\n+      end\n+\n       def with_tools(*tools)\n         self.class.instance_variable_set(:@tools, tools)\n         self\n@@ -38,6 +44,9 @@ def add_message(msg)\n       def complete(&block)\n         raise self.class.error_to_raise if self.class.error_to_raise\n \n+        # Like the real stream, thinking arrives before the text or the tool call.\n+        block.call(OpenStruct.new(content: nil, thinking: self.class.thinking)) if block && self.class.thinking\n+\n         if self.class.function\n           simulate_tool_calls\n         elsif block\n@@ -122,6 +131,12 @@ def self.thought_signature\n         nil\n       end\n \n+      # A ::RubyLLM::Thinking streamed ahead of the response; nil means the model\n+      # didn't think. Stub this to simulate extended thinking.\n+      def self.thinking\n+        nil\n+      end\n+\n       def self.default_text\n         \"Hello this is model #{@@model}! How can I assist you today?\"\n       end\n@@ -147,7 +162,7 @@ def self.id\n       end\n \n       class << self\n-        attr_reader :instructions, :params, :tools\n+        attr_reader :instructions, :params, :tools, :thinking_config\n       end\n     end\n "
+  },
+  {
+   "filename": "test/tasks/models_refresh_test.rb",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -206,6 +206,23 @@ class ModelsRefreshTest < ActiveSupport::TestCase\n     end\n   end\n \n+  test \"models:refresh marks Anthropic models that take adaptive thinking\" do\n+    registry = RubyLLM::Models.new([\n+      registry_model(\"claude-opus-5-5\", \"Claude Opus 5.5\", \"anthropic\", input: %w[text]),\n+      registry_model(\"claude-haiku-4-5\", \"Claude Haiku 4.5\", \"anthropic\", input: %w[text]),\n+      registry_model(\"claude-opus-5-5\", \"Claude Opus 5.5 via OpenRouter\", \"openrouter\", input: %w[text]),\n+    ])\n+\n+    with_registry(registry) do\n+      assert_output(/Added/, //) { invoke_refresh_task }\n+    end\n+\n+    models = users(:keith).language_models\n+    assert models.find_by!(api_service: api_services(:keith_anthropic_service), api_name: \"claude-opus-5-5\").supports_thinking?\n+    refute models.find_by!(api_service: api_services(:keith_anthropic_service), api_name: \"claude-haiku-4-5\").supports_thinking?\n+    refute models.find_by!(api_service: api_services(:keith_openrouter_service), api_name: \"claude-opus-5-5\").supports_thinking?\n+  end\n+\n   private\n \n   def registry_model(id, name, provider, input:, capabilities: [])"
+  }
+ ],
+ "test_files": [
+  "test/controllers/messages_controller_test.rb",
+  "test/controllers/settings/language_models_controller_test.rb",
+  "test/controllers/settings/people_controller_test.rb",
+  "test/jobs/get_next_ai_message_job_ruby_llm_test.rb",
+  "test/models/language_model/export_test.rb",
+  "test/models/user/preference_test.rb",
+  "test/services/ai_backend/ruby_llm/intercepted_chat_test.rb",
+  "test/services/ai_backend/ruby_llm_test.rb",
+  "test/services/toolbox/open_meteo_test.rb",
+  "test/support/test_client/ruby_llm.rb",
+  "test/tasks/models_refresh_test.rb"
+ ]
+}

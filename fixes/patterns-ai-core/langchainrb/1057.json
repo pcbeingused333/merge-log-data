@@ -1,0 +1,41 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1057,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1057",
+ "title": "Rebuild thinking blocks in streamed Anthropic responses",
+ "merged_at": "2026-10-12T11:12:33Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n - [SECURITY]: A change which fixes a security vulnerability.\n \n ## [Unreleased]\n+- [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1057] Rebuild `thinking` and `redacted_thinking` blocks in streamed `Langchain::LLM::Anthropic#chat` responses instead of leaving `nil` in the content, which made `chat_completion` raise `NoMethodError` whenever Claude thought (by default on Claude 5 models).\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1056] Format `PromptTemplate` and the `FewShotPromptTemplate` suffix in a single pass, so escaped `{{braces}}` stay literal, an inserted value is never expanded as another variable, and backslashes in values (`\\'`, `\\0`, `\\&`) are kept as-is.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1055] Stop sending the default `temperature` (0.0) from `Langchain::LLM::Anthropic#chat`; Claude Opus 4.7+ and Sonnet 5+ reject it with a 400. A temperature set in `default_options` or passed to `#chat` is still sent.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1052] Return every `tool_use` block from `AnthropicResponse#tool_calls` instead of only the first, so parallel tool calls from Claude are no longer silently dropped."
+  },
+  {
+   "filename": "lib/langchain/llm/anthropic.rb",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 2,
+   "patch": "@@ -146,13 +146,16 @@ def response_from_chunks\n       stop_reason = usage_chunk&.dig(\"delta\", \"stop_reason\")\n \n       content = grouped_chunks.map do |_index, chunks|\n+        block_type = chunks.find { |chunk| chunk[\"type\"] == \"content_block_start\" }&.dig(\"content_block\", \"type\")\n         text = chunks.map { |chunk| chunk.dig(\"delta\", \"text\") }.join\n-        if !text.nil? && !text.empty?\n+        if block_type == \"thinking\" || block_type == \"redacted_thinking\"\n+          thinking_block_from_chunks(chunks, block_type)\n+        elsif !text.nil? && !text.empty?\n           {type: \"text\", text: text}\n         else\n           tool_calls_from_choice_chunks(chunks)\n         end\n-      end.flatten\n+      end.flatten.compact\n \n       first_chunk = @response_chunks.first\n       {\n@@ -165,6 +168,21 @@ def response_from_chunks\n       }\n     end\n \n+    # Rebuilds a thinking block from its deltas. The signature is kept so the block\n+    # can be passed back unchanged on a later turn.\n+    def thinking_block_from_chunks(chunks, block_type)\n+      if block_type == \"redacted_thinking\"\n+        start = chunks.find { |chunk| chunk[\"type\"] == \"content_block_start\" }\n+        return {type: \"redacted_thinking\", data: start.dig(\"content_block\", \"data\")}\n+      end\n+\n+      {\n+        type: \"thinking\",\n+        thinking: chunks.map { |chunk| chunk.dig(\"delta\", \"thinking\") }.join,\n+        signature: chunks.map { |chunk| chunk.dig(\"delta\", \"signature\") }.join\n+      }\n+    end\n+\n     def tool_calls_from_choice_chunks(chunks)\n       return unless (first_block = chunks.find { |chunk| chunk.dig(\"content_block\", \"type\") == \"tool_use\" })\n "
+  },
+  {
+   "filename": "spec/fixtures/llm/anthropic/chat_stream_with_thinking.json",
+   "status": "added",
+   "additions": 88,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,88 @@\n+[\n+  {\n+    \"type\": \"message_start\",\n+    \"message\": {\n+      \"id\": \"msg_01ThinkStream\",\n+      \"type\": \"message\",\n+      \"role\": \"assistant\",\n+      \"model\": \"claude-sonnet-5-5\",\n+      \"content\": [],\n+      \"stop_reason\": null,\n+      \"stop_sequence\": null,\n+      \"usage\": {\n+        \"input_tokens\": 12,\n+        \"output_tokens\": 1\n+      }\n+    }\n+  },\n+  {\n+    \"type\": \"content_block_start\",\n+    \"index\": 0,\n+    \"content_block\": {\n+      \"type\": \"thinking\",\n+      \"thinking\": \"\",\n+      \"signature\": \"\"\n+    }\n+  },\n+  {\n+    \"type\": \"content_block_delta\",\n+    \"index\": 0,\n+    \"delta\": {\n+      \"type\": \"thinking_delta\",\n+      \"thinking\": \"The user is greeting me.\"\n+    }\n+  },\n+  {\n+    \"type\": \"content_block_delta\",\n+    \"index\": 0,\n+    \"delta\": {\n+      \"type\": \"signature_delta\",\n+      \"signature\": \"EqQBCgIYAhIM\"\n+    }\n+  },\n+  {\n+    \"type\": \"content_block_stop\",\n+    \"index\": 0\n+  },\n+  {\n+    \"type\": \"content_block_start\",\n+    \"index\": 1,\n+    \"content_block\": {\n+      \"type\": \"text\",\n+      \"text\": \"\"\n+    }\n+  },\n+  {\n+    \"type\": \"content_block_delta\",\n+    \"index\": 1,\n+    \"delta\": {\n+      \"type\": \"text_delta\",\n+      \"text\": \"Life is \"\n+    }\n+  },\n+  {\n+    \"type\": \"content_block_delta\",\n+    \"index\": 1,\n+    \"delta\": {\n+      \"type\": \"text_delta\",\n+      \"text\": \"pretty good\"\n+    }\n+  },\n+  {\n+    \"type\": \"content_block_stop\",\n+    \"index\": 1\n+  },\n+  {\n+    \"type\": \"message_delta\",\n+    \"delta\": {\n+      \"stop_reason\": \"end_turn\",\n+      \"stop_sequence\": null\n+    },\n+    \"usage\": {\n+      \"output_tokens\": 30\n+    }\n+  },\n+  {\n+    \"type\": \"message_stop\"\n+  }\n+]"
+  },
+  {
+   "filename": "spec/lib/langchain/llm/anthropic_spec.rb",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -178,6 +178,33 @@\n       end\n     end\n \n+    context \"with streaming and a thinking block\" do\n+      let(:fixture) { File.read(\"spec/fixtures/llm/anthropic/chat_stream_with_thinking.json\") }\n+      let(:response) { JSON.parse(fixture) }\n+      let(:stream_handler) { proc { _1 } }\n+\n+      before do\n+        allow(subject.client.messages).to receive(:create) do |parameters|\n+          response.each do |chunk|\n+            parameters[:stream].call(chunk)\n+          end\n+        end\n+      end\n+\n+      it \"returns the text after the thinking block\" do\n+        rsp = subject.chat(messages: messages, &stream_handler)\n+        expect(rsp.chat_completion).to eq(\"Life is pretty good\")\n+        expect(rsp.tool_calls).to eq([])\n+      end\n+\n+      it \"keeps the thinking block with its signature\" do\n+        rsp = subject.chat(messages: messages, &stream_handler)\n+        expect(rsp.chat_completions.first).to eq(\n+          {type: \"thinking\", thinking: \"The user is greeting me.\", signature: \"EqQBCgIYAhIM\"}\n+        )\n+      end\n+    end\n+\n     context \"with streaming tools\" do\n       let(:fixture) { File.read(\"spec/fixtures/llm/anthropic/chat_stream_with_tool_calls.json\") }\n       let(:response) { JSON.parse(fixture) }"
+  }
+ ],
+ "test_files": [
+  "spec/fixtures/llm/anthropic/chat_stream_with_thinking.json",
+  "spec/lib/langchain/llm/anthropic_spec.rb"
+ ]
+}

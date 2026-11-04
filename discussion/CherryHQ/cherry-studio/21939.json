@@ -1,0 +1,40 @@
+{
+ "repo": "CherryHQ/cherry-studio",
+ "number": 21939,
+ "url": "https://github.com/CherryHQ/cherry-studio/pull/21939",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-18T09:43:48Z",
+   "body": "Technical review supports approval of frozen head `59fa8b0d16ab8f1618a9f58bae96031c643a6c6c`, with one non-blocking shared-layer placement warning. No confirmed must-fix runtime defect was found, and this assessment does not depend on related PR #15482 merging.\n\nAt 2026-10-18 09:42:13 UTC, all reported head test and basic-check jobs had passed; `cherry-review` remained running. Legacy status had zero contexts, and the supplied synthetic-merge snapshot had no checks. Validation used source and contract inspection; no local Vitest or live Anthropic request was run by the Lead.\n\n**Cherry Review · Passed**\n\n1 non_blocking\nSee inline comments for individual findings.\n\n<!-- cherry-review:run=ff1ebe48bfc9c39c -->"
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-19T01:47:32Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "src/shared/utils/model.ts",
+   "created_at": "2026-10-18T09:43:48Z",
+   "body": "**Non-blocking risk**: `isClaudeFixedSamplingModel` is consumed only by main-process `modelParameters.ts`. The shared-layer contract (§1.1) requires actual main and renderer consumers, so this adds main-only request policy to the cross-process API. Please keep the predicate private in `modelParameters.ts`, reusing the shared ID-normalization helpers. This is a non-blocking placement warning; no runtime failure was established from its current location.\n\n`inv_537e61f37d641af7#f1`"
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-10-18T11:03:18Z",
+   "body": "**Pass with one gap.** I drove the real macOS app against a stand-in Anthropic endpoint that records what the app actually sends. With temperature turned on at 0.8, a chat message to `claude-opus-4-8` no longer carries `temperature`, `top_p` or `top_k` - exactly what this PR intends.\n\n### What this PR changes\n\nThe rule \"Claude rejects sampling params\" widens from Opus 4.7-only to Opus 4.7+, Opus/Sonnet/Haiku 5.x, Fable and Mythos, and a custom `topK` is now dropped for the 5.5 models.\n\n### How I tested it\n\n1. Added a provider in the real app pointing at a local endpoint that logs the outgoing request body.\n2. Turned on temperature (0.8) for the assistant.\n3. Sent a message with **Claude Sonnet 4.6** (older model, should keep sampling params).\n4. Sent a message with **Claude Opus 4.8** (newly covered model).\n\n### Results\n\n| Model | temperature in the outgoing request |\n| --- | --- |\n| `claude-sonnet-4-6` (baseline) | present, 0.8 |\n| `claude-opus-4-8` | absent |\n\nThe baseline matters: the same temperature setting still reaches an older Claude model, so this is a targeted change and not a blanket removal of sampling params for all Claude models.\n\n![Provider and models set up against the recording endpoint](https://github.com/CherryHQ/cherry-studio/blob/qa-evidence/docs/pr-evidence/21939/59fa8b0/s15-enabled.png?raw=true)\n\nThe service accepted the Sonnet 4.6 message and streamed a reply back, so the older path still works.\n\n![Sonnet 4.6 message sent and answered](https://github.com/CherryHQ/cherry-studio/blob/qa-evidence/docs/pr-evidence/21939/59fa8b0/s42-sonnet-baseline.png?raw=true)\n\nThe Opus 4.8 message also completed, and its request body carried no sampling params.\n\n![Opus 4.8 message sent](https://github.com/CherryHQ/cherry-studio/blob/qa-evidence/docs/pr-evidence/21939/59fa8b0/s44-opus-msg.png?raw=true)\n\n### Not covered\n\n- Real Anthropic production endpoints (no API key on this machine). The check above uses a local stand-in, so it proves what the app sends, not what Anthropic replies.\n- Bedrock (`anthropic.claude-opus-4-8-v1:0`) and OpenRouter (`anthropic/claude-sonnet-5`) id forms - covered by your unit tests, not by a real chat here.\n- `topP` and a custom `topK` were not exercised through the UI; the outgoing requests carried neither, so there was nothing to observe.\n\n### Needed from you\n\nNothing blocking."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-18T12:11:30Z",
+   "body": "**Additional check on the 5.x branch of the new rule (same verdict: pass with the same gap).**\n\nMy earlier comment tested the Opus 4.8 branch of the widened rule. I repeated the same real-app setup for the **Claude 5 family** branch, which had not been exercised through a real chat yet:\n\n| Model | temperature in the outgoing request |\n| --- | --- |\n| `claude-opus-5-qa` (newly covered 5.x naming) | absent |\n| `claude-sonnet-4-6-qa` (older model, control) | present, 1.0 |\n\nBoth chats completed and streamed a reply, so chatting with a 5.x-named Claude model still works and only the sampling params are dropped.\n\n![Opus 5-named model: message sent and answered](https://github.com/CherryHQ/cherry-studio/blob/qa-evidence/docs/pr-evidence/21939/59fa8b0/chat2-claude-opus-5-qa-reply.png?raw=true)\n\n![Control Sonnet 4.6: message sent and answered](https://github.com/CherryHQ/cherry-studio/blob/qa-evidence/docs/pr-evidence/21939/59fa8b0/chat2-claude-sonnet-4-6-qa-reply.png?raw=true)\n\nUncovered is unchanged: real Anthropic production endpoints (no API key on this machine) and the Bedrock/OpenRouter id forms (unit-test only).\n\nNothing blocking.\n"
+  }
+ ]
+}

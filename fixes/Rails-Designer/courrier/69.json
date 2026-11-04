@@ -1,0 +1,80 @@
+{
+ "repo": "Rails-Designer/courrier",
+ "number": 69,
+ "url": "https://github.com/Rails-Designer/courrier/pull/69",
+ "title": "Send a display name in its own field to the JSON API providers",
+ "merged_at": "2026-11-02T19:23:52Z",
+ "files": [
+  {
+   "filename": "lib/courrier/email/providers/base.rb",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 1,
+   "patch": "@@ -55,12 +55,27 @@ def split_addresses(value)\n \n         def address_element(address, as)\n           case as\n-          when :email then {\"email\" => address}\n+          when :email then email_and_name(address)\n           when :address then {\"address\" => address}\n           else address\n           end\n         end\n \n+        def email_and_name(address, email_key: \"email\", name_key: \"name\")\n+          match = address.match(/\\A(?<name>.*?)\\s*<(?<email>[^<>]+)>\\z/m)\n+          return {email_key => address} unless match\n+\n+          name = unquote(match[:name].strip)\n+\n+          {email_key => match[:email].strip, name_key => (name unless name.empty?)}.compact\n+        end\n+\n+        def unquote(name)\n+          return name unless name.length >= 2 && name.start_with?('\"') && name.end_with?('\"')\n+\n+          name[1..-2].gsub(/\\\\(.)/m, '\\1')\n+        end\n+\n         def provider = self.class.name.split(\"::\").last\n       end\n     end"
+  },
+  {
+   "filename": "lib/courrier/email/providers/mailjet.rb",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 13,
+   "patch": "@@ -12,14 +12,12 @@ def body\n           {\n             \"Messages\" => [\n               {\n-                \"From\" => {\n-                  \"Email\" => @options.from\n-                },\n+                \"From\" => addresses(@options.from)&.first,\n \n                 \"To\" => addresses(@options.to),\n                 \"Cc\" => addresses(@options.cc),\n                 \"Bcc\" => addresses(@options.bcc),\n-                \"ReplyTo\" => reply_to_object,\n+                \"ReplyTo\" => addresses(@options.reply_to)&.first,\n \n                 \"Subject\" => @options.subject,\n                 \"TextPart\" => @options.text,\n@@ -38,15 +36,7 @@ def default_headers\n         end\n \n         def addresses(value)\n-          address_list(value, as: :plain)&.map { |address| {\"Email\" => address} }\n-        end\n-\n-        def reply_to_object\n-          return if @options.reply_to.nil?\n-\n-          {\n-            \"Email\" => @options.reply_to\n-          }\n+          address_list(value, as: :plain)&.map { |address| email_and_name(address, email_key: \"Email\", name_key: \"Name\") }\n         end\n       end\n     end"
+  },
+  {
+   "filename": "lib/courrier/email/providers/sendgrid.rb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 12,
+   "patch": "@@ -8,17 +8,15 @@ class Sendgrid < Base\n \n         def body\n           {\n-            \"from\" => {\n-              \"email\" => @options.from\n-            },\n+            \"from\" => address_list(@options.from)&.first,\n             \"personalizations\" => [\n               {\n                 \"to\" => address_list(@options.to),\n                 \"cc\" => address_list(@options.cc),\n                 \"bcc\" => address_list(@options.bcc)\n               }.compact\n             ],\n-            \"reply_to\" => reply_to_object,\n+            \"reply_to\" => address_list(@options.reply_to)&.first,\n \n             \"subject\" => @options.subject,\n             \"content\" => [\n@@ -41,14 +39,6 @@ def default_headers\n             \"Authorization\" => \"Bearer #{@api_key}\"\n           }\n         end\n-\n-        def reply_to_object\n-          return if @options.reply_to.nil?\n-\n-          {\n-            \"email\" => @options.reply_to\n-          }\n-        end\n       end\n     end\n   end"
+  },
+  {
+   "filename": "test/courrier/email/providers/brevo_test.rb",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 1,
+   "patch": "@@ -36,7 +36,7 @@ def test_keeps_a_comma_inside_a_quoted_display_name\n \n       body = Brevo.new(api_key: \"test_key\", options: email.options).body\n \n-      assert_equal [{\"email\" => recipient}, {\"email\" => \"cc@railsdesigner.com\"}], body[\"to\"]\n+      assert_equal [{\"email\" => \"cc@railsdesigner.com\", \"name\" => \"Rails, Designer\"}, {\"email\" => \"cc@railsdesigner.com\"}], body[\"to\"]\n     end\n \n     def test_authenticates_with_api_key\n@@ -73,5 +73,20 @@ def test_omits_empty_address_fields\n       refute_includes body.keys, \"bcc\"\n       refute_includes body.keys, \"replyTo\"\n     end\n+\n+    def test_sends_a_display_name_in_its_own_field\n+      recipient = Courrier::Email::Address.with_name(\"cc@railsdesigner.com\", 'Doe, \"Johnny\" John')\n+      email = TestEmail.new(\n+        from: \"Rails Designer <devs@railsdesigner.com>\",\n+        to: \"#{recipient}, plain@example.com\",\n+        reply_to: \"Support <support@railsdesigner.com>\"\n+      )\n+\n+      body = Brevo.new(api_key: \"test_key\", options: email.options).body\n+\n+      assert_equal({\"email\" => \"devs@railsdesigner.com\", \"name\" => \"Rails Designer\"}, body[\"sender\"])\n+      assert_equal [{\"email\" => \"cc@railsdesigner.com\", \"name\" => \"Doe, \\\"Johnny\\\" John\"}, {\"email\" => \"plain@example.com\"}], body[\"to\"]\n+      assert_equal({\"email\" => \"support@railsdesigner.com\", \"name\" => \"Support\"}, body[\"replyTo\"])\n+    end\n   end\n end"
+  },
+  {
+   "filename": "test/courrier/email/providers/mailersend_test.rb",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -64,5 +64,20 @@ def test_omits_empty_address_fields\n       refute_includes body.keys, \"bcc\"\n       refute_includes body.keys, \"reply_to\"\n     end\n+\n+    def test_sends_a_display_name_in_its_own_field\n+      recipient = Courrier::Email::Address.with_name(\"cc@railsdesigner.com\", 'Doe, \"Johnny\" John')\n+      email = TestEmail.new(\n+        from: \"Rails Designer <devs@railsdesigner.com>\",\n+        to: \"#{recipient}, plain@example.com\",\n+        reply_to: \"Support <support@railsdesigner.com>\"\n+      )\n+\n+      body = Mailersend.new(api_key: \"test_key\", options: email.options).body\n+\n+      assert_equal({\"email\" => \"devs@railsdesigner.com\", \"name\" => \"Rails Designer\"}, body[\"from\"])\n+      assert_equal [{\"email\" => \"cc@railsdesigner.com\", \"name\" => \"Doe, \\\"Johnny\\\" John\"}, {\"email\" => \"plain@example.com\"}], body[\"to\"]\n+      assert_equal({\"email\" => \"support@railsdesigner.com\", \"name\" => \"Support\"}, body[\"reply_to\"])\n+    end\n   end\n end"
+  },
+  {
+   "filename": "test/courrier/email/providers/mailjet_test.rb",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -69,6 +69,23 @@ def test_is_available_through_provider_registry\n       mock_provider.verify\n     end\n \n+    def test_sends_a_display_name_in_its_own_field\n+      recipient = Courrier::Email::Address.with_name(\"cc@railsdesigner.com\", 'Doe, \"Johnny\" John')\n+      email = TestEmail.new(\n+        from: \"Rails Designer <devs@railsdesigner.com>\",\n+        to: \"#{recipient}, plain@example.com\",\n+        reply_to: \"Support <support@railsdesigner.com>\"\n+      )\n+\n+      body = Mailjet.new(api_key: \"test_key\", options: email.options, provider_options: Struct.new(:api_secret).new(\"secret\")).body\n+\n+      message = body[\"Messages\"][0]\n+\n+      assert_equal({\"Email\" => \"devs@railsdesigner.com\", \"Name\" => \"Rails Designer\"}, message[\"From\"])\n+      assert_equal [{\"Email\" => \"cc@railsdesigner.com\", \"Name\" => \"Doe, \\\"Johnny\\\" John\"}, {\"Email\" => \"plain@example.com\"}], message[\"To\"]\n+      assert_equal({\"Email\" => \"support@railsdesigner.com\", \"Name\" => \"Support\"}, message[\"ReplyTo\"])\n+    end\n+\n     private\n \n     def provider_for(email)"
+  },
+  {
+   "filename": "test/courrier/email/providers/mailtrap_test.rb",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -73,5 +73,20 @@ def test_omits_empty_address_fields\n       refute_includes body.keys, \"bcc\"\n       refute_includes body.keys, \"reply_to\"\n     end\n+\n+    def test_sends_a_display_name_in_its_own_field\n+      recipient = Courrier::Email::Address.with_name(\"cc@railsdesigner.com\", 'Doe, \"Johnny\" John')\n+      email = TestEmail.new(\n+        from: \"Rails Designer <devs@railsdesigner.com>\",\n+        to: \"#{recipient}, plain@example.com\",\n+        reply_to: \"Support <support@railsdesigner.com>\"\n+      )\n+\n+      body = Mailtrap.new(api_key: \"test_key\", options: email.options).body\n+\n+      assert_equal({\"email\" => \"devs@railsdesigner.com\", \"name\" => \"Rails Designer\"}, body[\"from\"])\n+      assert_equal [{\"email\" => \"cc@railsdesigner.com\", \"name\" => \"Doe, \\\"Johnny\\\" John\"}, {\"email\" => \"plain@example.com\"}], body[\"to\"]\n+      assert_equal({\"email\" => \"support@railsdesigner.com\", \"name\" => \"Support\"}, body[\"reply_to\"])\n+    end\n   end\n end"
+  },
+  {
+   "filename": "test/courrier/email/providers/sendgrid_test.rb",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -47,6 +47,21 @@ def test_authenticates_with_api_key\n       assert_equal({\"Authorization\" => \"Bearer test_key\"}, @provider.send(:default_headers))\n     end\n \n+    def test_sends_a_display_name_in_its_own_field\n+      recipient = Courrier::Email::Address.with_name(\"cc@railsdesigner.com\", 'Doe, \"Johnny\" John')\n+      email = TestEmail.new(\n+        from: \"Rails Designer <devs@railsdesigner.com>\",\n+        to: \"#{recipient}, plain@example.com\",\n+        reply_to: \"Support <support@railsdesigner.com>\"\n+      )\n+\n+      body = Sendgrid.new(api_key: \"test_key\", options: email.options).body\n+\n+      assert_equal({\"email\" => \"devs@railsdesigner.com\", \"name\" => \"Rails Designer\"}, body[\"from\"])\n+      assert_equal [{\"email\" => \"cc@railsdesigner.com\", \"name\" => \"Doe, \\\"Johnny\\\" John\"}, {\"email\" => \"plain@example.com\"}], body[\"personalizations\"][0][\"to\"]\n+      assert_equal({\"email\" => \"support@railsdesigner.com\", \"name\" => \"Support\"}, body[\"reply_to\"])\n+    end\n+\n     private\n \n     def provider_for(**options)"
+  },
+  {
+   "filename": "test/courrier/providers/base_test.rb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -79,9 +79,9 @@ def test_address_list_splits_a_plain_comma_separated_list\n   def test_address_list_keeps_a_comma_inside_a_quoted_display_name\n     recipient = Courrier::Email::Address.with_name(\"cc@railsdesigner.com\", \"Rails, Designer\")\n \n-    assert_equal [{\"email\" => recipient}], @provider.send(:address_list, recipient)\n+    assert_equal [{\"email\" => \"cc@railsdesigner.com\", \"name\" => \"Rails, Designer\"}], @provider.send(:address_list, recipient)\n     assert_equal(\n-      [{\"email\" => recipient}, {\"email\" => \"cc@railsdesigner.com\"}],\n+      [{\"email\" => \"cc@railsdesigner.com\", \"name\" => \"Rails, Designer\"}, {\"email\" => \"cc@railsdesigner.com\"}],\n       @provider.send(:address_list, \"#{recipient}, cc@railsdesigner.com\")\n     )\n   end"
+  }
+ ],
+ "test_files": [
+  "test/courrier/email/providers/brevo_test.rb",
+  "test/courrier/email/providers/mailersend_test.rb",
+  "test/courrier/email/providers/mailjet_test.rb",
+  "test/courrier/email/providers/mailtrap_test.rb",
+  "test/courrier/email/providers/sendgrid_test.rb",
+  "test/courrier/providers/base_test.rb"
+ ]
+}

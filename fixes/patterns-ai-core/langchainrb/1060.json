@@ -1,0 +1,33 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1060,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1060",
+ "title": "Find function calls and text anywhere in a Gemini response's parts",
+ "merged_at": "2026-10-13T06:11:31Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n - [SECURITY]: A change which fixes a security vulnerability.\n \n ## [Unreleased]\n+- [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1060] Find `functionCall` and text parts anywhere in a `GoogleGeminiResponse`, so a tool call that follows text is run instead of ending the `Langchain::Assistant` run, a text part after a call no longer raises `NoMethodError`, and `chat_completion` joins every text part and leaves out thought summaries.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1058] Pass Anthropic `thinking` and `redacted_thinking` blocks back, first and unchanged, in the assistant turn of `Langchain::Assistant`'s tool-use loop; dropping them made the request carrying the tool result fail whenever Claude thought before calling a tool.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1059] Give a streamed `Langchain::LLM::Anthropic` tool call without arguments `input: {}` instead of `nil`, which made `Langchain::Assistant` end the run in `:failed` with streaming on.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1057] Rebuild `thinking` and `redacted_thinking` blocks in streamed `Langchain::LLM::Anthropic#chat` responses instead of leaving `nil` in the content, which made `chat_completion` raise `NoMethodError` whenever Claude thought (by default on Claude 5 models)."
+  },
+  {
+   "filename": "lib/langchain/llm/response/google_gemini_response.rb",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 8,
+   "patch": "@@ -6,22 +6,21 @@ def initialize(raw_response, model: nil)\n       super\n     end\n \n+    # The model's answer, from every text part. A function call or a thought summary (`\"thought\": true`)\n+    # can come before the text, and a long answer can be split over several text parts.\n     def chat_completion\n-      raw_response.dig(\"candidates\", 0, \"content\", \"parts\", 0, \"text\")\n+      texts = parts.select { |part| part.key?(\"text\") && !part[\"thought\"] }.map { |part| part[\"text\"] }\n+      texts.join unless texts.empty?\n     end\n \n     def role\n       raw_response.dig(\"candidates\", 0, \"content\", \"role\")\n     end\n \n+    # The function call parts, wherever they are. The model often explains what it's about to do in a\n+    # text part before the call.\n     def tool_calls\n-      parts = raw_response.dig(\"candidates\", 0, \"content\", \"parts\")\n-\n-      if parts&.first.is_a?(Hash) && parts.first.key?(\"functionCall\")\n-        parts\n-      else\n-        []\n-      end\n+      parts.select { |part| part.key?(\"functionCall\") }\n     end\n \n     def embedding\n@@ -47,5 +46,11 @@ def completion_tokens\n     def total_tokens\n       raw_response.dig(\"usageMetadata\", \"totalTokenCount\")\n     end\n+\n+    private\n+\n+    def parts\n+      Array(raw_response.dig(\"candidates\", 0, \"content\", \"parts\")).grep(Hash)\n+    end\n   end\n end"
+  },
+  {
+   "filename": "spec/lib/langchain/llm/response/google_gemini_response_spec.rb",
+   "status": "modified",
+   "additions": 47,
+   "deletions": 0,
+   "patch": "@@ -14,6 +14,38 @@\n     it \"returns role\" do\n       expect(response.role).to eq(\"model\")\n     end\n+\n+    it \"joins the text parts when the model splits its answer\" do\n+      raw = {\"candidates\" => [{\"content\" => {\"role\" => \"model\", \"parts\" => [{\"text\" => \"The answer \"}, {\"text\" => \"is 4.0\"}]}}]}\n+\n+      expect(described_class.new(raw).chat_completion).to eq(\"The answer is 4.0\")\n+    end\n+\n+    it \"returns the text that comes after a function call\" do\n+      raw = {\"candidates\" => [{\"content\" => {\"role\" => \"model\", \"parts\" => [\n+        {\"functionCall\" => {\"name\" => \"calculator__execute\", \"args\" => {\"input\" => \"2+2\"}}},\n+        {\"text\" => \"Let me calculate that.\"}\n+      ]}}]}\n+\n+      expect(described_class.new(raw).chat_completion).to eq(\"Let me calculate that.\")\n+    end\n+\n+    it \"leaves out thought summaries\" do\n+      raw = {\"candidates\" => [{\"content\" => {\"role\" => \"model\", \"parts\" => [\n+        {\"text\" => \"**Adding the numbers**\", \"thought\" => true},\n+        {\"text\" => \"The answer is 4.0\", \"thoughtSignature\" => \"c2ln\"}\n+      ]}}]}\n+\n+      expect(described_class.new(raw).chat_completion).to eq(\"The answer is 4.0\")\n+    end\n+\n+    it \"returns nil when there is no text\" do\n+      raw = {\"candidates\" => [{\"content\" => {\"role\" => \"model\", \"parts\" => [\n+        {\"functionCall\" => {\"name\" => \"calculator__execute\", \"args\" => {\"input\" => \"2+2\"}}}\n+      ]}}]}\n+\n+      expect(described_class.new(raw).chat_completion).to be_nil\n+    end\n   end\n \n   describe \"#tool_calls\" do\n@@ -26,6 +58,21 @@\n       expect(response.tool_calls).to eq([{\"functionCall\" => {\"name\" => \"calculator__execute\", \"args\" => {\"input\" => \"2+2\"}}}])\n     end\n \n+    it \"returns a function call that follows text\" do\n+      call = {\"functionCall\" => {\"name\" => \"calculator__execute\", \"args\" => {\"input\" => \"2+2\"}}, \"thoughtSignature\" => \"c2ln\"}\n+      raw = {\"candidates\" => [{\"content\" => {\"role\" => \"model\", \"parts\" => [{\"text\" => \"Let me calculate that.\"}, call]}}]}\n+\n+      expect(described_class.new(raw).tool_calls).to eq([call])\n+    end\n+\n+    it \"returns only the function call parts\" do\n+      first = {\"functionCall\" => {\"name\" => \"calculator__execute\", \"args\" => {\"input\" => \"2+2\"}}}\n+      second = {\"functionCall\" => {\"name\" => \"calculator__execute\", \"args\" => {\"input\" => \"3+3\"}}}\n+      raw = {\"candidates\" => [{\"content\" => {\"role\" => \"model\", \"parts\" => [first, {\"text\" => \"Calculating.\"}, second]}}]}\n+\n+      expect(described_class.new(raw).tool_calls).to eq([first, second])\n+    end\n+\n     it \"returns [] when the candidate content has no parts (e.g. finishReason SAFETY)\" do\n       raw = {\"candidates\" => [{\"content\" => {\"role\" => \"model\"}, \"finishReason\" => \"SAFETY\"}]}\n "
+  }
+ ],
+ "test_files": [
+  "spec/lib/langchain/llm/response/google_gemini_response_spec.rb"
+ ]
+}

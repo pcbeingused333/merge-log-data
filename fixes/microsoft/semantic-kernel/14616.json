@@ -1,0 +1,26 @@
+{
+ "repo": "microsoft/semantic-kernel",
+ "number": 14616,
+ "url": "https://github.com/microsoft/semantic-kernel/pull/14616",
+ "title": "Python: fix(anthropic): map every Anthropic stop reason instead of raising KeyError",
+ "merged_at": "2026-10-28T07:08:53Z",
+ "files": [
+  {
+   "filename": "python/semantic_kernel/connectors/ai/anthropic/services/anthropic_chat_completion.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -65,8 +65,11 @@\n # map finish reasons from Anthropic to Semantic Kernel\n ANTHROPIC_TO_SEMANTIC_KERNEL_FINISH_REASON_MAP = {\n     \"end_turn\": SemanticKernelFinishReason.STOP,\n+    \"stop_sequence\": SemanticKernelFinishReason.STOP,\n     \"max_tokens\": SemanticKernelFinishReason.LENGTH,\n+    \"model_context_window_exceeded\": SemanticKernelFinishReason.LENGTH,\n     \"tool_use\": SemanticKernelFinishReason.TOOL_CALLS,\n+    \"refusal\": SemanticKernelFinishReason.CONTENT_FILTER,\n }\n \n logger: logging.Logger = logging.getLogger(__name__)\n@@ -274,7 +277,7 @@ def _create_chat_message_content(\n \n         finish_reason = None\n         if response.stop_reason:\n-            finish_reason = ANTHROPIC_TO_SEMANTIC_KERNEL_FINISH_REASON_MAP[response.stop_reason]\n+            finish_reason = ANTHROPIC_TO_SEMANTIC_KERNEL_FINISH_REASON_MAP.get(response.stop_reason)\n \n         return ChatMessageContent(\n             inner_content=response,\n@@ -312,7 +315,7 @@ def _create_streaming_chat_message_content(\n                 )\n             )\n         elif isinstance(stream_event, RawMessageDeltaEvent):\n-            finish_reason = ANTHROPIC_TO_SEMANTIC_KERNEL_FINISH_REASON_MAP[str(stream_event.delta.stop_reason)]\n+            finish_reason = ANTHROPIC_TO_SEMANTIC_KERNEL_FINISH_REASON_MAP.get(str(stream_event.delta.stop_reason))\n             usage = _get_completion_usage(stream_event.usage)\n             start_usage = metadata.get(\"usage\") if metadata else None\n             if getattr(stream_event.usage, \"input_tokens\", None) is None and isinstance(start_usage, CompletionUsage):"
+  },
+  {
+   "filename": "python/tests/unit/connectors/ai/anthropic/services/test_anthropic_chat_completion.py",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -22,6 +22,7 @@\n from semantic_kernel.contents.chat_message_content import ChatMessageContent, FunctionCallContent, TextContent\n from semantic_kernel.contents.streaming_chat_message_content import StreamingChatMessageContent\n from semantic_kernel.contents.utils.author_role import AuthorRole\n+from semantic_kernel.contents.utils.finish_reason import FinishReason\n from semantic_kernel.exceptions import (\n     ServiceInitializationError,\n     ServiceInvalidExecutionSettingsError,\n@@ -666,3 +667,40 @@ async def async_generator():\n         gen_ai_attributes.INPUT_TOKENS: 130,\n         gen_ai_attributes.OUTPUT_TOKENS: 7,\n     }\n+\n+\n+@pytest.mark.parametrize(\n+    (\"stop_reason\", \"finish_reason\"),\n+    [\n+        (\"end_turn\", FinishReason.STOP),\n+        (\"stop_sequence\", FinishReason.STOP),\n+        (\"max_tokens\", FinishReason.LENGTH),\n+        (\"model_context_window_exceeded\", FinishReason.LENGTH),\n+        (\"tool_use\", FinishReason.TOOL_CALLS),\n+        (\"refusal\", FinishReason.CONTENT_FILTER),\n+        (\"pause_turn\", None),\n+    ],\n+)\n+def test_stop_reason_maps_to_finish_reason(anthropic_unit_test_env, stop_reason, finish_reason) -> None:\n+    chat_completion = AnthropicChatCompletion()\n+    message = Message(\n+        id=\"msg_1\",\n+        type=\"message\",\n+        role=\"assistant\",\n+        model=\"claude-sonnet-4-5\",\n+        content=[TextBlock(type=\"text\", text=\"Hello\")],\n+        stop_reason=stop_reason,\n+        stop_sequence=None,\n+        usage=Usage(input_tokens=1, output_tokens=1),\n+    )\n+    delta_event = RawMessageDeltaEvent(\n+        type=\"message_delta\",\n+        delta=Delta(stop_reason=stop_reason, stop_sequence=None),\n+        usage=MessageDeltaUsage(output_tokens=1),\n+    )\n+\n+    content = chat_completion._create_chat_message_content(message, {})\n+    streaming_content = chat_completion._create_streaming_chat_message_content(delta_event)\n+\n+    assert content.finish_reason == finish_reason\n+    assert streaming_content.finish_reason == finish_reason"
+  }
+ ],
+ "test_files": [
+  "python/tests/unit/connectors/ai/anthropic/services/test_anthropic_chat_completion.py"
+ ]
+}

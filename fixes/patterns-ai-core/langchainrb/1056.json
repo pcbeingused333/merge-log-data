@@ -1,0 +1,48 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1056,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1056",
+ "title": "Format prompt templates in a single pass (escaped braces, rescanned values, backslashes)",
+ "merged_at": "2026-10-11T13:02:30Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n - [SECURITY]: A change which fixes a security vulnerability.\n \n ## [Unreleased]\n+- [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1056] Format `PromptTemplate` and the `FewShotPromptTemplate` suffix in a single pass, so escaped `{{braces}}` stay literal, an inserted value is never expanded as another variable, and backslashes in values (`\\'`, `\\0`, `\\&`) are kept as-is.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1055] Stop sending the default `temperature` (0.0) from `Langchain::LLM::Anthropic#chat`; Claude Opus 4.7+ and Sonnet 5+ reject it with a 400. A temperature set in `default_options` or passed to `#chat` is still sent.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1052] Return every `tool_use` block from `AnthropicResponse#tool_calls` instead of only the first, so parallel tool calls from Claude are no longer silently dropped.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1051] Skip unsupported and non-file directory entries when loading a directory instead of returning an `UnknownFormatError` object into the results array."
+  },
+  {
+   "filename": "lib/langchain/prompt/few_shot_prompt_template.rb",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -90,8 +90,11 @@ def initialize(\n     def format(**kwargs)\n       example_string = @examples.map { |example| @example_prompt.format(**example) }\n \n-      suffix_string = @suffix\n-      kwargs.each { |key, value| suffix_string = suffix_string.gsub(/\\{#{key}\\}/, value.to_s) }\n+      values = kwargs.transform_keys(&:to_s)\n+      # A single pass, so an inserted value is never rescanned for variables or backslash escapes.\n+      suffix_string = @suffix.gsub(/\\{([^{}]*)\\}/) do |match|\n+        values.fetch(Regexp.last_match(1)) { match }.to_s\n+      end\n \n       [@prefix, *example_string, suffix_string].join(@example_separator)\n     end"
+  },
+  {
+   "filename": "lib/langchain/prompt/prompt_template.rb",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 4,
+   "patch": "@@ -57,10 +57,17 @@ def initialize(template:, input_variables:, validate_template: true)\n     # @return [String] A formatted string.\n     #\n     def format(**kwargs)\n-      result = @template\n-      result = result.gsub(/{{/, \"{\").gsub(/}}/, \"}\")\n-      kwargs.each { |key, value| result = result.gsub(/\\{#{key}\\}/, value.to_s) }\n-      result\n+      values = kwargs.transform_keys(&:to_s)\n+      # A single pass over the template: `{{` and `}}` become literal braces instead of opening a\n+      # variable, and an inserted value is never rescanned, so braces or backslashes in it\n+      # (JSON, code, user input) come out unchanged.\n+      @template.gsub(/\\{\\{|\\}\\}|\\{([^{}]*)\\}/) do |match|\n+        case match\n+        when \"{{\" then \"{\"\n+        when \"}}\" then \"}\"\n+        else values.fetch(Regexp.last_match(1)) { match }.to_s\n+        end\n+      end\n     end\n \n     #"
+  },
+  {
+   "filename": "spec/lib/langchain/prompts/few_shot_prompt_template_spec.rb",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -39,6 +39,12 @@\n       )\n     end\n \n+    it \"inserts a suffix value with backslashes or braces unchanged\" do\n+      value = %q(It\\'s {adjective} \\0)\n+\n+      expect(prompt.format(adjective: value)).to end_with(\"Input: #{value}\\nOutput:\")\n+    end\n+\n     context \"input_variables is invalid\" do\n       let(:input_variables) { [\"adjective\", \"extra_adjective\"] }\n "
+  },
+  {
+   "filename": "spec/lib/langchain/prompts/prompt_template_spec.rb",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -80,6 +80,26 @@\n \n       expect(prompt.format(schema: schema)).to eq(\"Tell me a joke that follows this schema: #{schema}\")\n     end\n+\n+    it \"keeps escaped braces literal when their content is also a variable name\" do\n+      prompt = described_class.new(template: \"Write {{name}} literally, then {name}.\", input_variables: [\"name\"])\n+\n+      expect(prompt.format(name: \"Ada\")).to eq(\"Write {name} literally, then Ada.\")\n+    end\n+\n+    it \"does not expand a variable that appears inside another variable's value\" do\n+      prompt = described_class.new(template: \"Question: {question} Context: {context}\", input_variables: [\"question\", \"context\"])\n+\n+      expect(prompt.format(question: \"what is {context}?\", context: \"internal notes\"))\n+        .to eq(\"Question: what is {context}? Context: internal notes\")\n+    end\n+\n+    it \"inserts values with backslashes unchanged\" do\n+      prompt = described_class.new(template: \"Code: {code}\", input_variables: [\"code\"])\n+      code = %q(s = 'It\\'s'; re = /\\d+/; path = \"C:\\\\Users\"; m = \"\\0\\&\")\n+\n+      expect(prompt.format(code: code)).to eq(\"Code: #{code}\")\n+    end\n   end\n \n   describe \"#from_template\" do"
+  }
+ ],
+ "test_files": [
+  "spec/lib/langchain/prompts/few_shot_prompt_template_spec.rb",
+  "spec/lib/langchain/prompts/prompt_template_spec.rb"
+ ]
+}

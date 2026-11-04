@@ -1,0 +1,26 @@
+{
+ "repo": "micro/go-micro",
+ "number": 5012,
+ "url": "https://github.com/micro/go-micro/pull/5012",
+ "title": "Accept Anthropic streamed tool calls that have no arguments",
+ "merged_at": "2026-10-20T10:48:14Z",
+ "files": [
+  {
+   "filename": "model/anthropic/stream_generate.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -75,7 +75,8 @@ func readMessage(reader io.Reader, onToken func(string)) ([]byte, error) {\n \t\t\t\treturn nil, fmt.Errorf(\"invalid content block stop\")\n \t\t\t}\n \t\t\topen = -1\n-\t\t\tif raw, ok := inputs[event.Index]; ok {\n+\t\t\t// a tool without parameters streams a single empty partial_json\n+\t\t\tif raw, ok := inputs[event.Index]; ok && strings.TrimSpace(raw) != \"\" {\n \t\t\t\tvar input map[string]any\n \t\t\t\tif err := json.Unmarshal([]byte(raw), &input); err != nil {\n \t\t\t\t\treturn nil, fmt.Errorf(\"tool arguments: %w\", err)"
+  },
+  {
+   "filename": "model/anthropic/stream_generate_test.go",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -43,3 +43,27 @@ data: {\"type\":\"message_stop\"}\n \t\tt.Fatal(\"accepted unfinished tool input\")\n \t}\n }\n+\n+func TestReadMessageAcceptsToolWithoutArguments(t *testing.T) {\n+\tdata := `data: {\"type\":\"message_start\",\"message\":{\"role\":\"assistant\"}}\n+data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"one\",\"name\":\"now\",\"input\":{}}}\n+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\"}}\n+data: {\"type\":\"content_block_stop\",\"index\":0}\n+data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n+data: {\"type\":\"message_stop\"}\n+`\n+\traw, err := readMessage(strings.NewReader(data), func(string) {})\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tvar result struct {\n+\t\tContent []map[string]any `json:\"content\"`\n+\t}\n+\tif err := json.Unmarshal(raw, &result); err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tinput, ok := result.Content[0][\"input\"].(map[string]any)\n+\tif !ok || len(input) != 0 {\n+\t\tt.Fatalf(\"content=%v\", result.Content)\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "model/anthropic/stream_generate_test.go"
+ ]
+}

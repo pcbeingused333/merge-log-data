@@ -1,0 +1,26 @@
+{
+ "repo": "Rails-Designer/perron",
+ "number": 215,
+ "url": "https://github.com/Rails-Designer/perron/pull/215",
+ "title": "Ignore a leading thematic break that isn't really frontmatter",
+ "merged_at": "2026-10-12T09:39:16Z",
+ "files": [
+  {
+   "filename": "lib/perron/resource/separator.rb",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 5,
+   "patch": "@@ -19,12 +19,18 @@ def frontmatter\n \n       def parsed(content)\n         if content =~ /\\A---\\s*(.*?)\\s*---\\s*(.*)/m\n-          @frontmatter = YAML.safe_load($1, permitted_classes: [Date, Time]) || {}\n-          @content = $2.strip\n-        else\n-          @frontmatter = {}\n-          @content = content\n+          parsed_yaml = YAML.safe_load($1, permitted_classes: [Date, Time])\n+\n+          if parsed_yaml.nil? || parsed_yaml.is_a?(Hash)\n+            @frontmatter = parsed_yaml || {}\n+            @content = $2.strip\n+\n+            return\n+          end\n         end\n+\n+        @frontmatter = {}\n+        @content = content\n       end\n     end\n   end"
+  },
+  {
+   "filename": "test/perron/resource/separator_test.rb",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -60,6 +60,30 @@ def test_parses_yaml_list_syntax\n     assert_equal [\"alice\", \"bob\"], separator.frontmatter.authors\n   end\n \n+  def test_treats_a_leading_thematic_break_as_content_not_frontmatter\n+    content = <<~CONTENT\n+      ---\n+\n+      An intro paragraph.\n+\n+      ---\n+\n+      The rest of the post.\n+    CONTENT\n+    separator = Perron::Resource::Separator.new(content)\n+\n+    assert_equal content, separator.content\n+    assert_empty separator.frontmatter.to_h\n+  end\n+\n+  def test_ignores_a_scalar_between_the_fences\n+    content = \"---\\nJust a sentence, not a mapping\\n---\\nBody\\n\"\n+    separator = Perron::Resource::Separator.new(content)\n+\n+    assert_equal content, separator.content\n+    assert_empty separator.frontmatter.to_h\n+  end\n+\n   def test_parses_mixed_types_in_frontmatter\n     content = <<~CONTENT\n       ---"
+  }
+ ],
+ "test_files": [
+  "test/perron/resource/separator_test.rb"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "pydantic/logfire",
+ "number": 2582,
+ "url": "https://github.com/pydantic/logfire/pull/2582",
+ "title": "Record OpenAI refusals in gen_ai.output.messages",
+ "merged_at": "2026-10-19T11:17:35Z",
+ "files": [
+  {
+   "filename": "logfire-sdk/logfire/_internal/integrations/llm_providers/openai.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -395,6 +395,10 @@ def convert_openai_response_to_semconv(\n     \"\"\"Convert an OpenAI ChatCompletionMessage to OTel Gen AI Semantic Convention format.\"\"\"\n     parts: list[MessagePart] = _convert_content_part_or_parts(message.content)\n \n+    # A refused request carries its text in `refusal` and leaves `content` empty.\n+    if refusal := getattr(message, 'refusal', None):\n+        parts.append(TextPart(type='text', content=refusal))\n+\n     if message.tool_calls:  # pragma: no cover\n         for tc in message.tool_calls:\n             # Only handle function tool calls (not custom tool calls)"
+  },
+  {
+   "filename": "tests/otel_integrations/test_openai.py",
+   "status": "modified",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -4416,6 +4416,55 @@ def test_convert_responses_inputs_no_instructions() -> None:\n     )\n \n \n+def test_convert_openai_response_refusal() -> None:\n+    \"\"\"A refusal is recorded as a text part, since the message has no content.\"\"\"\n+    from logfire._internal.integrations.llm_providers.openai import convert_openai_response_to_semconv\n+\n+    message = chat_completion_message.ChatCompletionMessage(\n+        role='assistant', content=None, refusal=\"I can't help with that.\"\n+    )\n+    assert convert_openai_response_to_semconv(message, 'stop') == snapshot(\n+        {\n+            'role': 'assistant',\n+            'parts': [{'type': 'text', 'content': \"I can't help with that.\"}],\n+            'finish_reason': 'stop',\n+        }\n+    )\n+\n+\n+def test_chat_completion_stream_state_refusal() -> None:\n+    \"\"\"A streamed refusal ends up in the output messages.\"\"\"\n+    from logfire._internal.integrations.llm_providers.openai import OpenaiChatCompletionStreamState\n+\n+    state = OpenaiChatCompletionStreamState()\n+    for delta, finish_reason in [\n+        ({'role': 'assistant', 'refusal': \"I'm sorry, \"}, None),\n+        ({'refusal': \"I can't help with that.\"}, None),\n+        ({}, 'stop'),\n+    ]:\n+        state.record_chunk(\n+            cc_chunk.ChatCompletionChunk.model_validate(\n+                {\n+                    'id': 'chatcmpl-1',\n+                    'object': 'chat.completion.chunk',\n+                    'created': 0,\n+                    'model': 'gpt-4o-mini',\n+                    'choices': [{'index': 0, 'delta': delta, 'finish_reason': finish_reason}],\n+                }\n+            )\n+        )\n+\n+    assert state.get_attributes({})['gen_ai.output.messages'] == snapshot(\n+        [\n+            {\n+                'role': 'assistant',\n+                'parts': [{'type': 'text', 'content': \"I'm sorry, I can't help with that.\"}],\n+                'finish_reason': 'stop',\n+            }\n+        ]\n+    )\n+\n+\n def test_convert_responses_inputs_no_inputs() -> None:\n     \"\"\"Test convert_responses_inputs_to_semconv with no inputs.\"\"\"\n     from logfire._internal.integrations.llm_providers.openai import convert_responses_inputs_to_semconv"
+  }
+ ],
+ "test_files": [
+  "tests/otel_integrations/test_openai.py"
+ ]
+}

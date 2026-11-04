@@ -1,0 +1,63 @@
+{
+ "repo": "redis/redis-py",
+ "number": 4450,
+ "url": "https://github.com/redis/redis-py/pull/4450",
+ "title": "Add sharded pub/sub to the asyncio MultiDBClient PubSub",
+ "merged_at": "2026-10-19T13:59:08Z",
+ "files": [
+  {
+   "filename": "redis/asyncio/client.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -1794,6 +1794,11 @@ async def run(\n         for pattern, handler in self.patterns.items():\n             if handler is None:\n                 raise PubSubError(f\"Pattern: '{pattern}' has no handler registered\")\n+        for s_channel, handler in self.shard_channels.items():\n+            if handler is None:\n+                raise PubSubError(\n+                    f\"Shard Channel: '{s_channel}' has no handler registered\"\n+                )\n \n         await self.connect()\n         while True:"
+  },
+  {
+   "filename": "redis/asyncio/multidb/client.py",
+   "status": "modified",
+   "additions": 39,
+   "deletions": 0,
+   "patch": "@@ -668,6 +668,29 @@ async def unsubscribe(self, *args):\n             \"unsubscribe\", *args\n         )\n \n+    async def ssubscribe(\n+        self, *args: ChannelT | Subscription, **kwargs: PubSubHandler\n+    ) -> None:\n+        \"\"\"\n+        Subscribes the client to the specified shard channels.\n+        Channels supplied as keyword arguments expect a channel name as the key\n+        and a callable as the value. A channel's callable will be invoked automatically\n+        when a message is received on that channel rather than producing a message via\n+        ``listen()`` or ``get_sharded_message()``.\n+        \"\"\"\n+        return await self._client.command_executor.execute_pubsub_method(\n+            \"ssubscribe\", *args, **kwargs\n+        )\n+\n+    async def sunsubscribe(self, *args):\n+        \"\"\"\n+        Unsubscribe from the supplied shard_channels. If empty, unsubscribe from\n+        all shard_channels\n+        \"\"\"\n+        return await self._client.command_executor.execute_pubsub_method(\n+            \"sunsubscribe\", *args\n+        )\n+\n     async def get_message(\n         self, ignore_subscribe_messages: bool = False, timeout: Optional[float] = 0.0\n     ):\n@@ -684,6 +707,22 @@ async def get_message(\n             timeout=timeout,\n         )\n \n+    async def get_sharded_message(\n+        self, ignore_subscribe_messages: bool = False, timeout: Optional[float] = 0.0\n+    ):\n+        \"\"\"\n+        Get the next message if one is available in a sharded channel, otherwise None.\n+\n+        If timeout is specified, the system will wait for `timeout` seconds\n+        before returning. Timeout should be specified as a floating point\n+        number or None to wait indefinitely.\n+        \"\"\"\n+        return await self._client.command_executor.execute_pubsub_method(\n+            \"get_sharded_message\",\n+            ignore_subscribe_messages=ignore_subscribe_messages,\n+            timeout=timeout,\n+        )\n+\n     async def run(\n         self,\n         *,"
+  },
+  {
+   "filename": "redis/asyncio/multidb/command_executor.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 5,
+   "patch": "@@ -1,6 +1,6 @@\n from abc import abstractmethod\n-from asyncio import iscoroutinefunction\n from datetime import datetime\n+from inspect import isawaitable\n from typing import Any, Awaitable, Callable, List, Optional, Union\n \n from redis.asyncio import RedisCluster\n@@ -272,10 +272,12 @@ async def callback():\n     async def execute_pubsub_method(self, method_name: str, *args, **kwargs):\n         async def callback():\n             method = getattr(self.active_pubsub, method_name)\n-            if iscoroutinefunction(method):\n-                response = await method(*args, **kwargs)\n-            else:\n-                response = method(*args, **kwargs)\n+            response = method(*args, **kwargs)\n+            # Some PubSub methods (e.g. unsubscribe/sunsubscribe) are plain\n+            # methods that return an awaitable, so await by result, not by\n+            # whether the method is a coroutine function.\n+            if isawaitable(response):\n+                response = await response\n \n             await self._register_command_execution(args)\n             return response"
+  },
+  {
+   "filename": "redis/asyncio/multidb/event.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -53,6 +53,7 @@ async def listen(self, event: AsyncActiveDatabaseChanged):\n             new_pubsub = event.new_database.client.pubsub(**event.kwargs)\n             new_pubsub.channels = old_pubsub.channels\n             new_pubsub.patterns = old_pubsub.patterns\n+            new_pubsub.shard_channels = old_pubsub.shard_channels\n             await new_pubsub.on_connect(None)\n             event.command_executor.active_pubsub = new_pubsub\n             await old_pubsub.aclose()"
+  },
+  {
+   "filename": "tests/test_asyncio/test_multidb/test_command_executor.py",
+   "status": "modified",
+   "additions": 43,
+   "deletions": 1,
+   "patch": "@@ -1,5 +1,5 @@\n import asyncio\n-from unittest.mock import AsyncMock\n+from unittest.mock import AsyncMock, Mock\n \n import pytest\n \n@@ -342,6 +342,48 @@ async def test_execute_pubsub_method_forwards_multiple_args(\n             (\"channel-1\", \"channel-2\")\n         )\n \n+    @pytest.mark.asyncio\n+    @pytest.mark.parametrize(\n+        \"mock_db,mock_db1,mock_db2\",\n+        [\n+            (\n+                {\"weight\": 0.2, \"circuit\": {\"state\": CBState.CLOSED}},\n+                {\"weight\": 0.7, \"circuit\": {\"state\": CBState.CLOSED}},\n+                {\"weight\": 0.5, \"circuit\": {\"state\": CBState.CLOSED}},\n+            ),\n+        ],\n+        indirect=True,\n+    )\n+    @pytest.mark.parametrize(\"method\", [\"unsubscribe\", \"punsubscribe\", \"sunsubscribe\"])\n+    async def test_execute_pubsub_method_awaits_returned_awaitable(\n+        self, mock_db, mock_db1, mock_db2, mock_fd, mock_fs, mock_ed, method\n+    ):\n+        databases = create_weighted_list(mock_db, mock_db1, mock_db2)\n+\n+        executor = DefaultCommandExecutor(\n+            failure_detectors=[mock_fd],\n+            databases=databases,\n+            failover_strategy=mock_fs,\n+            event_dispatcher=mock_ed,\n+            command_retry=Retry(NoBackoff(), 0),\n+        )\n+\n+        await executor.set_active_database(mock_db1, GeoFailoverReason.MANUAL)\n+        sent = []\n+\n+        async def send(*args):\n+            sent.append(args)\n+            return \"sent\"\n+\n+        # asyncio PubSub.unsubscribe/punsubscribe/sunsubscribe are plain\n+        # methods that return an awaitable rather than coroutine functions.\n+        pubsub = Mock()\n+        setattr(pubsub, method, lambda *args: send(*args))\n+        executor.active_pubsub = pubsub\n+\n+        assert await executor.execute_pubsub_method(method, \"channel-1\") == \"sent\"\n+        assert sent == [(\"channel-1\",)]\n+\n     @pytest.mark.asyncio\n     @pytest.mark.parametrize(\n         \"mock_db,mock_db1,mock_db2\","
+  },
+  {
+   "filename": "tests/test_asyncio/test_multidb/test_event.py",
+   "status": "added",
+   "additions": 83,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,83 @@\n+from unittest.mock import AsyncMock, MagicMock\n+\n+import pytest\n+\n+from redis.asyncio.multidb.client import PubSub\n+from redis.asyncio.multidb.event import (\n+    AsyncActiveDatabaseChanged,\n+    ResubscribeOnActiveDatabaseChanged,\n+)\n+\n+\n+@pytest.mark.fixed_client\n+class TestResubscribeOnActiveDatabaseChanged:\n+    @pytest.mark.asyncio\n+    async def test_resubscribes_channels_patterns_and_shard_channels(self):\n+        old_pubsub = MagicMock()\n+        old_pubsub.channels = {b\"channel\": None}\n+        old_pubsub.patterns = {b\"pattern*\": None}\n+        old_pubsub.shard_channels = {b\"shard-channel\": None}\n+        old_pubsub.aclose = AsyncMock()\n+        new_pubsub = MagicMock()\n+        new_pubsub.on_connect = AsyncMock()\n+        new_database = MagicMock()\n+        new_database.client.pubsub.return_value = new_pubsub\n+        command_executor = MagicMock()\n+        command_executor.active_pubsub = old_pubsub\n+\n+        await ResubscribeOnActiveDatabaseChanged().listen(\n+            AsyncActiveDatabaseChanged(\n+                MagicMock(),\n+                new_database,\n+                command_executor,\n+                ignore_subscribe_messages=True,\n+            )\n+        )\n+\n+        new_database.client.pubsub.assert_called_once_with(\n+            ignore_subscribe_messages=True\n+        )\n+        assert new_pubsub.channels == {b\"channel\": None}\n+        assert new_pubsub.patterns == {b\"pattern*\": None}\n+        assert new_pubsub.shard_channels == {b\"shard-channel\": None}\n+        new_pubsub.on_connect.assert_awaited_once_with(None)\n+        assert command_executor.active_pubsub is new_pubsub\n+        old_pubsub.aclose.assert_awaited_once()\n+\n+\n+@pytest.mark.fixed_client\n+class TestMultiDbPubSubShardedMethods:\n+    @staticmethod\n+    def _pubsub():\n+        client = MagicMock()\n+        client.command_executor.execute_pubsub_method = AsyncMock(return_value=\"ok\")\n+        return PubSub(client), client.command_executor.execute_pubsub_method\n+\n+    @pytest.mark.asyncio\n+    async def test_ssubscribe(self):\n+        pubsub, execute = self._pubsub()\n+        handler = MagicMock()\n+\n+        assert await pubsub.ssubscribe(\"a\", b=handler) == \"ok\"\n+        execute.assert_awaited_once_with(\"ssubscribe\", \"a\", b=handler)\n+\n+    @pytest.mark.asyncio\n+    async def test_sunsubscribe(self):\n+        pubsub, execute = self._pubsub()\n+\n+        assert await pubsub.sunsubscribe(\"a\", \"b\") == \"ok\"\n+        execute.assert_awaited_once_with(\"sunsubscribe\", \"a\", \"b\")\n+\n+    @pytest.mark.asyncio\n+    async def test_get_sharded_message(self):\n+        pubsub, execute = self._pubsub()\n+\n+        assert (\n+            await pubsub.get_sharded_message(\n+                ignore_subscribe_messages=True, timeout=1.0\n+            )\n+            == \"ok\"\n+        )\n+        execute.assert_awaited_once_with(\n+            \"get_sharded_message\", ignore_subscribe_messages=True, timeout=1.0\n+        )"
+  },
+  {
+   "filename": "tests/test_asyncio/test_pubsub.py",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -1518,6 +1518,17 @@ async def loop_step():\n             await task\n \n \n+@pytest.mark.fixed_client\n+async def test_run_requires_a_handler_for_every_shard_channel():\n+    p = PubSub(MagicMock(), ignore_subscribe_messages=True)\n+    p.shard_channels = {b\"foo\": None}\n+\n+    with pytest.raises(\n+        redis.PubSubError, match=\"Shard Channel: 'b'foo'' has no handler registered\"\n+    ):\n+        await p.run()\n+\n+\n @pytest.mark.onlynoncluster\n class TestPubSubRun:\n     async def _subscribe(self, p, *args, **kwargs):"
+  }
+ ],
+ "test_files": [
+  "tests/test_asyncio/test_multidb/test_command_executor.py",
+  "tests/test_asyncio/test_multidb/test_event.py",
+  "tests/test_asyncio/test_pubsub.py"
+ ]
+}

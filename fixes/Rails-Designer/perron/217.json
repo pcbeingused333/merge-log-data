@@ -1,0 +1,41 @@
+{
+ "repo": "Rails-Designer/perron",
+ "number": 217,
+ "url": "https://github.com/Rails-Designer/perron/pull/217",
+ "title": "Insert the missing slash when making a relative path absolute",
+ "merged_at": "2026-10-12T09:42:52Z",
+ "files": [
+  {
+   "filename": "lib/perron/html_processor/absolute_urls.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -9,7 +9,7 @@ def process\n \n           next if src.blank? || absolute_url?(src)\n \n-          image[\"src\"] = base_url + src\n+          image[\"src\"] = \"#{base_url}/#{src.delete_prefix(\"/\")}\"\n         end\n       end\n "
+  },
+  {
+   "filename": "lib/perron/resource/metadata.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -71,7 +71,7 @@ def absolute_url(path)\n         return path if path.blank?\n         return path if path.start_with?(\"http://\", \"https://\", \"//\")\n \n-        Perron.configuration.url.delete_suffix(\"/\") + path\n+        \"#{Perron.configuration.url.delete_suffix(\"/\")}/#{path.delete_prefix(\"/\")}\"\n       end\n \n       def site_data"
+  },
+  {
+   "filename": "test/perron/html_processor/absolute_urls_test.rb",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -60,4 +60,13 @@ def process_html(html)\n \n     assert_dom_equal html, processed\n   end\n+\n+  test 'inserts a slash for a relative src without a leading slash' do\n+    html = '<img src=\"photo.jpg\"><img src=\"nested/photo.jpg\">'\n+    processed = process_html(html)\n+\n+    assert_dom_equal '<img src=\"http://localhost:3000/photo.jpg\">' \\\n+                     '<img src=\"http://localhost:3000/nested/photo.jpg\">',\n+                     processed\n+  end\n end"
+  },
+  {
+   "filename": "test/perron/resource/metadata_test.rb",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -105,6 +105,17 @@ def setup\n     assert_equal 'Kendall', metadata.author, 'Frontmatter author should take highest precedence'\n   end\n \n+  test 'makes a relative frontmatter image absolute with a slash separator' do\n+    metadata = Perron::Resource::Metadata.new(\n+      resource: @post,\n+      frontmatter: { image: 'cover.jpg' },\n+      collection: @posts_collection\n+    ).data\n+\n+    assert_equal 'http://localhost:3000/cover.jpg', metadata.image\n+    assert_equal 'http://localhost:3000/cover.jpg', metadata.og_image\n+  end\n+\n   test 'removes nil values from final data after processing' do\n     metadata = Perron::Resource::Metadata.new(\n       resource: @about_page,"
+  }
+ ],
+ "test_files": [
+  "test/perron/html_processor/absolute_urls_test.rb",
+  "test/perron/resource/metadata_test.rb"
+ ]
+}

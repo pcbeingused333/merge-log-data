@@ -1,0 +1,26 @@
+{
+ "repo": "we-promise/sure",
+ "number": 4256,
+ "url": "https://github.com/we-promise/sure/pull/4256",
+ "title": "Keep Plaid securities for accounts with holdings but no investment transactions",
+ "merged_at": "2026-10-20T23:10:04Z",
+ "files": [
+  {
+   "filename": "app/models/plaid_item/accounts_snapshot.rb",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -48,7 +48,10 @@ def account_scoped_investments_data(account_id)\n \n       transactions = investments_data.transactions.select { |t| t.account_id == account_id }\n       holdings = investments_data.holdings.select { |h| h.account_id == account_id }\n-      securities = transactions.count > 0 && holdings.count > 0 ? investments_data.securities : []\n+      # Holdings and investment transactions each resolve their security_id\n+      # through this metadata, so either one needs it; an account with holdings\n+      # but no investment transactions is common.\n+      securities = transactions.any? || holdings.any? ? investments_data.securities : []\n \n       InvestmentsData.new(\n         transactions: transactions,"
+  },
+  {
+   "filename": "test/models/plaid_item/accounts_snapshot_test.rb",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -94,6 +94,40 @@ class PlaidItem::AccountsSnapshotTest < ActiveSupport::TestCase\n     @snapshot.get_account_data(\"123\")\n   end\n \n+  test \"keeps securities for an investment account with holdings but no investment transactions\" do\n+    @plaid_item.update!(available_products: [ \"investments\" ], billed_products: [])\n+    @snapshot.stubs(:accounts).returns([ OpenStruct.new(account_id: \"123\", type: \"investment\") ])\n+\n+    security = OpenStruct.new(security_id: \"sec_1\", ticker_symbol: \"VTI\")\n+    @plaid_provider.expects(:get_item_investments).with(@plaid_item.access_token).returns(\n+      OpenStruct.new(\n+        holdings: [ OpenStruct.new(account_id: \"123\", security_id: \"sec_1\") ],\n+        transactions: [],\n+        securities: [ security ]\n+      )\n+    )\n+\n+    investments = @snapshot.get_account_data(\"123\").investments_data\n+\n+    assert_equal [ \"sec_1\" ], investments.holdings.map(&:security_id)\n+    assert_equal [ security ], investments.securities\n+  end\n+\n+  test \"has no securities for an investment account with neither holdings nor transactions\" do\n+    @plaid_item.update!(available_products: [ \"investments\" ], billed_products: [])\n+    @snapshot.stubs(:accounts).returns([ OpenStruct.new(account_id: \"123\", type: \"investment\") ])\n+\n+    @plaid_provider.expects(:get_item_investments).with(@plaid_item.access_token).returns(\n+      OpenStruct.new(\n+        holdings: [ OpenStruct.new(account_id: \"other\", security_id: \"sec_1\") ],\n+        transactions: [],\n+        securities: [ OpenStruct.new(security_id: \"sec_1\") ]\n+      )\n+    )\n+\n+    assert_empty @snapshot.get_account_data(\"123\").investments_data.securities\n+  end\n+\n   test \"does not fetch investments if no investment accounts\" do\n     @plaid_item.update!(available_products: [ \"investments\" ], billed_products: [])\n "
+  }
+ ],
+ "test_files": [
+  "test/models/plaid_item/accounts_snapshot_test.rb"
+ ]
+}

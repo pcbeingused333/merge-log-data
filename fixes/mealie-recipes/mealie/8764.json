@@ -1,0 +1,26 @@
+{
+ "repo": "mealie-recipes/mealie",
+ "number": 8764,
+ "url": "https://github.com/mealie-recipes/mealie/pull/8764",
+ "title": "fix: scale merged duplicate ingredients when adding a recipe to a shopping list",
+ "merged_at": "2026-10-21T18:47:40Z",
+ "files": [
+  {
+   "filename": "mealie/services/household_services/shopping_lists.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -482,7 +482,7 @@ def get_shopping_list_items_from_recipe(\n                 # since this is the same recipe, we combine the quanities, rather than the scales\n                 # all items will have exactly one recipe reference\n                 if ingredient.quantity:\n-                    existing_item.quantity += ingredient.quantity\n+                    existing_item.quantity += ingredient.quantity * scale\n                     existing_item.recipe_references[0].recipe_quantity += ingredient.quantity  # type: ignore\n \n                 # merge notes"
+  },
+  {
+   "filename": "tests/integration_tests/user_household_tests/test_group_shopping_lists.py",
+   "status": "modified",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -1054,6 +1054,51 @@ def test_shopping_list_add_recipe_scale(\n         assert refs[0][\"recipeScale\"] == 1 + recipe_scale\n \n \n+def test_shopping_list_add_recipe_scale_merges_duplicate_foods(\n+    api_client: TestClient,\n+    unique_user: TestUser,\n+    shopping_list: ShoppingListOut,\n+):\n+    database = unique_user.repos\n+    food = database.ingredient_foods.create(SaveIngredientFood(name=random_string(10), group_id=unique_user.group_id))\n+    recipe: Recipe = database.recipes.create(\n+        Recipe(\n+            name=random_string(10),\n+            user_id=unique_user.user_id,\n+            group_id=unique_user.group_id,\n+            recipe_ingredient=[\n+                RecipeIngredient(note=\"batter\", food=food, quantity=1),\n+                RecipeIngredient(note=\"topping\", food=food, quantity=2),\n+            ],\n+        )\n+    )\n+\n+    response = api_client.post(\n+        api_routes.households_shopping_lists_item_id_recipe(shopping_list.id),\n+        json=utils.jsonify(\n+            [ShoppingListAddRecipeParamsBulk(recipe_id=recipe.id, recipe_increment_quantity=2).model_dump()]\n+        ),\n+        headers=unique_user.token,\n+    )\n+    utils.assert_deserialize(response, 200)\n+\n+    response = api_client.get(\n+        api_routes.households_shopping_lists_item_id(shopping_list.id),\n+        headers=unique_user.token,\n+    )\n+    as_json = utils.assert_deserialize(response, 200)\n+\n+    assert len(as_json[\"listItems\"]) == 1\n+    item = as_json[\"listItems\"][0]\n+\n+    # both lines are scaled before they are combined\n+    assert item[\"quantity\"] == 6\n+    refs = item[\"recipeReferences\"]\n+    assert len(refs) == 1\n+    assert refs[0][\"recipeQuantity\"] == 3\n+    assert refs[0][\"recipeScale\"] == 2\n+\n+\n def test_shopping_lists_remove_recipe(\n     api_client: TestClient,\n     unique_user: TestUser,"
+  }
+ ],
+ "test_files": [
+  "tests/integration_tests/user_household_tests/test_group_shopping_lists.py"
+ ]
+}

@@ -1,0 +1,17 @@
+{
+ "repo": "Rails-Designer/mata",
+ "number": 21,
+ "url": "https://github.com/Rails-Designer/mata/pull/21",
+ "title": "Share one live reload connection between tabs",
+ "merged_at": "2026-11-02T19:58:29Z",
+ "files": [
+  {
+   "filename": "lib/mata/client.js",
+   "status": "modified",
+   "additions": 32,
+   "deletions": 19,
+   "patch": "@@ -16,32 +16,24 @@\n       if (!silent) console.error(\"[Mata]\", ...arguments);\n     }\n \n-    connect();\n+    const channel = \"BroadcastChannel\" in window ? new BroadcastChannel(\"mata\") : null;\n+\n+    if (channel && navigator.locks) {\n+      channel.onmessage = (event) => handle(event.data);\n+\n+      navigator.locks.request(\"mata\", () => new Promise(() => connect()));\n+    } else {\n+      connect();\n+    }\n \n     function connect() {\n       const eventSource = new EventSource(\"/__mata/events\");\n \n       eventSource.onmessage = function(event) {\n         const data = JSON.parse(event.data);\n \n-        switch(data.type) {\n-          case \"reload\":\n-            if (data.files?.some((file) => file.endsWith(\".js\"))) {\n-              log(\"JS file changed, reloading…\");\n-\n-              window.location.reload();\n-            } else {\n-              morphPage();\n-            }\n-\n-            break;\n-          case \"connected\":\n-            retryDelay = retryDelayBase;\n-\n-            log(\"Connected with DOM morphing\");\n-\n-            break;\n-        }\n+        channel?.postMessage(data);\n+        handle(data);\n       };\n \n       eventSource.onerror = function() {\n@@ -54,6 +46,27 @@\n       };\n     }\n \n+    function handle(data) {\n+      switch(data.type) {\n+        case \"reload\":\n+          if (data.files?.some((file) => file.endsWith(\".js\"))) {\n+            log(\"JS file changed, reloading…\");\n+\n+            window.location.reload();\n+          } else {\n+            morphPage();\n+          }\n+\n+          break;\n+        case \"connected\":\n+          retryDelay = retryDelayBase;\n+\n+          log(\"Connected with DOM morphing\");\n+\n+          break;\n+      }\n+    }\n+\n     async function morphPage() {\n       try {\n         log(\"Fetching updated page…\");"
+  }
+ ],
+ "test_files": []
+}

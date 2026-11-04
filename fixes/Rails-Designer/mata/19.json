@@ -1,0 +1,26 @@
+{
+ "repo": "Rails-Designer/mata",
+ "number": 19,
+ "url": "https://github.com/Rails-Designer/mata/pull/19",
+ "title": "Update a lowercase content-length and close the replaced body",
+ "merged_at": "2026-11-02T19:45:35Z",
+ "files": [
+  {
+   "filename": "lib/mata/agent.rb",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -19,7 +19,8 @@ def insert(status, headers, body)\n       script_tag += \"></script>\"\n       modified_content = content.sub(\"</head>\", \"#{script_tag}\\n</head>\")\n \n-      headers[\"Content-Length\"] = modified_content.bytesize.to_s if headers[\"Content-Length\"]\n+      length_header = headers.keys.find { it.to_s.casecmp?(\"content-length\") }\n+      headers[length_header] = modified_content.bytesize.to_s if length_header\n \n       [status, headers, [modified_content]]\n     end\n@@ -32,12 +33,16 @@ def html_response?(headers)\n       content_type&.include?(\"text/html\")\n     end\n \n+    # The original body is replaced, so it's closed here as the Rack spec asks:\n+    # that releases a file body and runs Rack::BodyProxy callbacks.\n     def extract(body)\n       if body.respond_to?(:each)\n         [].tap { |parts| body.each { |part| parts << part } }.join\n       else\n         body.to_s\n       end\n+    ensure\n+      body.close if body.respond_to?(:close)\n     end\n   end\n end"
+  },
+  {
+   "filename": "test/test_agent.rb",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 0,
+   "patch": "@@ -1,4 +1,5 @@\n require_relative \"test_helper\"\n+require \"rack/body_proxy\"\n \n class TestAgent < Minitest::Test\n   include Rack::Test::Methods\n@@ -63,6 +64,26 @@ def test_updates_content_length_header\n     assert headers[\"Content-Length\"].to_i > 39\n   end\n \n+  def test_updates_lowercase_content_length_header\n+    html = \"<html><head></head><body></body></html>\"\n+\n+    _, headers, body = @agent.insert(200, {\"content-type\" => \"text/html\", \"content-length\" => \"39\"}, [html])\n+\n+    assert_equal body.first.bytesize.to_s, headers[\"content-length\"]\n+    refute headers.key?(\"Content-Length\")\n+  end\n+\n+  def test_closes_the_original_body\n+    closed = []\n+    html = Rack::BodyProxy.new([\"<html><head></head><body></body></html>\"]) { closed << :html }\n+    json = Rack::BodyProxy.new(['{\"data\": \"value\"}']) { closed << :json }\n+\n+    @agent.insert(200, {\"content-type\" => \"text/html\"}, html)\n+    @agent.insert(200, {\"content-type\" => \"application/json\"}, json)\n+\n+    assert_equal [:html], closed\n+  end\n+\n   def test_handles_chunked_body\n     html = [\"<html><head>\", \"</head><body></body></html>\"]\n     _, _, body = @agent.insert(200, {\"Content-Type\" => \"text/html\"}, html)"
+  }
+ ],
+ "test_files": [
+  "test/test_agent.rb"
+ ]
+}

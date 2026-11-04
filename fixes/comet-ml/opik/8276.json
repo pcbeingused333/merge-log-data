@@ -1,0 +1,26 @@
+{
+ "repo": "comet-ml/opik",
+ "number": 8276,
+ "url": "https://github.com/comet-ml/opik/pull/8276",
+ "title": "[issue-8275] [SDK] fix: SpearmanRanking should reject rankings with duplicate items",
+ "merged_at": "2026-09-15T07:35:10Z",
+ "files": [
+  {
+   "filename": "sdks/python/src/opik/evaluation/metrics/heuristics/spearman.py",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -62,6 +62,19 @@ def score(\n                 \"Rankings cannot be empty for Spearman correlation.\"\n             )\n \n+        if len(set(output)) != len(output) or len(set(reference)) != len(reference):\n+            # A rank is only well-defined when each item appears exactly\n+            # once. Without this check a duplicate silently collapses in\n+            # `ref_ranks` below (a dict comprehension keeps only the last\n+            # occurrence's index), and the same-items check next can still\n+            # pass when both sequences repeat items in a way that keeps\n+            # their sets equal -- producing a numeric rho for an input that\n+            # was never a valid pair of rankings, instead of raising.\n+            raise MetricComputationError(\n+                \"Rankings must not contain duplicate items; each item's \"\n+                \"rank must be well-defined.\"\n+            )\n+\n         ref_ranks = {item: idx for idx, item in enumerate(reference)}\n         if set(output) != set(reference):\n             raise MetricComputationError(\"Rankings must contain the same items.\")"
+  },
+  {
+   "filename": "sdks/python/tests/unit/evaluation/metrics/test_heuristics.py",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -533,6 +533,23 @@ def test_spearman_ranking_metric():\n     assert result.value == pytest.approx((0.5 + 1) / 2)\n \n \n+@pytest.mark.parametrize(\n+    \"output,reference\",\n+    [\n+        # Both cases have equal-length, equal-set output/reference despite\n+        # the repeats, so before this fix they reached the correlation\n+        # formula and returned a numeric score (0.625 and 0.875\n+        # respectively) instead of raising.\n+        ([\"a\", \"b\", \"a\"], [\"a\", \"a\", \"b\"]),\n+        ([\"a\", \"a\", \"b\"], [\"a\", \"b\", \"b\"]),\n+    ],\n+)\n+def test_spearman_ranking_rejects_duplicate_items(output, reference):\n+    metric = SpearmanRanking(track=False)\n+    with pytest.raises(MetricComputationError):\n+        metric.score(output=output, reference=reference)\n+\n+\n def test_vader_sentiment_metric_uses_custom_analyzer():\n     class StubAnalyzer:\n         def polarity_scores(self, text: str) -> dict:"
+  }
+ ],
+ "test_files": [
+  "sdks/python/tests/unit/evaluation/metrics/test_heuristics.py"
+ ]
+}

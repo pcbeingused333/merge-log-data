@@ -1,0 +1,33 @@
+{
+ "repo": "deepset-ai/haystack",
+ "number": 12664,
+ "url": "https://github.com/deepset-ai/haystack/pull/12664",
+ "title": "fix: preserve nested pipeline errors in Pipeline.run_async",
+ "merged_at": "2026-09-23T17:01:23Z",
+ "files": [
+  {
+   "filename": "haystack/core/pipeline/pipeline.py",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -582,6 +582,18 @@ async def _run_component_async(\n                 # For sync-only components, _run_component_async dispatches to a thread via asyncio.to_thread,\n                 # which copies the current contextvars context — preserving e.g. the active tracing span.\n                 outputs = await _execute_component_async(instance, **component_inputs_copy)\n+            except BreakpointException as error:\n+                # Re-raise BreakpointException to preserve the original exception context, matching\n+                # the sync _run_component: a breakpoint triggered by a nested component (e.g. an Agent)\n+                # must bubble up to the main pipeline instead of being wrapped.\n+                raise error\n+\n+            # A component that internally uses Pipeline._run_component_async could raise a PipelineRuntimeError\n+            # carrying additional context (e.g. an agent snapshot); re-raise it instead of wrapping it in\n+            # another PipelineRuntimeError, matching the sync _run_component.\n+            except PipelineRuntimeError as runtime_error:\n+                raise runtime_error\n+\n             except Exception as error:\n                 raise PipelineRuntimeError.from_exception(component_name, instance.__class__, error) from error\n "
+  },
+  {
+   "filename": "releasenotes/notes/run-component-async-preserve-pipeline-errors-74569fb943007982.yaml",
+   "status": "added",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,7 @@\n+---\n+fixes:\n+  - |\n+    ``Pipeline.run_async`` now lets a ``BreakpointException`` or ``PipelineRuntimeError`` raised by a\n+    nested component propagate unchanged, instead of wrapping it in another ``PipelineRuntimeError``.\n+    This matches the synchronous ``Pipeline.run`` and preserves the original error context (for example an\n+    agent snapshot) when a component internally runs a pipeline."
+  },
+  {
+   "filename": "test/core/pipeline/test_async_pipeline.py",
+   "status": "modified",
+   "additions": 59,
+   "deletions": 0,
+   "patch": "@@ -550,3 +550,62 @@ def run(self, text: str) -> dict[str, str]:\n \n     with pytest.raises(PipelineRuntimeError, match=\"Cannot unwrap a list of 3 items\"):\n         await pipe.run_async({})\n+\n+\n+@pytest.mark.asyncio\n+async def test_run_async_does_not_double_wrap_a_nested_pipeline_runtime_error():\n+    \"\"\"\n+    A component that internally runs a pipeline and lets a PipelineRuntimeError escape (e.g. an Agent\n+    carrying a snapshot) should have that error propagate unchanged, not wrapped in another\n+    PipelineRuntimeError. This matches the synchronous _run_component.\n+    \"\"\"\n+    from haystack.core.errors import PipelineRuntimeError\n+\n+    inner_error = PipelineRuntimeError(component_name=\"inner\", component_type=None, message=\"inner failure\")\n+\n+    @component\n+    class NestedPipelineComponent:\n+        @component.output_types(value=str)\n+        def run(self, text: str) -> dict[str, str]:  # pragma: no cover - async path is under test\n+            raise inner_error\n+\n+        @component.output_types(value=str)\n+        async def run_async(self, text: str) -> dict[str, str]:\n+            raise inner_error\n+\n+    pp = Pipeline()\n+    pp.add_component(\"nested\", NestedPipelineComponent())\n+\n+    with pytest.raises(PipelineRuntimeError) as exc_info:\n+        await pp.run_async({\"nested\": {\"text\": \"x\"}})\n+\n+    assert exc_info.value is inner_error\n+    assert not isinstance(exc_info.value.__cause__, PipelineRuntimeError)\n+\n+\n+@pytest.mark.asyncio\n+async def test_run_async_lets_a_nested_breakpoint_exception_bubble_up():\n+    \"\"\"A BreakpointException raised by a nested component must reach the caller as-is, not wrapped.\"\"\"\n+    from haystack.core.errors import BreakpointException\n+    from haystack.dataclasses.breakpoints import Breakpoint\n+\n+    break_point = Breakpoint(component_name=\"inner\", visit_count=0)\n+    breakpoint_error = BreakpointException.from_triggered_breakpoint(break_point)\n+\n+    @component\n+    class BreakpointingComponent:\n+        @component.output_types(value=str)\n+        def run(self, text: str) -> dict[str, str]:  # pragma: no cover - async path is under test\n+            raise breakpoint_error\n+\n+        @component.output_types(value=str)\n+        async def run_async(self, text: str) -> dict[str, str]:\n+            raise breakpoint_error\n+\n+    pp = Pipeline()\n+    pp.add_component(\"bp\", BreakpointingComponent())\n+\n+    with pytest.raises(BreakpointException) as exc_info:\n+        await pp.run_async({\"bp\": {\"text\": \"x\"}})\n+\n+    assert exc_info.value is breakpoint_error"
+  }
+ ],
+ "test_files": [
+  "test/core/pipeline/test_async_pipeline.py"
+ ]
+}

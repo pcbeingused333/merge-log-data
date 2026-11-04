@@ -1,0 +1,26 @@
+{
+ "repo": "Rails-Designer/fuik",
+ "number": 54,
+ "url": "https://github.com/Rails-Designer/fuik/pull/54",
+ "title": "Return false payload values instead of nil",
+ "merged_at": "2026-11-02T19:05:24Z",
+ "files": [
+  {
+   "filename": "lib/fuik/dot_access.rb",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 2,
+   "patch": "@@ -12,7 +12,7 @@ def initialize(payload)\n       end\n \n       def [](key)\n-        value = @payload[key] || @payload[key.to_s] || @payload[key.to_sym]\n+        value = fetch_value(key)\n \n         value.is_a?(Hash) ? self.class.new(value) : value\n       end\n@@ -34,7 +34,7 @@ def key?(key)\n       def method_missing(method_name, *arguments)\n         return super unless arguments.empty? && !block_given?\n \n-        value = @payload[method_name] || @payload[method_name.to_s] || @payload[method_name.to_sym]\n+        value = fetch_value(method_name)\n         value.is_a?(Hash) ? self.class.new(value) : value\n       end\n \n@@ -43,6 +43,14 @@ def respond_to_missing?(method_name, include_private = false)\n       end\n \n       def to_h = @payload\n+\n+      private\n+\n+      def fetch_value(key)\n+        found = [key, key.to_s, key.to_s.to_sym].find { @payload.key?(it) }\n+\n+        @payload[found] unless found.nil?\n+      end\n     end\n   end\n end"
+  },
+  {
+   "filename": "test/lib/fuik/dot_access_test.rb",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -52,6 +52,21 @@ def setup\n       assert_equal \"John\", payload_with_symbols.dig(:customer, :name)\n     end\n \n+    test \"returns false values instead of nil\" do\n+      payload = { \"livemode\" => false, \"data\" => { \"object\" => { \"paid\" => false } } }.to_dot\n+\n+      assert_equal false, payload.livemode\n+      assert_equal false, payload[\"livemode\"]\n+      assert_equal false, payload[:livemode]\n+      assert_equal false, payload.data.object.paid\n+      assert_equal false, { paid: false }.to_dot[\"paid\"]\n+    end\n+\n+    test \"returns nil for a missing key\" do\n+      assert_nil @payload.nonexistent\n+      assert_nil @payload[\"nonexistent\"]\n+    end\n+\n     test \"supports key? method\" do\n       assert @payload.key?(\"id\")\n       assert @payload.key?(\"type\")"
+  }
+ ],
+ "test_files": [
+  "test/lib/fuik/dot_access_test.rb"
+ ]
+}

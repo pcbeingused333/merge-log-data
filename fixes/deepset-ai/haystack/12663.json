@@ -1,0 +1,33 @@
+{
+ "repo": "deepset-ai/haystack",
+ "number": 12663,
+ "url": "https://github.com/deepset-ai/haystack/pull/12663",
+ "title": "fix: request encoding_format=\"float\" in OpenAIDocumentEmbedder.run_async",
+ "merged_at": "2026-09-10T06:05:56Z",
+ "files": [
+  {
+   "filename": "haystack/components/embedders/openai_document_embedder.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -297,7 +297,7 @@ async def _embed_batch_async(\n             batches = async_tqdm(batches, desc=\"Calculating embeddings\")\n \n         for batch in batches:\n-            args: dict[str, Any] = {\"model\": self.model, \"input\": [b[1] for b in batch]}\n+            args: dict[str, Any] = {\"model\": self.model, \"input\": [b[1] for b in batch], \"encoding_format\": \"float\"}\n \n             if self.dimensions is not None:\n                 args[\"dimensions\"] = self.dimensions"
+  },
+  {
+   "filename": "releasenotes/notes/openai-document-embedder-async-encoding-format-ebb37993207e4f09.yaml",
+   "status": "added",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,7 @@\n+---\n+fixes:\n+  - |\n+    ``OpenAIDocumentEmbedder.run_async`` (and ``AzureOpenAIDocumentEmbedder``) now request\n+    ``encoding_format=\"float\"`` from the embeddings endpoint, matching the synchronous ``run``. The async\n+    batch path was missed when this was added in #9655, so ``run_async`` let the OpenAI SDK negotiate the\n+    ``base64`` wire format, which some OpenAI-compatible endpoints do not support."
+  },
+  {
+   "filename": "test/components/embedders/test_openai_document_embedder.py",
+   "status": "modified",
+   "additions": 40,
+   "deletions": 0,
+   "patch": "@@ -272,6 +272,46 @@ def test_embed_batch_raises_exception_on_failure(self):\n             with pytest.raises(APIError, match=\"Mocked error\"):\n                 embedder._embed_batch(texts_to_embed=fake_texts_to_embed, batch_size=2)\n \n+    def test_embed_batch_requests_float_encoding_format(self):\n+        # Must pin encoding_format=\"float\"; the OpenAI SDK otherwise negotiates base64,\n+        # which some OpenAI-compatible endpoints do not support (see #9655).\n+        embedder = OpenAIDocumentEmbedder(api_key=Secret.from_token(\"fake_api_key\"))\n+        embedder.warm_up()\n+        assert embedder.client is not None\n+\n+        response = Mock()\n+        response.data = [Mock(embedding=[0.1, 0.2, 0.3]), Mock(embedding=[0.4, 0.5, 0.6])]\n+        response.model = \"text-embedding-ada-002\"\n+        response.usage = {\"prompt_tokens\": 4, \"total_tokens\": 4}\n+        texts = {\"1\": \"text1\", \"2\": \"text2\"}\n+\n+        with patch.object(embedder.client.embeddings, \"create\", return_value=response) as mock_create:\n+            embedder._embed_batch(texts_to_embed=texts, batch_size=10)\n+\n+        assert mock_create.call_count == 1\n+        assert mock_create.call_args.kwargs[\"encoding_format\"] == \"float\"\n+\n+    @pytest.mark.asyncio\n+    async def test_embed_batch_requests_float_encoding_format_async(self):\n+        # Same requirement as the sync path above, but this one was missing it (see #12663).\n+        embedder = OpenAIDocumentEmbedder(api_key=Secret.from_token(\"fake_api_key\"))\n+        await embedder.warm_up_async()\n+        assert embedder.async_client is not None\n+\n+        response = Mock()\n+        response.data = [Mock(embedding=[0.1, 0.2, 0.3]), Mock(embedding=[0.4, 0.5, 0.6])]\n+        response.model = \"text-embedding-ada-002\"\n+        response.usage = {\"prompt_tokens\": 4, \"total_tokens\": 4}\n+        texts = {\"1\": \"text1\", \"2\": \"text2\"}\n+\n+        with patch.object(\n+            embedder.async_client.embeddings, \"create\", new=AsyncMock(return_value=response)\n+        ) as mock_create:\n+            await embedder._embed_batch_async(texts_to_embed=texts, batch_size=10)\n+\n+        assert mock_create.call_count == 1\n+        assert mock_create.call_args.kwargs[\"encoding_format\"] == \"float\"\n+\n     @pytest.mark.skipif(os.environ.get(\"OPENAI_API_KEY\", \"\") == \"\", reason=\"OPENAI_API_KEY is not set\")\n     @pytest.mark.integration\n     def test_run(self):"
+  }
+ ],
+ "test_files": [
+  "test/components/embedders/test_openai_document_embedder.py"
+ ]
+}

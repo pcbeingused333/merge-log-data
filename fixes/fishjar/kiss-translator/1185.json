@@ -1,0 +1,33 @@
+{
+ "repo": "fishjar/kiss-translator",
+ "number": 1185,
+ "url": "https://github.com/fishjar/kiss-translator/pull/1185",
+ "title": "fix(claude): omit temperature for Claude 4.7 and later models",
+ "merged_at": "2026-10-20T03:46:16Z",
+ "files": [
+  {
+   "filename": "src/apis/trans.translate.test.js",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -744,6 +744,41 @@ describe(\"handleTranslate\", () => {\n     }\n   );\n \n+  test.each([\n+    [\"claude-sonnet-5-5\", undefined],\n+    [\"claude-opus-4-7\", undefined],\n+    [\"claude-haiku-5-5\", undefined],\n+    [\"claude-mythos-5-1\", undefined],\n+    [\"claude-sonnet-4-6\", 0.7],\n+    [\"claude-haiku-4-5-20251001\", 0.7],\n+  ])(\"sends Claude %s temperature %s\", async (model, expected) => {\n+    fetchData.mockResolvedValue({\n+      role: \"assistant\",\n+      content: [{ type: \"text\", text: \"你好\" }],\n+    });\n+    await collectAsyncGenerator(\n+      handleTranslate([\"hello\"], {\n+        from: \"en\",\n+        to: \"zh-CN\",\n+        fromLang: \"English\",\n+        toLang: \"Chinese\",\n+        langMap: () => \"\",\n+        glossary: \"\",\n+        usePool: false,\n+        apiSetting: {\n+          ...getApiSetting(OPT_TRANS_CLAUDE),\n+          useStream: false,\n+          useBatchFetch: false,\n+          model,\n+          temperature: 0.7,\n+          thinkingMode: \"auto\",\n+        },\n+      })\n+    );\n+    const body = JSON.parse(fetchData.mock.calls[0][1].body);\n+    expect(body.temperature).toBe(expected);\n+  });\n+\n   test(\"does not inject native Gemini parameters for unknown models\", async () => {\n     fetchData.mockResolvedValue({\n       status: \"completed\","
+  },
+  {
+   "filename": "src/builtin-plugins/claude.js",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -1,5 +1,5 @@\n import { applyThinkingParameters } from \"./thinking\";\n-import { OPT_TRANS_CLAUDE } from \"../config\";\n+import { OPT_TRANS_CLAUDE, rejectsClaudeTemperature } from \"../config\";\n \n // 原生协议适配：保持旧参数、字段和厂家差异，不加载用户脚本解释器。\n const genClaude = ({\n@@ -40,6 +40,7 @@ const genClaude = ({\n     max_tokens: maxTokens,\n     stream: useStream,\n   };\n+  if (rejectsClaudeTemperature(model)) delete body.temperature;\n \n   applyThinkingParameters(body, {\n     apiType: OPT_TRANS_CLAUDE,"
+  },
+  {
+   "filename": "src/builtin-plugins/thinkingCapabilities.js",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -82,6 +82,16 @@ const normalizeOpenAIModelName = (model = \"\") =>\n export const isGPT6Astra = (model = \"\") =>\n   normalizeOpenAIModelName(model) === \"gpt-6-astra\";\n \n+/**\n+ * Claude 4.7 及之后的模型（含 Mythos）只接受默认的 temperature，传入其他值会返回 400。\n+ * @param {string} model Claude 模型名称。\n+ * @returns {boolean} 是否需要省略 temperature。\n+ */\n+export const rejectsClaudeTemperature = (model = \"\") =>\n+  /^claude-(?:opus-4-[7-9]|(?:opus|sonnet|haiku|fable|mythos)-[5-9]|mythos-preview)(?:-|$)/.test(\n+    String(model).trim().toLowerCase()\n+  );\n+\n /**\n  * 根据 OpenAI 模型名称解析已确认的思考能力。\n  * @param {string} model OpenAI 或带 openai/ 前缀的模型名称。"
+  }
+ ],
+ "test_files": [
+  "src/apis/trans.translate.test.js"
+ ]
+}

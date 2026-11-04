@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 212,
+ "url": "https://github.com/lofcz/LLMTornado/pull/212",
+ "title": "Pass reasoning parts to Microsoft.Extensions.AI",
+ "merged_at": "2026-10-20T08:18:37Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Microsoft.Extensions.AI/TypeConverters.cs",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 4,
+   "patch": "@@ -168,8 +168,8 @@ public static ChatMessage ToLlmTornado(this global::Microsoft.Extensions.AI.Chat\n             contents.Add(new TextContent(message.Content));\n         }\n \n-        // Add reasoning content\n-        if (!string.IsNullOrEmpty(message.ReasoningTokens))\n+        // Add reasoning content, unless reasoning parts carry it (xAI fills both)\n+        if (!string.IsNullOrEmpty(message.ReasoningTokens) && message.Parts?.Any(x => x.Type is ChatMessageTypes.Reasoning) is not true)\n         {\n             contents.Add(new TextReasoningContent(message.ReasoningTokens));\n         }\n@@ -189,9 +189,10 @@ public static ChatMessage ToLlmTornado(this global::Microsoft.Extensions.AI.Chat\n                         break;\n \n                     case ChatMessageTypes.Reasoning:\n-                        if (!string.IsNullOrEmpty(part.Text))\n+                        string? reasoning = part.Reasoning?.Content ?? part.Text;\n+                        if (!string.IsNullOrEmpty(reasoning))\n                         {\n-                            contents.Add(new TextReasoningContent(part.Text));\n+                            contents.Add(new TextReasoningContent(reasoning));\n                         }\n                         break;\n "
+  },
+  {
+   "filename": "src/LlmTornado.Tests/AnthropicParallelToolCallsTests.cs",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -61,6 +61,12 @@ public class AnthropicParallelToolCallsTests\n          \"usage\":{\"input_tokens\":600,\"output_tokens\":8}}\n         \"\"\";\n \n+    private const string ThinkingAnswerJson = \"\"\"\n+        {\"id\":\"msg_thinking\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\n+         \"content\":[{\"type\":\"thinking\",\"thinking\":\"Paris, London and Tokyo all report clouds.\",\"signature\":\"sig_abc\"},{\"type\":\"text\",\"text\":\"All three are cloudy.\"}],\n+         \"usage\":{\"input_tokens\":600,\"output_tokens\":30}}\n+        \"\"\";\n+\n     private static readonly string[] ToolUseIds = [\"toolu_paris\", \"toolu_london\", \"toolu_tokyo\"];\n     private static readonly string[] Cities = [\"Paris\", \"London\", \"Tokyo\"];\n \n@@ -146,6 +152,19 @@ public async Task ChatClient_TextReply_ReturnsTextOnce()\n         Assert.That(response.Messages.Single().Contents.OfType<TextContent>().Count(), Is.EqualTo(1));\n     }\n \n+    [Test]\n+    public async Task ChatClient_ThinkingReply_ReturnsReasoningOnce()\n+    {\n+        using FakeAnthropicServer server = new FakeAnthropicServer(\"application/json\", ThinkingAnswerJson);\n+        IChatClient client = CreateClient(server.Port);\n+\n+        ChatResponse response = await client.GetResponseAsync(Prompt());\n+\n+        List<AIContent> contents = response.Messages.Single().Contents.ToList();\n+        Assert.That(contents.OfType<TextReasoningContent>().Select(x => x.Text), Is.EqualTo(new[] { \"Paris, London and Tokyo all report clouds.\" }));\n+        Assert.That(response.Text, Is.EqualTo(\"All three are cloudy.\"));\n+    }\n+\n     private static IChatClient CreateClient(int port)\n     {\n         TornadoApi api = new TornadoApi(new AnthropicEndpointProvider"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/AnthropicParallelToolCallsTests.cs"
+ ]
+}

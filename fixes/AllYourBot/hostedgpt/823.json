@@ -1,0 +1,41 @@
+{
+ "repo": "AllYourBot/hostedgpt",
+ "number": 823,
+ "url": "https://github.com/AllYourBot/hostedgpt/pull/823",
+ "title": "Read the Anthropic text block even when a thinking block comes first",
+ "merged_at": "2026-10-11T11:25:10Z",
+ "files": [
+  {
+   "filename": "app/services/ai_backend.rb",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 1,
+   "patch": "@@ -53,10 +53,19 @@ def get_oneoff_message(instructions, messages, params = {}, json: false)\n       @client.send(client_method_name, ** @client_config)\n     end\n \n-    response.dig(\"content\", 0, \"text\") ||\n+    self.class.content_text(response) ||\n       response.dig(\"choices\", 0, \"message\", \"content\")\n   end\n \n+  # The text of an Anthropic-style response. Models that think by default can put\n+  # a thinking block first, so this looks for the text block rather than taking the first one.\n+  def self.content_text(response)\n+    content = response[\"content\"]\n+    return nil unless content.is_a?(Array)\n+\n+    content.find { |block| block[\"type\"] == \"text\" }&.dig(\"text\")\n+  end\n+\n   def stream_next_conversation_message(&chunk_handler)\n     @stream_response_text = \"\"\n     @stream_response_tool_calls = []"
+  },
+  {
+   "filename": "app/services/ai_backend/anthropic.rb",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 2,
+   "patch": "@@ -24,7 +24,7 @@ def self.test_execute(url, token, api_name)\n     )\n \n     Rails.logger.info \"Testing using model #{api_name}\"\n-    client.messages(\n+    response = client.messages(\n       parameters: {\n         model: api_name,\n         messages: [\n@@ -33,7 +33,8 @@ def self.test_execute(url, token, api_name)\n         system: \"You are a helpful assistant.   You can generate an image based on what the user asks you to generate. You will pass the users prompt and will get back the image using the tool/function name. If your name is Claude, you should use the tool/function named generate_an_image.\",\n         max_tokens: 1000\n       }\n-    ).dig(\"content\", 0, \"text\")\n+    )\n+    content_text(response)\n   rescue => e\n     \"Error: #{e.message}\"\n   end"
+  },
+  {
+   "filename": "test/services/ai_backend/anthropic_test.rb",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -439,6 +439,16 @@ class AIBackend::AnthropicTest < ActiveSupport::TestCase\n     end\n   end\n \n+  test \"one-off reads the text block when a thinking block comes first\" do\n+    TestClient::Anthropic.stub :thinking, \"\" do\n+      TestClient::Anthropic.stub :text, \"{\\\"topic\\\":\\\"Weekend plans\\\"}\" do\n+        reply = @anthropic.get_oneoff_message(\"Extract a topic.\", [\"Here is chat text.\"], json: true)\n+\n+        assert_equal \"Weekend plans\", JSON.parse(reply)[\"topic\"], \"the reply should come from the text block, not the thinking block before it\"\n+      end\n+    end\n+  end\n+\n   test \"key_error_message returns the recorded Anthropic copy\" do\n     assert_equal \"(You need to enter a valid API key for Anthropic to use Claude. Click your Profile in the bottom \" +\n       \"left and then Settings and then **API Services**. You will find Anthropic Key instructions.)\","
+  },
+  {
+   "filename": "test/support/test_client/anthropic.rb",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 2,
+   "patch": "@@ -9,6 +9,12 @@ def self.text\n       nil\n     end\n \n+    # Stub with a string to put a thinking block before the text, as models that\n+    # think by default (Claude Opus 5, Sonnet 5 and later) can return.\n+    def self.thinking\n+      nil\n+    end\n+\n     def self.function\n       raise \"Attempting to return a function response but .function method is not stubbed.\"\n     end\n@@ -68,8 +74,11 @@ def messages(**args)\n           \"type\"=>\"message\",\n           \"role\"=>\"assistant\",\n           \"content\"=>\n-            [{\"type\"=>\"text\",\n-              \"text\"=> self.class.text || self.class.default_text(model, system_message)}],\n+            [\n+              *([{\"type\"=>\"thinking\", \"thinking\"=>self.class.thinking, \"signature\"=>\"sig\"}] if self.class.thinking),\n+              {\"type\"=>\"text\",\n+                \"text\"=> self.class.text || self.class.default_text(model, system_message)}\n+            ],\n           \"model\"=> model,\n           \"stop_reason\"=>\"end_turn\",\n           \"stop_sequence\"=>nil,"
+  }
+ ],
+ "test_files": [
+  "test/services/ai_backend/anthropic_test.rb",
+  "test/support/test_client/anthropic.rb"
+ ]
+}

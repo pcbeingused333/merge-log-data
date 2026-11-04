@@ -1,0 +1,33 @@
+{
+ "repo": "pdm-project/pdm",
+ "number": 3931,
+ "url": "https://github.com/pdm-project/pdm/pull/3931",
+ "title": "fix: read inline script metadata after a UTF-8 BOM",
+ "merged_at": "2026-10-16T03:45:56Z",
+ "files": [
+  {
+   "filename": "news/3931.bugfix.md",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+Read the inline metadata of a script that starts with a UTF-8 BOM, which `pdm run` ignored."
+  },
+  {
+   "filename": "src/pdm/cli/commands/run.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -120,6 +120,8 @@ def read_script_metadata(script: str, section: str) -> dict[str, Any] | None:\n     else:\n         import tomli as tomllib\n \n+    # Python runs a script that starts with a UTF-8 BOM, so look for a block on its first line too.\n+    script = script.removeprefix(\"\\ufeff\")\n     matches = [m for m in re.finditer(_METADATA_REGEX, script) if m.group(\"type\") == section]\n     if len(matches) > 1:\n         raise ValueError(f\"Multiple {section} blocks found\")"
+  },
+  {
+   "filename": "tests/cli/test_run.py",
+   "status": "modified",
+   "additions": 31,
+   "deletions": 0,
+   "patch": "@@ -1218,6 +1218,37 @@ def test_run_script_with_inline_metadata(project, pdm, local_finder, local_finde\n         assert result.exit_code == 0\n \n \n+def test_run_script_with_inline_metadata_after_bom(project, pdm, local_finder_artifacts):\n+    local_artifacts_url = local_finder_artifacts.as_uri()\n+    project.root.joinpath(\"test_script.py\").write_text(\n+        textwrap.dedent(f\"\"\"\\\n+        # /// script\n+        # dependencies = [\"first\"]\n+        #\n+        # [[tool.pdm.source]]\n+        # name = \"pypi\"\n+        # url = \"{local_artifacts_url}\"\n+        # type = \"find_links\"\n+        # ///\n+        from first import first\n+\n+        assert first([0, False, 1, 2]) == 1\n+        \"\"\"),\n+        encoding=\"utf-8-sig\",\n+    )\n+    with cd(project.root):\n+        result = pdm([\"run\", \"test_script.py\"], obj=project)\n+        assert result.exit_code == 0\n+\n+\n+def test_read_script_metadata_ignores_leading_bom():\n+    from pdm.cli.commands.run import read_script_metadata\n+\n+    script = '# /// script\\n# dependencies = [\"first\"]\\n# ///\\nimport first\\n'\n+\n+    assert read_script_metadata(\"\\ufeff\" + script, \"script\") == {\"dependencies\": [\"first\"]}\n+\n+\n def test_run_script_pass_run_cwd(project, pdm, capfd):\n     project.pyproject.settings[\"scripts\"] = {\n         \"test_script\": ["
+  }
+ ],
+ "test_files": [
+  "tests/cli/test_run.py"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "TokenRhythm/opensquilla",
+ "number": 1956,
+ "url": "https://github.com/TokenRhythm/opensquilla/pull/1956",
+ "title": "fix(webui): end composer history navigation when the user edits the recalled message",
+ "merged_at": "2026-10-20T05:12:25Z",
+ "files": [
+  {
+   "filename": "opensquilla-webui/src/composables/chat/useChatComposerShortcuts.test.ts",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -492,6 +492,28 @@ describe('Escape and message edits', () => {\n     expect(down.preventDefault).not.toHaveBeenCalled()\n   })\n \n+  it('keeps an edited history entry when ArrowUp or ArrowDown follows (#1954)', () => {\n+    const { api, inputText } = harness({\n+      messages: [\n+        { role: 'user', text: 'first request', ts: null },\n+        { role: 'user', text: 'second request', ts: null },\n+      ],\n+    })\n+    api.onTextareaKeydown(keydown({ key: 'ArrowUp', target: field('', 'start') }))\n+    expect(inputText.value).toBe('second request')\n+    inputText.value = 'second request, edited'\n+    api.onTextareaInput(inputEvent('insertText', field('second request, edited', 'end')))\n+\n+    const up = keydown({ key: 'ArrowUp', target: field('second request, edited', 'end') })\n+    api.onTextareaKeydown(up)\n+    const down = keydown({ key: 'ArrowDown', target: field('second request, edited', 'end') })\n+    api.onTextareaKeydown(down)\n+\n+    expect(inputText.value).toBe('second request, edited')\n+    expect(up.preventDefault).not.toHaveBeenCalled()\n+    expect(down.preventDefault).not.toHaveBeenCalled()\n+  })\n+\n   it('cancels an uncommitted edit instead of clearing the composer', () => {\n     // #1372: edit mode empties the transcript on the first click, and Escape\n     // used to clear the draft and leave that empty state on screen. Cancelling"
+  },
+  {
+   "filename": "opensquilla-webui/src/composables/chat/useChatComposerShortcuts.ts",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 1,
+   "patch": "@@ -71,10 +71,14 @@ export function useChatComposerShortcuts(options: UseChatComposerShortcutsOption\n   let deleteUndoSnapshot: TextareaSnapshot | null = null\n   let pendingUndoRepair: TextareaSnapshot | null = null\n \n-  function resetInputHistory() {\n+  function endInputHistoryNavigation() {\n     inputHistoryIdx.value = null\n     inputHistoryDraft.value = ''\n     inputHistoryDraftPaths = []\n+  }\n+\n+  function resetInputHistory() {\n+    endInputHistoryNavigation()\n     clearTextareaUndoState()\n   }\n \n@@ -84,6 +88,9 @@ export function useChatComposerShortcuts(options: UseChatComposerShortcutsOption\n \n   function onTextareaInput(event?: Event) {\n     updateTextareaUndoStateAfterInput(event)\n+    // Editing a recalled message makes it the draft: Up/Down must not replace\n+    // it with another history entry (#1954). Keep the undo state just updated.\n+    endInputHistoryNavigation()\n     options.autoResizeTextarea()\n     const inputType = event && 'inputType' in event ? event.inputType : undefined\n     if ("
+  }
+ ],
+ "test_files": [
+  "opensquilla-webui/src/composables/chat/useChatComposerShortcuts.test.ts"
+ ]
+}

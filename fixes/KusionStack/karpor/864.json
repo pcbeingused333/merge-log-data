@@ -1,0 +1,48 @@
+{
+ "repo": "KusionStack/karpor",
+ "number": 864,
+ "url": "https://github.com/KusionStack/karpor/pull/864",
+ "title": "fix(ai): default the OpenAI model to gpt-5.6-terra",
+ "merged_at": "2026-10-23T03:22:06Z",
+ "files": [
+  {
+   "filename": "cmd/karpor/app/options/ai.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -35,7 +35,7 @@ type AIOptions struct {\n \n const (\n \tdefaultBackend     = \"openai\"\n-\tdefaultModel       = \"gpt-3.5-turbo\"\n+\tdefaultModel       = \"gpt-5.6-terra\"\n \tdefaultTemperature = 1\n \tdefaultTopP        = 1\n )"
+  },
+  {
+   "filename": "cmd/karpor/app/options/ai_test.go",
+   "status": "added",
+   "additions": 55,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,55 @@\n+// Copyright The Karpor Authors.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+// http://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+\n+package options\n+\n+import (\n+\t\"testing\"\n+\n+\t\"github.com/KusionStack/karpor/pkg/kubernetes/registry\"\n+\t\"github.com/spf13/pflag\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+func TestAIModelFlagDefault(t *testing.T) {\n+\topts := NewAIOptions()\n+\tfs := pflag.NewFlagSet(\"test\", pflag.ContinueOnError)\n+\topts.AddFlags(fs)\n+\trequire.NoError(t, fs.Parse(nil))\n+\n+\t// gpt-3.5-turbo is shut down by OpenAI on 2026-10-23.\n+\trequire.Equal(t, \"gpt-5.6-terra\", opts.AIModel)\n+}\n+\n+func TestAIModelDefaultIsKeptForOpenAI(t *testing.T) {\n+\topts := NewAIOptions()\n+\tfs := pflag.NewFlagSet(\"test\", pflag.ContinueOnError)\n+\topts.AddFlags(fs)\n+\trequire.NoError(t, fs.Parse(nil))\n+\n+\tcfg := &registry.ExtraConfig{}\n+\trequire.NoError(t, opts.ApplyTo(cfg))\n+\trequire.Equal(t, \"gpt-5.6-terra\", cfg.AIModel)\n+}\n+\n+func TestAIModelDefaultIsDroppedForOtherBackends(t *testing.T) {\n+\topts := NewAIOptions()\n+\tfs := pflag.NewFlagSet(\"test\", pflag.ContinueOnError)\n+\topts.AddFlags(fs)\n+\trequire.NoError(t, fs.Parse([]string{\"--ai-backend=huggingface\"}))\n+\n+\tcfg := &registry.ExtraConfig{}\n+\trequire.NoError(t, opts.ApplyTo(cfg))\n+\trequire.Empty(t, cfg.AIModel)\n+}"
+  },
+  {
+   "filename": "docs/cli/karpor.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -18,7 +18,7 @@ karpor [flags]\n       --ai-auth-token string                                    The ai auth token (same as api key)\n       --ai-backend string                                       The ai backend (default \"openai\")\n       --ai-base-url string                                      The ai base url\n-      --ai-model string                                         The ai model (default \"gpt-3.5-turbo\")\n+      --ai-model string                                         The ai model (default \"gpt-5.6-terra\")\n       --ai-temperature float32                                  The ai temperature (default 1)\n       --ai-top-p float32                                        The ai top-p (default 1)\n       --anonymous-auth                                          Enables anonymous requests to the secure port of the API server. Requests that are not rejected by another authentication method are treated as anonymous requests. Anonymous requests have a username of system:anonymous, and a group name of system:unauthenticated. (default true)"
+  },
+  {
+   "filename": "pkg/infra/ai/openai.go",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 16,
+   "patch": "@@ -51,8 +51,14 @@ func (c *OpenAIClient) Configure(cfg AIConfig) error {\n \treturn nil\n }\n \n-func (c *OpenAIClient) Generate(ctx context.Context, prompt string) (string, error) {\n-\tresp, err := c.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{\n+// defaultTopP is the value the API uses when top_p is not sent.\n+const defaultTopP = 1\n+\n+// newRequest builds the chat completion request. top_p is left out when it has the\n+// API default, because reasoning models such as gpt-5.6-terra only accept default\n+// sampling values and a request without it behaves the same on every model.\n+func (c *OpenAIClient) newRequest(prompt string) openai.ChatCompletionRequest {\n+\treq := openai.ChatCompletionRequest{\n \t\tModel: c.model,\n \t\tMessages: []openai.ChatCompletionMessage{\n \t\t\t{\n@@ -61,8 +67,15 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string) (string, err\n \t\t\t},\n \t\t},\n \t\tTemperature: c.temperature,\n-\t\tTopP:        c.topP,\n-\t})\n+\t}\n+\tif c.topP != defaultTopP {\n+\t\treq.TopP = c.topP\n+\t}\n+\treturn req\n+}\n+\n+func (c *OpenAIClient) Generate(ctx context.Context, prompt string) (string, error) {\n+\tresp, err := c.client.CreateChatCompletion(ctx, c.newRequest(prompt))\n \tif err != nil {\n \t\treturn \"\", err\n \t}\n@@ -75,18 +88,9 @@ func (c *OpenAIClient) Generate(ctx context.Context, prompt string) (string, err\n \n func (c *OpenAIClient) GenerateStream(ctx context.Context, prompt string) (<-chan string, error) {\n \t// Create chat completion stream with streaming enabled\n-\tstream, err := c.client.CreateChatCompletionStream(ctx, openai.ChatCompletionRequest{\n-\t\tModel: c.model,\n-\t\tMessages: []openai.ChatCompletionMessage{\n-\t\t\t{\n-\t\t\t\tRole:    openai.ChatMessageRoleUser,\n-\t\t\t\tContent: prompt,\n-\t\t\t},\n-\t\t},\n-\t\tTemperature: c.temperature,\n-\t\tTopP:        c.topP,\n-\t\tStream:      true,\n-\t})\n+\treq := c.newRequest(prompt)\n+\treq.Stream = true\n+\tstream, err := c.client.CreateChatCompletionStream(ctx, req)\n \tif err != nil {\n \t\treturn nil, err\n \t}"
+  },
+  {
+   "filename": "pkg/infra/ai/openai_test.go",
+   "status": "added",
+   "additions": 71,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,71 @@\n+// Copyright The Karpor Authors.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+// http://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+\n+package ai\n+\n+import (\n+\t\"context\"\n+\t\"encoding/json\"\n+\t\"io\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"testing\"\n+\n+\t\"github.com/stretchr/testify/assert\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+const openAIChatReply = `{\"id\":\"1\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}`\n+\n+// requestBodyFor configures an OpenAIClient against a test server and returns the\n+// JSON body sent by Generate.\n+func requestBodyFor(t *testing.T, temperature, topP float32) map[string]any {\n+\tt.Helper()\n+\n+\tvar body map[string]any\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\traw, err := io.ReadAll(r.Body)\n+\t\trequire.NoError(t, err)\n+\t\trequire.NoError(t, json.Unmarshal(raw, &body))\n+\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t_, _ = w.Write([]byte(openAIChatReply))\n+\t}))\n+\tt.Cleanup(server.Close)\n+\n+\tc := &OpenAIClient{}\n+\trequire.NoError(t, c.Configure(AIConfig{\n+\t\tAuthToken:   \"test-token\",\n+\t\tModel:       \"gpt-5.6-terra\",\n+\t\tBaseURL:     server.URL,\n+\t\tTemperature: temperature,\n+\t\tTopP:        topP,\n+\t}))\n+\n+\t_, err := c.Generate(context.Background(), \"hello\")\n+\trequire.NoError(t, err)\n+\treturn body\n+}\n+\n+func TestOpenAIClient_Generate_OmitsDefaultTopP(t *testing.T) {\n+\tbody := requestBodyFor(t, 1, 1)\n+\n+\tassert.NotContains(t, body, \"top_p\")\n+\tassert.EqualValues(t, 1, body[\"temperature\"])\n+}\n+\n+func TestOpenAIClient_Generate_SendsCustomTopP(t *testing.T) {\n+\tbody := requestBodyFor(t, 1, 0.5)\n+\n+\tassert.EqualValues(t, 0.5, body[\"top_p\"])\n+}"
+  }
+ ],
+ "test_files": [
+  "cmd/karpor/app/options/ai_test.go",
+  "pkg/infra/ai/openai_test.go"
+ ]
+}

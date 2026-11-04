@@ -1,0 +1,41 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1052,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1052",
+ "title": "Return every tool_use block from AnthropicResponse#tool_calls",
+ "merged_at": "2026-09-09T12:48:29Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n - [SECURITY]: A change which fixes a security vulnerability.\n \n ## [Unreleased]\n+- [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1052] Return every `tool_use` block from `AnthropicResponse#tool_calls` instead of only the first, so parallel tool calls from Claude are no longer silently dropped.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1044] Cap automatic assistant turns to prevent infinite tool execution loops.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1040] Fix `parallel_tool_calls: false` for Google Gemini assistants by serializing tool execution across model turns.\n - [COMPAT] [https://github.com/patterns-ai-core/langchainrb/pull/980] Suppress a Ruby 3.4 warning for URI parser."
+  },
+  {
+   "filename": "lib/langchain/llm/response/anthropic_response.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 2,
+   "patch": "@@ -16,8 +16,7 @@ def chat_completion\n     end\n \n     def tool_calls\n-      tool_call = chat_completions&.find { |h| h[:type].to_s == \"tool_use\" }\n-      tool_call ? [tool_call.to_h] : []\n+      chat_completions&.select { |h| h[:type].to_s == \"tool_use\" }&.map(&:to_h) || []\n     end\n \n     def chat_completions"
+  },
+  {
+   "filename": "spec/fixtures/llm/anthropic/chat_with_multiple_tool_calls.json",
+   "status": "added",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,34 @@\n+{\n+  \"id\": \"msg_01N22NEgEsCZBTmXndCeuCet\",\n+  \"type\": \"message\",\n+  \"role\": \"assistant\",\n+  \"model\": \"claude-3-sonnet-20240229\",\n+  \"stop_sequence\": null,\n+  \"usage\": {\n+    \"input_tokens\": 1644,\n+    \"output_tokens\": 131\n+  },\n+  \"content\": [\n+    {\n+      \"type\": \"text\",\n+      \"text\": \"Let me check the weather in both cities.\"\n+    },\n+    {\n+      \"type\": \"tool_use\",\n+      \"id\": \"toolu_01UEciZACvRZ6S4rqAwD1syH\",\n+      \"name\": \"weather__get_current\",\n+      \"input\": {\n+        \"city\": \"Santo Domingo\"\n+      }\n+    },\n+    {\n+      \"type\": \"tool_use\",\n+      \"id\": \"toolu_02VFdjAbDwSA7T5srBxE2tzI\",\n+      \"name\": \"weather__get_current\",\n+      \"input\": {\n+        \"city\": \"Toronto\"\n+      }\n+    }\n+  ],\n+  \"stop_reason\": \"tool_use\"\n+}"
+  },
+  {
+   "filename": "spec/lib/langchain/llm/response/anthropic_response_spec.rb",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -34,5 +34,30 @@\n         ]\n       )\n     end\n+\n+    it \"returns every tool_use block when the model calls tools in parallel\" do\n+      raw_response = JSON.parse(\n+        File.read(\"spec/fixtures/llm/anthropic/chat_with_multiple_tool_calls.json\"),\n+        symbolize_names: true\n+      )\n+      response = described_class.new(raw_response)\n+\n+      expect(response.tool_calls).to eq(\n+        [\n+          {\n+            type: \"tool_use\",\n+            id: \"toolu_01UEciZACvRZ6S4rqAwD1syH\",\n+            name: \"weather__get_current\",\n+            input: {city: \"Santo Domingo\"}\n+          },\n+          {\n+            type: \"tool_use\",\n+            id: \"toolu_02VFdjAbDwSA7T5srBxE2tzI\",\n+            name: \"weather__get_current\",\n+            input: {city: \"Toronto\"}\n+          }\n+        ]\n+      )\n+    end\n   end\n end"
+  }
+ ],
+ "test_files": [
+  "spec/fixtures/llm/anthropic/chat_with_multiple_tool_calls.json",
+  "spec/lib/langchain/llm/response/anthropic_response_spec.rb"
+ ]
+}

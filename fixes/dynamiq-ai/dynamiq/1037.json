@@ -1,0 +1,41 @@
+{
+ "repo": "dynamiq-ai/dynamiq",
+ "number": 1037,
+ "url": "https://github.com/dynamiq-ai/dynamiq/pull/1037",
+ "title": "fix: default image generation and edit nodes to gpt-image-2",
+ "merged_at": "2026-10-20T08:51:50Z",
+ "files": [
+  {
+   "filename": "dynamiq/nodes/images/edit.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -97,7 +97,7 @@ class ImageEdit(ConnectionNode):\n     Attributes:\n         FILE_PREFIX (str): Prefix for new file names. Default to \"edited\".\n         name (str): The name of the node.\n-        model (str): The model to use for image editing (e.g., 'dall-e-2', 'gpt-image-1').\n+        model (str): The model to use for image editing (e.g., 'dall-e-2', 'gpt-image-2').\n         connection (OpenAIConnection): The connection to the API.\n         n (int): Number of edited images to generate.\n         size (ImageSize | str): Size of the output images.\n@@ -135,7 +135,7 @@ class ImageEdit(ConnectionNode):\n - {\"prompt\": \"Add a sunset background behind the subject\", \"files\": <source_image>}\n - {\"prompt\": \"Change the shirt color to blue\", \"files\": <source_image>, \"mask\": <mask_image>}\n - {\"prompt\": \"Make the image more vibrant and colorful\", \"n\": 3, \"files\": <source_image>}\"\"\"\n-    model: str = \"gpt-image-1\"\n+    model: str = \"gpt-image-2\"\n     connection: OpenAIConnection | OpenRouterConnection | None = None\n     n: int | None = None\n     size: ImageSize | str = ImageSize.SIZE_1024x1024"
+  },
+  {
+   "filename": "dynamiq/nodes/images/generation.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -122,7 +122,7 @@ class ImageGeneration(ConnectionNode):\n     Attributes:\n         FILE_PREFIX (str): Prefix for new file names. Default to \"generated\".\n         name (str): The name of the node.\n-        model (str): The model to use for image generation (e.g., 'dall-e-3', 'gpt-image-1',\n+        model (str): The model to use for image generation (e.g., 'dall-e-3', 'gpt-image-2',\n             'bedrock/stability.stable-diffusion-xl-v0').\n         connection (OpenAIConnection | GeminiConnection | VertexAIConnection | AWSConnection | AzureAIConnection):\n         The connection to the API.\n@@ -164,7 +164,7 @@ class ImageGeneration(ConnectionNode):\n - {\"prompt\": \"A serene mountain landscape at sunset, photorealistic\"}\n - {\"prompt\": \"Modern minimalist logo for tech startup, blue and white\", \"n\": 3}\n - {\"prompt\": \"Abstract art with vibrant colors\", \"size\": \"1792x1024\", \"quality\": \"hd\"}\"\"\"\n-    model: str = \"gpt-image-1\"\n+    model: str = \"gpt-image-2\"\n     connection: (\n         OpenAIConnection\n         | GeminiConnection"
+  },
+  {
+   "filename": "tests/integration/nodes/images/test_image_edit.py",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 0,
+   "patch": "@@ -432,3 +432,24 @@ def test_image_edit_preserves_original_filename(\n     output_file = node_output[\"output\"][\"files\"][0]\n     assert hasattr(output_file, \"name\")\n     assert \"edited_image.png\" in output_file.name\n+\n+\n+def test_image_edit_default_model(mock_image_file, mock_image_edit_executor, mock_requests_get):\n+    \"\"\"Test that the default model is one OpenAI still serves (gpt-image-1 shuts down on 2026-10-23).\"\"\"\n+    openai_connection = connections.OpenAI(id=str(uuid.uuid4()), api_key=\"test-api-key\")\n+\n+    node = ImageEdit(connection=openai_connection)\n+\n+    wf = Workflow(\n+        id=str(uuid.uuid4()),\n+        flow=Flow(nodes=[node]),\n+    )\n+\n+    response = wf.run(\n+        input_data={\"prompt\": \"Add a sunset background\", \"files\": mock_image_file},\n+        config=RunnableConfig(callbacks=[]),\n+    )\n+\n+    assert response.status == RunnableStatus.SUCCESS\n+    call_kwargs = mock_image_edit_executor.call_args[1]\n+    assert call_kwargs[\"model\"] == \"gpt-image-2\""
+  },
+  {
+   "filename": "tests/integration/nodes/images/test_image_generation.py",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 0,
+   "patch": "@@ -270,3 +270,24 @@ def test_image_generation_optimized_for_agents_with_tracing(\n     assert \"## Generated Images\" in content\n     assert \"Created:\" in content\n     assert \"Files Generated\" in content\n+\n+\n+def test_image_generation_default_model(mock_image_generation_executor, mock_requests_get):\n+    \"\"\"Test that the default model is one OpenAI still serves (gpt-image-1 shuts down on 2026-10-23).\"\"\"\n+    openai_connection = connections.OpenAI(id=str(uuid.uuid4()), api_key=\"test-api-key\")\n+\n+    image_node = ImageGeneration(connection=openai_connection)\n+\n+    wf = Workflow(\n+        id=str(uuid.uuid4()),\n+        flow=Flow(nodes=[image_node]),\n+    )\n+\n+    response = wf.run(\n+        input_data={\"prompt\": \"A beautiful sunset over mountains\"},\n+        config=RunnableConfig(callbacks=[]),\n+    )\n+\n+    assert response.status == RunnableStatus.SUCCESS\n+    call_kwargs = mock_image_generation_executor.call_args[1]\n+    assert call_kwargs[\"model\"] == \"gpt-image-2\""
+  }
+ ],
+ "test_files": [
+  "tests/integration/nodes/images/test_image_edit.py",
+  "tests/integration/nodes/images/test_image_generation.py"
+ ]
+}

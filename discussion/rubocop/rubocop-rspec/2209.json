@@ -1,0 +1,37 @@
+{
+ "repo": "rubocop/rubocop-rspec",
+ "number": 2209,
+ "url": "https://github.com/rubocop/rubocop-rspec/pull/2209",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-08-29T17:08:30Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "collaborator",
+   "created_at": "2026-08-01T15:12:30Z",
+   "body": "Oh my, it seems we call `each_ancestor(:block)` in quite a few places:\r\n\r\n```\r\n❯ rg -l -F 'each_ancestor(:block)' lib\r\nlib/rubocop/cop/rspec/implicit_block_expectation.rb\r\nlib/rubocop/cop/rspec/multiple_expectations.rb\r\nlib/rubocop/cop/rspec/leading_subject.rb\r\nlib/rubocop/cop/rspec/subject_stub.rb\r\nlib/rubocop/cop/rspec/leaky_constant_declaration.rb\r\nlib/rubocop/cop/rspec/leaky_local_variable.rb\r\nlib/rubocop/cop/rspec/multiple_memoized_helpers.rb\r\nlib/rubocop/cop/rspec/instance_variable.rb\r\nlib/rubocop/cop/rspec/discarded_matcher.rb\r\nlib/rubocop/cop/rspec/named_subject.rb\r\nlib/rubocop/cop/rspec/let_setup.rb\r\nlib/rubocop/cop/rspec/repeated_subject_call.rb\r\nlib/rubocop/cop/rspec/mixin/inside_example.rb\r\n```\r\n\r\nWould you mind spot checking if some of those other cops are affected by the same issue?"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-08-02T00:32:39Z",
+   "body": "Spot check done — and it turned into a fuller picture than the\r\n`each_ancestor(:block)` grep suggested. Short version: 7 cops silently drop\r\noffences under an `itblock`/`numblock`, and the root cause spans five\r\nindependent mechanisms. I have a fix that makes all seven pass with the full\r\nsuite green (2513 examples, 0 failures), so this is verified, not theory.\r\n\r\n**Method:** a `:ruby34` audit spec, one probe per cop, asserting the offence\r\nstill fires when the surrounding group/example is an `itblock`. Seven failed:\r\n`LeakyConstantDeclaration`, `LeakyLocalVariable`, `DiscardedMatcher`,\r\n`ImplicitBlockExpectation`, `SubjectStub`, `RepeatedSubjectCall`, `LetSetup`.\r\n(`InstanceVariable`/`NamedSubject` share the blind spot on an exemption /\r\nnon-default-`EnforcedStyle` path, so the symptom there is a possible false\r\npositive rather than a dropped offence — didn't repro under default config.)\r\n\r\n**The five mechanisms** (swapping only `:block`→`:any_block` fixes just 2 of\r\nthe 7 — the rest need the others):\r\n\r\n1. **Traversal** — `each_ancestor(:block)` / `each_descendant(:block)` skip\r\n   itblock/numblock. → `:any_block`.\r\n2. **Node patterns hardcoding `(block …)`** — `example?`, `shared_group?`,\r\n   and per-cop ones like `example_or_shared_group_or_including?`. Note\r\n   `example_group_with_body?` also needs its `args` slot relaxed to `_`,\r\n   since an `itblock`/`numblock`’s middle child isn’t an `args` node.\r\n   (`example_group?`/`spec_group?`/`hook?` already use `any_block`.)\r\n3. **`each_child_node(…, :block, …)`** omits `:numblock`/`:itblock`, so the\r\n   recursion skips those nodes (`SubjectStub`, `RepeatedSubjectCall`, and\r\n   `NestedGroups`/`OverwritingSetup`).\r\n4. **Callback registration** — `on_block`-only cops (the\r\n   `InternalAffairs/…Handler` disables) never fire when the group node\r\n   itself is an itblock. `AroundBlock`/`IteratedExpectation` already show the\r\n   `on_numblock`/`on_itblock` pattern to follow.\r\n5. **Type dispatch** — `case node.parent.type; when :block` in\r\n   `DiscardedMatcher#void_value?` drops itblock/numblock.\r\n\r\nSince this touches shared `Language` patterns (blast radius well beyond the 7\r\naudited cops) and a batch of `on_block`-only cops, I don't want to drop one\r\ngiant PR on you unannounced. How would you prefer it — a tracking issue with\r\nthe five buckets and staged PRs (patterns/traversal first, then the\r\n`on_block` sweep), or one PR since it's already green? Either way I'll bring\r\nthe `:ruby34` audit spec along, split into per-cop regression specs.\r\n\r\n---\r\n\r\nUpdate: rather than leave it hypothetical, I've opened it as a draft so you can see the actual shape — #2213. It already has the per-cop `:ruby34` regression specs split out and CI is green. Still very happy to restructure or stage it (patterns/traversal first, then the `on_block` sweep) — whatever's easiest for you to review."
+  },
+  {
+   "role": "member",
+   "created_at": "2026-08-02T07:09:17Z",
+   "body": "> silently drop offences under an itblock/numblock\r\n\r\nThis doesn’t sound as bas as NoMethodError\r\n\r\nI recall we had a PR in the past to fill the gaps and cover all itblock cases, but deliberately decided not to."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-08-02T07:30:13Z",
+   "body": "Fair enough — makes sense not to chase every block-syntax edge case for low payoff.\r\n\r\nI'll treat #2213 as opt-in: happy to trim it to just the two that can flip to a false *positive* (`InstanceVariable`, `NamedSubject`), or close it entirely — whichever you prefer. The `LeadingSubject` crash fix is the part that clearly earns its keep either way.\r\n👍🏻"
+  }
+ ]
+}

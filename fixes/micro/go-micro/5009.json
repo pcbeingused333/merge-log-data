@@ -1,0 +1,26 @@
+{
+ "repo": "micro/go-micro",
+ "number": 5009,
+ "url": "https://github.com/micro/go-micro/pull/5009",
+ "title": "Default the OpenAI image model to gpt-image-2",
+ "merged_at": "2026-10-19T06:31:08Z",
+ "files": [
+  {
+   "filename": "model/openai/openai.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -265,7 +265,8 @@ func (p *Provider) callAPI(ctx context.Context, req map[string]any) (*model.Resp\n \treturn response, rawMessage, nil\n }\n \n-const defaultImageModel = \"gpt-image-1\"\n+// gpt-image-1 is shut down on 2026-10-23 (https://developers.openai.com/api/docs/deprecations).\n+const defaultImageModel = \"gpt-image-2\"\n \n func (p *Provider) GenerateImage(ctx context.Context, req *model.ImageRequest, opts ...model.GenerateOption) (*model.ImageResponse, error) {\n \tmodelName := req.Model"
+  },
+  {
+   "filename": "model/openai/openai_test.go",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 0,
+   "patch": "@@ -220,3 +220,24 @@ func TestProvider_GenerateImage_NoAPIKey(t *testing.T) {\n func TestProvider_ImplementsImageModel(t *testing.T) {\n \tvar _ model.ImageModel = (*Provider)(nil)\n }\n+\n+func TestProvider_GenerateImageDefaultModel(t *testing.T) {\n+\tvar body map[string]any\n+\tts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tif err := json.NewDecoder(r.Body).Decode(&body); err != nil {\n+\t\t\tt.Fatalf(\"decode request: %v\", err)\n+\t\t}\n+\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t_, _ = w.Write([]byte(`{\"data\":[{\"b64_json\":\"aGk=\"}]}`))\n+\t}))\n+\tdefer ts.Close()\n+\n+\tp := NewProvider(model.WithAPIKey(\"test-key\"), model.WithBaseURL(ts.URL))\n+\tif _, err := p.GenerateImage(context.Background(), &model.ImageRequest{Prompt: \"a cat\"}); err != nil {\n+\t\tt.Fatalf(\"GenerateImage failed: %v\", err)\n+\t}\n+\t// gpt-image-1 is shut down on 2026-10-23.\n+\tif body[\"model\"] != \"gpt-image-2\" {\n+\t\tt.Errorf(\"Expected default image model 'gpt-image-2', got %v\", body[\"model\"])\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "model/openai/openai_test.go"
+ ]
+}

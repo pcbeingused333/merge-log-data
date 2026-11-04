@@ -1,0 +1,26 @@
+{
+ "repo": "wger-project/wger",
+ "number": 2544,
+ "url": "https://github.com/wger-project/wger/pull/2544",
+ "title": "Serve the nutrition diary pages when opened directly",
+ "merged_at": "2026-10-21T07:09:01Z",
+ "files": [
+  {
+   "filename": "wger/nutrition/tests/test_plan.py",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -82,3 +82,22 @@ def test_copy_plan(self):\n                 copied_dict = model_to_dict(copied_meal_item, exclude=['id', 'meal'])\n                 self.assertEqual(orig_dict, copied_dict)\n                 self.assertNotEqual(orig_meal_item.id, copied_meal_item.id)\n+\n+\n+class PlanDiaryPageTestCase(WgerTestCase):\n+    \"\"\"\n+    The React frontend links each diary date of a plan as /<lang>/nutrition/<plan>/<date>,\n+    so the page must also load when opened directly (new tab, reload, bookmark).\n+    \"\"\"\n+\n+    def test_diary_date_page_loads_directly(self):\n+        self.user_login()\n+        response = self.client.get(\n+            f'/en/nutrition/{PLAN_OWNED_BY_TEST_USER}/2026-10-11', follow=True\n+        )\n+        self.assertEqual(response.status_code, 200)\n+\n+    def test_diary_page_loads_directly(self):\n+        self.user_login()\n+        response = self.client.get(f'/en/nutrition/{PLAN_OWNED_BY_TEST_USER}/diary', follow=True)\n+        self.assertEqual(response.status_code, 200)"
+  },
+  {
+   "filename": "wger/nutrition/urls.py",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 1,
+   "patch": "@@ -18,7 +18,10 @@\n # Django\n from django.conf.urls import include\n from django.contrib.auth.decorators import login_required\n-from django.urls import path\n+from django.urls import (\n+    path,\n+    re_path,\n+)\n \n # wger\n from wger.core.views.react import ReactView\n@@ -42,6 +45,18 @@\n         ReactView.as_view(login_required=True),\n         name='view',\n     ),\n+    # The nutrition diary pages are React routes too (/<plan>/diary and /<plan>/<date>),\n+    # so they need to load when opened directly, e.g. from a new tab or a bookmark\n+    path(\n+        '<uuid:id>/diary/',\n+        ReactView.as_view(login_required=True),\n+        name='diary',\n+    ),\n+    re_path(\n+        r'^(?P<id>[0-9a-f-]+)/(?P<date>\\d{4}-\\d{2}-\\d{2})/$',\n+        ReactView.as_view(login_required=True),\n+        name='diary-date',\n+    ),\n     path(\n         '<uuid:pk>/copy',\n         plan.copy,"
+  }
+ ],
+ "test_files": [
+  "wger/nutrition/tests/test_plan.py"
+ ]
+}

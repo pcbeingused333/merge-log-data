@@ -1,0 +1,47 @@
+{
+ "repo": "pypa/pipenv",
+ "number": 6750,
+ "url": "https://github.com/pypa/pipenv/pull/6750",
+ "title": "Read Pipfile, Pipfile.lock, pylock.toml and pyproject.toml saved with a UTF-8 BOM",
+ "merged_at": "2026-10-20T10:32:03Z",
+ "files": [
+  {
+   "filename": "news/6750.bugfix.rst",
+   "status": "added",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,2 @@\n+Fix ``pipenv`` failing to read a ``Pipfile``, ``Pipfile.lock``, ``pylock.toml`` or ``pyproject.toml`` that was saved as UTF-8 with a byte order mark (BOM), which editors such as Windows Notepad add.\n+The files are now decoded as ``utf-8-sig``."
+  },
+  {
+   "filename": "pipenv/utils/lockfile.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -226,7 +226,7 @@ def load(self, expand_env_vars: bool = True):\n         pipfile_path = Path(project.pipfile.location)\n \n         try:\n-            with lockfile_path.open(encoding=\"utf-8\") as lock:\n+            with lockfile_path.open(encoding=\"utf-8-sig\") as lock:\n                 try:\n                     j = json.load(lock)\n                     project._lockfile_newlines = _preferred_newlines(lock)"
+  },
+  {
+   "filename": "pipenv/utils/pipfile.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -303,7 +303,7 @@ def read(\n         if not path.exists() and not invalid_ok:\n             raise FileNotFoundError(location)\n         try:\n-            with path.open(encoding=\"utf-8\") as f:\n+            with path.open(encoding=\"utf-8-sig\") as f:\n                 model = model_cls.load(f)\n                 line_ending = preferred_newlines(f)\n         except Exception:\n@@ -697,7 +697,7 @@ def read(self) -> str:\n         \"\"\"\n         if not self.exists:\n             return \"\"\n-        with open(self.location) as f:\n+        with open(self.location, encoding=\"utf-8-sig\") as f:\n             contents = f.read()\n             self._newlines = preferred_newlines(f)\n         return contents"
+  },
+  {
+   "filename": "pipenv/utils/pylock.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -92,7 +92,7 @@ def from_lockfile(\n             dev_groups = [\"dev\"]\n \n         try:\n-            with open(lockfile_path, encoding=\"utf-8\") as f:\n+            with open(lockfile_path, encoding=\"utf-8-sig\") as f:\n                 lockfile_data = json.load(f)\n         except Exception as e:\n             raise ValueError(f\"Invalid Pipfile.lock file: {e}\")\n@@ -285,7 +285,7 @@ def from_path(cls, path: Union[str, Path]) -> \"PylockFile\":\n             raise FileNotFoundError(f\"Pylock file not found: {path}\")\n \n         try:\n-            with open(path, encoding=\"utf-8\") as f:\n+            with open(path, encoding=\"utf-8-sig\") as f:\n                 content = f.read()\n                 data = tomlkit.parse(content)\n                 # Convert tomlkit objects to Python native types\n@@ -361,7 +361,7 @@ def from_pyproject(\n             pylock_path = Path(pylock_path)\n \n         try:\n-            with open(pyproject_path, encoding=\"utf-8\") as f:\n+            with open(pyproject_path, encoding=\"utf-8-sig\") as f:\n                 pyproject_data = tomlkit.parse(f.read())\n         except Exception as e:\n             raise ValueError(f\"Invalid pyproject.toml file: {e}\")"
+  },
+  {
+   "filename": "tests/unit/test_bom_readers.py",
+   "status": "added",
+   "additions": 111,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,111 @@\n+\"\"\"Files saved as UTF-8 with a byte order mark (BOM) must load like any other.\n+\n+Editors such as Windows Notepad add a BOM when saving as UTF-8. Reading with\n+``encoding=\"utf-8\"`` keeps it as a leading ``\\\\ufeff`` that the TOML and JSON\n+parsers reject, so each reader decodes with ``utf-8-sig``.\n+\"\"\"\n+\n+import json\n+\n+import pytest\n+\n+from pipenv.project import Project\n+from pipenv.utils.pipfile import ProjectFile\n+from pipenv.utils.pylock import PylockFile\n+from pipenv.vendor import plette\n+\n+PIPFILE = \"\"\"\\\n+[[source]]\n+url = \"https://pypi.org/simple\"\n+verify_ssl = true\n+name = \"pypi\"\n+\n+[packages]\n+requests = \"*\"\n+\n+[dev-packages]\n+\"\"\"\n+\n+PYLOCK = \"\"\"\\\n+lock-version = '1.0'\n+created-by = 'test-tool'\n+\n+[[packages]]\n+name = 'requests'\n+version = '2.28.1'\n+\"\"\"\n+\n+PYPROJECT = \"\"\"\\\n+[project]\n+name = \"my-project\"\n+version = \"1.0.0\"\n+requires-python = \">=3.9\"\n+dependencies = [\"requests>=2.28.0\"]\n+\"\"\"\n+\n+LOCKFILE = {\n+    \"_meta\": {\n+        \"hash\": {\"sha256\": \"abc123\"},\n+        \"pipfile-spec\": 6,\n+        \"requires\": {},\n+        \"sources\": [\n+            {\"name\": \"pypi\", \"url\": \"https://pypi.org/simple\", \"verify_ssl\": True}\n+        ],\n+    },\n+    \"default\": {\"requests\": {\"version\": \"==2.28.1\"}},\n+    \"develop\": {},\n+}\n+\n+\n+def write_bom(path, text):\n+    path.write_text(text, encoding=\"utf-8-sig\")\n+    assert path.read_bytes().startswith(b\"\\xef\\xbb\\xbf\")\n+    return path\n+\n+\n+@pytest.mark.utils\n+def test_project_file_reads_pipfile_with_bom(tmp_path):\n+    path = write_bom(tmp_path / \"Pipfile\", PIPFILE)\n+    project_file = ProjectFile.read(path, plette.Pipfile)\n+    assert \"requests\" in project_file.model.packages\n+\n+\n+@pytest.mark.utils\n+def test_project_pipfile_parses_pipfile_with_bom(tmp_path, monkeypatch):\n+    write_bom(tmp_path / \"Pipfile\", PIPFILE)\n+    monkeypatch.chdir(tmp_path)\n+    monkeypatch.delenv(\"PIPENV_PIPFILE\", raising=False)\n+    project = Project(chdir=False)\n+    assert \"requests\" in project.pipfile.parsed[\"packages\"]\n+\n+\n+@pytest.mark.utils\n+def test_pylock_from_path_reads_file_with_bom(tmp_path):\n+    path = write_bom(tmp_path / \"pylock.toml\", PYLOCK)\n+    pylock = PylockFile.from_path(path)\n+    assert [p[\"name\"] for p in pylock.packages] == [\"requests\"]\n+\n+\n+@pytest.mark.utils\n+def test_pylock_from_pyproject_reads_file_with_bom(tmp_path):\n+    path = write_bom(tmp_path / \"pyproject.toml\", PYPROJECT)\n+    pylock = PylockFile.from_pyproject(path)\n+    assert pylock.requires_python == \">=3.9\"\n+\n+\n+@pytest.mark.utils\n+def test_pylock_from_lockfile_reads_pipfile_lock_with_bom(tmp_path):\n+    path = write_bom(tmp_path / \"Pipfile.lock\", json.dumps(LOCKFILE))\n+    pylock = PylockFile.from_lockfile(path, tmp_path / \"pylock.toml\")\n+    assert [p[\"name\"] for p in pylock.packages] == [\"requests\"]\n+\n+\n+@pytest.mark.utils\n+def test_lockfile_load_reads_pipfile_lock_with_bom(tmp_path, monkeypatch):\n+    (tmp_path / \"Pipfile\").write_text(PIPFILE)\n+    write_bom(tmp_path / \"Pipfile.lock\", json.dumps(LOCKFILE))\n+    monkeypatch.chdir(tmp_path)\n+    monkeypatch.delenv(\"PIPENV_PIPFILE\", raising=False)\n+    project = Project(chdir=False)\n+    loaded = project.lockfile.load(expand_env_vars=False)\n+    assert loaded[\"_meta\"][\"hash\"][\"sha256\"] == \"abc123\""
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_bom_readers.py"
+ ]
+}

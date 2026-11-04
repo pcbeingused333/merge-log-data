@@ -1,0 +1,33 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1079,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1079",
+ "title": "Accept gems that reach the bundle through another gem in depends_on",
+ "merged_at": "2026-10-15T19:26:00Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n - [SECURITY]: A change which fixes a security vulnerability.\n \n ## [Unreleased]\n+- [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1079] `Langchain::DependencyHelper#depends_on` accepts a gem that's in the bundle through another gem's gemspec instead of the `Gemfile`, such as `aws-sdk-bedrockruntime` declared by a gem that depends on langchainrb; it raised `LoadError` before.\n - [FEATURE] [https://github.com/patterns-ai-core/langchainrb/pull/1078] Add `Langchain::Vectorsearch::Milvus#update_texts`; with the default `auto_id` schema Milvus gives each updated text a new id, returned under `\"data\" => \"upsertIds\"`.\n - [FEATURE] [https://github.com/patterns-ai-core/langchainrb/pull/1074] Add `Langchain::Vectorsearch::Pinecone#remove_texts`.\n - [FEATURE] [https://github.com/patterns-ai-core/langchainrb/pull/1075] Add `Langchain::Vectorsearch::Hnswlib#update_texts` and `#remove_texts`."
+  },
+  {
+   "filename": "lib/langchain/dependency_helper.rb",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 3,
+   "patch": "@@ -19,12 +19,13 @@ def depends_on(gem_name, req: true)\n \n       return true unless defined?(Bundler) # If we're in a non-bundler environment, we're no longer able to determine if we'll meet requirements\n \n+      # The gem can come into the bundle through another gem's gemspec rather than the Gemfile\n+      raise LoadError unless Bundler.load.specs.any? { |spec| spec.name == gem_name }\n+\n       gem_version = Gem.loaded_specs[gem_name].version\n       gem_requirement = Bundler.load.dependencies.find { |g| g.name == gem_name }&.requirement\n \n-      raise LoadError unless gem_requirement\n-\n-      unless gem_requirement.satisfied_by?(gem_version)\n+      if gem_requirement && !gem_requirement.satisfied_by?(gem_version)\n         raise VersionError, \"The #{gem_name} gem is installed, but version #{gem_requirement} is required. You have #{gem_version}.\"\n       end\n "
+  },
+  {
+   "filename": "spec/dependency_helper_spec.rb",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 2,
+   "patch": "@@ -15,13 +15,19 @@\n     expect { subject.depends_on(\"random-gem\") }.to raise_error(Langchain::DependencyHelper::LoadError, /Could not load random-gem/)\n   end\n \n-  it \"raises an error when it doesn't have it as a bundler dependency\" do\n-    bundler_load = double(:load, dependencies: [])\n+  it \"raises an error when the gem isn't in the bundle\" do\n+    bundler_load = double(:load, dependencies: [], specs: [])\n     allow(Bundler).to receive(:load).and_return(bundler_load)\n \n     expect { subject.depends_on(\"rspec\") }.to raise_error(Langchain::DependencyHelper::LoadError, /Could not load rspec/)\n   end\n \n+  it \"doesn't raise an error when the gem is in the bundle only as another gem's dependency\" do\n+    expect(Bundler.load.dependencies.map(&:name)).not_to include(\"rspec-core\")\n+\n+    expect(subject.depends_on(\"rspec-core\", req: \"rspec/core\")).to eq(true)\n+  end\n+\n   it \"raises an error when it doesn't match gem version requirement\" do\n     gem_loaded_spec = double(:specs, \"[]\": double(:version, version: Gem::Version.new(\"0.1\")))\n     allow(Gem).to receive(:loaded_specs).and_return(gem_loaded_spec)"
+  }
+ ],
+ "test_files": [
+  "spec/dependency_helper_spec.rb"
+ ]
+}

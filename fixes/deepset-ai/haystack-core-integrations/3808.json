@@ -1,0 +1,56 @@
+{
+ "repo": "deepset-ai/haystack-core-integrations",
+ "number": 3808,
+ "url": "https://github.com/deepset-ai/haystack-core-integrations/pull/3808",
+ "title": "fix: serialize missing init params in to_dict (transformers, huggingface_api, ragas)",
+ "merged_at": "2026-08-24T09:19:14Z",
+ "files": [
+  {
+   "filename": "integrations/huggingface_api/src/haystack_integrations/components/rankers/huggingface_api/ranker.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -108,6 +108,7 @@ def to_dict(self) -> dict[str, Any]:\n             self,\n             url=self.url,\n             top_k=self.top_k,\n+            raw_scores=self.raw_scores,\n             timeout=self.timeout,\n             token=self.token,\n             max_retries=self.max_retries,"
+  },
+  {
+   "filename": "integrations/huggingface_api/tests/test_ranker.py",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -60,6 +60,14 @@ def test_to_dict(self, del_hf_env_vars_if_empty):\n         assert data[\"init_parameters\"][\"max_retries\"] == 4\n         assert data[\"init_parameters\"][\"retry_status_codes\"] == [500, 502]\n \n+    def test_raw_scores_survives_a_serialization_round_trip(self, del_hf_env_vars_if_empty):\n+        \"\"\"raw_scores goes into the request payload, so losing it changes what the API returns.\"\"\"\n+        ranker = HuggingFaceTEIRanker(url=\"https://api.my-tei-service.com\", raw_scores=True)\n+\n+        restored = HuggingFaceTEIRanker.from_dict(ranker.to_dict())\n+\n+        assert restored.raw_scores is True\n+\n     def test_from_dict(self, del_hf_env_vars_if_empty):\n         \"\"\"Test deserialization from dict with environment variable token\"\"\"\n         data = {"
+  },
+  {
+   "filename": "integrations/ragas/src/haystack_integrations/components/evaluators/ragas/evaluator.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -85,7 +85,11 @@ def to_dict(self) -> dict[str, Any]:\n         :returns:\n             Dictionary with serialized data.\n         \"\"\"\n-        return default_to_dict(self, ragas_metrics=[_serialize_metric(m) for m in self.metrics])\n+        return default_to_dict(\n+            self,\n+            ragas_metrics=[_serialize_metric(m) for m in self.metrics],\n+            concurrency_limit=self.concurrency_limit,\n+        )\n \n     @classmethod\n     def from_dict(cls, data: dict[str, Any]) -> \"RagasEvaluator\":"
+  },
+  {
+   "filename": "integrations/ragas/tests/test_evaluator.py",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 1,
+   "patch": "@@ -316,10 +316,20 @@ def test_to_dict(self, monkeypatch):\n                         \"llm\": {\"model\": \"gpt-4o-mini\", \"provider\": \"openai\"},\n                     },\n                     {\"type\": \"tests.test_evaluator.ConcreteMetric\", \"name\": \"another_metric\"},\n-                ]\n+                ],\n+                \"concurrency_limit\": 4,\n             },\n         }\n \n+    def test_concurrency_limit_survives_a_serialization_round_trip(self, monkeypatch):\n+        \"\"\"concurrency_limit caps how many metric evaluations run at once in run_async.\"\"\"\n+        monkeypatch.setenv(\"OPENAI_API_KEY\", \"test\")\n+        evaluator = RagasEvaluator(ragas_metrics=[ConcreteMetric(name=\"a_metric\")], concurrency_limit=16)\n+\n+        restored = RagasEvaluator.from_dict(evaluator.to_dict())\n+\n+        assert restored.concurrency_limit == 16\n+\n     def test_from_dict(self, monkeypatch):\n         monkeypatch.setenv(\"OPENAI_API_KEY\", \"test\")\n         data = {"
+  },
+  {
+   "filename": "integrations/transformers/src/haystack_integrations/components/routers/transformers/zero_shot_text_router.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -156,7 +156,11 @@ def to_dict(self) -> dict[str, Any]:\n             Dictionary with serialized data.\n         \"\"\"\n         serialization_dict = default_to_dict(\n-            self, labels=self.labels, huggingface_pipeline_kwargs=self.huggingface_pipeline_kwargs, token=self.token\n+            self,\n+            labels=self.labels,\n+            multi_label=self.multi_label,\n+            huggingface_pipeline_kwargs=self.huggingface_pipeline_kwargs,\n+            token=self.token,\n         )\n \n         huggingface_pipeline_kwargs = serialization_dict[\"init_parameters\"][\"huggingface_pipeline_kwargs\"]"
+  },
+  {
+   "filename": "integrations/transformers/tests/test_zero_shot_text_router.py",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -22,6 +22,7 @@ def test_to_dict(self):\n             \"type\": COMPONENT_TYPE,\n             \"init_parameters\": {\n                 \"labels\": [\"query\", \"passage\"],\n+                \"multi_label\": False,\n                 \"token\": {\"env_vars\": [\"HF_API_TOKEN\", \"HF_TOKEN\"], \"strict\": False, \"type\": \"env_var\"},\n                 \"huggingface_pipeline_kwargs\": {\n                     \"model\": \"MoritzLaurer/deberta-v3-base-zeroshot-v1.1-all-33\",\n@@ -31,6 +32,14 @@ def test_to_dict(self):\n             },\n         }\n \n+    def test_multi_label_survives_a_serialization_round_trip(self, del_hf_env_vars_if_empty):\n+        \"\"\"`multi_label` changes how the pipeline normalizes scores, so losing it changes routing decisions.\"\"\"\n+        router = TransformersZeroShotTextRouter(labels=[\"query\", \"passage\"], multi_label=True)\n+\n+        restored = TransformersZeroShotTextRouter.from_dict(router.to_dict())\n+\n+        assert restored.multi_label is True\n+\n     def test_from_dict(self, del_hf_env_vars_if_empty):\n         data = {\n             \"type\": COMPONENT_TYPE,"
+  }
+ ],
+ "test_files": [
+  "integrations/huggingface_api/tests/test_ranker.py",
+  "integrations/ragas/tests/test_evaluator.py",
+  "integrations/transformers/tests/test_zero_shot_text_router.py"
+ ]
+}

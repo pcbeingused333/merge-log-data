@@ -1,0 +1,33 @@
+{
+ "repo": "deepset-ai/haystack",
+ "number": 12518,
+ "url": "https://github.com/deepset-ai/haystack/pull/12518",
+ "title": "fix: serialize `timeout` and `max_retries` in `OpenAIImageGenerator.to_dict`",
+ "merged_at": "2026-09-08T08:16:34Z",
+ "files": [
+  {
+   "filename": "haystack/components/generators/openai_image_generator.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -238,6 +238,8 @@ def to_dict(self) -> dict[str, Any]:\n             api_key=self.api_key,\n             api_base_url=self.api_base_url,\n             organization=self.organization,\n+            timeout=self.timeout,\n+            max_retries=self.max_retries,\n             http_client_kwargs=self.http_client_kwargs,\n         )\n "
+  },
+  {
+   "filename": "releasenotes/notes/openai-image-generator-serialize-timeout-max-retries-4b1d0e77a9c62f31.yaml",
+   "status": "added",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,8 @@\n+---\n+fixes:\n+  - |\n+    Add the init parameters ``timeout`` and ``max_retries`` to the ``to_dict`` method of\n+    ``OpenAIImageGenerator``. They were dropped on serialization, so a pipeline saved and\n+    reloaded silently fell back to the ``OPENAI_TIMEOUT``/``OPENAI_MAX_RETRIES`` defaults\n+    instead of the configured values. This matches ``OpenAIChatGenerator``,\n+    ``OpenAITextEmbedder`` and ``OpenAIDocumentEmbedder``, which already serialize both."
+  },
+  {
+   "filename": "test/components/generators/test_openai_image_generator.py",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 1,
+   "patch": "@@ -88,6 +88,8 @@ def test_to_dict(self) -> None:\n                 \"api_key\": {\"type\": \"env_var\", \"env_vars\": [\"OPENAI_API_KEY\"], \"strict\": True},\n                 \"api_base_url\": None,\n                 \"organization\": None,\n+                \"timeout\": None,\n+                \"max_retries\": None,\n                 \"http_client_kwargs\": None,\n             },\n         }\n@@ -100,7 +102,7 @@ def test_to_dict_with_params(self) -> None:\n             api_key=Secret.from_env_var(\"EXAMPLE_API_KEY\"),\n             api_base_url=\"https://api.openai.com\",\n             organization=\"test-org\",\n-            timeout=60,\n+            timeout=60.0,\n             max_retries=10,\n             http_client_kwargs={\"proxy\": \"http://localhost:8080\"},\n         )\n@@ -114,6 +116,8 @@ def test_to_dict_with_params(self) -> None:\n                 \"api_key\": {\"type\": \"env_var\", \"env_vars\": [\"EXAMPLE_API_KEY\"], \"strict\": True},\n                 \"api_base_url\": \"https://api.openai.com\",\n                 \"organization\": \"test-org\",\n+                \"timeout\": 60.0,\n+                \"max_retries\": 10,\n                 \"http_client_kwargs\": {\"proxy\": \"http://localhost:8080\"},\n             },\n         }\n@@ -138,6 +142,18 @@ def test_from_dict(self) -> None:\n         assert generator.api_key.to_dict() == {\"type\": \"env_var\", \"env_vars\": [\"OPENAI_API_KEY\"], \"strict\": True}\n         assert generator.http_client_kwargs is None\n \n+    def test_to_dict_from_dict_roundtrip_preserves_client_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:\n+        \"\"\"`timeout` and `max_retries` decide the client the component builds, so a pipeline\n+        that survives a save/load round trip must keep them. Without them in `to_dict` they\n+        silently revert to the `OPENAI_TIMEOUT`/`OPENAI_MAX_RETRIES` fallbacks (30s, 5).\"\"\"\n+        monkeypatch.setenv(\"OPENAI_API_KEY\", \"test-api-key\")\n+        generator = OpenAIImageGenerator(timeout=120.0, max_retries=10)\n+        restored = OpenAIImageGenerator.from_dict(generator.to_dict())\n+        assert restored.timeout == 120.0\n+        assert restored.max_retries == 10\n+        assert restored._client_kwargs()[\"timeout\"] == 120.0\n+        assert restored._client_kwargs()[\"max_retries\"] == 10\n+\n     def test_from_dict_default_params(self) -> None:\n         data = {\n             \"type\": \"haystack.components.generators.openai_image_generator.OpenAIImageGenerator\","
+  }
+ ],
+ "test_files": [
+  "test/components/generators/test_openai_image_generator.py"
+ ]
+}

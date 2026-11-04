@@ -1,0 +1,41 @@
+{
+ "repo": "deepset-ai/haystack-core-integrations",
+ "number": 3873,
+ "url": "https://github.com/deepset-ai/haystack-core-integrations/pull/3873",
+ "title": "fix: serialize missing init params in `to_dict` (transformers, amazon_bedrock)",
+ "merged_at": "2026-09-23T11:05:35Z",
+ "files": [
+  {
+   "filename": "integrations/amazon_bedrock/src/haystack_integrations/components/downloaders/s3/s3_downloader.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -299,6 +299,7 @@ def to_dict(self) -> dict[str, Any]:\n             aws_session_token=self.aws_session_token,\n             aws_region_name=self.aws_region_name,\n             aws_profile_name=self.aws_profile_name,\n+            boto3_config=self.boto3_config,\n             file_root_path=str(self.file_root_path),\n             max_workers=self.max_workers,\n             max_cache_size=self.max_cache_size,"
+  },
+  {
+   "filename": "integrations/amazon_bedrock/tests/test_s3_downloader.py",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -83,6 +83,7 @@ def test_to_dict(self, tmp_path, boto3_config: dict[str, Any] | None):\n                     \"env_vars\": [\"AWS_PROFILE\"],\n                     \"strict\": False,\n                 },\n+                \"boto3_config\": boto3_config,\n                 \"file_root_path\": str(tmp_path),\n                 \"file_extensions\": None,\n                 \"max_cache_size\": 100,\n@@ -94,6 +95,14 @@ def test_to_dict(self, tmp_path, boto3_config: dict[str, Any] | None):\n         }\n         assert d.to_dict() == expected\n \n+    def test_boto3_config_survives_a_serialization_round_trip(self, mock_boto3_session: Any, tmp_path):\n+        \"\"\"boto3_config builds the botocore Config: timeouts, retries and proxies all live there.\"\"\"\n+        downloader = S3Downloader(file_root_path=str(tmp_path), boto3_config={\"read_timeout\": 10, \"connect_timeout\": 5})\n+\n+        restored = S3Downloader.from_dict(downloader.to_dict())\n+\n+        assert restored.boto3_config == {\"read_timeout\": 10, \"connect_timeout\": 5}\n+\n     @pytest.mark.parametrize(\"boto3_config\", [None, {\"read_timeout\": 10}])\n     def test_from_dict(self, tmp_path, boto3_config: dict[str, Any] | None):\n         data = {\n@@ -170,6 +179,7 @@ def test_to_dict_with_parameters(self, tmp_path):\n                     \"env_vars\": [\"AWS_PROFILE\"],\n                     \"strict\": False,\n                 },\n+                \"boto3_config\": None,\n                 \"file_root_path\": str(tmp_path),\n                 \"file_extensions\": [\".txt\"],\n                 \"max_cache_size\": 400,"
+  },
+  {
+   "filename": "integrations/transformers/src/haystack_integrations/components/readers/transformers/extractive_reader.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -150,6 +150,7 @@ def to_dict(self) -> dict[str, Any]:\n             answers_per_seq=self.answers_per_seq,\n             no_answer=self.no_answer,\n             calibration_factor=self.calibration_factor,\n+            overlap_threshold=self.overlap_threshold,\n             model_kwargs=self.model_kwargs,\n         )\n "
+  },
+  {
+   "filename": "integrations/transformers/tests/test_extractive_reader.py",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -150,6 +150,7 @@ def test_to_dict(initialized_token: Secret):\n             \"answers_per_seq\": None,\n             \"no_answer\": True,\n             \"calibration_factor\": 0.1,\n+            \"overlap_threshold\": 0.01,\n             \"model_kwargs\": {\n                 \"torch_dtype\": \"torch.float16\",\n                 \"device_map\": ComponentDevice.resolve_device(None).to_hf(),\n@@ -158,6 +159,15 @@ def test_to_dict(initialized_token: Secret):\n     }\n \n \n+def test_overlap_threshold_survives_a_serialization_round_trip():\n+    \"\"\"overlap_threshold decides which overlapping answers are deduplicated away in run().\"\"\"\n+    reader = TransformersExtractiveReader(\"my-model\", token=None, overlap_threshold=0.5)\n+\n+    restored = TransformersExtractiveReader.from_dict(reader.to_dict())\n+\n+    assert restored.overlap_threshold == 0.5\n+\n+\n def test_to_dict_no_token():\n     component = TransformersExtractiveReader(\"my-model\", token=None, model_kwargs={\"torch_dtype\": torch.float16})\n     data = component.to_dict()\n@@ -178,6 +188,7 @@ def test_to_dict_no_token():\n             \"answers_per_seq\": None,\n             \"no_answer\": True,\n             \"calibration_factor\": 0.1,\n+            \"overlap_threshold\": 0.01,\n             \"model_kwargs\": {\n                 \"torch_dtype\": \"torch.float16\",\n                 \"device_map\": ComponentDevice.resolve_device(None).to_hf(),\n@@ -206,6 +217,7 @@ def test_to_dict_empty_model_kwargs(initialized_token: Secret):\n             \"answers_per_seq\": None,\n             \"no_answer\": True,\n             \"calibration_factor\": 0.1,\n+            \"overlap_threshold\": 0.01,\n             \"model_kwargs\": {\"device_map\": ComponentDevice.resolve_device(None).to_hf()},\n         },\n     }\n@@ -239,6 +251,7 @@ def test_to_dict_device_map(device_map, expected):\n             \"answers_per_seq\": None,\n             \"no_answer\": True,\n             \"calibration_factor\": 0.1,\n+            \"overlap_threshold\": 0.01,\n             \"model_kwargs\": {\"device_map\": expected},\n         },\n     }\n@@ -261,6 +274,7 @@ def test_from_dict():\n             \"answers_per_seq\": None,\n             \"no_answer\": True,\n             \"calibration_factor\": 0.1,\n+            \"overlap_threshold\": 0.01,\n             \"model_kwargs\": {\"torch_dtype\": \"torch.float16\"},\n         },\n     }\n@@ -325,6 +339,7 @@ def test_from_dict_no_token():\n             \"answers_per_seq\": None,\n             \"no_answer\": True,\n             \"calibration_factor\": 0.1,\n+            \"overlap_threshold\": 0.01,\n             \"model_kwargs\": {\"torch_dtype\": \"torch.float16\"},\n         },\n     }"
+  }
+ ],
+ "test_files": [
+  "integrations/amazon_bedrock/tests/test_s3_downloader.py",
+  "integrations/transformers/tests/test_extractive_reader.py"
+ ]
+}

@@ -1,0 +1,40 @@
+{
+ "repo": "cisco-ai-defense/skill-scanner",
+ "number": 275,
+ "url": "https://github.com/cisco-ai-defense/skill-scanner/pull/275",
+ "title": "fix(llm): replace retired openrouter and vertex default models",
+ "merged_at": "2026-10-20T22:22:38Z",
+ "files": [
+  {
+   "filename": "docs/architecture/analyzers/llm-analyzer.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -145,7 +145,7 @@ analyzer = LLMAnalyzer(model=\"gemini/gemini-2.0-flash-exp\", api_key=key)\n \n # Vertex AI -- uses GOOGLE_APPLICATION_CREDENTIALS if set, otherwise falls\n # back to ambient Application Default Credentials (e.g. Workload Identity)\n-analyzer = LLMAnalyzer(model=\"vertex_ai/gemini-1.5-pro\")\n+analyzer = LLMAnalyzer(model=\"vertex_ai/gemini-3.8-flash\")\n ```\n \n ### Azure OpenAI"
+  },
+  {
+   "filename": "docs/architecture/analyzers/meta-analyzer.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -174,7 +174,7 @@ export SKILL_SCANNER_LLM_API_VERSION=\"2025-01-01-preview\"\n **Google Gemini:**\n ```bash\n export SKILL_SCANNER_LLM_API_KEY=\"your-gemini-key\"\n-export SKILL_SCANNER_LLM_MODEL=\"gemini/gemini-1.5-pro\"\n+export SKILL_SCANNER_LLM_MODEL=\"gemini/gemini-3.8-flash\"\n ```\n \n **AWS Bedrock:**"
+  },
+  {
+   "filename": "skill_scanner/core/analyzers/llm_analyzer.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -346,10 +346,10 @@ def __init__(\n                 \"azure-openai\": \"azure/gpt-4o\",\n                 \"azure-ai\": \"azure/gpt-4\",\n                 \"aws-bedrock\": \"bedrock/us.anthropic.claude-sonnet-5-5\",\n-                \"gcp-vertex\": \"vertex_ai/gemini-1.5-pro\",\n+                \"gcp-vertex\": \"vertex_ai/gemini-3.8-flash\",\n                 \"ollama\": \"ollama/llama2\",\n                 \"apple-fm\": \"apple-fm/system\",\n-                \"openrouter\": \"openrouter/openai/gpt-4\",\n+                \"openrouter\": \"openrouter/openai/gpt-5.6-sol\",\n                 \"orcarouter\": \"orcarouter/anthropic/claude-sonnet-5\",\n             }\n             model = model_mapping.get(provider_str, DEFAULT_LLM_MODEL)"
+  },
+  {
+   "filename": "tests/test_llm_analyzer.py",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -211,6 +211,23 @@ def test_orcarouter_custom_base_url_overrides_default_endpoint(self):\n             \"api_base\": \"https://orca.internal/v1\",\n         }\n \n+    def test_openrouter_provider_default_model_is_not_retired(self):\n+        \"\"\"OpenAI shuts down gpt-4 on 2026-10-23 and names gpt-5.6-sol as its replacement.\"\"\"\n+        with patch.dict(\"os.environ\", {}, clear=True):\n+            analyzer = LLMAnalyzer(provider=\"openrouter\", api_key=\"test-key\")\n+\n+        assert analyzer.model == \"openrouter/openai/gpt-5.6-sol\"\n+        # gpt-5.6-sol is a reasoning model: the request must leave temperature out\n+        assert analyzer.request_handler.temperature is None\n+\n+    def test_vertex_provider_default_model_is_not_retired(self):\n+        \"\"\"Vertex AI retired gemini-1.5-pro in 2025 and lists gemini-3.8-flash as current.\"\"\"\n+        with patch.dict(\"os.environ\", {}, clear=True):\n+            analyzer = LLMAnalyzer(provider=\"gcp-vertex\", api_key=None)\n+\n+        assert analyzer.model == \"vertex_ai/gemini-3.8-flash\"\n+        assert analyzer.provider_config.is_vertex\n+\n \n class TestPromptLoading:\n     \"\"\"Test prompt loading functionality.\"\"\""
+  }
+ ],
+ "test_files": [
+  "tests/test_llm_analyzer.py"
+ ]
+}

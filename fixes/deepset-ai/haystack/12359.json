@@ -1,0 +1,33 @@
+{
+ "repo": "deepset-ai/haystack",
+ "number": 12359,
+ "url": "https://github.com/deepset-ai/haystack/pull/12359",
+ "title": "fix: convert images off the event loop in LLMDocumentContentExtractor.run_async",
+ "merged_at": "2026-08-20T12:49:11Z",
+ "files": [
+  {
+   "filename": "haystack/components/extractors/image/llm_document_content_extractor.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -422,7 +422,10 @@ async def run_async(self, documents: list[Document]) -> dict[str, list[Document]\n \n         await self.warm_up_async()\n \n-        image_contents = self._document_to_image_content.run(documents=documents)[\"image_contents\"]\n+        # Reading the files and rendering PDF pages is blocking work and `DocumentToImageContent` has no\n+        # `run_async`, so it runs in a thread instead of on the event loop.\n+        conversion_result = await _execute_component_async(self._document_to_image_content, documents=documents)\n+        image_contents = conversion_result[\"image_contents\"]\n \n         # Capture the current span here so concurrent tasks nest their generator spans under the component span.\n         parent_span = tracing.tracer.current_span()"
+  },
+  {
+   "filename": "releasenotes/notes/fix-llm-content-extractor-async-image-conversion-69772090bd3a32c4.yaml",
+   "status": "added",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,8 @@\n+---\n+fixes:\n+  - |\n+    Fixed ``LLMDocumentContentExtractor.run_async`` converting documents to images on the event loop.\n+    ``DocumentToImageContent`` reads every file and renders the requested PDF pages, and it has no\n+    ``run_async``, so calling it directly blocked the loop for the whole batch before any LLM call\n+    started. It now runs through ``_execute_component_async``, which hands the synchronous work to a\n+    thread."
+  },
+  {
+   "filename": "test/components/extractors/image/test_llm_document_content_extractor.py",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 0,
+   "patch": "@@ -4,6 +4,7 @@\n \n import asyncio\n import os\n+import threading\n from unittest.mock import AsyncMock, Mock, patch\n \n import pytest\n@@ -580,6 +581,33 @@ def run(self, messages, **kwargs):\n         assert len(result[\"failed_documents\"]) == 0\n         assert result[\"documents\"][0].content == \"Extracted via sync run\"\n \n+    @pytest.mark.asyncio\n+    @patch.object(DocumentToImageContent, \"run\")\n+    async def test_run_async_converts_images_off_the_event_loop(self, mock_doc_to_image_run):\n+        \"\"\"\n+        Turning documents into images reads the files and renders PDF pages, and `DocumentToImageContent`\n+        only has a synchronous `run`, so `run_async` has to hand that work to a thread.\n+        \"\"\"\n+        conversion_thread = None\n+\n+        def record_thread(documents):\n+            nonlocal conversion_thread\n+            conversion_thread = threading.current_thread()\n+            return {\"image_contents\": [ImageContent.from_file_path(\"./test/test_files/images/apple.jpg\")]}\n+\n+        mock_doc_to_image_run.side_effect = record_thread\n+\n+        mock_chat_generator = Mock(spec=OpenAIChatGenerator)\n+        mock_chat_generator.run_async = AsyncMock(\n+            return_value={\"replies\": [ChatMessage.from_assistant(text='{\"document_content\": \"Extracted\"}')]}\n+        )\n+        extractor = LLMDocumentContentExtractor(chat_generator=mock_chat_generator)\n+\n+        await extractor.run_async(documents=[Document(content=\"\", meta={\"file_path\": \"/path/to/image.pdf\"})])\n+\n+        assert conversion_thread is not None\n+        assert conversion_thread is not threading.current_thread()\n+\n     @pytest.mark.asyncio\n     @patch.object(DocumentToImageContent, \"run\")\n     async def test_run_async_respects_max_workers(self, mock_doc_to_image_run):"
+  }
+ ],
+ "test_files": [
+  "test/components/extractors/image/test_llm_document_content_extractor.py"
+ ]
+}

@@ -1,0 +1,27 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1054,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1054",
+ "title": "Add regression coverage for an explicit tool_calls: null (#1011)",
+ "merged_at": "2026-09-09T17:05:06Z",
+ "files": [
+  {
+   "filename": "spec/lib/langchain/assistant/assistant_spec.rb",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -341,6 +341,40 @@\n         end\n       end\n \n+      context \"when the response carries an explicit tool_calls: null (see #1011)\" do\n+        let(:raw_openai_response_null_tool_calls) do\n+          {\n+            \"id\" => \"chatcmpl-BoGVVtq92F0jUwOIs6CU0qs65xbql\",\n+            \"object\" => \"chat.completion\",\n+            \"created\" => 1751319553,\n+            \"model\" => \"gpt-4o-mini-2024-07-18\",\n+            \"choices\" => [\n+              {\n+                \"index\" => 0,\n+                \"message\" => {\"role\" => \"assistant\", \"content\" => \"There are no directories under /Home.\", \"tool_calls\" => nil, \"function_call\" => nil},\n+                \"finish_reason\" => \"stop\"\n+              }\n+            ],\n+            \"usage\" => {\"prompt_tokens\" => 50, \"completion_tokens\" => 12, \"total_tokens\" => 62}\n+          }\n+        end\n+\n+        before do\n+          allow(subject.llm).to receive(:chat).and_return(\n+            Langchain::LLM::Response::OpenAIResponse.new(raw_openai_response_null_tool_calls)\n+          )\n+          subject.add_message(role: \"user\", content: \"how many directories are there under /Home\")\n+        end\n+\n+        it \"completes the run without raising\" do\n+          expect { subject.run(auto_tool_execution: true) }.not_to raise_error\n+\n+          expect(subject.messages.last.role).to eq(\"assistant\")\n+          expect(subject.messages.last.content).to eq(\"There are no directories under /Home.\")\n+          expect(subject.messages.last.tool_calls).to eq([])\n+        end\n+      end\n+\n       context \"when messages are empty\" do\n         let(:instructions) { nil }\n "
+  },
+  {
+   "filename": "spec/lib/langchain/llm/response/openai_response_spec.rb",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -14,6 +14,12 @@\n       expect(described_class.new(raw).tool_calls).to eq([])\n     end\n \n+    it \"returns [] when tool_calls is present but null (see #1011)\" do\n+      raw = {\"choices\" => [{\"message\" => {\"role\" => \"assistant\", \"content\" => \"hi\", \"tool_calls\" => nil, \"function_call\" => nil}}]}\n+\n+      expect(described_class.new(raw).tool_calls).to eq([])\n+    end\n+\n     it \"returns [] when choices is empty\" do\n       expect(described_class.new({\"choices\" => []}).tool_calls).to eq([])\n     end"
+  }
+ ],
+ "test_files": [
+  "spec/lib/langchain/assistant/assistant_spec.rb",
+  "spec/lib/langchain/llm/response/openai_response_spec.rb"
+ ]
+}

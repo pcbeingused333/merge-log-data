@@ -1,0 +1,33 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1073,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1073",
+ "title": "Raise Anthropic's default max_tokens from 256 to 16,000",
+ "merged_at": "2026-10-15T03:15:30Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n - [SECURITY]: A change which fixes a security vulnerability.\n \n ## [Unreleased]\n+- [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1073] Raise `Langchain::LLM::Anthropic`'s default `max_tokens` from 256 to 16,000; Claude Sonnet 5 and later, Haiku 5.5 and Opus 5 and later think by default within that cap, so they often stopped before writing any text and `#chat_completion` returned `nil`.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1072] Ask the LLM with `#chat` in `Langchain::Chunker::Semantic`, the Ragas evals and `Vectorsearch::Base#similarity_search_with_hyde`; they called `#complete`, which Google Gemini, Vertex AI and Mistral AI don't implement, and the semantic chunker passed `max_tokens_to_sample:`, which `Langchain::LLM::Anthropic#complete` rejected.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1069] Honor `tables:` and `exclude_tables:` in `Langchain::Tool::Database#list_tables` and `#dump_schema`, list the key columns of a composite primary key, and drop the trailing comma from the schema of a table without a primary key.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1071] Use the loader's `chunker:` for every file of a directory loaded with `Langchain::Loader`, and match file extensions case-insensitively, so `NOTES.TXT` no longer raises `UnknownFormatError`."
+  },
+  {
+   "filename": "lib/langchain/llm/anthropic.rb",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -15,7 +15,9 @@ class Anthropic < Base\n       temperature: 0.0,\n       completion_model: \"claude-2.1\",\n       chat_model: \"claude-sonnet-4-6\",\n-      max_tokens: 256\n+      # Claude Sonnet 5 and later, Haiku 5.5 and Opus 5 and later think by default, and the thinking\n+      # counts against max_tokens: with a small cap they can stop on \"max_tokens\" before writing any text.\n+      max_tokens: 16_000\n     }.freeze\n \n     # Initialize an Anthropic LLM instance"
+  },
+  {
+   "filename": "spec/lib/langchain/llm/anthropic_spec.rb",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -80,6 +80,25 @@\n     let(:fixture) { File.read(\"spec/fixtures/llm/anthropic/chat.json\") }\n     let(:response) { JSON.parse(fixture, symbolize_names: true) }\n \n+    context \"with max_tokens\" do\n+      it \"leaves room for the thinking that current Claude models do by default\" do\n+        expect(subject.client.messages).to receive(:create)\n+          .with(hash_including(max_tokens: 16_000))\n+          .and_return(response)\n+\n+        subject.chat(messages: messages)\n+      end\n+\n+      it \"sends a max_tokens set in default_options\" do\n+        llm = described_class.new(api_key: \"123\", default_options: {max_tokens: 1024})\n+        expect(llm.client.messages).to receive(:create)\n+          .with(hash_including(max_tokens: 1024))\n+          .and_return(response)\n+\n+        llm.chat(messages: messages)\n+      end\n+    end\n+\n     context \"with temperature\" do\n       it \"does not send the library's default temperature, which current Claude models reject\" do\n         expect(subject.client.messages).to receive(:create)"
+  }
+ ],
+ "test_files": [
+  "spec/lib/langchain/llm/anthropic_spec.rb"
+ ]
+}

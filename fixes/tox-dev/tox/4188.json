@@ -1,0 +1,55 @@
+{
+ "repo": "tox-dev/tox",
+ "number": 4188,
+ "url": "https://github.com/tox-dev/tox/pull/4188",
+ "title": "🐛 fix(python): read a UTF-8 BOM in pyproject.toml and base_python_file",
+ "merged_at": "2026-10-27T23:10:25Z",
+ "files": [
+  {
+   "filename": "docs/changelog/4188.bugfix.rst",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+A leading UTF-8 byte order mark in ``pyproject.toml`` no longer breaks ``dependency_groups`` or reading the package's\n+static dependencies from ``[project]``, and one in a ``base_python_file`` such as ``.python-version`` is no longer read\n+as part of the Python version."
+  },
+  {
+   "filename": "src/tox/tox_env/python/api.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -222,7 +222,7 @@ def _read_python_version_file(self, file_paths: list[str]) -> list[str]:\n             path = tox_root / file_path\n             if not path.exists():\n                 continue\n-            content = path.read_text(encoding=\"utf-8\")\n+            content = path.read_text(encoding=\"utf-8-sig\")\n             for line in content.splitlines():\n                 stripped = line.strip()\n                 if stripped and not stripped.startswith(\"#\"):"
+  },
+  {
+   "filename": "src/tox/tox_env/python/dependency_groups.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 2,
+   "patch": "@@ -24,8 +24,7 @@ def resolve(root: Path, groups: set[str]) -> set[Requirement]:\n     if not pyproject_file.exists():\n         msg = f\"no pyproject.toml found at {pyproject_file} to read dependency groups from\"\n         raise Fail(msg)\n-    with pyproject_file.open(\"rb\") as file_handler:\n-        pyproject = tomllib.load(file_handler)\n+    pyproject = tomllib.loads(pyproject_file.read_text(encoding=\"utf-8-sig\"))\n     if \"dependency-groups\" not in pyproject:\n         msg = f\"no dependency groups defined in {pyproject_file}\"\n         raise Fail(msg)"
+  },
+  {
+   "filename": "src/tox/tox_env/python/extras.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 2,
+   "patch": "@@ -16,8 +16,7 @@ def resolve_extras_static(root: Path, extras: set[str]) -> list[Requirement] | N\n     pyproject_file = root / \"pyproject.toml\"\n     if not pyproject_file.exists():\n         return None\n-    with pyproject_file.open(\"rb\") as file_handler:\n-        pyproject = tomllib.load(file_handler)\n+    pyproject = tomllib.loads(pyproject_file.read_text(encoding=\"utf-8-sig\"))\n     if \"project\" not in pyproject:\n         return None\n     project = pyproject[\"project\"]"
+  },
+  {
+   "filename": "tests/tox_env/python/test_python_api.py",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -765,6 +765,14 @@ def test_base_python_file_global_testenv(tox_project: ToxProjectCreator) -> None\n     assert f\"py{_PY_VER_NODOT}\" in result.out\n \n \n+def test_base_python_file_with_utf8_bom(tox_project: ToxProjectCreator) -> None:\n+    project = tox_project({\"tox.ini\": \"[testenv:mypy]\\npackage=skip\\nbase_python_file=.python-version\\n\"})\n+    (project.path / \".python-version\").write_bytes(f\"\\ufeff{_PY_VER}\\n\".encode())\n+    result = project.run(\"c\", \"-e\", \"mypy\", \"-k\", \"base_python\")\n+    result.assert_success()\n+    assert f\"base_python = {_PY_VER}\\n\" in result.out\n+\n+\n def test_base_python_file_not_used_when_not_set(tox_project: ToxProjectCreator) -> None:\n     toml = 'env_list = [\"lint\"]\\n\\n[env_run_base]\\npackage = \"skip\"\\ncommands = [[\"python\", \"-c\", \"print(1)\"]]\\n'\n     result = tox_project({\"tox.toml\": toml}).run(\"c\", \"-e\", \"lint\", \"-k\", \"base_python\")"
+  },
+  {
+   "filename": "tests/tox_env/python/test_python_runner.py",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -491,6 +491,13 @@ def test_dependency_groups_nested_extra_names(tox_project: ToxProjectCreator) ->\n     assert resolve(project.path, {\"test\"}) == {Requirement(\"first>=1\"), Requirement(\"second>=2\")}\n \n \n+def test_dependency_groups_pyproject_with_utf8_bom(tox_project: ToxProjectCreator) -> None:\n+    project: Final = tox_project({\"pyproject.toml\": '[dependency-groups]\\ntest = [\"first>=1\"]\\n'})\n+    pyproject = project.path / \"pyproject.toml\"\n+    pyproject.write_bytes(b\"\\xef\\xbb\\xbf\" + pyproject.read_bytes())\n+    assert resolve(project.path, {\"test\"}) == {Requirement(\"first>=1\")}\n+\n+\n @pytest.mark.parametrize(\n     (\"requirements\", \"message\"),\n     [\n@@ -741,6 +748,12 @@ def test_resolve_extras_static_no_pyproject(tmp_path: Path) -> None:\n     assert resolve_extras_static(tmp_path, set()) is None\n \n \n+def test_resolve_extras_static_pyproject_with_utf8_bom(tmp_path: Path) -> None:\n+    content = b'\\xef\\xbb\\xbf[project]\\nname = \"demo\"\\nversion = \"1.0\"\\ndependencies = [\"first>=1\"]\\n'\n+    (tmp_path / \"pyproject.toml\").write_bytes(content)\n+    assert resolve_extras_static(tmp_path, set()) == [Requirement(\"first>=1\")]\n+\n+\n @pytest.mark.parametrize(\n     (\"pyproject\", \"extras\"),\n     ["
+  }
+ ],
+ "test_files": [
+  "tests/tox_env/python/test_python_api.py",
+  "tests/tox_env/python/test_python_runner.py"
+ ]
+}

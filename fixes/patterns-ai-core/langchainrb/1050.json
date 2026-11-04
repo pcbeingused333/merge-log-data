@@ -1,0 +1,56 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1050,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1050",
+ "title": "Return [] from #tool_calls when the response has no usable choices",
+ "merged_at": "2026-09-09T12:51:09Z",
+ "files": [
+  {
+   "filename": "lib/langchain/llm/response/google_gemini_response.rb",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 2,
+   "patch": "@@ -15,8 +15,10 @@ def role\n     end\n \n     def tool_calls\n-      if raw_response.dig(\"candidates\", 0, \"content\") && raw_response.dig(\"candidates\", 0, \"content\", \"parts\", 0).has_key?(\"functionCall\")\n-        raw_response.dig(\"candidates\", 0, \"content\", \"parts\")\n+      parts = raw_response.dig(\"candidates\", 0, \"content\", \"parts\")\n+\n+      if parts&.first.is_a?(Hash) && parts.first.key?(\"functionCall\")\n+        parts\n       else\n         []\n       end"
+  },
+  {
+   "filename": "lib/langchain/llm/response/mistralai_response.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -15,7 +15,7 @@ def chat_completions\n     end\n \n     def tool_calls\n-      chat_completions.dig(0, \"message\", \"tool_calls\") || []\n+      chat_completions&.dig(0, \"message\", \"tool_calls\") || []\n     end\n \n     def role"
+  },
+  {
+   "filename": "lib/langchain/llm/response/openai_response.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 5,
+   "patch": "@@ -25,11 +25,7 @@ def chat_completion\n     end\n \n     def tool_calls\n-      if chat_completions.dig(0, \"message\").has_key?(\"tool_calls\")\n-        chat_completions.dig(0, \"message\", \"tool_calls\")\n-      else\n-        []\n-      end\n+      chat_completions&.dig(0, \"message\", \"tool_calls\") || []\n     end\n \n     def embedding"
+  },
+  {
+   "filename": "spec/lib/langchain/llm/response/google_gemini_response_spec.rb",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -25,6 +25,12 @@\n     it \"returns tool_calls\" do\n       expect(response.tool_calls).to eq([{\"functionCall\" => {\"name\" => \"calculator__execute\", \"args\" => {\"input\" => \"2+2\"}}}])\n     end\n+\n+    it \"returns [] when the candidate content has no parts (e.g. finishReason SAFETY)\" do\n+      raw = {\"candidates\" => [{\"content\" => {\"role\" => \"model\"}, \"finishReason\" => \"SAFETY\"}]}\n+\n+      expect(described_class.new(raw).tool_calls).to eq([])\n+    end\n   end\n \n   describe \"#embeddings\" do"
+  },
+  {
+   "filename": "spec/lib/langchain/llm/response/mistral_ai_response_spec.rb",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -31,5 +31,9 @@\n         ]\n       )\n     end\n+\n+    it \"returns [] when the response has no choices (e.g. an error payload)\" do\n+      expect(described_class.new({\"object\" => \"error\", \"message\" => \"boom\"}).tool_calls).to eq([])\n+    end\n   end\n end"
+  },
+  {
+   "filename": "spec/lib/langchain/llm/response/openai_response_spec.rb",
+   "status": "added",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,25 @@\n+# frozen_string_literal: true\n+\n+RSpec.describe Langchain::LLM::Response::OpenAIResponse do\n+  describe \"#tool_calls\" do\n+    it \"returns the tool calls when present\" do\n+      raw = {\"choices\" => [{\"message\" => {\"role\" => \"assistant\", \"tool_calls\" => [{\"id\" => \"call_1\"}]}}]}\n+\n+      expect(described_class.new(raw).tool_calls).to eq([{\"id\" => \"call_1\"}])\n+    end\n+\n+    it \"returns [] when the message has no tool_calls\" do\n+      raw = {\"choices\" => [{\"message\" => {\"role\" => \"assistant\", \"content\" => \"hi\"}}]}\n+\n+      expect(described_class.new(raw).tool_calls).to eq([])\n+    end\n+\n+    it \"returns [] when choices is empty\" do\n+      expect(described_class.new({\"choices\" => []}).tool_calls).to eq([])\n+    end\n+\n+    it \"returns [] when there is no choices key (e.g. an error response)\" do\n+      expect(described_class.new({\"error\" => {\"message\" => \"boom\"}}).tool_calls).to eq([])\n+    end\n+  end\n+end"
+  }
+ ],
+ "test_files": [
+  "spec/lib/langchain/llm/response/google_gemini_response_spec.rb",
+  "spec/lib/langchain/llm/response/mistral_ai_response_spec.rb",
+  "spec/lib/langchain/llm/response/openai_response_spec.rb"
+ ]
+}

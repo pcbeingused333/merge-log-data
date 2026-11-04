@@ -1,0 +1,48 @@
+{
+ "repo": "we-promise/sure",
+ "number": 4258,
+ "url": "https://github.com/we-promise/sure/pull/4258",
+ "title": "Fix three buttons that sent the wrong HTTP method",
+ "merged_at": "2026-10-16T21:08:35Z",
+ "files": [
+  {
+   "filename": "app/views/imports/_ready.html.erb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -100,7 +100,7 @@\n   </div>\n \n   <% if import_summary_empty %>\n-    <%= render DS::Button.new(text: t(\".back_to_imports\"), href: imports_path, variant: :secondary, full_width: true) %>\n+    <%= render DS::Link.new(text: t(\".back_to_imports\"), href: imports_path, variant: :secondary, full_width: true) %>\n   <% else %>\n     <%= render DS::Button.new(text: t(\".publish_import\"), href: publish_import_path(import), method: :post, full_width: true) %>\n   <% end %>"
+  },
+  {
+   "filename": "app/views/imports/_revert_failure.html.erb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -14,7 +14,8 @@\n     <%= render DS::Button.new(\n       text: t(\".try_again\"),\n       full_width: true,\n-      href: revert_import_path(import)\n+      href: revert_import_path(import),\n+      method: :put\n     ) %>\n   </div>\n </div>"
+  },
+  {
+   "filename": "app/views/reports/google_sheets_instructions.html.erb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -47,7 +47,7 @@\n             data: { action: \"click->DS--dialog#close\" }\n           ) %>\n         <% else %>\n-          <%= render DS::Button.new(\n+          <%= render DS::Link.new(\n             text: t(\"reports.google_sheets_instructions.go_to_api_keys\"),\n             variant: \"primary\",\n             full_width: true,"
+  },
+  {
+   "filename": "test/controllers/imports_controller_test.rb",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -31,6 +31,33 @@ class ImportsControllerTest < ActionDispatch::IntegrationTest\n     assert_select \"form[data-turbo-frame=_top] input[type=file][onchange='this.form.requestSubmit()']\", count: 2\n   end\n \n+  # DS::Button with an href renders button_to, which POSTs unless given a\n+  # method. revert only routes PUT, so Try again hit a routing error.\n+  test \"try again on a failed revert PUTs to revert\" do\n+    import = imports(:transaction)\n+    import.update_columns(status: \"revert_failed\")\n+    TransactionImport.any_instance.stubs(uploaded?: true, publishable?: true)\n+\n+    get import_url(import)\n+\n+    assert_response :success\n+    assert_select \"form[action=?]\", revert_import_path(import) do\n+      assert_select \"input[name=_method][value=put]\"\n+    end\n+  end\n+\n+  # POSTing to imports_path is create, which needs import params.\n+  test \"back to imports on an empty import is a link to the imports page\" do\n+    import = imports(:transaction)\n+    TransactionImport.any_instance.stubs(uploaded?: true, publishable?: true)\n+\n+    get import_url(import)\n+\n+    assert_response :success\n+    assert_select \"a[href=?]\", imports_path, text: I18n.t(\"imports.ready.back_to_imports\")\n+    assert_select \"form[action=?]\", imports_path, count: 0\n+  end\n+\n   test \"cancel marks a lost import as failed\" do\n     import = imports(:transaction)\n     import.update_columns(status: \"importing\", updated_at: 2.hours.ago)"
+  },
+  {
+   "filename": "test/controllers/reports_controller_test.rb",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -761,6 +761,15 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest\n     assert_no_match(/#{Regexp.escape(I18n.t(\"reports.investment_performance.sells_count\", count: 2))}/, response.body)\n   end\n \n+  # POSTing to settings_api_keys_path is create, which needs api_key params.\n+  test \"google sheets instructions link to the API keys page\" do\n+    get google_sheets_instructions_reports_url\n+\n+    assert_response :success\n+    assert_select \"a[href=?][data-turbo-frame=_top]\", settings_api_keys_path, text: I18n.t(\"reports.google_sheets_instructions.go_to_api_keys\")\n+    assert_select \"form[action=?]\", settings_api_keys_path, count: 0\n+  end\n+\n   private\n     # n EUR-priced disposals in a USD account, each on its own date with its\n     # own rate row, so every one needs a distinct lookup."
+  }
+ ],
+ "test_files": [
+  "test/controllers/imports_controller_test.rb",
+  "test/controllers/reports_controller_test.rb"
+ ]
+}

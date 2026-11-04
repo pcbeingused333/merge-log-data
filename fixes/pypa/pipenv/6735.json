@@ -1,0 +1,33 @@
+{
+ "repo": "pypa/pipenv",
+ "number": 6735,
+ "url": "https://github.com/pypa/pipenv/pull/6735",
+ "title": "Accept a newer minor pylock.toml lock-version with a warning",
+ "merged_at": "2026-10-16T14:30:39Z",
+ "files": [
+  {
+   "filename": "news/6735.bugfix.rst",
+   "status": "added",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,2 @@\n+Accept a ``pylock.toml`` with a newer minor ``lock-version`` (e.g. 1.1) with a warning instead of rejecting it,\n+as PEP 751 requires an error only for an unsupported major version."
+  },
+  {
+   "filename": "pipenv/utils/pylock.py",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 2,
+   "patch": "@@ -36,6 +36,11 @@ class PylockFormatError(PylockError):\n     pass\n \n \n+# pylock.toml is read several times per command; warn about a newer minor\n+# lock-version once per file.\n+_warned_newer_lock_versions: Set[Path] = set()\n+\n+\n @dataclass\n class PylockFile:\n     \"\"\"Represents a pylock.toml file as specified in PEP 751.\"\"\"\n@@ -253,11 +258,23 @@ def from_path(cls, path: Union[str, Path]) -> \"PylockFile\":\n         if not lock_version:\n             raise PylockFormatError(\"Missing required field: lock-version\")\n \n-        # Currently, we only support version 1.0\n-        if lock_version != \"1.0\":\n+        # Currently, we support version 1.0. PEP 751 requires an error for an\n+        # unsupported major version; a newer minor version is still readable,\n+        # so warn that keys it adds are ignored.\n+        major, _, minor = str(lock_version).partition(\".\")\n+        if not (major.isdigit() and minor.isdigit()):\n+            raise PylockVersionError(f\"Invalid lock-version: {lock_version}\")\n+        if int(major) != 1:\n             raise PylockVersionError(\n                 f\"Unsupported lock-version: {lock_version}. Only version 1.0 is supported.\"\n             )\n+        if int(minor) > 0 and path.resolve() not in _warned_newer_lock_versions:\n+            _warned_newer_lock_versions.add(path.resolve())\n+            err.print(\n+                f\"[bold yellow]Warning: {path} has lock-version {lock_version}, \"\n+                \"newer than the 1.0 pipenv supports; keys added after 1.0 are \"\n+                \"ignored.[/bold yellow]\"\n+            )\n \n         return cls(path=path, data=data_dict)\n "
+  },
+  {
+   "filename": "tests/unit/test_pylock_lock_version.py",
+   "status": "added",
+   "additions": 53,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,53 @@\n+import pytest\n+\n+from pipenv.utils import pylock as pylock_module\n+from pipenv.utils.pylock import PylockFile, PylockVersionError\n+\n+PACKAGE = \"\"\"\n+[[packages]]\n+name = 'click'\n+version = '8.5.0'\n+\"\"\"\n+\n+\n+def _write(tmp_path, lock_version):\n+    path = tmp_path / \"pylock.toml\"\n+    path.write_text(f\"lock-version = '{lock_version}'\\ncreated-by = 'test-tool'\\n{PACKAGE}\")\n+    return path\n+\n+\n+def test_newer_minor_lock_version_loads_with_a_warning(tmp_path, monkeypatch):\n+    warnings = []\n+    monkeypatch.setattr(pylock_module.err, \"print\", lambda message, **kwargs: warnings.append(message))\n+\n+    path = _write(tmp_path, \"1.1\")\n+    pylock = PylockFile.from_path(path)\n+    PylockFile.from_path(path)\n+\n+    assert pylock.lock_version == \"1.1\"\n+    assert [p[\"name\"] for p in pylock.packages] == [\"click\"]\n+    assert len(warnings) == 1\n+    assert \"lock-version 1.1\" in warnings[0]\n+\n+\n+def test_supported_lock_version_loads_without_a_warning(tmp_path, monkeypatch):\n+    warnings = []\n+    monkeypatch.setattr(pylock_module.err, \"print\", lambda message, **kwargs: warnings.append(message))\n+\n+    PylockFile.from_path(_write(tmp_path, \"1.0\"))\n+\n+    assert warnings == []\n+\n+\n+@pytest.mark.parametrize(\n+    \"lock_version, message\",\n+    [\n+        (\"2.0\", \"Unsupported lock-version\"),\n+        (\"0.9\", \"Unsupported lock-version\"),\n+        (\"1\", \"Invalid lock-version\"),\n+        (\"one.0\", \"Invalid lock-version\"),\n+    ],\n+)\n+def test_unsupported_or_invalid_lock_version_raises(tmp_path, lock_version, message):\n+    with pytest.raises(PylockVersionError, match=message):\n+        PylockFile.from_path(_write(tmp_path, lock_version))"
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_pylock_lock_version.py"
+ ]
+}

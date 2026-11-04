@@ -1,0 +1,41 @@
+{
+ "repo": "lich0821/ccNexus",
+ "number": 144,
+ "url": "https://github.com/lich0821/ccNexus/pull/144",
+ "title": "fix: replace retired default Claude and Gemini models",
+ "merged_at": "2026-10-20T01:41:53Z",
+ "files": [
+  {
+   "filename": "internal/proxy/default_models_test.go",
+   "status": "added",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,14 @@\n+package proxy\n+\n+import (\n+\t\"testing\"\n+\n+\t\"github.com/lich0821/ccNexus/internal/config\"\n+)\n+\n+func TestDefaultModelsClaudeFallbackIsSupportedModel(t *testing.T) {\n+\tmodels := (&Proxy{}).getDefaultModels(config.Endpoint{Name: \"claude\", Transformer: \"claude\"})\n+\tif len(models) != 1 || models[0].ID != \"claude-sonnet-4-6\" {\n+\t\tt.Fatalf(\"models=%+v, want claude-sonnet-4-6\", models)\n+\t}\n+}"
+  },
+  {
+   "filename": "internal/proxy/models.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -179,7 +179,7 @@ func (p *Proxy) getDefaultModels(ep config.Endpoint) []ModelInfo {\n \t\tif ep.Model != \"\" {\n \t\t\tmodelID = ep.Model\n \t\t} else {\n-\t\t\tmodelID = \"claude-sonnet-4-20250514\" // Default Claude model\n+\t\t\tmodelID = \"claude-sonnet-4-6\" // Default Claude model\n \t\t}\n \t\townedBy = \"anthropic\"\n "
+  },
+  {
+   "filename": "internal/service/default_model_test.go",
+   "status": "added",
+   "additions": 51,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,51 @@\n+package service\n+\n+import (\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"testing\"\n+\n+\t\"github.com/lich0821/ccNexus/internal/config\"\n+)\n+\n+func newGeminiPathRecorder(t *testing.T) (*httptest.Server, chan string) {\n+\tt.Helper()\n+\tpaths := make(chan string, 4)\n+\tupstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tpaths <- r.URL.Path\n+\t\t_, _ = w.Write([]byte(`{}`))\n+\t}))\n+\tt.Cleanup(upstream.Close)\n+\treturn upstream, paths\n+}\n+\n+func TestEndpointGeminiDefaultsToSupportedModel(t *testing.T) {\n+\tupstream, paths := newGeminiPathRecorder(t)\n+\n+\tcfg := config.DefaultConfig()\n+\tcfg.UpdateEndpoints([]config.Endpoint{{\n+\t\tName: \"gemini-test\", APIUrl: upstream.URL, APIKey: \"secret\",\n+\t\tAuthMode: config.AuthModeAPIKey, Transformer: \"gemini\",\n+\t}})\n+\tservice := NewEndpointService(cfg, nil, nil)\n+\tservice.TestEndpoint(0)\n+\n+\twant := \"/v1beta/models/gemini-3.8-flash:generateContent\"\n+\tif got := <-paths; got != want {\n+\t\tt.Fatalf(\"path=%q, want %q\", got, want)\n+\t}\n+}\n+\n+func TestMinimalRequestGeminiDefaultsToSupportedModel(t *testing.T) {\n+\tupstream, paths := newGeminiPathRecorder(t)\n+\n+\tservice := NewEndpointService(config.DefaultConfig(), nil, nil)\n+\tif _, err := service.testMinimalRequest(upstream.URL, \"secret\", \"gemini\", \"\", nil); err != nil {\n+\t\tt.Fatalf(\"testMinimalRequest: %v\", err)\n+\t}\n+\n+\twant := \"/v1beta/models/gemini-3.8-flash:generateContent\"\n+\tif got := <-paths; got != want {\n+\t\tt.Fatalf(\"path=%q, want %q\", got, want)\n+\t}\n+}"
+  },
+  {
+   "filename": "internal/service/endpoint.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -488,7 +488,7 @@ func (e *EndpointService) TestEndpoint(index int) string {\n \tcase \"gemini\":\n \t\tmodel := endpoint.Model\n \t\tif model == \"\" {\n-\t\t\tmodel = \"gemini-pro\"\n+\t\t\tmodel = \"gemini-3.8-flash\"\n \t\t}\n \t\tapiPath = \"/v1beta/models/\" + model + \":generateContent\"\n \t\trequestBody, err = json.Marshal(map[string]interface{}{\n@@ -1063,7 +1063,7 @@ func (e *EndpointService) testMinimalRequest(apiUrl, apiKey, transformer, model\n \t\t}\n \tcase \"gemini\":\n \t\tif model == \"\" {\n-\t\t\tmodel = \"gemini-2.0-flash\"\n+\t\t\tmodel = \"gemini-3.8-flash\"\n \t\t}\n \t\treqURL = fmt.Sprintf(\"%s/v1beta/models/%s:generateContent?key=%s\", apiUrl, model, apiKey)\n \t\tbody, _ = json.Marshal(map[string]interface{}{"
+  }
+ ],
+ "test_files": [
+  "internal/proxy/default_models_test.go",
+  "internal/service/default_model_test.go"
+ ]
+}

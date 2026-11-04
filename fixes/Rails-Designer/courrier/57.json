@@ -1,0 +1,41 @@
+{
+ "repo": "Rails-Designer/courrier",
+ "number": 57,
+ "url": "https://github.com/Rails-Designer/courrier/pull/57",
+ "title": "Fix NameError in Mailgun and Mailjet on Ruby 3.4",
+ "merged_at": "2026-08-31T11:18:55Z",
+ "files": [
+  {
+   "filename": "lib/courrier/email/providers/mailgun.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -33,7 +33,7 @@ def content_type = \"multipart/form-data\"\n \n         def default_headers\n           {\n-            \"Authorization\" => \"Basic #{Base64.strict_encode64(\"api:#{@api_key}\")}\"\n+            \"Authorization\" => \"Basic #{[\"api:#{@api_key}\"].pack(\"m0\")}\"\n           }\n         end\n       end"
+  },
+  {
+   "filename": "lib/courrier/email/providers/mailjet.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -35,7 +35,7 @@ def body\n \n         def default_headers\n           {\n-            \"Authorization\" => \"Basic \" + Base64.strict_encode64(\"#{@api_key}:#{@provider_options.api_secret}\")\n+            \"Authorization\" => \"Basic #{[\"#{@api_key}:#{@provider_options.api_secret}\"].pack(\"m0\")}\"\n           }\n         end\n "
+  },
+  {
+   "filename": "test/courrier/email/providers/mailgun_test.rb",
+   "status": "added",
+   "additions": 86,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,86 @@\n+require \"test_helper\"\n+\n+module Courrier::Email::Providers\n+  class MailgunTest < Minitest::Test\n+    def setup\n+      email = TestEmail.new(\n+        from: \"devs@railsdesigner.com\",\n+        to: \"first@example.com, second@example.com\",\n+        reply_to: \"support@railsdesigner.com\"\n+      )\n+\n+      @provider = provider_for(email)\n+    end\n+\n+    def test_formats_transactional_email\n+      assert_equal(\n+        {\n+          \"from\" => \"devs@railsdesigner.com\",\n+          \"to\" => \"first@example.com, second@example.com\",\n+          \"h:Reply-To\" => \"support@railsdesigner.com\",\n+          \"subject\" => \"Test Subject\",\n+          \"text\" => \"Test Body\",\n+          \"html\" => \"<p>Test HTML Body</p>\"\n+        },\n+        @provider.body\n+      )\n+    end\n+\n+    def test_omits_reply_to_when_not_set\n+      body = provider_for(TestEmail.new(from: \"devs@railsdesigner.com\", to: \"first@example.com\")).body\n+\n+      refute_includes body.keys, \"h:Reply-To\"\n+    end\n+\n+    def test_builds_endpoint_url_from_domain\n+      assert_equal \"https://api.mailgun.net/v3/railsdesigner.com/messages\", @provider.send(:endpoint_url)\n+    end\n+\n+    def test_requires_a_domain\n+      provider = Mailgun.new(\n+        api_key: \"test_key\",\n+        options: TestEmail.new(from: \"devs@railsdesigner.com\", to: \"first@example.com\").options,\n+        provider_options: Courrier::Configuration::ProviderConfig.new\n+      )\n+\n+      error = assert_raises(Courrier::ArgumentError) { provider.send(:endpoint_url) }\n+\n+      assert_match(/domain/, error.message)\n+    end\n+\n+    def test_authenticates_with_api_key\n+      assert_equal(\n+        {\"Authorization\" => \"Basic YXBpOnRlc3Rfa2V5\"},\n+        @provider.send(:default_headers)\n+      )\n+    end\n+\n+    def test_submits_as_multipart_form_data\n+      assert_equal \"multipart/form-data\", @provider.send(:content_type)\n+    end\n+\n+    def test_is_available_through_provider_registry\n+      mock_provider = Minitest::Mock.new\n+      mock_provider.expect(:deliver, nil)\n+\n+      Mailgun.stub :new, mock_provider do\n+        Courrier::Email::Provider.new(\n+          provider: \"mailgun\",\n+          api_key: \"test_key\",\n+          options: @provider.instance_variable_get(:@options)\n+        ).deliver\n+      end\n+\n+      mock_provider.verify\n+    end\n+\n+    private\n+\n+    def provider_for(email)\n+      provider_options = Courrier::Configuration::ProviderConfig.new\n+      provider_options.domain = \"railsdesigner.com\"\n+\n+      Mailgun.new(api_key: \"test_key\", options: email.options, provider_options: provider_options)\n+    end\n+  end\n+end"
+  },
+  {
+   "filename": "test/courrier/email/providers/mailjet_test.rb",
+   "status": "added",
+   "additions": 70,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,70 @@\n+require \"test_helper\"\n+\n+module Courrier::Email::Providers\n+  class MailjetTest < Minitest::Test\n+    def setup\n+      email = TestEmail.new(\n+        from: \"devs@railsdesigner.com\",\n+        to: \"first@example.com\",\n+        reply_to: \"support@railsdesigner.com\"\n+      )\n+\n+      @provider = provider_for(email)\n+    end\n+\n+    def test_formats_transactional_email\n+      assert_equal(\n+        {\n+          \"Messages\" => [\n+            {\n+              \"From\" => {\"Email\" => \"devs@railsdesigner.com\"},\n+              \"To\" => [{\"Email\" => \"first@example.com\"}],\n+              \"ReplyTo\" => {\"Email\" => \"support@railsdesigner.com\"},\n+              \"Subject\" => \"Test Subject\",\n+              \"TextPart\" => \"Test Body\",\n+              \"HTMLPart\" => \"<p>Test HTML Body</p>\"\n+            }\n+          ]\n+        },\n+        @provider.body\n+      )\n+    end\n+\n+    def test_omits_reply_to_when_not_set\n+      body = provider_for(TestEmail.new(from: \"devs@railsdesigner.com\", to: \"first@example.com\")).body\n+\n+      refute_includes body[\"Messages\"].first.keys, \"ReplyTo\"\n+    end\n+\n+    def test_authenticates_with_api_key_and_secret\n+      assert_equal(\n+        {\"Authorization\" => \"Basic dGVzdF9rZXk6dGVzdF9zZWNyZXQ=\"},\n+        @provider.send(:default_headers)\n+      )\n+    end\n+\n+    def test_is_available_through_provider_registry\n+      mock_provider = Minitest::Mock.new\n+      mock_provider.expect(:deliver, nil)\n+\n+      Mailjet.stub :new, mock_provider do\n+        Courrier::Email::Provider.new(\n+          provider: \"mailjet\",\n+          api_key: \"test_key\",\n+          options: @provider.instance_variable_get(:@options)\n+        ).deliver\n+      end\n+\n+      mock_provider.verify\n+    end\n+\n+    private\n+\n+    def provider_for(email)\n+      provider_options = Courrier::Configuration::ProviderConfig.new\n+      provider_options.api_secret = \"test_secret\"\n+\n+      Mailjet.new(api_key: \"test_key\", options: email.options, provider_options: provider_options)\n+    end\n+  end\n+end"
+  }
+ ],
+ "test_files": [
+  "test/courrier/email/providers/mailgun_test.rb",
+  "test/courrier/email/providers/mailjet_test.rb"
+ ]
+}

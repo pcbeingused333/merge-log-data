@@ -1,0 +1,26 @@
+{
+ "repo": "AllYourBot/hostedgpt",
+ "number": 841,
+ "url": "https://github.com/AllYourBot/hostedgpt/pull/841",
+ "title": "Keep streamed OpenAI tool calls apart by their index",
+ "merged_at": "2026-10-26T14:17:05Z",
+ "files": [
+  {
+   "filename": "app/services/ai_backend/open_ai.rb",
+   "status": "modified",
+   "additions": 33,
+   "deletions": 4,
+   "patch": "@@ -135,10 +135,7 @@ def stream_handler(&chunk_handler)\n       end\n \n       if tool_calls_chunk && tool_calls_chunk.is_a?(Array)\n-        tool_calls_chunk.each_with_index do |tool_call, i|\n-          @stream_response_tool_calls[i] ||= {}\n-          @stream_response_tool_calls[i] = deep_streaming_merge(@stream_response_tool_calls[i], tool_call)\n-        end\n+        tool_calls_chunk.each { |tool_call| merge_streamed_tool_call(tool_call) }\n       end\n \n     rescue ::GetNextAIMessageJob::ResponseCancelled => e\n@@ -219,6 +216,38 @@ def document_part(document)\n     end\n   end\n \n+  # A delta carries one fragment of a call, tagged with the call's index: the first\n+  # fragment brings id and name, the rest only argument text. Parallel calls arrive\n+  # interleaved, so each fragment is matched to its call by index, not by position in\n+  # the chunk. Without an index, a new id starts a call and a bare fragment extends\n+  # the latest one.\n+  def merge_streamed_tool_call(fragment)\n+    index = fragment[\"index\"]\n+    call = @stream_response_tool_calls.find do |c|\n+      if index.nil?\n+        fragment[\"id\"].blank? && c.equal?(@stream_response_tool_calls.last)\n+      else\n+        c[\"index\"] == index && (fragment[\"id\"].blank? || c[\"id\"].blank? || c[\"id\"] == fragment[\"id\"])\n+      end\n+    end\n+\n+    if call.nil?\n+      call = {}\n+      @stream_response_tool_calls << call\n+    end\n+\n+    fragment.each do |key, value|\n+      if key == \"function\" && value.is_a?(Hash)\n+        function = (call[\"function\"] ||= {})\n+        value.each do |k, v|\n+          function[k] = k == \"arguments\" && function.key?(k) ? function[k] + v : (function[k] || v)\n+        end\n+      else\n+        call[key] ||= value\n+      end\n+    end\n+  end\n+\n   def find_repeats_and_split(str)\n     (1..str.length).each do |len|\n       substring = str[0, len]"
+  },
+  {
+   "filename": "test/services/ai_backend/open_ai_test.rb",
+   "status": "modified",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -219,6 +219,39 @@ class AIBackend::OpenAITest < ActiveSupport::TestCase\n     end\n   end\n \n+  test \"stream_next_conversation_message keeps interleaved parallel calls to different tools apart\" do\n+    @assistant.language_model.update!(supports_tools: true)\n+    delta = ->(tool_call) { { \"choices\" => [{ \"delta\" => { \"tool_calls\" => [tool_call] } }] } }\n+    chunks = [\n+      delta.({ \"index\" => 0, \"id\" => \"call_aaa\", \"type\" => \"function\", \"function\" => { \"name\" => \"weather\", \"arguments\" => \"\" } }),\n+      delta.({ \"index\" => 1, \"id\" => \"call_bbb\", \"type\" => \"function\", \"function\" => { \"name\" => \"search\", \"arguments\" => \"\" } }),\n+      delta.({ \"index\" => 0, \"function\" => { \"arguments\" => \"{\\\"city\\\":\" } }),\n+      delta.({ \"index\" => 1, \"function\" => { \"arguments\" => \"{\\\"query\\\":\\\"rain\\\"}\" } }),\n+      delta.({ \"index\" => 0, \"function\" => { \"arguments\" => \"\\\"Austin\\\"}\" } }),\n+    ]\n+\n+    @openai.client.stub :chat, ->(**args) { chunks.each { |chunk| args.dig(:parameters, :stream).call(chunk) } } do\n+      function_calls = @openai.stream_next_conversation_message { |chunk| }\n+\n+      assert_equal [0, 1], function_calls.map { |f| f[:index] || f[\"index\"] }\n+      assert_equal [\"call_aaa\", \"call_bbb\"], function_calls.map { |f| f[:id] || f[\"id\"] }\n+      assert_equal [\"weather\", \"search\"], function_calls.map { |f| (f[:function] || f[\"function\"]).values_at(:name, \"name\").compact.first }\n+      assert_equal ['{\"city\":\"Austin\"}', '{\"query\":\"rain\"}'], function_calls.map { |f| (f[:function] || f[\"function\"]).values_at(:arguments, \"arguments\").compact.first }\n+    end\n+  end\n+\n+  test \"stream_next_conversation_message splits parallel calls that all arrive with the same index\" do\n+    @assistant.language_model.update!(supports_tools: true)\n+    delta = ->(id, name, args) { { \"choices\" => [{ \"delta\" => { \"tool_calls\" => [{ \"index\" => 0, \"id\" => id, \"type\" => \"function\", \"function\" => { \"name\" => name, \"arguments\" => args } }] } }] } }\n+    chunks = [delta.(\"call_aaa\", \"weather\", \"{}\"), delta.(\"call_bbb\", \"search\", \"{}\")]\n+\n+    @openai.client.stub :chat, ->(**args) { chunks.each { |chunk| args.dig(:parameters, :stream).call(chunk) } } do\n+      function_calls = @openai.stream_next_conversation_message { |chunk| }\n+\n+      assert_equal [\"call_aaa\", \"call_bbb\"], function_calls.map { |f| f[:id] || f[\"id\"] }\n+    end\n+  end\n+\n   test \"preceding_conversation_messages constructs a proper response and pivots on images\" do\n     preceding_conversation_messages = @openai.send(:preceding_conversation_messages)\n     history = @conversation.messages.ordered.to_a[0...-1]"
+  }
+ ],
+ "test_files": [
+  "test/services/ai_backend/open_ai_test.rb"
+ ]
+}

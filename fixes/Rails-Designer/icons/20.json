@@ -1,0 +1,26 @@
+{
+ "repo": "Rails-Designer/icons",
+ "number": 20,
+ "url": "https://github.com/Rails-Designer/icons/pull/20",
+ "title": "Don't mask a sync error with `NoMethodError` when there is no TTY",
+ "merged_at": "2026-10-05T14:05:33Z",
+ "files": [
+  {
+   "filename": "lib/icons/sync.rb",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 2,
+   "patch": "@@ -88,9 +88,11 @@ def purge_temp_directory\n \n     def post_error_clean_up\n       print \"Do you want to remove the temp files? ('#{@temp_directory}') [y/n]: \"\n-      response = $stdin.gets.chomp.downcase\n+      response = $stdin.gets\n \n-      if response == \"y\" || response == \"yes\"\n+      # No TTY (CI, cron, a piped `rake`): keep the files and let the real error\n+      # surface, rather than masking it with `NoMethodError` on `nil.chomp`.\n+      if response && %w[y yes].include?(response.chomp.downcase)\n         puts \"[Icons] Cleaning up…\"\n         FileUtils.rm_rf(@temp_directory)\n       else"
+  },
+  {
+   "filename": "test/icons/sync_test.rb",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -1,6 +1,9 @@\n # frozen_string_literal: true\n \n require \"test_helper\"\n+require \"fileutils\"\n+require \"stringio\"\n+require \"tmpdir\"\n \n class Icons::SyncTest < Minitest::Test\n   def test_clone_repository_uses_shallow_partial_sparse_clone\n@@ -47,8 +50,41 @@ def test_sparse_checkout_paths_returns_all_when_variants_is_nil\n     assert_equal \"'icons/filled' 'icons/outline'\", paths\n   end\n \n+  def test_post_error_clean_up_keeps_files_when_there_is_no_tty\n+    sync = Icons::Sync.new(\"tabler\")\n+\n+    out, _err = with_stdin(\"\") do\n+      capture_io { sync.send(:post_error_clean_up) }\n+    end\n+\n+    assert_match(/Keeping files at/, out)\n+    refute_match(/Cleaning up/, out)\n+  end\n+\n+  def test_post_error_clean_up_removes_files_on_yes\n+    Dir.mktmpdir do |dir|\n+      temp = File.join(dir, \"tabler\")\n+      FileUtils.mkdir_p(temp)\n+\n+      sync = Icons::Sync.new(\"tabler\")\n+      sync.instance_variable_set(:@temp_directory, temp)\n+\n+      with_stdin(\"y\\n\") { capture_io { sync.send(:post_error_clean_up) } }\n+\n+      refute Dir.exist?(temp)\n+    end\n+  end\n+\n   private\n \n+  def with_stdin(input)\n+    original = $stdin\n+    $stdin = StringIO.new(input)\n+    yield\n+  ensure\n+    $stdin = original\n+  end\n+\n   def temp_dir\n     Icons.configuration.base_path.join(\"tmp/icons/tabler\").to_s\n   end"
+  }
+ ],
+ "test_files": [
+  "test/icons/sync_test.rb"
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1078,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1078",
+ "title": "Add Milvus#update_texts",
+ "merged_at": "2026-10-15T13:20:21Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n - [SECURITY]: A change which fixes a security vulnerability.\n \n ## [Unreleased]\n+- [FEATURE] [https://github.com/patterns-ai-core/langchainrb/pull/1078] Add `Langchain::Vectorsearch::Milvus#update_texts`; with the default `auto_id` schema Milvus gives each updated text a new id, returned under `\"data\" => \"upsertIds\"`.\n - [FEATURE] [https://github.com/patterns-ai-core/langchainrb/pull/1074] Add `Langchain::Vectorsearch::Pinecone#remove_texts`.\n - [FEATURE] [https://github.com/patterns-ai-core/langchainrb/pull/1075] Add `Langchain::Vectorsearch::Hnswlib#update_texts` and `#remove_texts`.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1076] Accept `{role:, content:}` messages in `Langchain::LLM::GoogleGemini#chat` and `Langchain::LLM::GoogleVertexAI#chat`, converting them to `parts` with system messages as the system instruction; `OutputFixingParser`, `Vectorsearch#ask`, `Chunker::Semantic`, the Ragas evals and HyDE got a 400 from Google before."
+  },
+  {
+   "filename": "lib/langchain/vectorsearch/milvus.rb",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 3,
+   "patch": "@@ -33,7 +33,24 @@ def add_texts(texts:)\n       )\n     end\n \n-    # TODO: Add update_texts method\n+    # Updates a list of texts in the index\n+    #\n+    # With the default schema (auto_id), Milvus deletes each entity and inserts it again under a new id;\n+    # the response lists the new ids, in order, under \"data\" => \"upsertIds\".\n+    #\n+    # @param texts [Array<String>] The texts to update\n+    # @param ids [Array<Integer>] The ids of the texts to update\n+    # @return [Hash] The response from the server\n+    def update_texts(texts:, ids:)\n+      raise ArgumentError, \"texts and ids must have the same size\" unless Array(texts).size == Array(ids).size\n+\n+      client.entities.upsert(\n+        collection_name: index_name,\n+        data: texts.zip(ids).map do |text, id|\n+          {id: id, content: text, vector: llm.embed(text: text).embedding}\n+        end\n+      )\n+    end\n \n     # Deletes a list of texts in the index\n     #\n@@ -48,8 +65,6 @@ def remove_texts(ids:)\n       )\n     end\n \n-    # TODO: Add update_texts method\n-\n     # Create default schema\n     # @return [Hash] The response from the server\n     def create_default_schema"
+  },
+  {
+   "filename": "spec/lib/langchain/vectorsearch/milvus_spec.rb",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -50,6 +50,30 @@\n     end\n   end\n \n+  describe \"#update_texts\" do\n+    let(:fixture) { {\"code\" => 0, \"data\" => {\"upsertCount\" => 2, \"upsertIds\" => [11, 12]}} }\n+\n+    before do\n+      allow(subject.llm).to receive(:embed) { |text:| double(embedding: (text == \"one\") ? [0.1, 0.2, 0.3] : [0.4, 0.5, 0.6]) }\n+    end\n+\n+    it \"upserts each text with its id and new embedding\" do\n+      expect(subject.client).to receive_message_chain(:entities, :upsert).with(\n+        collection_name: index_name,\n+        data: [\n+          {id: 1, content: \"one\", vector: [0.1, 0.2, 0.3]},\n+          {id: 2, content: \"two\", vector: [0.4, 0.5, 0.6]}\n+        ]\n+      ).and_return(fixture)\n+\n+      expect(subject.update_texts(texts: [\"one\", \"two\"], ids: [1, 2])).to eq(fixture)\n+    end\n+\n+    it \"raises when texts and ids don't match up\" do\n+      expect { subject.update_texts(texts: [\"one\"], ids: [1, 2]) }.to raise_error(ArgumentError)\n+    end\n+  end\n+\n   let(:text) { \"Hello World\" }\n   let(:embedding) { [0.1, 0.2, 0.3] }\n   let(:count) { 1 }"
+  }
+ ],
+ "test_files": [
+  "spec/lib/langchain/vectorsearch/milvus_spec.rb"
+ ]
+}

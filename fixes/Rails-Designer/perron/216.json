@@ -1,0 +1,26 @@
+{
+ "repo": "Rails-Designer/perron",
+ "number": 216,
+ "url": "https://github.com/Rails-Designer/perron/pull/216",
+ "title": "Don't crash on an impossible date in a resource filename",
+ "merged_at": "2026-10-12T09:40:51Z",
+ "files": [
+  {
+   "filename": "lib/perron/resource/publishable.rb",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 1,
+   "patch": "@@ -54,7 +54,15 @@ def date_from_filename\n         return @date_from_filename if defined?(@date_from_filename)\n \n         match = File.basename(file_path).match(DATE_REGEX)\n-        @date_from_filename = match ? Date.new(match[:year].to_i, match[:month].to_i, match[:day].to_i).in_time_zone : nil\n+\n+        @date_from_filename =\n+          if match\n+            begin\n+              Date.new(match[:year].to_i, match[:month].to_i, match[:day].to_i).in_time_zone\n+            rescue Date::Error\n+              nil\n+            end\n+          end\n       end\n     end\n   end"
+  },
+  {
+   "filename": "test/perron/resource/resource_publishable_test.rb",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -1,4 +1,5 @@\n require \"test_helper\"\n+require \"tmpdir\"\n \n class Perron::Site::Resource::PublishableTest < ActiveSupport::TestCase\n   include ActiveSupport::Testing::TimeHelpers\n@@ -74,4 +75,15 @@ class Perron::Site::Resource::PublishableTest < ActiveSupport::TestCase\n \n     refute public_feature.draft?\n   end\n+\n+  test \"#publication_date ignores a structurally valid but impossible date in the filename\" do\n+    Dir.mktmpdir do |dir|\n+      path = File.join(dir, \"2024-99-99-typo.md\")\n+      File.write(path, \"---\\ntitle: Typo\\n---\\nBody\")\n+      resource = Content::Post.new(path)\n+\n+      assert_nil resource.publication_date\n+      assert resource.published?\n+    end\n+  end\n end"
+  }
+ ],
+ "test_files": [
+  "test/perron/resource/resource_publishable_test.rb"
+ ]
+}

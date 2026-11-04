@@ -1,0 +1,40 @@
+{
+ "repo": "Rails-Designer/courrier",
+ "number": 53,
+ "url": "https://github.com/Rails-Designer/courrier/pull/53",
+ "title": "Add MailerSend email provider",
+ "merged_at": "2026-08-31T11:14:31Z",
+ "files": [
+  {
+   "filename": "README.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -196,6 +196,7 @@ Courrier supports these transactional email providers:\n - [Cloudflare Email Service](https://developers.cloudflare.com/email-service/)\n - [Lettermint](https://lettermint.co)\n - [Loops](https://loops.so)\n+- [MailerSend](https://www.mailersend.com/)\n - [Mailgun](https://mailgun.com)\n - [MailPace](https://mailpace.com)\n - [Postmark](https://postmarkapp.com)"
+  },
+  {
+   "filename": "lib/courrier/email/provider.rb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -6,6 +6,7 @@\n require \"courrier/email/providers/lettermint\"\n require \"courrier/email/providers/logger\"\n require \"courrier/email/providers/loops\"\n+require \"courrier/email/providers/mailersend\"\n require \"courrier/email/providers/mailgun\"\n require \"courrier/email/providers/mailjet\"\n require \"courrier/email/providers/mailpace\"\n@@ -26,6 +27,7 @@ class Provider\n         logger: Courrier::Email::Providers::Logger,\n         lettermint: Courrier::Email::Providers::Lettermint,\n         loops: Courrier::Email::Providers::Loops,\n+        mailersend: Courrier::Email::Providers::Mailersend,\n         mailgun: Courrier::Email::Providers::Mailgun,\n         mailjet: Courrier::Email::Providers::Mailjet,\n         mailpace: Courrier::Email::Providers::Mailpace,"
+  },
+  {
+   "filename": "lib/courrier/email/providers/mailersend.rb",
+   "status": "added",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,36 @@\n+# frozen_string_literal: true\n+\n+module Courrier\n+  class Email\n+    module Providers\n+      class Mailersend < Base\n+        ENDPOINT_URL = \"https://api.mailersend.com/v1/email\"\n+\n+        def body\n+          {\n+            \"from\" => email_address(@options.from),\n+            \"to\" => email_addresses(@options.to),\n+            \"cc\" => email_addresses(@options.cc),\n+            \"bcc\" => email_addresses(@options.bcc),\n+            \"reply_to\" => email_address(@options.reply_to),\n+            \"subject\" => @options.subject,\n+            \"text\" => @options.text,\n+            \"html\" => @options.html\n+          }.compact\n+        end\n+\n+        private\n+\n+        def default_headers = {\"Authorization\" => \"Bearer #{@api_key}\"}\n+\n+        def email_addresses(addresses)\n+          addresses&.split(\",\")&.map { |address| email_address(address) }\n+        end\n+\n+        def email_address(address)\n+          {\"email\" => address.strip} if address\n+        end\n+      end\n+    end\n+  end\n+end"
+  },
+  {
+   "filename": "test/courrier/email/providers/mailersend_test.rb",
+   "status": "added",
+   "additions": 52,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,52 @@\n+require \"test_helper\"\n+\n+module Courrier::Email::Providers\n+  class MailersendTest < Minitest::Test\n+    def setup\n+      email = TestEmail.new(\n+        from: \"devs@railsdesigner.com\",\n+        to: \"first@example.com, second@example.com\",\n+        reply_to: \"support@railsdesigner.com\",\n+        cc: \"copy@example.com\",\n+        bcc: \"archive@example.com\"\n+      )\n+\n+      @provider = Mailersend.new(api_key: \"test_key\", options: email.options)\n+    end\n+\n+    def test_formats_transactional_email\n+      assert_equal(\n+        {\n+          \"from\" => {\"email\" => \"devs@railsdesigner.com\"},\n+          \"to\" => [{\"email\" => \"first@example.com\"}, {\"email\" => \"second@example.com\"}],\n+          \"cc\" => [{\"email\" => \"copy@example.com\"}],\n+          \"bcc\" => [{\"email\" => \"archive@example.com\"}],\n+          \"reply_to\" => {\"email\" => \"support@railsdesigner.com\"},\n+          \"subject\" => \"Test Subject\",\n+          \"text\" => \"Test Body\",\n+          \"html\" => \"<p>Test HTML Body</p>\"\n+        },\n+        @provider.body\n+      )\n+    end\n+\n+    def test_authenticates_with_api_key\n+      assert_equal({\"Authorization\" => \"Bearer test_key\"}, @provider.send(:default_headers))\n+    end\n+\n+    def test_is_available_through_provider_registry\n+      mock_provider = Minitest::Mock.new\n+      mock_provider.expect(:deliver, nil)\n+\n+      Mailersend.stub :new, mock_provider do\n+        Courrier::Email::Provider.new(\n+          provider: \"mailersend\",\n+          api_key: \"test_key\",\n+          options: @provider.instance_variable_get(:@options)\n+        ).deliver\n+      end\n+\n+      mock_provider.verify\n+    end\n+  end\n+end"
+  }
+ ],
+ "test_files": [
+  "test/courrier/email/providers/mailersend_test.rb"
+ ]
+}

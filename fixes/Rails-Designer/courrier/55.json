@@ -1,0 +1,40 @@
+{
+ "repo": "Rails-Designer/courrier",
+ "number": 55,
+ "url": "https://github.com/Rails-Designer/courrier/pull/55",
+ "title": "Add SMTP.com email provider",
+ "merged_at": "2026-08-31T11:17:39Z",
+ "files": [
+  {
+   "filename": "README.md",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -96,6 +96,7 @@ Courrier.configure do |config|\n   config.providers.cloudflare.account_id = \"your-account-id\"\n   config.providers.loops.transactional_id = \"default-template\"\n   config.providers.mailgun.domain = \"notifications.railsdesigner.com\"\n+  config.providers.smtpcom.channel = \"your-sender-channel\"\n \n   config.providers.ses.region = \"us-east-1\"\n   config.providers.ses.access_key_id = \"your-access-key-id\"\n@@ -202,6 +203,7 @@ Courrier supports these transactional email providers:\n - [Resend](https://resend.com)\n - [SendGrid](https://sendgrid.com)\n - [SMTP2GO](https://www.smtp2go.com/)\n+- [SMTP.com](https://www.smtp.com/) — requires a `channel`\n - [SparkPost](https://www.sparkpost.com/)\n - [Userlist](https://userlist.com)\n "
+  },
+  {
+   "filename": "lib/courrier/email/provider.rb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -14,6 +14,7 @@\n require \"courrier/email/providers/ses\"\n require \"courrier/email/providers/sendgrid\"\n require \"courrier/email/providers/smtp2go\"\n+require \"courrier/email/providers/smtpcom\"\n require \"courrier/email/providers/sparkpost\"\n require \"courrier/email/providers/userlist\"\n \n@@ -34,6 +35,7 @@ class Provider\n         ses: Courrier::Email::Providers::Ses,\n         sendgrid: Courrier::Email::Providers::Sendgrid,\n         smtp2go: Courrier::Email::Providers::Smtp2go,\n+        smtpcom: Courrier::Email::Providers::Smtpcom,\n         sparkpost: Courrier::Email::Providers::Sparkpost,\n         userlist: Courrier::Email::Providers::Userlist\n       }"
+  },
+  {
+   "filename": "lib/courrier/email/providers/smtpcom.rb",
+   "status": "added",
+   "additions": 65,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,65 @@\n+# frozen_string_literal: true\n+\n+module Courrier\n+  class Email\n+    module Providers\n+      class Smtpcom < Base\n+        def self.config_options = %w[channel]\n+\n+        ENDPOINT_URL = \"https://api.smtp.com/v4/messages\"\n+\n+        def body\n+          {\n+            \"channel\" => channel,\n+            \"recipients\" => {\n+              \"to\" => email_addresses(@options.to),\n+              \"cc\" => email_addresses(@options.cc),\n+              \"bcc\" => email_addresses(@options.bcc)\n+            }.compact,\n+            \"originator\" => {\n+              \"from\" => email_address(@options.from),\n+              \"reply_to\" => email_address(@options.reply_to)\n+            }.compact,\n+            \"subject\" => @options.subject,\n+            \"body\" => {\"parts\" => parts}\n+          }\n+        end\n+\n+        private\n+\n+        def default_headers\n+          {\"Authorization\" => \"Basic #{base64(\"api:#{@api_key}\")}\"}\n+        end\n+\n+        def channel\n+          @provider_options.channel || raise(Courrier::ArgumentError, \"SMTP.com requires a `channel`\")\n+        end\n+\n+        def parts\n+          [part(\"text/plain\", @options.text), part(\"text/html\", @options.html)].compact\n+        end\n+\n+        def part(type, content)\n+          return unless content\n+\n+          {\n+            \"type\" => type,\n+            \"charset\" => \"UTF-8\",\n+            \"encoding\" => \"base64\",\n+            \"content\" => base64(content)\n+          }\n+        end\n+\n+        def base64(value) = [value].pack(\"m0\")\n+\n+        def email_addresses(addresses)\n+          addresses&.split(\",\")&.map { |address| email_address(address) }\n+        end\n+\n+        def email_address(address)\n+          {\"address\" => address.strip} if address\n+        end\n+      end\n+    end\n+  end\n+end"
+  },
+  {
+   "filename": "test/courrier/email/providers/smtpcom_test.rb",
+   "status": "added",
+   "additions": 93,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,93 @@\n+require \"test_helper\"\n+\n+module Courrier::Email::Providers\n+  class SmtpcomTest < Minitest::Test\n+    def setup\n+      email = TestEmail.new(\n+        from: \"devs@railsdesigner.com\",\n+        to: \"first@example.com, second@example.com\",\n+        reply_to: \"support@railsdesigner.com\",\n+        cc: \"copy@example.com\",\n+        bcc: \"archive@example.com\"\n+      )\n+\n+      @provider = provider_for(email)\n+    end\n+\n+    def test_formats_transactional_email\n+      assert_equal(\n+        {\n+          \"channel\" => \"test_channel\",\n+          \"recipients\" => {\n+            \"to\" => [{\"address\" => \"first@example.com\"}, {\"address\" => \"second@example.com\"}],\n+            \"cc\" => [{\"address\" => \"copy@example.com\"}],\n+            \"bcc\" => [{\"address\" => \"archive@example.com\"}]\n+          },\n+          \"originator\" => {\n+            \"from\" => {\"address\" => \"devs@railsdesigner.com\"},\n+            \"reply_to\" => {\"address\" => \"support@railsdesigner.com\"}\n+          },\n+          \"subject\" => \"Test Subject\",\n+          \"body\" => {\n+            \"parts\" => [\n+              {\"type\" => \"text/plain\", \"charset\" => \"UTF-8\", \"encoding\" => \"base64\", \"content\" => [\"Test Body\"].pack(\"m0\")},\n+              {\"type\" => \"text/html\", \"charset\" => \"UTF-8\", \"encoding\" => \"base64\", \"content\" => [\"<p>Test HTML Body</p>\"].pack(\"m0\")}\n+            ]\n+          }\n+        },\n+        @provider.body\n+      )\n+    end\n+\n+    def test_omits_optional_addresses_when_not_set\n+      body = provider_for(TestEmail.new(from: \"devs@railsdesigner.com\", to: \"first@example.com\")).body\n+\n+      refute_includes body[\"recipients\"].keys, \"cc\"\n+      refute_includes body[\"recipients\"].keys, \"bcc\"\n+      refute_includes body[\"originator\"].keys, \"reply_to\"\n+    end\n+\n+    def test_requires_a_channel\n+      provider = Smtpcom.new(\n+        api_key: \"test_key\",\n+        options: TestEmail.new(from: \"devs@railsdesigner.com\", to: \"first@example.com\").options,\n+        provider_options: Courrier::Configuration::ProviderConfig.new\n+      )\n+\n+      error = assert_raises(Courrier::ArgumentError) { provider.body }\n+\n+      assert_match(/channel/, error.message)\n+    end\n+\n+    def test_authenticates_with_api_key\n+      assert_equal(\n+        {\"Authorization\" => \"Basic #{[\"api:test_key\"].pack(\"m0\")}\"},\n+        @provider.send(:default_headers)\n+      )\n+    end\n+\n+    def test_is_available_through_provider_registry\n+      mock_provider = Minitest::Mock.new\n+      mock_provider.expect(:deliver, nil)\n+\n+      Smtpcom.stub :new, mock_provider do\n+        Courrier::Email::Provider.new(\n+          provider: \"smtpcom\",\n+          api_key: \"test_key\",\n+          options: @provider.instance_variable_get(:@options)\n+        ).deliver\n+      end\n+\n+      mock_provider.verify\n+    end\n+\n+    private\n+\n+    def provider_for(email)\n+      provider_options = Courrier::Configuration::ProviderConfig.new\n+      provider_options.channel = \"test_channel\"\n+\n+      Smtpcom.new(api_key: \"test_key\", options: email.options, provider_options: provider_options)\n+    end\n+  end\n+end"
+  }
+ ],
+ "test_files": [
+  "test/courrier/email/providers/smtpcom_test.rb"
+ ]
+}

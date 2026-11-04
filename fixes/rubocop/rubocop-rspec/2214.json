@@ -1,0 +1,33 @@
+{
+ "repo": "rubocop/rubocop-rspec",
+ "number": 2214,
+ "url": "https://github.com/rubocop/rubocop-rspec/pull/2214",
+ "title": "Fix RSpec/LeadingSubject to not move a subject above another subject",
+ "merged_at": "2026-09-17T15:56:12Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -4,6 +4,7 @@\n \n - Fix an error for `RSpec/ImplicitExpect` when the runner is separated from `is_expected` by whitespace. ([@viralpraxis])\n - Fix false positives for `RSpec/InstanceVariable` when an instance variable is used inside a `class_eval` or `module_eval` block. ([@corsonknowles])\n+- Fix `RSpec/LeadingSubject` to not move a subject above another subject, avoiding an autocorrect clash with `RSpec/MultipleSubjects` that could remove a subject used in tests. ([@pcbeingused333])\n - Fix false positives for `RSpec/Pending` when using SimpleCov 1.x `skip` filters. ([@gee-forr])\n - Speed up loading rubocop-rspec by lazily loading only the cops needed for a run. This requires RuboCop 1.89.0+. ([@koic])\n - Fix false positives for `RSpec/SpecFilePathFormat` when matching spec partials. ([@ydah])"
+  },
+  {
+   "filename": "lib/rubocop/cop/rspec/leading_subject.rb",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 9,
+   "patch": "@@ -47,19 +47,33 @@ def on_block(node) # rubocop:disable InternalAffairs/NumblockHandler, InternalAf\n         private\n \n         def check_previous_nodes(node)\n-          offending_node(node) do |offender|\n-            msg = format(MSG, offending: offender.method_name)\n-            add_offense(node, message: msg) do |corrector|\n-              autocorrect(corrector, node, offender)\n-            end\n+          offender = preceding_offender(node)\n+          return unless offender\n+\n+          msg = format(MSG, offending: offender.method_name)\n+          add_offense(node, message: msg) do |corrector|\n+            target = move_target(node)\n+            autocorrect(corrector, node, target) if target\n           end\n         end\n \n-        def offending_node(node)\n-          parent(node).each_child_node.find do |sibling|\n-            break if sibling.equal?(node)\n+        def preceding_offender(node)\n+          preceding_siblings(node).find { |sibling| offending?(sibling) }\n+        end\n+\n+        def move_target(node)\n+          target = nil\n+          preceding_siblings(node).reverse_each do |sibling|\n+            break if subject?(sibling)\n+\n+            target = sibling if offending?(sibling)\n+          end\n+          target\n+        end\n \n-            yield sibling if offending?(sibling)\n+        def preceding_siblings(node)\n+          parent(node).each_child_node.take_while do |sibling|\n+            !sibling.equal?(node)\n           end\n         end\n "
+  },
+  {
+   "filename": "spec/rubocop/cop/rspec/leading_subject_spec.rb",
+   "status": "modified",
+   "additions": 75,
+   "deletions": 0,
+   "patch": "@@ -290,6 +290,81 @@ module Support\n     RUBY\n   end\n \n+  it 'does not move a subject above another subject' do\n+    expect_offense(<<~RUBY)\n+      RSpec.describe User do\n+        let(:foo) { bar }\n+        subject(:a) { first }\n+        ^^^^^^^^^^^^^^^^^^^^^ Declare `subject` above any other `let` declarations.\n+        subject(:b) { second }\n+        ^^^^^^^^^^^^^^^^^^^^^^ Declare `subject` above any other `let` declarations.\n+      end\n+    RUBY\n+\n+    expect_correction(<<~RUBY)\n+      RSpec.describe User do\n+        subject(:a) { first }\n+        subject(:b) { second }\n+        let(:foo) { bar }\n+      end\n+    RUBY\n+  end\n+\n+  it 'moves several subjects above a preceding hook, keeping their order' do\n+    expect_offense(<<~RUBY)\n+      RSpec.describe User do\n+        before { prepare }\n+        subject(:a) { first }\n+        ^^^^^^^^^^^^^^^^^^^^^ Declare `subject` above any other `before` declarations.\n+        subject(:b) { second }\n+        ^^^^^^^^^^^^^^^^^^^^^^ Declare `subject` above any other `before` declarations.\n+        subject(:c) { third }\n+        ^^^^^^^^^^^^^^^^^^^^^ Declare `subject` above any other `before` declarations.\n+      end\n+    RUBY\n+\n+    expect_correction(<<~RUBY)\n+      RSpec.describe User do\n+        subject(:a) { first }\n+        subject(:b) { second }\n+        subject(:c) { third }\n+        before { prepare }\n+      end\n+    RUBY\n+  end\n+\n+  it 'keeps the order of subjects separated by a let' do\n+    expect_offense(<<~RUBY)\n+      RSpec.describe User do\n+        let(:x) { 1 }\n+        subject(:a) { first }\n+        ^^^^^^^^^^^^^^^^^^^^^ Declare `subject` above any other `let` declarations.\n+        let(:y) { 2 }\n+        subject(:b) { second }\n+        ^^^^^^^^^^^^^^^^^^^^^^ Declare `subject` above any other `let` declarations.\n+      end\n+    RUBY\n+\n+    expect_correction(<<~RUBY)\n+      RSpec.describe User do\n+        subject(:a) { first }\n+        subject(:b) { second }\n+        let(:x) { 1 }\n+        let(:y) { 2 }\n+      end\n+    RUBY\n+  end\n+\n+  it 'does not register an offense for consecutive leading subjects' do\n+    expect_no_offenses(<<~RUBY)\n+      RSpec.describe User do\n+        subject(:a) { first }\n+        subject(:b) { second }\n+        let(:foo) { bar }\n+      end\n+    RUBY\n+  end\n+\n   context 'when Ruby 3.4', :ruby34 do\n     it 'does not crash when the example group is an `itblock`' do\n       expect_no_offenses(<<~RUBY)"
+  }
+ ],
+ "test_files": [
+  "spec/rubocop/cop/rspec/leading_subject_spec.rb"
+ ]
+}

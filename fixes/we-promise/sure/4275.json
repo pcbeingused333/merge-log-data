@@ -1,0 +1,26 @@
+{
+ "repo": "we-promise/sure",
+ "number": 4275,
+ "url": "https://github.com/we-promise/sure/pull/4275",
+ "title": "Kraken: leave the Add Account modal at the top level when setup can't open",
+ "merged_at": "2026-10-17T02:56:07Z",
+ "files": [
+  {
+   "filename": "app/controllers/kraken_items_controller.rb",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 1,
+   "patch": "@@ -46,7 +46,12 @@ def select_accounts\n     kraken_item = account_flow[:kraken_item]\n \n     unless kraken_item\n-      redirect_to settings_providers_path, alert: kraken_item_selection_message(account_flow[:credentialed_items])\n+      message = kraken_item_selection_message(account_flow[:credentialed_items])\n+      if turbo_frame_request?\n+        render_frame_redirect(settings_providers_path, alert: message)\n+      else\n+        redirect_to settings_providers_path, alert: message\n+      end\n       return\n     end\n \n@@ -216,4 +221,16 @@ def safe_return_to_path\n     rescue URI::InvalidURIError\n       nil\n     end\n+\n+    # Add Account opens select_accounts inside the \"modal\" turbo frame, and a\n+    # plain redirect would be followed within it, losing the page and its\n+    # alert. Answer with the frame carrying a redirect stream action instead,\n+    # which performs a full-page visit (as PlaidItemsController does).\n+    def render_frame_redirect(path, alert:)\n+      flash[:alert] = alert\n+\n+      render html: helpers.turbo_frame_tag(turbo_frame_request_id) {\n+        helpers.turbo_stream.action(:redirect, path)\n+      }\n+    end\n end"
+  },
+  {
+   "filename": "test/controllers/kraken_items_controller_test.rb",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -126,6 +126,15 @@ class KrakenItemsControllerTest < ActionDispatch::IntegrationTest\n     assert_equal \"Choose a Kraken connection in Provider Settings.\", flash[:alert]\n   end\n \n+  test \"select accounts leaves the Add Account modal for Settings at the top level\" do\n+    get select_accounts_kraken_items_url, params: { accountable_type: \"Crypto\" }, headers: { \"Turbo-Frame\" => \"modal\" }\n+\n+    # A redirect would be followed inside the frame and the flash lost.\n+    assert_response :success\n+    assert_select \"turbo-frame#modal turbo-stream[action=redirect][target=?]\", settings_providers_path\n+    assert_equal I18n.t(\"kraken_items.select_accounts.select_connection\"), flash[:alert]\n+  end\n+\n   test \"select accounts targets selected kraken item\" do\n     get select_accounts_kraken_items_url, params: {\n       kraken_item_id: @second_item.id,"
+  }
+ ],
+ "test_files": [
+  "test/controllers/kraken_items_controller_test.rb"
+ ]
+}

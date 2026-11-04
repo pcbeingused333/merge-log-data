@@ -1,0 +1,94 @@
+{
+ "repo": "comet-ml/opik",
+ "number": 8999,
+ "url": "https://github.com/comet-ml/opik/pull/8999",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-16T22:02:53Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-16T22:23:01Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-16T22:23:03Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-16T22:23:30Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-21T08:09:25Z",
+   "body": "Thanks a lot for this one, it's a clean fix. Grouping the fragments by `index` and keeping `id`/`type` brings the TS integration in line with the Python aggregator, and keeping the streamed text next to the tool calls is a nice touch. I ran it locally through `trackOpenAI` with a stubbed stream: two interleaved parallel calls plus leading text now come out as two separate calls with the message kept, and text-only streams are unchanged.\n\nA few points:\n\n1. `src/decorators.ts:242-253`, following up on the open Baz thread: yes, please add the `trackOpenAI` streaming test in this PR. No new harness is needed. A fake SDK whose `chat.completions.create` returns an async generator of chunks, plus a stub `parent` (`{ span: vi.fn(), update: vi.fn(), end: vi.fn() }`), is enough. Drain the stream and assert the whole `output` passed to `parent.span`. That covers the wiring the parser tests can't (spreading `chunkData.data`, collecting `chunkData.text`, picking the final output). Mixed text plus interleaved parallel calls, and text-only, would be the two cases to cover.\n2. `tests/parsers.test.ts`: \"keeps every tool call carried by a single chunk\" and \"orders tool calls by index when fragments arrive out of order\" only compare the ids. Please assert the whole `getToolCallOutput(...)` result, as the first test does, so names, types and arguments are checked too. The same applies to \"keeps the text of a chunk that also carries tool calls\", which can assert the whole `parseChunk` result.\n3. Minor: the ids, names and arguments could be generated (random) rather than fixed literals. That keeps the assertions from passing by coincidence.\n4. Minor: formatting. This package's code is in the prettier 2 / es5 style (main's `parsers.ts` passes `npx prettier@2 --check`). With that, only two of your lines need rewrapping: the `buildStreamOutput` return type at `src/parsers.ts:538` and the `expect(buildStreamOutput(...)).toEqual({` line in the test.\n5. Minor: the Testing section of the description still says 4 new tests / 22 passing. It is 6 and 26 now.\n"
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-23T11:10:02Z",
+   "body": ""
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-23T11:10:36Z",
+   "body": " Nice work! During my testing, found the issue with gemini openai-like endpoint, which sends tool calls with no index, but it had been the issue before, so approving.\nGood job!"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "sdks/typescript/src/opik/integrations/opik-openai/src/decorators.ts",
+   "created_at": "2026-10-16T22:02:54Z",
+   "body": "### Streamed tool-call output wiring has no test\n\nThe new stream-wrapper path is untested, so a wiring regression in tool-call accumulation or final output selection would leave the suite green; add an integration test that calls `trackOpenAI` with a mocked streaming client and asserts the recorded span output.\n<!--\n_Finding type:_ `AI Coding Guidelines`\n-->\n\n<picture><img src=\"https://baz.co/api/v2/badges?type=reviewer&content=AI%20Coding%20Guidelines&severity=low\" alt=\"Severity\" height=\"24\" /></picture> <picture><img src=\"https://baz.co/api/v2/badges?type=guidelines&content=.agents%2Fskills%2Fopik-integrations%20%C2%B7%20sdks%2Ftypescript%2FAGENTS.md%20%C2%B7%20%2B2%20more\" alt=\"guidelines\" height=\"24\" /></picture>\n\nWant Baz to fix this for you? [Activate Fixer](https://baz.co/agents/baz) You can also update your AI coding guidelines based on this comment by `apply pr to [branch name]`\n\n<details>\n<summary>Other fix methods</summary>\n\n\n<a href=\"https://cursor.com/link/prompt?text=Before%20applying%2C%20verify%20this%20suggestion%20against%20the%20current%20code.%0AIn%20sdks%2Ftypescript%2Fsrc%2Fopik%2Fintegrations%2Fopik-openai%2Fsrc%2Fdecorators.ts%20around%20lines%20243-266%2C%20add%20integration%20coverage%20for%20the%20%60tracedOutputGenerator%60%20stream-wrapper%20logic%20that%20accumulates%20tool-call%20chunks%20and%20selects%20%60buildStreamOutput%60%20for%20the%20final%20traced%20output.%20Create%20a%20test%20that%20calls%20the%20public%20%60trackOpenAI%60%20with%20a%20mocked%20client%20streaming%20method%2C%20consumes%20the%20wrapped%20stream%2C%20and%20asserts%20the%20recorded%20span%20and%20parent%20update%20contain%20the%20expected%20output.%20Keep%20the%20existing%20parser-helper%20tests%2C%20but%20ensure%20this%20end-to-end%20test%20would%20fail%20if%20the%20stream%20wiring%20or%20final%20output%20selection%20regresses.\" target=\"_blank\" rel=\"noopener noreferrer\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/fix-in-cursor-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/fix-in-cursor-light.svg\"><img alt=\"Fix in Cursor\" src=\"https://cursor.com/fix-in-cursor.svg\"></picture></a>\n\n<details>\n<summary>Prompt for AI Agents</summary>\n\n```text\nBefore applying, verify this suggestion against the current code. In\nsdks/typescript/src/opik/integrations/opik-openai/src/decorators.ts around lines\n243-266, add integration coverage for the `tracedOutputGenerator` stream-wrapper logic\nthat accumulates tool-call chunks and selects `buildStreamOutput` for the final traced\noutput. Create a test that calls the public `trackOpenAI` with a mocked client streaming\nmethod, consumes the wrapped stream, and asserts the recorded span and parent update\ncontain the expected output. Keep the existing parser-helper tests, but ensure this\nend-to-end test would fail if the stream wiring or final output selection regresses.\n```\n\n</details>\n</details>"
+  },
+  {
+   "role": "bot",
+   "path": "sdks/typescript/src/opik/integrations/opik-openai/src/parsers.ts",
+   "created_at": "2026-10-16T22:02:54Z",
+   "body": "### Index order lost when tool calls stream out of order\n\n`getToolCallOutput` records tool calls in stream-arrival order, so an index 1 fragment arriving before index 0 produces `[call 1, call 0]` instead of the index order expected by the Python aggregator and tests; sort the Map keys by index before mapping.\n<!--\n_Finding type:_ `Logical Bugs`\n-->\n\n<picture><img src=\"https://baz.co/api/v2/badges?type=reviewer&content=Logical%20Bugs&severity=low\" alt=\"Severity\" height=\"24\" /></picture>\n\nWant Baz to fix this for you? [Activate Fixer](https://baz.co/agents/baz)\n\n<details>\n<summary>Other fix methods</summary>\n\n\n<a href=\"https://cursor.com/link/prompt?text=Before%20applying%2C%20verify%20this%20suggestion%20against%20the%20current%20code.%0AIn%20%60sdks%2Ftypescript%2Fsrc%2Fopik%2Fintegrations%2Fopik-openai%2Fsrc%2Fparsers.ts%60%20around%20line%20508%2C%20update%20%60getToolCallOutput%60%20so%20the%20returned%20%60tool_calls%60%20are%20ordered%20by%20ascending%20tool-call%20index%20rather%20than%20Map%20insertion%20order.%20Sort%20the%20Map%20entries%20or%20keys%20numerically%20before%20mapping%20them%20to%20output%20values%2C%20preserving%20grouping%20while%20ensuring%20out-of-order%20streamed%20fragments%20produce%20the%20canonical%20call%20order.\" target=\"_blank\" rel=\"noopener noreferrer\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/fix-in-cursor-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/fix-in-cursor-light.svg\"><img alt=\"Fix in Cursor\" src=\"https://cursor.com/fix-in-cursor.svg\"></picture></a>\n\n<details>\n<summary>Prompt for AI Agents</summary>\n\n```text\nBefore applying, verify this suggestion against the current code. In\n`sdks/typescript/src/opik/integrations/opik-openai/src/parsers.ts` around line 508,\nupdate `getToolCallOutput` so the returned `tool_calls` are ordered by ascending\ntool-call index rather than Map insertion order. Sort the Map entries or keys\nnumerically before mapping them to output values, preserving grouping while ensuring\nout-of-order streamed fragments produce the canonical call order.\n```\n\n</details>\n</details>"
+  },
+  {
+   "role": "author",
+   "path": "sdks/typescript/src/opik/integrations/opik-openai/src/parsers.ts",
+   "created_at": "2026-10-16T22:23:01Z",
+   "body": "Good catch: the calls came out in arrival order. Fixed in d76337e: tool calls are now sorted by index (as the Python aggregator does), with a test for out-of-order fragments. The same commit keeps text from a chunk that carries both content and tool calls."
+  },
+  {
+   "role": "author",
+   "path": "sdks/typescript/src/opik/integrations/opik-openai/src/decorators.ts",
+   "created_at": "2026-10-16T22:23:03Z",
+   "body": "The stream wrapper now only collects per-chunk results and hands the output to `buildStreamOutput`, which the new tests cover for tool calls, mixed text and text-only streams. The package has no `trackOpenAI` streaming test harness yet; happy to add one with a mocked client if you'd like it in this PR."
+  },
+  {
+   "role": "bot",
+   "path": "sdks/typescript/src/opik/integrations/opik-openai/src/decorators.ts",
+   "created_at": "2026-10-16T22:23:30Z",
+   "body": "To apply a code change, reply to Baz with `apply commit` to push the fix to this PR's branch, or `apply pr` to open a follow-up PR with the fix."
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-10-21T08:15:22Z",
+   "body": "Thanks for the review. Pushed 8dbfb8f42d, which covers each point:\n\n1. Added `tests/trackOpenAI.test.ts`: `trackOpenAI` around a fake SDK whose `chat.completions.create` returns an async generator, with a stub `parent` (`span`, `update`, `end`). It drains the stream and asserts the whole `output` passed to `parent.span`, for interleaved parallel tool calls with leading text and for a text-only stream. The parallel-calls case fails on `main`.\n2. The single-chunk, out-of-order and mixed-chunk tests in `tests/parsers.test.ts` now assert the whole `getToolCallOutput(...)`, `buildStreamOutput(...)` and `parseChunk(...)` result.\n3. Ids, names, arguments and text in these tests are generated per run.\n4. Rewrapped the `buildStreamOutput` return type in `src/parsers.ts` the way `prettier@2` does; the new test file is `prettier@2`-clean too. The rest of the existing `parsers.test.ts` was left untouched.\n5. Updated the Testing section of the description: 6 tests in `parsers.test.ts` plus 2 in `trackOpenAI.test.ts`, 28 passing.\n\n`vitest`, `tsc --noEmit` and `eslint` pass locally.\n"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-10-23T16:05:27Z",
+   "body": "Thanks again, @pcbeingused333 — merged, and it closes #8998. Clean fix keeping streamed parallel tool calls apart in the TS OpenAI integration. 🙌"
+  }
+ ]
+}

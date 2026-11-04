@@ -1,0 +1,137 @@
+{
+ "repo": "Mirascope/mirascope",
+ "number": 2896,
+ "url": "https://github.com/Mirascope/mirascope/pull/2896",
+ "title": "fix(ts/anthropic): count cumulative message_delta usage once",
+ "merged_at": "2026-10-19T17:00:25Z",
+ "files": [
+  {
+   "filename": "typescript/src/llm/providers/anthropic/beta-decode-stream.ts",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 8,
+   "patch": "@@ -54,6 +54,13 @@ interface DecodeState {\n   currentBlock: AccumulatedBlock | null;\n   /** All accumulated blocks for raw message */\n   accumulatedBlocks: AccumulatedBlock[];\n+  /** Usage reported by message_start, which message_delta's usage includes */\n+  startUsage: {\n+    inputTokens: number;\n+    outputTokens: number;\n+    cacheReadTokens: number;\n+    cacheWriteTokens: number;\n+  };\n }\n \n /**\n@@ -66,6 +73,12 @@ export function createBetaDecodeState(includeThoughts: boolean): DecodeState {\n     includeThoughts,\n     currentBlock: null,\n     accumulatedBlocks: [],\n+    startUsage: {\n+      inputTokens: 0,\n+      outputTokens: 0,\n+      cacheReadTokens: 0,\n+      cacheWriteTokens: 0,\n+    },\n   };\n }\n \n@@ -89,12 +102,14 @@ export function decodeBetaStreamEvent(\n     case \"message_start\":\n       // Emit initial usage if available\n       if (event.message.usage) {\n-        chunks.push(\n-          usageDeltaChunk({\n-            inputTokens: event.message.usage.input_tokens,\n-            outputTokens: event.message.usage.output_tokens,\n-          }),\n-        );\n+        state.startUsage = {\n+          inputTokens: event.message.usage.input_tokens,\n+          outputTokens: event.message.usage.output_tokens,\n+          cacheReadTokens: event.message.usage.cache_read_input_tokens ?? 0,\n+          cacheWriteTokens:\n+            event.message.usage.cache_creation_input_tokens ?? 0,\n+        };\n+        chunks.push(usageDeltaChunk(state.startUsage));\n       }\n       break;\n \n@@ -177,11 +192,23 @@ export function decodeBetaStreamEvent(\n           chunks.push(finishReasonChunk(finishReason));\n         }\n       }\n-      // Handle output token usage delta\n+      // message_delta usage is cumulative and includes message_start's counts.\n+      // With server tools its input and cache counts grow past them, so emit\n+      // only the growth. Counts the delta omits stay at message_start's values.\n       if (event.usage) {\n+        const start = state.startUsage;\n         chunks.push(\n           usageDeltaChunk({\n-            outputTokens: event.usage.output_tokens,\n+            inputTokens:\n+              (event.usage.input_tokens ?? start.inputTokens) -\n+              start.inputTokens,\n+            outputTokens: event.usage.output_tokens - start.outputTokens,\n+            cacheReadTokens:\n+              (event.usage.cache_read_input_tokens ?? start.cacheReadTokens) -\n+              start.cacheReadTokens,\n+            cacheWriteTokens:\n+              (event.usage.cache_creation_input_tokens ??\n+                start.cacheWriteTokens) - start.cacheWriteTokens,\n           }),\n         );\n       }"
+  },
+  {
+   "filename": "typescript/src/llm/providers/anthropic/decode-stream.test.ts",
+   "status": "added",
+   "additions": 156,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,156 @@\n+/**\n+ * Unit tests for Anthropic stream usage decoding.\n+ *\n+ * message_delta usage is cumulative, so the usage deltas emitted for a stream\n+ * must sum to its final counts.\n+ */\n+\n+import type { BetaRawMessageStreamEvent } from \"@anthropic-ai/sdk/resources/beta/messages/messages\";\n+import type { MessageStreamEvent } from \"@anthropic-ai/sdk/resources/messages\";\n+\n+import { describe, it, expect } from \"vitest\";\n+\n+import type { StreamResponseChunk } from \"@/llm/responses/chunks\";\n+\n+import {\n+  createBetaDecodeState,\n+  decodeBetaStreamEvent,\n+} from \"./beta-decode-stream\";\n+import { createDecodeState, decodeStreamEvent } from \"./decode-stream\";\n+\n+type Usage = Record<string, unknown>;\n+\n+function messageStart(usage: Usage) {\n+  return {\n+    type: \"message_start\",\n+    message: {\n+      id: \"msg_123\",\n+      type: \"message\",\n+      role: \"assistant\",\n+      content: [],\n+      model: \"claude-haiku-4-5\",\n+      stop_reason: null,\n+      stop_sequence: null,\n+      usage,\n+    },\n+  };\n+}\n+\n+function messageDelta(usage: Usage) {\n+  return {\n+    type: \"message_delta\",\n+    delta: { stop_reason: \"end_turn\", stop_sequence: null },\n+    usage,\n+  };\n+}\n+\n+const decoders = [\n+  {\n+    name: \"standard\",\n+    decode: (events: unknown[]) => {\n+      const state = createDecodeState(false);\n+      return events.flatMap((event) =>\n+        decodeStreamEvent(event as MessageStreamEvent, state),\n+      );\n+    },\n+  },\n+  {\n+    name: \"beta\",\n+    decode: (events: unknown[]) => {\n+      const state = createBetaDecodeState(false);\n+      return events.flatMap((event) =>\n+        decodeBetaStreamEvent(event as BetaRawMessageStreamEvent, state),\n+      );\n+    },\n+  },\n+];\n+\n+function sumUsage(chunks: StreamResponseChunk[]) {\n+  const total = {\n+    inputTokens: 0,\n+    outputTokens: 0,\n+    cacheReadTokens: 0,\n+    cacheWriteTokens: 0,\n+  };\n+  for (const chunk of chunks) {\n+    if (chunk.type === \"usage_delta_chunk\") {\n+      total.inputTokens += chunk.inputTokens;\n+      total.outputTokens += chunk.outputTokens;\n+      total.cacheReadTokens += chunk.cacheReadTokens;\n+      total.cacheWriteTokens += chunk.cacheWriteTokens;\n+    }\n+  }\n+  return total;\n+}\n+\n+describe.each(decoders)(\"$name stream usage decoding\", ({ decode }) => {\n+  it(\"sums to the cumulative message_delta usage\", () => {\n+    // With server tools, message_delta's input and cache counts grow past\n+    // message_start's (values from a recorded web search stream).\n+    const chunks = decode([\n+      messageStart({\n+        input_tokens: 2285,\n+        output_tokens: 25,\n+        cache_creation_input_tokens: 0,\n+        cache_read_input_tokens: 0,\n+      }),\n+      messageDelta({\n+        input_tokens: 2292,\n+        output_tokens: 150,\n+        cache_creation_input_tokens: 12032,\n+        cache_read_input_tokens: 0,\n+        server_tool_use: { web_search_requests: 1 },\n+      }),\n+    ]);\n+\n+    expect(sumUsage(chunks)).toEqual({\n+      inputTokens: 2292,\n+      outputTokens: 150,\n+      cacheReadTokens: 0,\n+      cacheWriteTokens: 12032,\n+    });\n+  });\n+\n+  it(\"keeps message_start counts that message_delta omits\", () => {\n+    const chunks = decode([\n+      messageStart({\n+        input_tokens: 10,\n+        output_tokens: 1,\n+        cache_creation_input_tokens: null,\n+        cache_read_input_tokens: 40,\n+      }),\n+      messageDelta({\n+        input_tokens: null,\n+        output_tokens: 12,\n+        cache_creation_input_tokens: null,\n+        cache_read_input_tokens: null,\n+      }),\n+    ]);\n+\n+    expect(sumUsage(chunks)).toEqual({\n+      inputTokens: 10,\n+      outputTokens: 12,\n+      cacheReadTokens: 40,\n+      cacheWriteTokens: 0,\n+    });\n+  });\n+\n+  it(\"counts missing cache counts as zero\", () => {\n+    const chunks = decode([\n+      messageStart({\n+        input_tokens: 10,\n+        output_tokens: 1,\n+        cache_creation_input_tokens: null,\n+        cache_read_input_tokens: null,\n+      }),\n+      messageDelta({ input_tokens: 10, output_tokens: 12 }),\n+    ]);\n+\n+    expect(sumUsage(chunks)).toEqual({\n+      inputTokens: 10,\n+      outputTokens: 12,\n+      cacheReadTokens: 0,\n+      cacheWriteTokens: 0,\n+    });\n+  });\n+});"
+  },
+  {
+   "filename": "typescript/src/llm/providers/anthropic/decode-stream.ts",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 7,
+   "patch": "@@ -64,6 +64,13 @@ interface DecodeState {\n   accumulatedToolJson: string;\n   /** All accumulated blocks for raw message */\n   accumulatedBlocks: AccumulatedBlock[];\n+  /** Usage reported by message_start, which message_delta's usage includes */\n+  startUsage: {\n+    inputTokens: number;\n+    outputTokens: number;\n+    cacheReadTokens: number;\n+    cacheWriteTokens: number;\n+  };\n }\n \n /**\n@@ -77,6 +84,12 @@ export function createDecodeState(includeThoughts: boolean): DecodeState {\n     currentBlock: null,\n     accumulatedToolJson: \"\",\n     accumulatedBlocks: [],\n+    startUsage: {\n+      inputTokens: 0,\n+      outputTokens: 0,\n+      cacheReadTokens: 0,\n+      cacheWriteTokens: 0,\n+    },\n   };\n }\n \n@@ -100,12 +113,14 @@ export function decodeStreamEvent(\n     case \"message_start\":\n       // Emit initial usage if available\n       if (event.message.usage) {\n-        chunks.push(\n-          usageDeltaChunk({\n-            inputTokens: event.message.usage.input_tokens,\n-            outputTokens: event.message.usage.output_tokens,\n-          }),\n-        );\n+        state.startUsage = {\n+          inputTokens: event.message.usage.input_tokens,\n+          outputTokens: event.message.usage.output_tokens,\n+          cacheReadTokens: event.message.usage.cache_read_input_tokens ?? 0,\n+          cacheWriteTokens:\n+            event.message.usage.cache_creation_input_tokens ?? 0,\n+        };\n+        chunks.push(usageDeltaChunk(state.startUsage));\n       }\n       break;\n \n@@ -248,10 +263,23 @@ export function decodeStreamEvent(\n           chunks.push(finishReasonChunk(finishReason));\n         }\n       }\n+      // message_delta usage is cumulative and includes message_start's counts.\n+      // With server tools its input and cache counts grow past them, so emit\n+      // only the growth. Counts the delta omits stay at message_start's values.\n       if (event.usage) {\n+        const start = state.startUsage;\n         chunks.push(\n           usageDeltaChunk({\n-            outputTokens: event.usage.output_tokens,\n+            inputTokens:\n+              (event.usage.input_tokens ?? start.inputTokens) -\n+              start.inputTokens,\n+            outputTokens: event.usage.output_tokens - start.outputTokens,\n+            cacheReadTokens:\n+              (event.usage.cache_read_input_tokens ?? start.cacheReadTokens) -\n+              start.cacheReadTokens,\n+            cacheWriteTokens:\n+              (event.usage.cache_creation_input_tokens ??\n+                start.cacheWriteTokens) - start.cacheWriteTokens,\n           }),\n         );\n       }"
+  },
+  {
+   "filename": "typescript/tests/e2e/input/__snapshots__/mirascope-provider.test.ts.snap",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -104,10 +104,10 @@ exports[`mirascope provider > [mirascope:anthropic] streams from underlying prov\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 23,\n-      \"outputTokens\": 9,\n+      \"outputTokens\": 6,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 32,\n+      \"totalTokens\": 29,\n     },\n   },\n }"
+  },
+  {
+   "filename": "typescript/tests/e2e/input/__snapshots__/structured-output.test.ts.snap",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -100,10 +100,10 @@ exports[`structured output streaming > [anthropic] streams partial objects 1`] =\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 820,\n-      \"outputTokens\": 123,\n+      \"outputTokens\": 108,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 943,\n+      \"totalTokens\": 928,\n     },\n   },\n }"
+  },
+  {
+   "filename": "typescript/tests/e2e/input/__snapshots__/web-search-tool.test.ts.snap",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 4,
+   "patch": "@@ -473,12 +473,12 @@ exports[`WebSearchTool > [anthropic] streams with web search tool 1`] = `\n     ],\n     \"usage\": {\n       \"cacheReadTokens\": 0,\n-      \"cacheWriteTokens\": 0,\n-      \"inputTokens\": 2285,\n-      \"outputTokens\": 175,\n+      \"cacheWriteTokens\": 12032,\n+      \"inputTokens\": 2292,\n+      \"outputTokens\": 150,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 2460,\n+      \"totalTokens\": 2442,\n     },\n   },\n }"
+  },
+  {
+   "filename": "typescript/tests/e2e/output/__snapshots__/context-call.test.ts.snap",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -104,10 +104,10 @@ exports[`context call output > [anthropic] streams response with context 1`] = `\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 16,\n-      \"outputTokens\": 21,\n+      \"outputTokens\": 13,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 37,\n+      \"totalTokens\": 29,\n     },\n   },\n }"
+  },
+  {
+   "filename": "typescript/tests/e2e/output/__snapshots__/context-prompt.test.ts.snap",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -104,10 +104,10 @@ exports[`context prompt output > [anthropic] streams model with context 1`] = `\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 16,\n-      \"outputTokens\": 21,\n+      \"outputTokens\": 13,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 37,\n+      \"totalTokens\": 29,\n     },\n   },\n }"
+  },
+  {
+   "filename": "typescript/tests/e2e/output/__snapshots__/max-tokens.test.ts.snap",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -150,10 +150,10 @@ exports[`max tokens > [anthropic] returns MAX_TOKENS finish reason for stream 1`\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 15,\n-      \"outputTokens\": 51,\n+      \"outputTokens\": 50,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 66,\n+      \"totalTokens\": 65,\n     },\n   },\n }"
+  },
+  {
+   "filename": "typescript/tests/e2e/output/__snapshots__/prompt.test.ts.snap",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -104,10 +104,10 @@ exports[`prompt output > [anthropic] streams model with string model id 1`] = `\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 17,\n-      \"outputTokens\": 16,\n+      \"outputTokens\": 15,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 33,\n+      \"totalTokens\": 32,\n     },\n   },\n }"
+  },
+  {
+   "filename": "typescript/tests/e2e/output/__snapshots__/refusal.test.ts.snap",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -180,10 +180,10 @@ If you're struggling with substance use or addiction, I encourage you to reach o\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 726,\n-      \"outputTokens\": 261,\n+      \"outputTokens\": 250,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 987,\n+      \"totalTokens\": 976,\n     },\n   },\n }"
+  },
+  {
+   "filename": "typescript/tests/e2e/output/__snapshots__/resume.test.ts.snap",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 4,
+   "patch": "@@ -446,10 +446,10 @@ exports[`context resume from stream > [anthropic] resumes context conversation a\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 28,\n-      \"outputTokens\": 10,\n+      \"outputTokens\": 5,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 38,\n+      \"totalTokens\": 33,\n     },\n   },\n }\n@@ -1222,10 +1222,10 @@ exports[`resume from stream > [anthropic] resumes conversation after streaming 1\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 28,\n-      \"outputTokens\": 10,\n+      \"outputTokens\": 5,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 38,\n+      \"totalTokens\": 33,\n     },\n   },\n }"
+  },
+  {
+   "filename": "typescript/tests/e2e/output/__snapshots__/stream.test.ts.snap",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 16,
+   "patch": "@@ -48,10 +48,10 @@ exports[`stream output > [anthropic] accumulates content as stream progresses 1`\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 11,\n-      \"outputTokens\": 5,\n+      \"outputTokens\": 4,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 16,\n+      \"totalTokens\": 15,\n     },\n   },\n }\n@@ -105,10 +105,10 @@ exports[`stream output > [anthropic] builds assistant message after streaming 1`\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 11,\n-      \"outputTokens\": 5,\n+      \"outputTokens\": 4,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 16,\n+      \"totalTokens\": 15,\n     },\n   },\n }\n@@ -166,10 +166,10 @@ How can I help you today?\",\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 8,\n-      \"outputTokens\": 18,\n+      \"outputTokens\": 17,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 26,\n+      \"totalTokens\": 25,\n     },\n   },\n }\n@@ -223,10 +223,10 @@ exports[`stream output > [anthropic] provides usage after streaming 1`] = `\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 8,\n-      \"outputTokens\": 20,\n+      \"outputTokens\": 12,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 28,\n+      \"totalTokens\": 20,\n     },\n   },\n }\n@@ -284,10 +284,10 @@ Dragons stand as some of humanity's most enduring mythological creatures, captiv\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 47,\n-      \"outputTokens\": 53,\n+      \"outputTokens\": 50,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 100,\n+      \"totalTokens\": 97,\n     },\n   },\n }\n@@ -342,10 +342,10 @@ exports[`stream output > [anthropic] streams text response 1`] = `\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 12,\n-      \"outputTokens\": 6,\n+      \"outputTokens\": 5,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 18,\n+      \"totalTokens\": 17,\n     },\n   },\n }\n@@ -1584,10 +1584,10 @@ exports[`stream thinking > [anthropic] completes with text output when thinking\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 45,\n-      \"outputTokens\": 45,\n+      \"outputTokens\": 44,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 90,\n+      \"totalTokens\": 89,\n     },\n   },\n }\n@@ -1697,10 +1697,10 @@ You can also think of this as:\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 50,\n-      \"outputTokens\": 298,\n+      \"outputTokens\": 297,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 348,\n+      \"totalTokens\": 347,\n     },\n   },\n }"
+  },
+  {
+   "filename": "typescript/tests/e2e/output/__snapshots__/structured-output-with-tools.test.ts.snap",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 8,
+   "patch": "@@ -1282,10 +1282,10 @@ exports[`structured output with tools streaming (default mode) > [anthropic] str\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 1011,\n-      \"outputTokens\": 127,\n+      \"outputTokens\": 109,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 1138,\n+      \"totalTokens\": 1120,\n     },\n   },\n }\n@@ -1449,10 +1449,10 @@ exports[`structured output with tools streaming (default mode) > [anthropic] str\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 1011,\n-      \"outputTokens\": 127,\n+      \"outputTokens\": 109,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 1138,\n+      \"totalTokens\": 1120,\n     },\n   },\n }\n@@ -1616,10 +1616,10 @@ exports[`structured output with tools streaming (tool mode) > [anthropic] stream\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 1011,\n-      \"outputTokens\": 127,\n+      \"outputTokens\": 109,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 1138,\n+      \"totalTokens\": 1120,\n     },\n   },\n }\n@@ -1783,10 +1783,10 @@ exports[`structured output with tools streaming (tool mode) > [anthropic] stream\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 1011,\n-      \"outputTokens\": 127,\n+      \"outputTokens\": 109,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 1138,\n+      \"totalTokens\": 1120,\n     },\n   },\n }"
+  },
+  {
+   "filename": "typescript/tests/e2e/output/__snapshots__/structured-output.test.ts.snap",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 12,
+   "patch": "@@ -110,10 +110,10 @@ exports[`structured output (default mode) > [anthropic] parses stream with conte\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 866,\n-      \"outputTokens\": 88,\n+      \"outputTokens\": 77,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 954,\n+      \"totalTokens\": 943,\n     },\n   },\n }\n@@ -229,10 +229,10 @@ exports[`structured output (default mode) > [anthropic] parses stream with neste\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 866,\n-      \"outputTokens\": 88,\n+      \"outputTokens\": 77,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 954,\n+      \"totalTokens\": 943,\n     },\n   },\n }\n@@ -637,10 +637,10 @@ exports[`structured output (json mode) > [anthropic] parses stream with context\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 303,\n-      \"outputTokens\": 60,\n+      \"outputTokens\": 59,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 363,\n+      \"totalTokens\": 362,\n     },\n   },\n }\n@@ -805,10 +805,10 @@ exports[`structured output (json mode) > [anthropic] parses stream with nested s\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 303,\n-      \"outputTokens\": 60,\n+      \"outputTokens\": 59,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 363,\n+      \"totalTokens\": 362,\n     },\n   },\n }\n@@ -1258,10 +1258,10 @@ exports[`structured output (tool mode) > [anthropic] parses stream with context\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 866,\n-      \"outputTokens\": 88,\n+      \"outputTokens\": 77,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 954,\n+      \"totalTokens\": 943,\n     },\n   },\n }\n@@ -1377,10 +1377,10 @@ exports[`structured output (tool mode) > [anthropic] parses stream with nested s\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 866,\n-      \"outputTokens\": 88,\n+      \"outputTokens\": 77,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 954,\n+      \"totalTokens\": 943,\n     },\n   },\n }"
+  },
+  {
+   "filename": "typescript/tests/e2e/output/__snapshots__/tools.test.ts.snap",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -578,10 +578,10 @@ exports[`tool usage with streaming > [anthropic] streams tool calls and resumes\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n       \"inputTokens\": 776,\n-      \"outputTokens\": 61,\n+      \"outputTokens\": 53,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 837,\n+      \"totalTokens\": 829,\n     },\n   },\n   \"toolIterations\": 1,"
+  }
+ ],
+ "test_files": [
+  "typescript/src/llm/providers/anthropic/decode-stream.test.ts",
+  "typescript/tests/e2e/input/__snapshots__/mirascope-provider.test.ts.snap",
+  "typescript/tests/e2e/input/__snapshots__/structured-output.test.ts.snap",
+  "typescript/tests/e2e/input/__snapshots__/web-search-tool.test.ts.snap",
+  "typescript/tests/e2e/output/__snapshots__/context-call.test.ts.snap",
+  "typescript/tests/e2e/output/__snapshots__/context-prompt.test.ts.snap",
+  "typescript/tests/e2e/output/__snapshots__/max-tokens.test.ts.snap",
+  "typescript/tests/e2e/output/__snapshots__/prompt.test.ts.snap",
+  "typescript/tests/e2e/output/__snapshots__/refusal.test.ts.snap",
+  "typescript/tests/e2e/output/__snapshots__/resume.test.ts.snap",
+  "typescript/tests/e2e/output/__snapshots__/stream.test.ts.snap",
+  "typescript/tests/e2e/output/__snapshots__/structured-output-with-tools.test.ts.snap",
+  "typescript/tests/e2e/output/__snapshots__/structured-output.test.ts.snap",
+  "typescript/tests/e2e/output/__snapshots__/tools.test.ts.snap"
+ ]
+}

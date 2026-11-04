@@ -1,0 +1,26 @@
+{
+ "repo": "lich0821/ccNexus",
+ "number": 145,
+ "url": "https://github.com/lich0821/ccNexus/pull/145",
+ "title": "fix: report tool_use when an OpenAI stream ends a tool call with finish_reason stop",
+ "merged_at": "2026-10-23T06:41:34Z",
+ "files": [
+  {
+   "filename": "internal/transformer/convert/claude_openai.go",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 2,
+   "patch": "@@ -449,6 +449,7 @@ func OpenAIStreamToClaude(event []byte, ctx *transformer.StreamContext) ([]byte,\n \t\t\tvar result []byte\n \t\t\temitText, emitThinking := makeThinkEmitters(ctx, &result)\n \t\t\tflushThinkTaggedStream(ctx, emitText, emitThinking)\n+\t\t\thadToolCall := ctx.ToolBlockStarted\n \t\t\t// Close any open content blocks before message_stop\n \t\t\tif ctx.ThinkingBlockStarted {\n \t\t\t\tresult = append(result, buildClaudeEvent(\"content_block_stop\", map[string]interface{}{\"index\": ctx.ThinkingIndex})...)\n@@ -464,8 +465,12 @@ func OpenAIStreamToClaude(event []byte, ctx *transformer.StreamContext) ([]byte,\n \t\t\t}\n \t\t\t// Send message_delta with stop_reason if not sent\n \t\t\tif !ctx.FinishReasonSent {\n+\t\t\t\tstopReason := \"end_turn\"\n+\t\t\t\tif hadToolCall {\n+\t\t\t\t\tstopReason = \"tool_use\"\n+\t\t\t\t}\n \t\t\t\tresult = append(result, buildClaudeEvent(\"message_delta\", map[string]interface{}{\n-\t\t\t\t\t\"delta\": map[string]interface{}{\"stop_reason\": \"end_turn\", \"stop_sequence\": nil},\n+\t\t\t\t\t\"delta\": map[string]interface{}{\"stop_reason\": stopReason, \"stop_sequence\": nil},\n \t\t\t\t\t\"usage\": map[string]interface{}{\"output_tokens\": 0},\n \t\t\t\t})...)\n \t\t\t}\n@@ -611,6 +616,7 @@ func OpenAIStreamToClaude(event []byte, ctx *transformer.StreamContext) ([]byte,\n \n \t// Finish\n \tif choice.FinishReason != nil {\n+\t\thadToolCall := ctx.ToolBlockStarted\n \t\tif ctx.ThinkingBlockStarted {\n \t\t\tresult = append(result, buildClaudeEvent(\"content_block_stop\", map[string]interface{}{\"index\": ctx.ThinkingIndex})...)\n \t\t\tctx.ThinkingBlockStarted = false\n@@ -624,7 +630,8 @@ func OpenAIStreamToClaude(event []byte, ctx *transformer.StreamContext) ([]byte,\n \t\t\tctx.ToolBlockStarted = false\n \t\t}\n \t\tstopReason := \"end_turn\"\n-\t\tif *choice.FinishReason == \"tool_calls\" {\n+\t\t// Some OpenAI-compatible providers (Gemini) end tool calls with \"stop\".\n+\t\tif *choice.FinishReason == \"tool_calls\" || (*choice.FinishReason == \"stop\" && hadToolCall) {\n \t\t\tstopReason = \"tool_use\"\n \t\t}\n \t\tresult = append(result, buildClaudeEvent(\"message_delta\", map[string]interface{}{"
+  },
+  {
+   "filename": "internal/transformer/convert/claude_openai_test.go",
+   "status": "modified",
+   "additions": 48,
+   "deletions": 0,
+   "patch": "@@ -435,3 +435,51 @@ func TestClaudeReqToOpenAIThinkingOnly(t *testing.T) {\n \t\t}\n \t}\n }\n+\n+func streamToClaude(t *testing.T, chunks []string) string {\n+\tt.Helper()\n+\tctx := transformer.NewStreamContext()\n+\tctx.ModelName = \"claude-3-sonnet-20240229\"\n+\tvar all []string\n+\tfor _, chunk := range chunks {\n+\t\tevents, err := OpenAIStreamToClaude([]byte(chunk), ctx)\n+\t\tif err != nil {\n+\t\t\tt.Fatalf(\"OpenAIStreamToClaude failed: %v\", err)\n+\t\t}\n+\t\tif events != nil {\n+\t\t\tall = append(all, string(events))\n+\t\t}\n+\t}\n+\treturn strings.Join(all, \"\")\n+}\n+\n+// Gemini's OpenAI-compatible endpoint ends tool calls with finish_reason \"stop\".\n+func TestOpenAIStreamToClaudeStopWithToolCallReportsToolUse(t *testing.T) {\n+\tevents := streamToClaude(t, []string{\n+\t\t`data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Paris\\\"}\"}}]},\"finish_reason\":\"stop\"}]}`,\n+\t\t`data: [DONE]`,\n+\t})\n+\n+\tassertContains(t, events, `\"stop_reason\":\"tool_use\"`, \"Expected stop_reason tool_use for a tool call finished with \\\"stop\\\"\")\n+\tif strings.Contains(events, `\"stop_reason\":\"end_turn\"`) {\n+\t\tt.Error(\"stop_reason end_turn must not be sent when the message has a tool_use block\")\n+\t}\n+}\n+\n+func TestOpenAIStreamToClaudeStopWithoutToolCallReportsEndTurn(t *testing.T) {\n+\tevents := streamToClaude(t, []string{\n+\t\t`data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hello!\"},\"finish_reason\":\"stop\"}]}`,\n+\t\t`data: [DONE]`,\n+\t})\n+\n+\tassertContains(t, events, `\"stop_reason\":\"end_turn\"`, \"Expected stop_reason end_turn for a plain text reply\")\n+}\n+\n+func TestOpenAIStreamToClaudeDoneWithToolCallAndNoFinishReasonReportsToolUse(t *testing.T) {\n+\tevents := streamToClaude(t, []string{\n+\t\t`data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{}\"}}]}}]}`,\n+\t\t`data: [DONE]`,\n+\t})\n+\n+\tassertContains(t, events, `\"stop_reason\":\"tool_use\"`, \"Expected stop_reason tool_use when the stream ends after a tool call\")\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/transformer/convert/claude_openai_test.go"
+ ]
+}
