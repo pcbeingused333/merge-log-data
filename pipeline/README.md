@@ -81,8 +81,8 @@ state to a private repository.
 
 ## Numbers
 
-[`runs.csv`](runs.csv) has one row per run; [`daily_cost.csv`](daily_cost.csv) one row per
-day. Model cost is estimated at API prices from the session transcripts.
+[`runs.csv`](runs.csv) has one row per run. Model cost per published PR is estimated at API
+prices from the session transcripts.
 
 40 runs between 25 October and 4 November 2026 (35 batch, 2 continuous, 3 maintenance):
 
@@ -92,7 +92,7 @@ day. Model cost is estimated at API prices from the session transcripts.
 | New PRs published | 643 |
 | Follow-ups published | 292 |
 | 30-day merge rate (of PRs decided) | 87–89% |
-| Model cost | about $2,500, or $2.40–5 per published PR in recent runs |
+| Model cost per published PR | $2.40–5 in recent runs |
 
 Decisions the numbers drove:
 
@@ -100,9 +100,9 @@ Decisions the numbers drove:
   mistake, so candidates are verified before a fixer touches them.
 - **Reviewers on a cheaper model.** A side-by-side test gave nearly the same verdicts for about
   2.5× less.
-- **Context is the cost.** 52–76% of the bill is cache reads from long sessions re-reading their
-  context. Average context per request fell from about 290k tokens (20 October) to about 64k
-  (4 November) by trimming prompts and telling each role exactly which notes to read.
+- **Context is the cost.** Most of the bill is long sessions re-reading their context. Average
+  context per request fell from about 290k tokens (20 October) to about 64k (4 November) by
+  trimming prompts and telling each role exactly which notes to read.
 - **Merges, not PRs.** Success is measured by merges and by open PRs going down, which is why
   the ceiling on new PRs dropped while open PRs were above ~400, and why maintenance mode exists.
 

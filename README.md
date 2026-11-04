@@ -51,7 +51,7 @@ each tested against the real files from these fixes.
 | `discussion/<owner>/<repo>/<number>.json` | Reviews, review comments and comments on each PR. Authors appear only by role (`author`, `member`, `owner`, `contributor`, `bot`), never by name |
 | `data/issues.json` | Every issue opened, with its state |
 | `data/projects.json` | My own public repositories |
-| `pipeline/` | How the pipeline works, `runs.csv` (one row per run) and `daily_cost.csv` |
+| `pipeline/` | How the pipeline works and `runs.csv`, one row per run |
 | `data/pull_requests.json` / `.csv` | One row per pull request: repo, number, title, url, state (`merged` / `open` / `closed`), category, repo stars and language, created / merged / closed timestamps, hours to merge, whether the description discloses AI use and mentions tests |
 | `data/repos.json` | One row per repository: stars, language, description, and how many of the pull requests were merged, are open or were closed |
 | `data/patterns.json` | The recurring patterns above, with up to five example pull requests each |
@@ -70,7 +70,8 @@ python scripts/update.py --details         # also fixes/ and discussion/ (REST, 
 A token comes from `GITHUB_TOKEN` or a logged-in `gh`. A GitHub Actions workflow runs it with
 `--details` every six hours, capped at 900 REST calls a run, and commits what changed. The first
 backfill of `fixes/` and `discussion/` takes about two days of runs; after that only new or
-updated PRs are fetched. `pipeline/` is synced by hand from the private system.
+updated PRs are fetched. `pipeline/runs.csv` is refreshed from the private system at the start
+of each maintenance run with `scripts/pipeline_sync.py`, run from a private copy.
 
 ## License
 
