@@ -1,16 +1,24 @@
 name: Update dataset
 
+# Every six hours: the PR list, issues and projects in full, then the code and discussion of PRs
+# that are new or changed, up to 900 REST calls per run (GITHUB_TOKEN allows 1,000 an hour).
+# The first backfill of every PR takes about two days of runs; after that each run is small.
 on:
   schedule:
-    - cron: "17 6 * * 1"   # Mondays, 06:17 UTC
+    - cron: "17 */6 * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: update-dataset
+  cancel-in-progress: false
+
 jobs:
   update:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -19,10 +27,13 @@ jobs:
       - name: Rebuild from the GitHub API
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python -I scripts/update.py
+        run: python -I scripts/update.py --details --max-calls 900
       - name: Commit if anything changed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data
-          git diff --cached --quiet || git commit -m "data: weekly update" && git push
+          git add data fixes discussion
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "data: update $(date -u +%F)"
+          git pull --rebase --autostash
+          git push
