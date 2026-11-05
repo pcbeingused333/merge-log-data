@@ -1,0 +1,26 @@
+{
+ "repo": "micro/go-micro",
+ "number": 5016,
+ "url": "https://github.com/micro/go-micro/pull/5016",
+ "title": "Report the token usage of every request in a tool round",
+ "merged_at": "2026-10-20T16:12:49Z",
+ "files": [
+  {
+   "filename": "model/internal/openaiapi/generate.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -67,6 +67,12 @@ func GenerateWithRequest(ctx context.Context, opts model.Options, req *model.Req\n \t\t\tresp.Answer = next.Reply\n \t\t}\n \t\tresp.StopReason = next.StopReason\n+\t\t// Every request of the tool round is billed, not only the first one.\n+\t\tresp.Usage = model.Usage{\n+\t\t\tInputTokens:  resp.Usage.InputTokens + next.Usage.InputTokens,\n+\t\t\tOutputTokens: resp.Usage.OutputTokens + next.Usage.OutputTokens,\n+\t\t\tTotalTokens:  resp.Usage.TotalTokens + next.Usage.TotalTokens,\n+\t\t}\n \t\tpending, raw = next.ToolCalls, nextRaw\n \t\tresp.ToolCalls = append(resp.ToolCalls, next.ToolCalls...)\n \t}"
+  },
+  {
+   "filename": "model/internal/openaiapi/stream_generate_test.go",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -132,3 +132,30 @@ func TestGenerateContinuesUnindexedToolCallFragments(t *testing.T) {\n \t\tt.Fatalf(\"fragments were not joined into one call: %+v\", seen)\n \t}\n }\n+\n+// Every request of a tool round is billed, so the response has to report the usage of all of them.\n+func TestGenerateSumsUsageAcrossToolRounds(t *testing.T) {\n+\trequests := 0\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\trequests++\n+\t\tw.Header().Set(\"Content-Type\", \"text/event-stream\")\n+\t\tif requests == 1 {\n+\t\t\tfmt.Fprintln(w, `data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call1\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"text\\\":\\\"hi\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}`)\n+\t\t} else {\n+\t\t\tfmt.Fprintln(w, `data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":7,\"total_tokens\":27}}`)\n+\t\t}\n+\t\tfmt.Fprintln(w, \"data: [DONE]\")\n+\t}))\n+\tdefer server.Close()\n+\topts := model.Options{BaseURL: server.URL, ToolHandler: func(context.Context, model.ToolCall) model.ToolResult {\n+\t\treturn model.ToolResult{Content: \"ok\"}\n+\t}}\n+\tresp, err := Generate(context.Background(), opts, &model.Request{Tools: []model.Tool{{Name: \"echo\"}}}, nil, model.WithTokenHandler(func(string) {}))\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\twant := model.Usage{InputTokens: 30, OutputTokens: 12, TotalTokens: 42}\n+\tif resp.Usage != want {\n+\t\tt.Fatalf(\"usage=%+v want %+v\", resp.Usage, want)\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "model/internal/openaiapi/stream_generate_test.go"
+ ]
+}

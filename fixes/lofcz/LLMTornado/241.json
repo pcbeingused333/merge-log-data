@@ -1,0 +1,33 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 241,
+ "url": "https://github.com/lofcz/LLMTornado/pull/241",
+ "title": "Report finish reasons for Responses API results and failed or incomplete streams",
+ "merged_at": "2026-10-21T08:16:41Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/Responses/ResponsesFinishReasonTests.cs",
+   "status": "added",
+   "additions": 58,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,58 @@\n+using LlmTornado.Chat;\n+using LlmTornado.Code;\n+using LlmTornado.Code.Vendor;\n+using LlmTornado.Responses;\n+using Newtonsoft.Json;\n+\n+namespace LlmTornado.Tests.Responses;\n+\n+[TestFixture]\n+public class ResponsesFinishReasonTests\n+{\n+    private static ChatChoice Convert(string json)\n+    {\n+        ResponseResult result = JsonConvert.DeserializeObject<ResponseResult>(json)!;\n+        return ResponseHelpers.ToChatChoice(result, new ResponseRequest(), new OpenAiEndpointProvider());\n+    }\n+\n+    [Test]\n+    public void ToChatChoice_CompletedMessage_ReportsEndTurn()\n+    {\n+        ChatChoice choice = Convert(\"\"\"\n+            {\"id\":\"resp_1\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"msg_1\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"Paris.\"}]}]}\n+            \"\"\");\n+\n+        Assert.That(choice.FinishReason, Is.EqualTo(ChatMessageFinishReasons.EndTurn));\n+    }\n+\n+    [Test]\n+    public void ToChatChoice_FunctionCall_ReportsToolCalls()\n+    {\n+        ChatChoice choice = Convert(\"\"\"\n+            {\"id\":\"resp_1\",\"status\":\"completed\",\"output\":[{\"type\":\"function_call\",\"id\":\"fc_1\",\"call_id\":\"call_1\",\"name\":\"get_weather\",\"arguments\":\"{}\",\"status\":\"completed\"}]}\n+            \"\"\");\n+\n+        Assert.That(choice.FinishReason, Is.EqualTo(ChatMessageFinishReasons.ToolCalls));\n+    }\n+\n+    [TestCase(\"max_output_tokens\", ChatMessageFinishReasons.Length)]\n+    [TestCase(\"content_filter\", ChatMessageFinishReasons.ContentFilter)]\n+    public void ToChatChoice_IncompleteResponse_MapsTheIncompleteReason(string reason, ChatMessageFinishReasons expected)\n+    {\n+        ChatChoice choice = Convert($$\"\"\"\n+            {\"id\":\"resp_1\",\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"{{reason}}\"},\"output\":[{\"type\":\"message\",\"id\":\"msg_1\",\"role\":\"assistant\",\"status\":\"incomplete\",\"content\":[{\"type\":\"output_text\",\"text\":\"Par\"}]}]}\n+            \"\"\");\n+\n+        Assert.That(choice.FinishReason, Is.EqualTo(expected));\n+    }\n+\n+    [Test]\n+    public void ToChatChoice_FailedResponse_ReportsError()\n+    {\n+        ChatChoice choice = Convert(\"\"\"\n+            {\"id\":\"resp_1\",\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"boom\"},\"output\":[]}\n+            \"\"\");\n+\n+        Assert.That(choice.FinishReason, Is.EqualTo(ChatMessageFinishReasons.Error));\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/Conversation.cs",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 3,
+   "patch": "@@ -1711,9 +1711,24 @@ await eventsHandler.ReasoningTokenHandler.Invoke(new ChatMessageReasoningData\n                                     await eventsHandler.OnFinished.Invoke(new ChatStreamFinishedData\n                                     (\n                                         usage,\n-                                        completedEvt.Response.Error is not null\n-                                            ? ChatMessageFinishReasons.Error\n-                                            : ChatMessageFinishReasons.EndTurn\n+                                        chatChoice.FinishReason ?? ChatMessageFinishReasons.EndTurn\n+                                    ));\n+                                }\n+\n+                                break;\n+                            }\n+                        case ResponseEventTypes.ResponseFailed or ResponseEventTypes.ResponseIncomplete:\n+                            {\n+                                ResponseResult? terminal = (evt as ResponseEventFailed)?.Response ?? (evt as ResponseEventIncomplete)?.Response;\n+\n+                                if (terminal is not null && eventsHandler?.OnFinished is not null)\n+                                {\n+                                    ChatChoice terminalChoice = ResponseHelpers.ToChatChoice(terminal, responsesRequest, provider);\n+\n+                                    await eventsHandler.OnFinished.Invoke(new ChatStreamFinishedData\n+                                    (\n+                                        terminal.Usage is not null ? new ChatUsage(terminal.Usage) : new ChatUsage(LLmProviders.OpenAi),\n+                                        terminalChoice.FinishReason ?? ChatMessageFinishReasons.Unknown\n                                     ));\n                                 }\n "
+  },
+  {
+   "filename": "src/LlmTornado/Responses/ResponseHelpers.cs",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 1,
+   "patch": "@@ -567,10 +567,29 @@ public static ChatChoice ToChatChoice(ResponseResult response, ResponseRequest r\n                 }\n             }\n         }\n-        \n+\n+        choice.FinishReason = ToFinishReason(response, choice);\n         return choice;\n     }\n \n+    private static ChatMessageFinishReasons ToFinishReason(ResponseResult response, ChatChoice choice)\n+    {\n+        switch (response.Status)\n+        {\n+            case ResponseMessageStatuses.Failed:\n+                return ChatMessageFinishReasons.Error;\n+            case ResponseMessageStatuses.Incomplete:\n+                return response.IncompleteDetails?.Reason switch\n+                {\n+                    \"max_output_tokens\" => ChatMessageFinishReasons.Length,\n+                    \"content_filter\" => ChatMessageFinishReasons.ContentFilter,\n+                    _ => ChatMessageFinishReasons.Unknown\n+                };\n+            default:\n+                return choice.Message?.ToolCalls?.Count > 0 ? ChatMessageFinishReasons.ToolCalls : ChatMessageFinishReasons.EndTurn;\n+        }\n+    }\n+\n     public static Tool? ToChatTool(ResponseTool responseTool)\n     {\n         return responseTool.Type switch"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/Responses/ResponsesFinishReasonTests.cs"
+ ]
+}

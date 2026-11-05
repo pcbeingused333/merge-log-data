@@ -1,0 +1,33 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 263,
+ "url": "https://github.com/lofcz/LLMTornado/pull/263",
+ "title": "fix(cohere): report the cached prompt tokens of the usage as CacheReadTokens",
+ "merged_at": "2026-10-22T23:46:03Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/CohereUsageTests.cs",
+   "status": "modified",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -43,4 +43,37 @@ public async Task InboundStream_MessageEndReportsInputAndOutputTokensSeparately(\n         Assert.That(usage.CompletionTokens, Is.EqualTo(30));\n         Assert.That(usage.TotalTokens, Is.EqualTo(150));\n     }\n+\n+    [Test]\n+    public async Task InboundStream_MessageEndReportsCachedPromptTokensAsCacheReadTokens()\n+    {\n+        const string sse = \"\"\"\n+            data: {\"type\":\"content-delta\",\"index\":0,\"delta\":{\"message\":{\"content\":{\"text\":\"Hi\"}}}}\n+\n+            data: {\"type\":\"message-end\",\"delta\":{\"finish_reason\":\"COMPLETE\",\"usage\":{\"billed_units\":{\"input_tokens\":120,\"output_tokens\":30},\"tokens\":{\"input_tokens\":150,\"output_tokens\":30},\"cached_tokens\":64}}}\n+\n+\n+            \"\"\";\n+\n+        CohereEndpointProvider provider = new CohereEndpointProvider();\n+        StreamReader reader = new StreamReader(new MemoryStream(Encoding.UTF8.GetBytes(sse)));\n+        ChatRequest request = new ChatRequest\n+        {\n+            Stream = true,\n+            Messages = [new ChatMessage(ChatMessageRoles.User, \"test\")]\n+        };\n+\n+        ChatUsage? usage = null;\n+        await foreach (ChatResult? chunk in provider.InboundStream(reader, request, null))\n+        {\n+            if (chunk?.Usage is not null)\n+            {\n+                usage = chunk.Usage;\n+            }\n+        }\n+\n+        Assert.That(usage, Is.Not.Null);\n+        Assert.That(usage!.CacheReadTokens, Is.EqualTo(64));\n+        Assert.That(usage.PromptTokens, Is.EqualTo(120));\n+    }\n }"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/ChatResult.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -511,6 +511,7 @@ internal ChatUsage(VendorCohereUsage usage)\n \t\tCompletionTokens = usage.BilledUnits?.OutputTokens ?? 0;\n \t\tPromptTokens = usage.BilledUnits?.InputTokens ?? 0;\n \t\tTotalTokens = CompletionTokens + PromptTokens;\n+\t\tCacheReadTokens = usage.CachedTokens;\n \t\tVendorUsageObject = usage;\n \t\tProvider = LLmProviders.Cohere;\n \t}"
+  },
+  {
+   "filename": "src/LlmTornado/Vendor/Cohere/VendorCohereUsage.cs",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -27,4 +27,9 @@ internal class VendorCohereUsageTokens\n     public VendorCohereUsageTokens? Tokens { get; set; }\n     [JsonProperty(\"response_type\")]\n     public string? ResponseType { get; set; }\n+    /// <summary>\n+    /// The number of prompt tokens that hit the inference cache.\n+    /// </summary>\n+    [JsonProperty(\"cached_tokens\")]\n+    public int? CachedTokens { get; set; }\n }\n\\ No newline at end of file"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/CohereUsageTests.cs"
+ ]
+}

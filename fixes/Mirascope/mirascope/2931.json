@@ -1,0 +1,42 @@
+{
+ "repo": "Mirascope/mirascope",
+ "number": 2931,
+ "url": "https://github.com/Mirascope/mirascope/pull/2931",
+ "title": "fix(llm): map non-HTTP Anthropic SDK errors to ProviderError",
+ "merged_at": "2026-10-22T20:53:16Z",
+ "files": [
+  {
+   "filename": "typescript/src/llm/providers/anthropic/_utils.test.ts",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -21,6 +21,7 @@ import {\n   FeatureNotSupportedError,\n   NotFoundError,\n   PermissionError,\n+  ProviderError,\n   RateLimitError,\n   ServerError,\n   TimeoutError,\n@@ -1175,3 +1176,22 @@ describe(\"decodeResponse finish reasons\", () => {\n     expect(finishReason).toBe(expected);\n   });\n });\n+\n+describe(\"ANTHROPIC_ERROR_MAP catch-all\", () => {\n+  const mapped = (error: Error) => {\n+    for (const [SdkError, MirascopeError] of ANTHROPIC_ERROR_MAP) {\n+      if (error instanceof SdkError) return MirascopeError;\n+    }\n+    return undefined;\n+  };\n+\n+  it(\"maps a non-HTTP AnthropicError to ProviderError like the Python provider\", () => {\n+    expect(mapped(new Anthropic.AnthropicError(\"bad request options\"))).toBe(\n+      ProviderError,\n+    );\n+  });\n+\n+  it(\"leaves errors from outside the SDK unmapped\", () => {\n+    expect(mapped(new Error(\"unrelated\"))).toBeUndefined();\n+  });\n+});"
+  },
+  {
+   "filename": "typescript/src/llm/providers/anthropic/_utils.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -43,6 +43,7 @@ import {\n   FeatureNotSupportedError,\n   NotFoundError,\n   PermissionError,\n+  ProviderError,\n   RateLimitError,\n   ServerError,\n   TimeoutError,\n@@ -213,6 +214,8 @@ export const ANTHROPIC_ERROR_MAP: ProviderErrorMap = [\n   [Anthropic.APIConnectionTimeoutError, TimeoutError],\n   [Anthropic.APIConnectionError, ConnectionError],\n   [Anthropic.APIError, APIError],\n+  // Catch-all for the SDK's non-HTTP errors, as in the Python provider's map.\n+  [Anthropic.AnthropicError, ProviderError],\n ];\n \n // ============================================================================"
+  },
+  {
+   "filename": "typescript/src/llm/providers/anthropic/beta-provider.test.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -50,6 +50,7 @@ vi.mock(\"@anthropic-ai/sdk\", async (importOriginal) => {\n     InternalServerError: actual.default.InternalServerError,\n     APIError: actual.default.APIError,\n     APIConnectionTimeoutError: actual.default.APIConnectionTimeoutError,\n+    AnthropicError: actual.default.AnthropicError,\n     APIConnectionError: actual.default.APIConnectionError,\n   });\n "
+  },
+  {
+   "filename": "typescript/src/llm/providers/anthropic/provider.test.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -45,6 +45,7 @@ vi.mock(\"@anthropic-ai/sdk\", async (importOriginal) => {\n     InternalServerError: actual.default.InternalServerError,\n     APIError: actual.default.APIError,\n     APIConnectionTimeoutError: actual.default.APIConnectionTimeoutError,\n+    AnthropicError: actual.default.AnthropicError,\n     APIConnectionError: actual.default.APIConnectionError,\n   });\n "
+  }
+ ],
+ "test_files": [
+  "typescript/src/llm/providers/anthropic/_utils.test.ts",
+  "typescript/src/llm/providers/anthropic/beta-provider.test.ts",
+  "typescript/src/llm/providers/anthropic/provider.test.ts"
+ ]
+}

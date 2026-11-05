@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 217,
+ "url": "https://github.com/lofcz/LLMTornado/pull/217",
+ "title": "Resolve provider finish reasons regardless of case",
+ "merged_at": "2026-10-20T23:23:04Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/FinishReasonMapTests.cs",
+   "status": "added",
+   "additions": 52,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,52 @@\n+using System.IO;\n+using System.Text;\n+using LlmTornado.Chat;\n+using LlmTornado.Code;\n+using LlmTornado.Code.Vendor;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class FinishReasonMapTests\n+{\n+    [TestCase(\"STOP\", ChatMessageFinishReasons.EndTurn)]\n+    [TestCase(\"MAX_TOKENS\", ChatMessageFinishReasons.Length)]\n+    [TestCase(\"SAFETY\", ChatMessageFinishReasons.ContentFilter)]\n+    [TestCase(\"MALFORMED_FUNCTION_CALL\", ChatMessageFinishReasons.MalformedToolCall)]\n+    [TestCase(\"stop\", ChatMessageFinishReasons.EndTurn)]\n+    [TestCase(\"tool_use\", ChatMessageFinishReasons.ToolCalls)]\n+    public void Map_ResolvesProviderFinishReasonsRegardlessOfCase(string reason, ChatMessageFinishReasons expected)\n+    {\n+        Assert.That(ChatMessageFinishReasonsConverter.Map.GetValueOrDefault(reason, ChatMessageFinishReasons.Unknown), Is.EqualTo(expected));\n+    }\n+\n+    [Test]\n+    public async Task GoogleInboundStream_ReportsTheUppercaseFinishReasonGeminiSends()\n+    {\n+        const string json = \"\"\"\n+            [\n+              {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"Hi\"}]},\"finishReason\":\"MAX_TOKENS\",\"index\":0}],\"usageMetadata\":{\"promptTokenCount\":5,\"candidatesTokenCount\":1,\"totalTokenCount\":6}}\n+            ]\n+            \"\"\";\n+\n+        GoogleEndpointProvider provider = new GoogleEndpointProvider();\n+        StreamReader reader = new StreamReader(new MemoryStream(Encoding.UTF8.GetBytes(json)));\n+        ChatRequest request = new ChatRequest\n+        {\n+            Stream = true,\n+            Messages = [new ChatMessage(ChatMessageRoles.User, \"test\")]\n+        };\n+\n+        ChatResult? finish = null;\n+        await foreach (ChatResult? chunk in provider.InboundStream(reader, request, null))\n+        {\n+            if (chunk?.StreamInternalKind is ChatResultStreamInternalKinds.FinishData)\n+            {\n+                finish = chunk;\n+            }\n+        }\n+\n+        Assert.That(finish, Is.Not.Null);\n+        Assert.That(finish!.Choices![0].FinishReason, Is.EqualTo(ChatMessageFinishReasons.Length));\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Code/PartialModels.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -408,7 +408,7 @@ internal class ChatMessageFinishReasonsConverter : JsonConverter<ChatMessageFini\n         { \"refusal\", ChatMessageFinishReasons.Refusal },\n         \n         { \"compaction\", ChatMessageFinishReasons.Compaction }\n-    }.ToFrozenDictionary();\n+    }.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);\n     \n     /// <summary>\n     /// Reads and converts JSON input into the appropriate ResponseFormat object."
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/FinishReasonMapTests.cs"
+ ]
+}

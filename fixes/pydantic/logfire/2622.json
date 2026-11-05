@@ -1,0 +1,26 @@
+{
+ "repo": "pydantic/logfire",
+ "number": 2622,
+ "url": "https://github.com/pydantic/logfire/pull/2622",
+ "title": "Record why a Claude Agent SDK run ended in error",
+ "merged_at": "2026-10-21T10:51:20Z",
+ "files": [
+  {
+   "filename": "logfire-sdk/logfire/_internal/integrations/claude_agent_sdk.py",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 2,
+   "patch": "@@ -607,8 +607,22 @@ def _record_result(span: LogfireSpan, msg: ResultMessage) -> None:\n         if (value := getattr(msg, attr, None)) is not None:  # pragma: no branch\n             attrs[attr] = value\n \n+    is_error = getattr(msg, 'is_error', None)\n+    if is_error:\n+        attrs[ERROR_TYPE] = _result_error_type(msg)\n+\n     span.set_attributes(attrs)\n \n-    is_error = getattr(msg, 'is_error', None)\n-    if is_error:  # pragma: no cover\n+    if is_error:\n         span.set_level('error')\n+\n+\n+def _result_error_type(msg: ResultMessage) -> str:\n+    \"\"\"Describe why a ResultMessage is an error: its subtype, else the HTTP status of the failed API call.\"\"\"\n+    subtype = getattr(msg, 'subtype', None)\n+    if subtype and subtype != 'success':\n+        return str(subtype)\n+    api_error_status = getattr(msg, 'api_error_status', None)\n+    if api_error_status is not None:\n+        return str(api_error_status)\n+    return 'error'"
+  },
+  {
+   "filename": "tests/otel_integrations/test_claude_agent_sdk.py",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -19,6 +19,7 @@\n import stat\n from contextlib import suppress\n from pathlib import Path\n+from typing import Any\n from unittest.mock import Mock\n \n import anyio\n@@ -38,6 +39,7 @@\n     ClaudeAgentOptions,\n     ClaudeSDKClient,\n     HookMatcher,\n+    ResultMessage,\n     TextBlock,\n     ThinkingBlock,\n     ToolResultBlock,\n@@ -51,6 +53,7 @@\n     _ConversationState,\n     _extract_usage,\n     _inject_tracing_hooks,\n+    _record_result,\n     _set_state,\n     post_tool_use_failure_hook,\n     post_tool_use_hook,\n@@ -609,6 +612,38 @@ async def test_already_instrumented() -> None:\n     # No error, and only one layer of patching\n \n \n+def _result_message(**kwargs: Any) -> ResultMessage:\n+    return ResultMessage(\n+        subtype=kwargs.pop('subtype', 'success'),\n+        duration_ms=10,\n+        duration_api_ms=8,\n+        is_error=kwargs.pop('is_error', False),\n+        num_turns=1,\n+        session_id='session-1',\n+        **kwargs,\n+    )\n+\n+\n+@pytest.mark.parametrize(\n+    ('result_kwargs', 'expected_error_type'),\n+    [\n+        ({'subtype': 'error_max_turns', 'is_error': True}, 'error_max_turns'),\n+        ({'subtype': 'success', 'is_error': True, 'api_error_status': 529}, '529'),\n+        ({'subtype': 'success', 'is_error': True}, 'error'),\n+        ({'subtype': 'success', 'is_error': False}, None),\n+    ],\n+)\n+def test_record_result_reports_why_the_run_failed(\n+    exporter: TestExporter, result_kwargs: dict[str, Any], expected_error_type: str | None\n+) -> None:\n+    with logfire.span('invoke_agent') as span:\n+        _record_result(span, _result_message(**result_kwargs))\n+\n+    attributes = exporter.exported_spans[-1].attributes or {}\n+    assert attributes.get('error.type') == expected_error_type\n+    assert (attributes.get('logfire.level_num') == 17) == (expected_error_type is not None)\n+\n+\n # ---------------------------------------------------------------------------\n # Cassette-based integration tests (replay through real transport).\n # ---------------------------------------------------------------------------"
+  }
+ ],
+ "test_files": [
+  "tests/otel_integrations/test_claude_agent_sdk.py"
+ ]
+}

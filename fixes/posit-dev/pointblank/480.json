@@ -1,0 +1,26 @@
+{
+ "repo": "posit-dev/pointblank",
+ "number": 480,
+ "url": "https://github.com/posit-dev/pointblank/pull/480",
+ "title": "fix: make a missing value fail col_vals_in_set() in the sundered data and extracts",
+ "merged_at": "2026-10-23T14:06:17Z",
+ "files": [
+  {
+   "filename": "pointblank/_interrogation.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -1031,7 +1031,11 @@ def interrogate_isin(tbl: IntoFrame, column: str, set_values: Any) -> Any:\n     assert isinstance(nw_tbl, (nw.DataFrame, nw.LazyFrame))\n \n     can_be_null: bool = None in set_values\n-    base_expr: nw.Expr = _is_in(column, set_values, nw_tbl.collect_schema()[column])\n+    # `is_in()` gives null for a missing value on Polars and nullable pandas dtypes, which is\n+    # neither passing nor failing in the sundered data and the extracts\n+    base_expr: nw.Expr = _is_in(column, set_values, nw_tbl.collect_schema()[column]).fill_null(\n+        False\n+    )\n     if can_be_null:\n         base_expr = base_expr | nw.col(column).is_null()\n "
+  },
+  {
+   "filename": "tests/test_in_set_missing_values.py",
+   "status": "added",
+   "additions": 42,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,42 @@\n+import pandas as pd\n+import polars as pl\n+import pytest\n+\n+from pointblank import Validate\n+\n+STRINGS = [\"x\", None, \"y\", \"z\"]\n+\n+\n+def _table(tbl_type: str):\n+    \"\"\"A column with the values `x`, missing, `y`, `z` (or 1, missing, 2, 3), for set `[\"x\"]`/`[1]`.\"\"\"\n+    if tbl_type == \"polars_str\":\n+        return pl.DataFrame({\"a\": STRINGS}), [\"x\"]\n+    if tbl_type == \"polars_float\":\n+        return pl.DataFrame({\"a\": [1.0, None, 2.0, 3.0]}), [1.0]\n+    if tbl_type == \"polars_enum\":\n+        return pl.DataFrame({\"a\": STRINGS}, schema={\"a\": pl.Enum([\"x\", \"y\", \"z\"])}), [\"x\"]\n+    if tbl_type == \"pandas_float\":\n+        return pd.DataFrame({\"a\": [1.0, None, 2.0, 3.0]}), [1.0]\n+    if tbl_type == \"pandas_object\":\n+        return pd.DataFrame({\"a\": STRINGS}), [\"x\"]\n+    if tbl_type == \"pandas_Int64\":\n+        return pd.DataFrame({\"a\": pd.array([1, None, 2, 3], dtype=\"Int64\")}), [1]\n+    raise ValueError(tbl_type)\n+\n+\n+@pytest.mark.parametrize(\n+    \"tbl_type\",\n+    [\"polars_str\", \"polars_float\", \"polars_enum\", \"pandas_float\", \"pandas_object\", \"pandas_Int64\"],\n+)\n+def test_col_vals_in_set_missing_value_fails_in_sundered_data_and_extracts(tbl_type) -> None:\n+    tbl, set_values = _table(tbl_type)\n+\n+    validation = Validate(tbl).col_vals_in_set(columns=\"a\", set=set_values).interrogate()\n+\n+    assert (\n+        validation.n_passed(i=1, scalar=True),\n+        validation.n_failed(i=1, scalar=True),\n+    ) == (1, 3)\n+    assert len(validation.get_sundered_data(type=\"pass\")) == 1\n+    assert len(validation.get_sundered_data(type=\"fail\")) == 3\n+    assert len(validation.get_data_extracts(i=1, frame=True)) == 3"
+  }
+ ],
+ "test_files": [
+  "tests/test_in_set_missing_values.py"
+ ]
+}

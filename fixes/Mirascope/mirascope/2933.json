@@ -1,0 +1,49 @@
+{
+ "repo": "Mirascope/mirascope",
+ "number": 2933,
+ "url": "https://github.com/Mirascope/mirascope/pull/2933",
+ "title": "fix(llm): count Gemini tool-use prompt tokens as input tokens",
+ "merged_at": "2026-10-22T21:01:54Z",
+ "files": [
+  {
+   "filename": "typescript/src/llm/providers/google/_utils.test.ts",
+   "status": "modified",
+   "additions": 39,
+   "deletions": 0,
+   "patch": "@@ -453,3 +453,42 @@ describe(\"raw message round-tripping\", () => {\n     expect(contents[1]).toEqual({ text: \"Hello!\" });\n   });\n });\n+\n+describe(\"decodeResponse usage\", () => {\n+  const response = (usageMetadata: Record<string, number>) =>\n+    ({\n+      candidates: [\n+        {\n+          content: { role: \"model\", parts: [{ text: \"answer\" }] },\n+          finishReason: \"STOP\",\n+        },\n+      ],\n+      usageMetadata,\n+    }) as unknown as GenerateContentResponse;\n+\n+  it(\"counts tool-use prompt tokens as input tokens\", () => {\n+    const { usage } = decodeResponse(\n+      response({\n+        promptTokenCount: 100,\n+        toolUsePromptTokenCount: 40,\n+        candidatesTokenCount: 5,\n+        totalTokenCount: 145,\n+      }),\n+      \"google/gemini-2.5-flash\",\n+      false,\n+    );\n+\n+    expect(usage?.inputTokens).toBe(140);\n+    expect(usage?.outputTokens).toBe(5);\n+  });\n+\n+  it(\"leaves the input tokens alone without tool-use prompt tokens\", () => {\n+    const { usage } = decodeResponse(\n+      response({ promptTokenCount: 100, candidatesTokenCount: 5 }),\n+      \"google/gemini-2.5-flash\",\n+      false,\n+    );\n+\n+    expect(usage?.inputTokens).toBe(100);\n+  });\n+});"
+  },
+  {
+   "filename": "typescript/src/llm/providers/google/_utils.ts",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -757,7 +757,12 @@ function decodeUsage(response: GenerateContentResponse): Usage | null {\n \n   /* v8 ignore start - token counts always present in practice, fallbacks are defensive */\n   return createUsage({\n-    inputTokens: metadata.promptTokenCount ?? 0,\n+    // Tokens of tool results (URL context, search, code execution) given back to the\n+    // model are reported apart from `promptTokenCount` but are input too:\n+    // `totalTokenCount` sums both.\n+    inputTokens:\n+      (metadata.promptTokenCount ?? 0) +\n+      (metadata.toolUsePromptTokenCount ?? 0),\n     outputTokens:\n       (metadata.candidatesTokenCount ?? 0) + (metadata.thoughtsTokenCount ?? 0),\n     cacheReadTokens: metadata.cachedContentTokenCount ?? 0,"
+  },
+  {
+   "filename": "typescript/src/llm/providers/google/decode-stream.test.ts",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -129,6 +129,26 @@ describe(\"Google stream cumulative usage\", () => {\n     ]);\n   });\n \n+  it(\"counts tool-use prompt tokens as input and emits only their growth\", () => {\n+    const state = createDecodeState(false);\n+    const totals = [\n+      {\n+        promptTokenCount: 100,\n+        toolUsePromptTokenCount: 20,\n+        candidatesTokenCount: 2,\n+      },\n+      {\n+        promptTokenCount: 100,\n+        toolUsePromptTokenCount: 40,\n+        candidatesTokenCount: 5,\n+      },\n+    ];\n+    const deltas = totals.flatMap((metadata) => usageChunks(metadata, state));\n+\n+    expect(deltas.map((chunk) => chunk.inputTokens)).toEqual([120, 20]);\n+    expect(deltas.map((chunk) => chunk.outputTokens)).toEqual([2, 3]);\n+  });\n+\n   it(\"sums to the final totals over a whole stream\", () => {\n     const state = createDecodeState(false);\n     const totals = ["
+  },
+  {
+   "filename": "typescript/src/llm/providers/google/decode-stream.ts",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -199,7 +199,10 @@ export function decodeStreamEvent(\n     const reasoningTokens =\n       usage.thoughtsTokenCount ?? /* v8 ignore next 1 */ 0;\n     const current = {\n-      inputTokens: usage.promptTokenCount ?? /* v8 ignore next 1 */ 0,\n+      // Tool results given back to the model are input too, reported apart\n+      inputTokens:\n+        (usage.promptTokenCount ?? /* v8 ignore next 1 */ 0) +\n+        (usage.toolUsePromptTokenCount ?? /* v8 ignore next 1 */ 0),\n       outputTokens:\n         (usage.candidatesTokenCount ?? /* v8 ignore next 1 */ 0) +\n         reasoningTokens,"
+  },
+  {
+   "filename": "typescript/tests/e2e/input/__snapshots__/web-search-tool.test.ts.snap",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 4,
+   "patch": "@@ -568,11 +568,11 @@ It's worth noting that some analyses from December 2025 suggested a plausible pr\n     \"usage\": {\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n-      \"inputTokens\": 69,\n+      \"inputTokens\": 206,\n       \"outputTokens\": 358,\n       \"raw\": \"[object Object]\",\n       \"reasoningTokens\": 33,\n-      \"totalTokens\": 427,\n+      \"totalTokens\": 564,\n     },\n   },\n }\n@@ -668,11 +668,11 @@ exports[`WebSearchTool > [google] streams with web search tool 1`] = `\n     \"usage\": {\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n-      \"inputTokens\": 69,\n+      \"inputTokens\": 232,\n       \"outputTokens\": 708,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 579,\n-      \"totalTokens\": 777,\n+      \"totalTokens\": 940,\n     },\n   },\n }"
+  }
+ ],
+ "test_files": [
+  "typescript/src/llm/providers/google/_utils.test.ts",
+  "typescript/src/llm/providers/google/decode-stream.test.ts",
+  "typescript/tests/e2e/input/__snapshots__/web-search-tool.test.ts.snap"
+ ]
+}

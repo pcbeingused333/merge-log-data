@@ -1,0 +1,33 @@
+{
+ "repo": "Mirascope/mirascope",
+ "number": 2914,
+ "url": "https://github.com/Mirascope/mirascope/pull/2914",
+ "title": "fix(llm): map Anthropic context window and Google image refusals to finish reasons",
+ "merged_at": "2026-10-21T15:39:38Z",
+ "files": [
+  {
+   "filename": "python/mirascope/llm/providers/anthropic/_utils/decode.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -39,6 +39,7 @@\n ANTHROPIC_FINISH_REASON_MAP = {\n     \"max_tokens\": FinishReason.MAX_TOKENS,\n     \"refusal\": FinishReason.REFUSAL,\n+    \"model_context_window_exceeded\": FinishReason.CONTEXT_LENGTH_EXCEEDED,\n }\n \n "
+  },
+  {
+   "filename": "python/mirascope/llm/providers/google/_utils/decode.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -43,6 +43,9 @@\n     \"BLOCKLIST\": FinishReason.REFUSAL,\n     \"PROHIBITED_CONTENT\": FinishReason.REFUSAL,\n     \"SPII\": FinishReason.REFUSAL,\n+    \"IMAGE_SAFETY\": FinishReason.REFUSAL,\n+    \"IMAGE_PROHIBITED_CONTENT\": FinishReason.REFUSAL,\n+    \"IMAGE_RECITATION\": FinishReason.REFUSAL,\n }\n \n "
+  },
+  {
+   "filename": "python/tests/llm/providers/test_finish_reason_mapping.py",
+   "status": "added",
+   "additions": 118,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,118 @@\n+\"\"\"Tests for provider stop reasons that map to a `FinishReason`.\"\"\"\n+\n+import json\n+\n+import httpx\n+import pytest\n+from anthropic import Anthropic, types as anthropic_types\n+from google.genai import types as genai_types\n+\n+from mirascope import llm\n+from mirascope.llm.providers.anthropic._utils import decode as anthropic_decode\n+from mirascope.llm.providers.google._utils.decode import decode_response, decode_stream\n+from mirascope.llm.responses import FinishReasonChunk\n+\n+\n+def _anthropic_message(stop_reason: str) -> anthropic_types.Message:\n+    # The SDK does not validate the stop reason, so newer API values pass through.\n+    return anthropic_types.Message.model_construct(\n+        id=\"msg_1\",\n+        type=\"message\",\n+        role=\"assistant\",\n+        model=\"claude-sonnet-4-5\",\n+        content=[anthropic_types.TextBlock(type=\"text\", text=\"partial\")],\n+        stop_reason=stop_reason,\n+        stop_sequence=None,\n+        usage=anthropic_types.Usage(input_tokens=10, output_tokens=5),\n+    )\n+\n+\n+def test_anthropic_decode_response_context_window_exceeded() -> None:\n+    _, finish_reason, _ = anthropic_decode.decode_response(\n+        _anthropic_message(\"model_context_window_exceeded\"),\n+        \"anthropic/claude-sonnet-4-5\",\n+        include_thoughts=False,\n+    )\n+    assert finish_reason == llm.FinishReason.CONTEXT_LENGTH_EXCEEDED\n+\n+\n+def test_anthropic_decode_stream_context_window_exceeded() -> None:\n+    events = [\n+        {\n+            \"type\": \"message_start\",\n+            \"message\": {\n+                \"id\": \"msg_1\",\n+                \"type\": \"message\",\n+                \"role\": \"assistant\",\n+                \"model\": \"claude-sonnet-4-5\",\n+                \"content\": [],\n+                \"stop_reason\": None,\n+                \"stop_sequence\": None,\n+                \"usage\": {\"input_tokens\": 10, \"output_tokens\": 1},\n+            },\n+        },\n+        {\n+            \"type\": \"message_delta\",\n+            \"delta\": {\n+                \"stop_reason\": \"model_context_window_exceeded\",\n+                \"stop_sequence\": None,\n+            },\n+            \"usage\": {\"output_tokens\": 5},\n+        },\n+        {\"type\": \"message_stop\"},\n+    ]\n+    body = \"\".join(f\"event: {e['type']}\\ndata: {json.dumps(e)}\\n\\n\" for e in events)\n+\n+    def handler(request: httpx.Request) -> httpx.Response:\n+        return httpx.Response(\n+            200,\n+            request=request,\n+            headers={\"content-type\": \"text/event-stream\"},\n+            content=body,\n+        )\n+\n+    with Anthropic(\n+        api_key=\"test\", http_client=httpx.Client(transport=httpx.MockTransport(handler))\n+    ) as client:\n+        stream = client.messages.stream(\n+            model=\"claude-sonnet-4-5\", max_tokens=10, messages=[]\n+        )\n+        chunks = list(anthropic_decode.decode_stream(stream, include_thoughts=False))\n+    assert [c.finish_reason for c in chunks if isinstance(c, FinishReasonChunk)] == [\n+        llm.FinishReason.CONTEXT_LENGTH_EXCEEDED\n+    ]\n+\n+\n+IMAGE_REFUSALS = [\"IMAGE_SAFETY\", \"IMAGE_PROHIBITED_CONTENT\", \"IMAGE_RECITATION\"]\n+\n+\n+def _google_response(finish_reason: str) -> genai_types.GenerateContentResponse:\n+    return genai_types.GenerateContentResponse(\n+        candidates=[\n+            genai_types.Candidate(\n+                content=genai_types.Content(role=\"model\", parts=[]),\n+                finish_reason=genai_types.FinishReason(finish_reason),\n+            )\n+        ],\n+        usage_metadata=genai_types.GenerateContentResponseUsageMetadata(\n+            prompt_token_count=3, candidates_token_count=0\n+        ),\n+    )\n+\n+\n+@pytest.mark.parametrize(\"reason\", IMAGE_REFUSALS)\n+def test_google_decode_response_image_refusal(reason: str) -> None:\n+    _, finish_reason, _ = decode_response(\n+        _google_response(reason), \"google/gemini-3.8-flash\", include_thoughts=False\n+    )\n+    assert finish_reason == llm.FinishReason.REFUSAL\n+\n+\n+@pytest.mark.parametrize(\"reason\", IMAGE_REFUSALS)\n+def test_google_decode_stream_image_refusal(reason: str) -> None:\n+    chunks = list(\n+        decode_stream(iter([_google_response(reason)]), include_thoughts=False)\n+    )\n+    assert [c.finish_reason for c in chunks if isinstance(c, FinishReasonChunk)] == [\n+        llm.FinishReason.REFUSAL\n+    ]"
+  }
+ ],
+ "test_files": [
+  "python/tests/llm/providers/test_finish_reason_mapping.py"
+ ]
+}

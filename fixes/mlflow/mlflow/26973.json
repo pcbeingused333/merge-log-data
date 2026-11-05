@@ -1,0 +1,34 @@
+{
+ "repo": "mlflow/mlflow",
+ "number": 26973,
+ "url": "https://github.com/mlflow/mlflow/pull/26973",
+ "title": "Keep tool calls and finish_reason in streamed OpenAI chat traces",
+ "merged_at": "2026-10-27T02:29:22Z",
+ "files": [
+  {
+   "filename": "mlflow/openai/autolog.py",
+   "status": "modified",
+   "additions": 26,
+   "deletions": 6,
+   "patch": "@@ -529,16 +529,36 @@ def _extract_content(chunk: Any) -> str:\n             return \"\".join(text_parts)\n         return content\n \n+    tool_calls: list[dict[str, Any]] = []\n+    finish_reason = \"stop\"\n+    for chunk in chunks:\n+        if not chunk.choices:\n+            continue\n+        chunk_choice = chunk.choices[0]\n+        if chunk_choice.finish_reason:\n+            finish_reason = chunk_choice.finish_reason\n+        for tool_call_delta in getattr(chunk_choice.delta, \"tool_calls\", None) or []:\n+            while tool_call_delta.index >= len(tool_calls):\n+                tool_calls.append({\n+                    \"id\": \"\",\n+                    \"type\": \"function\",\n+                    \"function\": {\"name\": \"\", \"arguments\": \"\"},\n+                })\n+            tool_call = tool_calls[tool_call_delta.index]\n+            if tool_call_delta.id:\n+                tool_call[\"id\"] = tool_call_delta.id\n+            if function := tool_call_delta.function:\n+                tool_call[\"function\"][\"name\"] += function.name or \"\"\n+                tool_call[\"function\"][\"arguments\"] += function.arguments or \"\"\n+\n+    content = \"\".join(map(_extract_content, chunks))\n     message = ChatCompletionMessage(\n-        role=\"assistant\", content=\"\".join(map(_extract_content, chunks))\n+        role=\"assistant\",\n+        content=None if tool_calls and not content else content,\n+        tool_calls=tool_calls or None,\n     )\n \n-    # Extract metadata from the last chunk\n     last_chunk = chunks[-1]\n-    finish_reason = \"stop\"\n-    if choices := getattr(last_chunk, \"choices\", None):\n-        if chunk_choice := choices[0]:\n-            finish_reason = getattr(chunk_choice, \"finish_reason\") or finish_reason\n \n     choice = Choice(index=0, message=message, finish_reason=finish_reason)\n "
+  },
+  {
+   "filename": "tests/openai/mock_openai.py",
+   "status": "modified",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -14,6 +14,7 @@\n AZURE_ANNOTATIONS = \"AZURE_ANNOTATIONS\"\n EMPTY_STREAM = \"EMPTY_STREAM\"\n ERROR_MID_STREAM = \"ERROR_MID_STREAM\"\n+TOOL_CALL_STREAM = \"TOOL_CALL_STREAM\"\n \n app = fastapi.FastAPI()\n \n@@ -158,6 +159,47 @@ async def chat_response_stream(include_usage: bool = False):\n     yield _make_chat_stream_chunk(\" world\", include_usage=include_usage)\n \n \n+def _make_chat_stream_delta_chunk(delta, finish_reason=None):\n+    return {\n+        \"id\": \"chatcmpl-123\",\n+        \"object\": \"chat.completion.chunk\",\n+        \"created\": 1677652288,\n+        \"model\": \"gpt-4o-mini\",\n+        \"system_fingerprint\": \"fp_44709d6fcb\",\n+        \"choices\": [\n+            {\n+                \"index\": 0,\n+                \"delta\": delta,\n+                \"finish_reason\": finish_reason,\n+            }\n+        ],\n+        \"usage\": None,\n+    }\n+\n+\n+async def chat_response_stream_with_tool_calls(include_usage: bool = False):\n+    yield _make_chat_stream_delta_chunk({\"role\": \"assistant\", \"content\": None})\n+    yield _make_chat_stream_delta_chunk({\n+        \"tool_calls\": [\n+            {\n+                \"index\": 0,\n+                \"id\": \"call_1\",\n+                \"type\": \"function\",\n+                \"function\": {\"name\": \"get_weather\", \"arguments\": \"\"},\n+            }\n+        ]\n+    })\n+    yield _make_chat_stream_delta_chunk({\n+        \"tool_calls\": [{\"index\": 0, \"function\": {\"arguments\": '{\"city\": '}}]\n+    })\n+    yield _make_chat_stream_delta_chunk({\n+        \"tool_calls\": [{\"index\": 0, \"function\": {\"arguments\": '\"Paris\"}'}}]\n+    })\n+    yield _make_chat_stream_delta_chunk({}, finish_reason=\"tool_calls\")\n+    if include_usage:\n+        yield _make_chat_stream_usage_chunk()\n+\n+\n async def chat_response_stream_empty_choices():\n     yield _make_chat_stream_chunk_empty_choices()\n     yield _make_chat_stream_chunk(\"Hello\")\n@@ -205,6 +247,13 @@ async def chat(payload: ChatCompletionRequest):\n                     include_usage=(payload.stream_options or {}).get(\"include_usage\", False)\n                 )\n             )\n+        elif TOOL_CALL_STREAM == payload.messages[0].content:\n+            content = (\n+                f\"data: {json.dumps(d)}\\n\\n\"\n+                async for d in chat_response_stream_with_tool_calls(\n+                    include_usage=(payload.stream_options or {}).get(\"include_usage\", False)\n+                )\n+            )\n         elif LIST_CONTENT == payload.messages[0].content:\n             content = (\n                 f\"data: {json.dumps(d)}\\n\\n\""
+  },
+  {
+   "filename": "tests/openai/test_openai_autolog.py",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -39,6 +39,7 @@\n     EMPTY_STREAM,\n     ERROR_MID_STREAM,\n     LIST_CONTENT,\n+    TOOL_CALL_STREAM,\n )\n from tests.tracing.helper import get_traces, skip_when_testing_trace_sdk\n \n@@ -775,6 +776,35 @@ async def test_chat_completions_streaming_with_list_content(client):\n     assert span.outputs[\"choices\"][0][\"message\"][\"content\"] == \"Hello world\"\n \n \n+@pytest.mark.asyncio\n+@pytest.mark.parametrize(\"include_usage\", [True, False])\n+async def test_chat_completions_streaming_with_tool_calls(client, include_usage):\n+    mlflow.openai.autolog()\n+    stream = client.chat.completions.create(\n+        messages=[{\"role\": \"user\", \"content\": TOOL_CALL_STREAM}],\n+        model=\"gpt-4o-mini\",\n+        stream=True,\n+        stream_options={\"include_usage\": include_usage},\n+    )\n+\n+    chunks = [chunk async for chunk in await stream] if client._is_async else list(stream)\n+    assert len(chunks) == (6 if include_usage else 5)\n+\n+    trace = mlflow.get_trace(mlflow.get_last_active_trace_id())\n+    assert trace.info.status == \"OK\"\n+    span = trace.data.spans[0]\n+    choice = span.outputs[\"choices\"][0]\n+    assert choice[\"finish_reason\"] == \"tool_calls\"\n+    assert choice[\"message\"][\"content\"] is None\n+    assert choice[\"message\"][\"tool_calls\"] == [\n+        {\n+            \"id\": \"call_1\",\n+            \"type\": \"function\",\n+            \"function\": {\"name\": \"get_weather\", \"arguments\": '{\"city\": \"Paris\"}'},\n+        }\n+    ]\n+\n+\n @pytest.mark.asyncio\n async def test_completions_autolog(client):\n     mlflow.openai.autolog()"
+  }
+ ],
+ "test_files": [
+  "tests/openai/mock_openai.py",
+  "tests/openai/test_openai_autolog.py"
+ ]
+}

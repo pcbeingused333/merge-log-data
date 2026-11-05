@@ -1,0 +1,33 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 255,
+ "url": "https://github.com/lofcz/LLMTornado/pull/255",
+ "title": "Keep the file name, size and creation time of Anthropic and Gemini files",
+ "merged_at": "2026-10-22T03:23:16Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/FileVendorMappingTests.cs",
+   "status": "added",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,49 @@\n+using LlmTornado.Files;\n+using LlmTornado.Files.Vendors.Anthropic;\n+using LlmTornado.Files.Vendors.Google;\n+using Newtonsoft.Json;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class FileVendorMappingTests\n+{\n+    [Test]\n+    public void Anthropic_ToFile_KeepsTheFileName()\n+    {\n+        VendorAnthropicTornadoFile? vendor = JsonConvert.DeserializeObject<VendorAnthropicTornadoFile>(\"\"\"\n+            { \"id\": \"file_011\", \"type\": \"file\", \"filename\": \"report.pdf\", \"mime_type\": \"application/pdf\", \"size_bytes\": 1024, \"created_at\": \"2025-01-02T03:04:05Z\", \"downloadable\": false }\n+            \"\"\");\n+\n+        TornadoFile file = vendor!.ToFile();\n+\n+        Assert.That(file.Name, Is.EqualTo(\"report.pdf\"));\n+    }\n+\n+    [Test]\n+    public void Google_ToFile_KeepsDisplayNameSizeAndCreationTime()\n+    {\n+        VendorGoogleTornadoFileContent? vendor = JsonConvert.DeserializeObject<VendorGoogleTornadoFileContent>(\"\"\"\n+            { \"name\": \"files/abc\", \"displayName\": \"report.pdf\", \"mimeType\": \"application/pdf\", \"sizeBytes\": \"1024\", \"createTime\": \"2025-01-02T03:04:05Z\", \"uri\": \"https://example.com/files/abc\", \"state\": \"ACTIVE\" }\n+            \"\"\");\n+\n+        TornadoFile file = vendor!.ToFile(null);\n+\n+        Assert.Multiple(() =>\n+        {\n+            Assert.That(file.Name, Is.EqualTo(\"report.pdf\"));\n+            Assert.That(file.Bytes, Is.EqualTo(1024));\n+            Assert.That(file.CreatedAt, Is.EqualTo(new DateTimeOffset(2025, 1, 2, 3, 4, 5, TimeSpan.Zero).ToUnixTimeSeconds()));\n+        });\n+    }\n+\n+    [Test]\n+    public void Google_ToFile_WithoutCreateTime_LeavesCreatedAtZero()\n+    {\n+        VendorGoogleTornadoFileContent? vendor = JsonConvert.DeserializeObject<VendorGoogleTornadoFileContent>(\"\"\"\n+            { \"name\": \"files/abc\", \"mimeType\": \"text/plain\", \"state\": \"ACTIVE\" }\n+            \"\"\");\n+\n+        Assert.That(vendor!.ToFile(null).CreatedAt, Is.EqualTo(0));\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Files/Vendors/Anthropic/VendorAnthropicTornadoFile.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -77,6 +77,7 @@ public TornadoFile ToFile()\n \t\t{\n \t\t\tCreatedAt = createdAt,\n \t\t\tId = Id,\n+\t\t\tName = Name,\n \t\t\tMimeType = MimeType,\n \t\t\tBytes = SizeBytes,\n \t\t\tObject = \"file\","
+  },
+  {
+   "filename": "src/LlmTornado/Files/Vendors/Google/VendorGoogleTornadoFile.cs",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -11,6 +11,9 @@ internal class VendorGoogleTornadoFileContent\n     [JsonProperty(\"name\")]\n     public string Name { get; set; }\n         \n+    [JsonProperty(\"displayName\")]\n+    public string? DisplayName { get; set; }\n+        \n     [JsonProperty(\"mimeType\")]\n     public string MimeType { get; set; }\n         \n@@ -57,6 +60,9 @@ public TornadoFile ToFile(string? postData)\n         return new TornadoFile\n         {\n             Id = Name,\n+            Name = DisplayName,\n+            Bytes = SizeBytes,\n+            CreatedAt = CreateTime == default ? 0 : new DateTimeOffset(CreateTime.ToUniversalTime()).ToUnixTimeSeconds(),\n             MimeType = MimeType,\n             ExpirationDate = ExpirationTime,\n             Uri = Uri,"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/FileVendorMappingTests.cs"
+ ]
+}

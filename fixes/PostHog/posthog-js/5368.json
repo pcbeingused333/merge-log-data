@@ -1,0 +1,41 @@
+{
+ "repo": "PostHog/posthog-js",
+ "number": 5368,
+ "url": "https://github.com/PostHog/posthog-js/pull/5368",
+ "title": "fix(ai): count Gemini tool-use prompt tokens as input tokens",
+ "merged_at": "2026-10-22T14:06:52Z",
+ "files": [
+  {
+   "filename": ".changeset/gemini-tool-use-prompt-tokens.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@posthog/ai': patch\n+---\n+\n+Count Gemini tool-use prompt tokens in the captured input tokens."
+  },
+  {
+   "filename": "packages/ai/harness/gemini-wrapper.test.ts",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -166,6 +166,30 @@ it.each([\n   }\n )\n \n+it.each(['generateContent', 'generateContentStream'] as const)(\n+  'built Gemini %s counts tool-use prompt tokens as input tokens',\n+  async (operation) => {\n+    const toolUsage = {\n+      promptTokenCount: 11,\n+      candidatesTokenCount: 3,\n+      toolUsePromptTokenCount: 40,\n+      totalTokenCount: 54,\n+    }\n+    const body = {\n+      candidates: [\n+        { index: 0, content: { role: 'model', parts: [{ text: 'Grounded answer.' }] }, finishReason: 'STOP' },\n+      ],\n+      usageMetadata: toolUsage,\n+    }\n+    const { event } = await runSynthetic(\n+      operation,\n+      { model, contents: 'Search the web.', config: { tools: [{ googleSearch: {} }] } },\n+      operation === 'generateContentStream' ? [body] : body\n+    )\n+    expect(event.properties).toMatchObject({ $ai_input_tokens: 51, $ai_output_tokens: 3, $ai_usage: toolUsage })\n+  }\n+)\n+\n it.each(['generateContent', 'generateContentStream'] as const)(\n   'built Gemini %s preserves function calls and tool telemetry',\n   async (operation) => {"
+  },
+  {
+   "filename": "packages/ai/src/gemini/usage.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -7,7 +7,9 @@ export function mapGeminiUsage(\n   additionalUsage: Pick<TokenUsage, 'webSearchCount'> = {}\n ): TokenUsage {\n   return {\n-    inputTokens: metadata?.promptTokenCount ?? 0,\n+    // Tool-use prompt tokens (built-in tools such as Google Search or URL context)\n+    // are billed as input but reported outside promptTokenCount.\n+    inputTokens: (metadata?.promptTokenCount ?? 0) + (metadata?.toolUsePromptTokenCount ?? 0),\n     outputTokens: metadata?.candidatesTokenCount ?? 0,\n     reasoningTokens: metadata?.thoughtsTokenCount ?? 0,\n     cacheReadInputTokens: metadata?.cachedContentTokenCount ?? 0,"
+  },
+  {
+   "filename": "packages/ai/tests/gemini.test.ts",
+   "status": "modified",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -337,6 +337,55 @@ describe('PostHogGemini - Jest test suite', () => {\n     expect(mockPostHogClient.captureImmediate).toHaveBeenCalledTimes(1)\n   })\n \n+  test('counts tool-use prompt tokens as input tokens', async () => {\n+    ;(client as any).client.models.generateContent = vi.fn().mockResolvedValue({\n+      candidates: [{ content: { parts: [{ text: 'Answer' }] }, finishReason: 'STOP' }],\n+      usageMetadata: {\n+        promptTokenCount: 15,\n+        candidatesTokenCount: 8,\n+        toolUsePromptTokenCount: 40,\n+        totalTokenCount: 63,\n+      },\n+    })\n+\n+    await client.models.generateContent({\n+      model: 'gemini-2.0-flash-001',\n+      contents: 'Search the web',\n+      posthogDistinctId: 'test-id',\n+    })\n+\n+    const [captureArgs] = (mockPostHogClient.capture as vi.Mock).mock.calls\n+    expect(captureArgs[0].properties['$ai_input_tokens']).toBe(55)\n+    expect(captureArgs[0].properties['$ai_output_tokens']).toBe(8)\n+  })\n+\n+  test('counts tool-use prompt tokens as input tokens when streaming', async () => {\n+    ;(client as any).client.models.generateContentStream = mockGenerateContentStream([\n+      {\n+        text: 'Answer',\n+        candidates: [{ content: { parts: [{ text: 'Answer' }] }, finishReason: 'STOP' }],\n+        usageMetadata: {\n+          promptTokenCount: 15,\n+          candidatesTokenCount: 8,\n+          toolUsePromptTokenCount: 40,\n+          totalTokenCount: 63,\n+        },\n+      },\n+    ])\n+\n+    const stream = await client.models.generateContentStream({\n+      model: 'gemini-2.0-flash-001',\n+      contents: 'Search the web',\n+      posthogDistinctId: 'test-id',\n+    })\n+    for await (const _ of stream) {\n+      // drain\n+    }\n+\n+    const [captureArgs] = (mockPostHogClient.capture as vi.Mock).mock.calls\n+    expect(captureArgs[0].properties['$ai_input_tokens']).toBe(55)\n+  })\n+\n   test('preserves output inline data when the client enables multimodal capture', async () => {\n     const base64Data = 'A'.repeat(2000)\n     ;(client as any).client.models.generateContent = vi.fn().mockResolvedValue({"
+  }
+ ],
+ "test_files": [
+  "packages/ai/harness/gemini-wrapper.test.ts",
+  "packages/ai/tests/gemini.test.ts"
+ ]
+}

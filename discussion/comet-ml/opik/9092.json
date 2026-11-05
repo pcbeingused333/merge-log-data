@@ -1,0 +1,222 @@
+{
+ "repo": "comet-ml/opik",
+ "number": 9092,
+ "url": "https://github.com/comet-ml/opik/pull/9092",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-20T23:28:00Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "DISMISSED",
+   "submitted_at": "2026-10-21T08:09:29Z",
+   "body": "Thanks a lot for tracking this down and for the clear repro in #9089. The fix does what it says: I ran the new test against main (it fails, `tool_calls` is `None`) and against this branch (it passes), and the reassembled calls match what `litellm.stream_chunk_builder` produces for the same chunks. A few things before the SDK team takes it:\n\n1. `completion_chunks_aggregator.py:38-41`: the `index is None` fallback can't trigger, since LiteLLM's `ChatCompletionDeltaToolCall.index` is a required `int` (constructing one with `index=None` raises a ValidationError). If it ever did trigger, every unindexed first fragment would land on position 0 and separate calls would be concatenated into one. Please drop it, which also settles the unindexed-test thread.\n2. Your #8995 adds `opik/integrations/_streamed_tool_calls.StreamedToolCalls` for exactly this merge, and it handles LiteLLM deltas as they are (I fed it the same fragments and got identical output). Two implementations of the same reassembly will drift, so whichever of the two lands first, the other should call `StreamedToolCalls` (`add` per delta tool call, `to_list()` at the end) instead of `_merge_tool_call_deltas`.\n3. `test_completion_chunks_aggregator.py:62-69` and `:74-77`: please assert the whole aggregated message (`message.model_dump()` against an expected dict) instead of projecting `(id, name, arguments)` tuples or checking `content` alone, and use random ids, names and arguments rather than fixed literals.\n4. Please also cover a stream with both text and a tool call, and a single call whose id and name arrive only on the first fragment, with the arguments spread over several chunks.\n\nMinor:\n5. `completion_chunks_aggregator.py:47`: `type` is hardcoded to `\"function\"`; taking it from the first fragment that carries it keeps parity with the non-streamed response.\n6. A `tools=` + `stream=True` case in `tests/library_integration/litellm/test_litellm_streaming.py` asserting the span output via `SpanModel` would cover this through `track_completion`, like #8995 does for Groq, Together and Cerebras.\n"
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-21T08:22:34Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-21T12:28:18Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-21T12:28:20Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-21T12:28:23Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-21T12:28:27Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-21T12:28:30Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-21T12:28:34Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-21T12:28:39Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-21T12:28:51Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-03T09:48:31Z",
+   "body": "Thanks a lot for this, @pcbeingused333! The fix is solid and the tests cover it really well. We're almost there to merge, with just one small change left (see the inline comment)."
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-03T10:21:24Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-03T14:17:45Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "sdks/python/tests/unit/integrations/litellm/test_completion_chunks_aggregator.py",
+   "created_at": "2026-10-20T23:28:00Z",
+   "body": "### Unindexed tool calls lack regression coverage\n\nThe tests miss the documented fallback for tool calls without an index because `_call` always supplies one, so `_merge_tool_call_deltas` can regress unnoticed. Add a case with `index=None` across multiple chunks and assert the deltas merge and remain ordered by position.\n<!--\n_Finding type:_ `Assert expected behavior`\n-->\n\n<picture><img src=\"https://baz.co/api/v2/badges?type=reviewer&content=Assert%20expected%20behavior&severity=low\" alt=\"Severity\" height=\"24\" /></picture>\n\nWant Baz to fix this for you? [Activate Fixer](https://baz.co/agents/baz)\n\n<details>\n<summary>Other fix methods</summary>\n\n\n<a href=\"https://cursor.com/link/prompt?text=Before%20applying%2C%20verify%20this%20suggestion%20against%20the%20current%20code.%0AIn%20%60sdks%2Fpython%2Ftests%2Funit%2Fintegrations%2Flitellm%2Ftest_completion_chunks_aggregator.py%60%20around%20lines%2030-40%2C%20update%20the%20%60_call%60%20test%20helper%20so%20it%20can%20construct%20%60ChatCompletionDeltaToolCall%60%20instances%20with%20%60index%3DNone%60.%20Add%20a%20test%20using%20multiple%20chunks%20with%20unindexed%20tool%20calls%2C%20and%20assert%20that%20the%20calls%20are%20merged%20correctly%20and%20ordered%20according%20to%20their%20delta%20positions%2C%20covering%20the%20fallback%20behavior%20in%20%60_merge_tool_call_deltas%60.\" target=\"_blank\" rel=\"noopener noreferrer\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/fix-in-cursor-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/fix-in-cursor-light.svg\"><img alt=\"Fix in Cursor\" src=\"https://cursor.com/fix-in-cursor.svg\"></picture></a>\n\n<details>\n<summary>Prompt for AI Agents</summary>\n\n```text\nBefore applying, verify this suggestion against the current code. In\n`sdks/python/tests/unit/integrations/litellm/test_completion_chunks_aggregator.py`\naround lines 30-40, update the `_call` test helper so it can construct\n`ChatCompletionDeltaToolCall` instances with `index=None`. Add a test using multiple\nchunks with unindexed tool calls, and assert that the calls are merged correctly and\nordered according to their delta positions, covering the fallback behavior in\n`_merge_tool_call_deltas`.\n```\n\n</details>\n</details>"
+  },
+  {
+   "role": "bot",
+   "path": "sdks/python/src/opik/integrations/litellm/completion_chunks_aggregator.py",
+   "created_at": "2026-10-20T23:28:00Z",
+   "body": "### Tool arguments incur quadratic assembly cost\n\nLarge streamed tool arguments become increasingly slow because `+=` copies the entire accumulated string for every fragment; collect fragments in a list and join them once after consuming the stream.\n<!--\n_Finding type:_ `Batch and stream`\n-->\n\n<picture><img src=\"https://baz.co/api/v2/badges?type=reviewer&content=Batch%20and%20stream&severity=medium\" alt=\"Severity\" height=\"24\" /></picture>\n\nWant Baz to fix this for you? [Activate Fixer](https://baz.co/agents/baz)\n\n<details>\n<summary>Other fix methods</summary>\n\n\n<a href=\"https://cursor.com/link/prompt?text=Before%20applying%2C%20verify%20this%20suggestion%20against%20the%20current%20code.%0AIn%20%60sdks%2Fpython%2Fsrc%2Fopik%2Fintegrations%2Flitellm%2Fcompletion_chunks_aggregator.py%60%20around%20lines%2052-54%2C%20refactor%20%60_merge_tool_call_deltas%60%20so%20streamed%20tool-call%20arguments%20are%20not%20accumulated%20with%20repeated%20%60%2B%3D%60%2C%20which%20copies%20the%20full%20string%20for%20every%20fragment.%20Store%20argument%20fragments%20in%20a%20list%20for%20each%20tool%20call%20and%20join%20them%20once%20when%20building%20%60aggregated_response%5B%22choices%22%5D%5B0%5D%5B%22message%22%5D%5B%22tool_calls%22%5D%60%20in%20%60aggregate%60%2C%20preserving%20the%20current%20ordering%20and%20output%20format.\" target=\"_blank\" rel=\"noopener noreferrer\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/fix-in-cursor-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/fix-in-cursor-light.svg\"><img alt=\"Fix in Cursor\" src=\"https://cursor.com/fix-in-cursor.svg\"></picture></a>\n\n<details>\n<summary>Prompt for AI Agents</summary>\n\n```text\nBefore applying, verify this suggestion against the current code. In\n`sdks/python/src/opik/integrations/litellm/completion_chunks_aggregator.py` around lines\n52-54, refactor `_merge_tool_call_deltas` so streamed tool-call arguments are not\naccumulated with repeated `+=`, which copies the full string for every fragment. Store\nargument fragments in a list for each tool call and join them once when building\n`aggregated_response[\"choices\"][0][\"message\"][\"tool_calls\"]` in `aggregate`, preserving\nthe current ordering and output format.\n```\n\n</details>\n</details>"
+  },
+  {
+   "role": "bot",
+   "path": "sdks/python/src/opik/integrations/litellm/completion_chunks_aggregator.py",
+   "created_at": "2026-10-20T23:28:00Z",
+   "body": "### Tool-call output behavior lacks public documentation\n\n`aggregate` now exposes reconstructed `message[\"tool_calls\"]`, so add a concise docstring documenting that fragments merge by `index` (or per-delta position when absent), arguments concatenate, results follow index order, and text-only streams omit the field.\n<!--\n_Finding type:_ `Document behavior and context`\n-->\n\n<picture><img src=\"https://baz.co/api/v2/badges?type=reviewer&content=Document%20behavior%20and%20context&severity=low\" alt=\"Severity\" height=\"24\" /></picture>\n\nWant Baz to fix this for you? [Activate Fixer](https://baz.co/agents/baz)\n\n<details>\n<summary>Other fix methods</summary>\n\n\n<a href=\"https://cursor.com/link/prompt?text=Before%20applying%2C%20verify%20this%20suggestion%20against%20the%20current%20code.%0AIn%20%60sdks%2Fpython%2Fsrc%2Fopik%2Fintegrations%2Flitellm%2Fcompletion_chunks_aggregator.py%60%20around%20lines%20121-135%2C%20document%20the%20%60aggregate%60%20method%E2%80%99s%20newly%20exposed%20%60message%5B%22tool_calls%22%5D%60%20behavior%20with%20a%20concise%20docstring.%20Explain%20that%20streamed%20fragments%20are%20merged%20by%20%60index%60%20%28falling%20back%20to%20per-delta%20position%20when%20absent%29%2C%20function%20arguments%20are%20concatenated%2C%20results%20are%20emitted%20in%20index%20order%2C%20and%20text-only%20streams%20omit%20the%20field.\" target=\"_blank\" rel=\"noopener noreferrer\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/fix-in-cursor-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/fix-in-cursor-light.svg\"><img alt=\"Fix in Cursor\" src=\"https://cursor.com/fix-in-cursor.svg\"></picture></a>\n\n<details>\n<summary>Prompt for AI Agents</summary>\n\n```text\nBefore applying, verify this suggestion against the current code. In\n`sdks/python/src/opik/integrations/litellm/completion_chunks_aggregator.py` around lines\n121-135, document the `aggregate` method’s newly exposed `message[\"tool_calls\"]`\nbehavior with a concise docstring. Explain that streamed fragments are merged by `index`\n(falling back to per-delta position when absent), function arguments are concatenated,\nresults are emitted in index order, and text-only streams omit the field.\n```\n\n</details>\n</details>"
+  },
+  {
+   "role": "bot",
+   "path": "sdks/python/src/opik/integrations/litellm/_streamed_tool_calls.py",
+   "created_at": "2026-10-21T08:22:34Z",
+   "body": "### Tool arguments merge under truncated indices\n\nNon-integral indices such as `0.5` are truncated by `int(index)` and merged into call `0`, which can combine fragments from different calls and emit corrupted tool calls; validate and reject non-integer indices before using them as aggregation keys.\n<!--\n_Finding type:_ `Centralize error handling`\n-->\n\n<picture><img src=\"https://baz.co/api/v2/badges?type=reviewer&content=Centralize%20error%20handling&severity=medium\" alt=\"Severity\" height=\"24\" /></picture>\n\nWant Baz to fix this for you? [Activate Fixer](https://baz.co/agents/baz)\n\n<details>\n<summary>Other fix methods</summary>\n\n\n<a href=\"https://cursor.com/link/prompt?text=Before%20applying%2C%20verify%20this%20suggestion%20against%20the%20current%20code.%0AIn%20%60sdks%2Fpython%2Fsrc%2Fopik%2Fintegrations%2F_streamed_tool_calls.py%60%20around%20lines%2021-26%2C%20update%20%60StreamedToolCalls.add%60%20so%20%60index%60%20is%20validated%20before%20it%20is%20used%20as%20an%20aggregation%20key.%20Reject%20non-integral%20or%20otherwise%20invalid%20index%20values%20with%20a%20clear%20%60ValueError%60%20instead%20of%20silently%20truncating%20values%20such%20as%20%600.5%60%3B%20only%20convert%20validated%20integral%20indices%20to%20%60int%60.\" target=\"_blank\" rel=\"noopener noreferrer\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/fix-in-cursor-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/fix-in-cursor-light.svg\"><img alt=\"Fix in Cursor\" src=\"https://cursor.com/fix-in-cursor.svg\"></picture></a>\n\n<details>\n<summary>Prompt for AI Agents</summary>\n\n```text\nBefore applying, verify this suggestion against the current code. In\n`sdks/python/src/opik/integrations/_streamed_tool_calls.py` around lines 21-26, update\n`StreamedToolCalls.add` so `index` is validated before it is used as an aggregation key.\nReject non-integral or otherwise invalid index values with a clear `ValueError` instead\nof silently truncating values such as `0.5`; only convert validated integral indices to\n`int`.\n```\n\n</details>\n</details>"
+  },
+  {
+   "role": "bot",
+   "path": "sdks/python/src/opik/integrations/litellm/completion_chunks_aggregator.py",
+   "created_at": "2026-10-21T08:22:34Z",
+   "body": "### Streamed tool-call span output lacks integration test\n\nA regression passing the reconstructed streaming response from `track_completion` to the recorded span would pass because LiteLLM tests only call `aggregate()` directly or assert `output={\"choices\": ANY_LIST}`, not `choices[0].message.tool_calls`. Add a span-level streaming integration test like Mistral; the end preprocessor already preserves the full `choices` list.\n<!--\n_Finding type:_ `AI Coding Guidelines`\n-->\n\n<picture><img src=\"https://baz.co/api/v2/badges?type=reviewer&content=AI%20Coding%20Guidelines&severity=low\" alt=\"Severity\" height=\"24\" /></picture> <picture><img src=\"https://baz.co/api/v2/badges?type=guidelines&content=.agents%2Fskills%2Fopik-integrations%20%C2%B7%20sdks%2Fpython%2FAGENTS.md\" alt=\"guidelines\" height=\"24\" /></picture>\n\nWant Baz to fix this for you? [Activate Fixer](https://baz.co/agents/baz) You can also update your AI coding guidelines based on this comment by `apply pr to [branch name]`\n\n<details>\n<summary>Other fix methods</summary>\n\n\n<a href=\"https://cursor.com/link/prompt?text=Before%20applying%2C%20verify%20this%20suggestion%20against%20the%20current%20code.%0AIn%20%60sdks%2Fpython%2Fsrc%2Fopik%2Fintegrations%2Flitellm%2Fcompletion_chunks_aggregator.py%60%20around%20lines%20113-116%20in%20%60aggregate%60%2C%20add%20or%20update%20the%20LiteLLM%20library-integration%20tests%20to%20stream%20a%20tool-call%20response%20through%20%60track_completion%60.%20Assert%20that%20the%20recorded%20span%20output%20contains%20%60choices%5B0%5D.message.tool_calls%60%20with%20the%20reconstructed%20call%2C%20rather%20than%20only%20asserting%20that%20%60choices%60%20is%20a%20list%2C%20following%20the%20existing%20Mistral%20span-level%20test%20convention.\" target=\"_blank\" rel=\"noopener noreferrer\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/fix-in-cursor-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/fix-in-cursor-light.svg\"><img alt=\"Fix in Cursor\" src=\"https://cursor.com/fix-in-cursor.svg\"></picture></a>\n\n<details>\n<summary>Prompt for AI Agents</summary>\n\n```text\nBefore applying, verify this suggestion against the current code. In\n`sdks/python/src/opik/integrations/litellm/completion_chunks_aggregator.py` around lines\n113-116 in `aggregate`, add or update the LiteLLM library-integration tests to stream a\ntool-call response through `track_completion`. Assert that the recorded span output\ncontains `choices[0].message.tool_calls` with the reconstructed call, rather than only\nasserting that `choices` is a list, following the existing Mistral span-level test\nconvention.\n```\n\n</details>\n</details>"
+  },
+  {
+   "role": "bot",
+   "path": "sdks/python/tests/unit/integrations/test_streamed_tool_calls.py",
+   "created_at": "2026-10-21T08:22:34Z",
+   "body": "### Unit test imports undeclared together package\n\nThe Python SDK unit job fails during test collection with `ModuleNotFoundError: together` because this module imports `together.types` at module scope, while the dependency is installed only for Together integration tests. Make the import optional with `pytest.importorskip` or remove the dependency by building the float-index fragment without the Together SDK.\n<!--\n_Finding type:_ `AI Coding Guidelines`\n-->\n\n<picture><img src=\"https://baz.co/api/v2/badges?type=reviewer&content=AI%20Coding%20Guidelines&severity=high\" alt=\"Severity\" height=\"24\" /></picture> <picture><img src=\"https://baz.co/api/v2/badges?type=web_search&content=pytest\" alt=\"web_search\" height=\"24\" /></picture>\n\nWant Baz to fix this for you? [Activate Fixer](https://baz.co/agents/baz) You can also update your AI coding guidelines based on this comment by `apply pr to [branch name]`\n\n<details>\n<summary>Other fix methods</summary>\n\n\n<a href=\"https://cursor.com/link/prompt?text=Before%20applying%2C%20verify%20this%20suggestion%20against%20the%20current%20code.%0AIn%20%60sdks%2Fpython%2Ftests%2Funit%2Fintegrations%2Ftest_streamed_tool_calls.py%60%20around%20line%205%2C%20update%20the%20%60_together_fragment%60%20test%20helper%20and%20its%20Together%20import%20so%20unit-test%20collection%20does%20not%20require%20the%20undeclared%20%60together%60%20package.%20Prefer%20constructing%20the%20float-index%20fragment%20with%20existing%20SDK%2FOpenAI%20models%20or%20a%20lightweight%20compatible%20test%20double%3B%20if%20the%20Together%20models%20are%20necessary%2C%20gate%20only%20the%20affected%20test%20with%20%60pytest.importorskip%60%20rather%20than%20importing%20Together%20at%20module%20scope.\" target=\"_blank\" rel=\"noopener noreferrer\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/fix-in-cursor-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/fix-in-cursor-light.svg\"><img alt=\"Fix in Cursor\" src=\"https://cursor.com/fix-in-cursor.svg\"></picture></a>\n\n<details>\n<summary>Prompt for AI Agents</summary>\n\n```text\nBefore applying, verify this suggestion against the current code. In\n`sdks/python/tests/unit/integrations/test_streamed_tool_calls.py` around line 5, update\nthe `_together_fragment` test helper and its Together import so unit-test collection\ndoes not require the undeclared `together` package. Prefer constructing the float-index\nfragment with existing SDK/OpenAI models or a lightweight compatible test double; if the\nTogether models are necessary, gate only the affected test with `pytest.importorskip`\nrather than importing Together at module scope.\n```\n\n</details>\n</details>"
+  },
+  {
+   "role": "author",
+   "path": "sdks/python/tests/unit/integrations/litellm/test_completion_chunks_aggregator.py",
+   "created_at": "2026-10-21T12:28:17Z",
+   "body": "The unindexed fallback is covered in `tests/unit/integrations/test_streamed_tool_calls.py` (a continuation without `index` joins the call with the same `id`, a fragment with neither opens a new call, in arrival order), since the merge now lives in `StreamedToolCalls` and `_merge_tool_call_deltas` no longer exists. A LiteLLM-level case with `index=None` can't be built: `ChatCompletionDeltaToolCall.index` is a required `int` there.\n"
+  },
+  {
+   "role": "author",
+   "path": "sdks/python/src/opik/integrations/litellm/completion_chunks_aggregator.py",
+   "created_at": "2026-10-21T12:28:20Z",
+   "body": "Done in 0fdf596b8c: `StreamedToolCalls` keeps the argument fragments of each call in a list and joins them once in `to_list()`.\n"
+  },
+  {
+   "role": "author",
+   "path": "sdks/python/src/opik/integrations/litellm/completion_chunks_aggregator.py",
+   "created_at": "2026-10-21T12:28:23Z",
+   "body": "Added a docstring to `aggregate()` (0fdf596b8c) describing the merge by `index`, the fallback by `id`, argument concatenation, index order and that text-only streams leave `tool_calls` unset.\n"
+  },
+  {
+   "role": "author",
+   "path": "sdks/python/src/opik/integrations/litellm/_streamed_tool_calls.py",
+   "created_at": "2026-10-21T12:28:27Z",
+   "body": "Fixed in 0fdf596b8c: an index that is not integral (e.g. `0.5`) is now treated as missing, so the fragment continues the call with the same `id` or opens a new call instead of being truncated into call `0`. Test: `test_add__fractional_index__does_not_merge_into_the_truncated_call`. I didn't raise on it because `aggregate()` would then drop the whole traced output for one odd fragment.\n"
+  },
+  {
+   "role": "author",
+   "path": "sdks/python/src/opik/integrations/litellm/completion_chunks_aggregator.py",
+   "created_at": "2026-10-21T12:28:30Z",
+   "body": "Added `tests/unit/integrations/litellm/test_tracked_stream_tool_calls.py` (0fdf596b8c): it streams a tool call through `track_completion` using LiteLLM's `mock_response` (no network) and asserts `choices[0].message.tool_calls` and `finish_reason` on the recorded span output.\n"
+  },
+  {
+   "role": "author",
+   "path": "sdks/python/tests/unit/integrations/test_streamed_tool_calls.py",
+   "created_at": "2026-10-21T12:28:34Z",
+   "body": "Fixed in 0fdf596b8c: the test no longer imports `together`. The float-index fragment is built with a small local pydantic model, so unit collection doesn't need the package.\n"
+  },
+  {
+   "role": "bot",
+   "path": "sdks/python/tests/unit/integrations/litellm/test_completion_chunks_aggregator.py",
+   "created_at": "2026-10-21T12:28:39Z",
+   "body": "Thanks for clarifying — testing the fallback at `StreamedToolCalls` is the appropriate layer given LiteLLM's required index type. I’ll save this to memory once the PR is merged."
+  },
+  {
+   "role": "bot",
+   "path": "sdks/python/src/opik/integrations/litellm/_streamed_tool_calls.py",
+   "created_at": "2026-10-21T12:28:51Z",
+   "body": "Got it — treating malformed fragment indexes as missing avoids losing the whole traced output, and the added regression test covers the behavior well."
+  },
+  {
+   "role": "contributor",
+   "path": "sdks/python/src/opik/integrations/litellm/completion_chunks_aggregator.py",
+   "created_at": "2026-11-03T09:48:31Z",
+   "body": "Please move the tool call merging into the LiteLLM package instead of a shared `opik/integrations/_streamed_tool_calls.py`. Each integration keeps its own logic in its own package. For example, the OpenAI fix in #8361 kept its merge logic as a private function in `openai/chat_completion_chunks_aggregator.py`. We accept some duplication across integrations here, because each provider can change its format on its own."
+  },
+  {
+   "role": "bot",
+   "path": "sdks/python/tests/unit/integrations/litellm/test_streamed_tool_calls.py",
+   "created_at": "2026-11-03T10:21:24Z",
+   "body": "### Unindexed fragments lack fallback coverage\n\nThis test doesn’t cover an ID-less fragment: `call_id=\"call_2\"` resolves through the ID map, so a regression in `_next_unindexed_key()` could pass; add a fragment with neither `index` nor `id` and assert its exact output and order.\n<!--\n_Finding type:_ `Assert expected behavior`\n-->\n\n<picture><img src=\"https://baz.co/api/v2/badges?type=reviewer&content=Assert%20expected%20behavior&severity=low\" alt=\"Severity\" height=\"24\" /></picture>\n\nWant Baz to fix this for you? [Activate Fixer](https://baz.co/agents/baz)\n\n<details>\n<summary>Other fix methods</summary>\n\n\n<a href=\"https://cursor.com/link/prompt?text=Before%20applying%2C%20verify%20this%20suggestion%20against%20the%20current%20code.%0AIn%20%60sdks%2Fpython%2Ftests%2Funit%2Fintegrations%2Flitellm%2Ftest_streamed_tool_calls.py%60%20around%20lines%2092-109%2C%20update%20%60test_add__fragment_without_index_or_known_id__opens_a_new_call%60%20so%20the%20second%20fragment%20has%20neither%20an%20%60index%60%20nor%20an%20%60id%60%20instead%20of%20passing%20%60call_id%3D%22call_2%22%60.%20Assert%20the%20exact%20generated%20output%20and%20ordering%20for%20this%20truly%20ID-less%20fragment%2C%20ensuring%20the%20test%20exercises%20arrival-order%20allocation%20through%20%60_next_unindexed_key%28%29%60%20rather%20than%20the%20ID%20map.\" target=\"_blank\" rel=\"noopener noreferrer\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/fix-in-cursor-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/fix-in-cursor-light.svg\"><img alt=\"Fix in Cursor\" src=\"https://cursor.com/fix-in-cursor.svg\"></picture></a>\n\n<details>\n<summary>Prompt for AI Agents</summary>\n\n```text\nBefore applying, verify this suggestion against the current code. In\n`sdks/python/tests/unit/integrations/litellm/test_streamed_tool_calls.py` around lines\n92-109, update `test_add__fragment_without_index_or_known_id__opens_a_new_call` so the\nsecond fragment has neither an `index` nor an `id` instead of passing\n`call_id=\"call_2\"`. Assert the exact generated output and ordering for this truly\nID-less fragment, ensuring the test exercises arrival-order allocation through\n`_next_unindexed_key()` rather than the ID map.\n```\n\n</details>\n</details>"
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-10-21T08:18:51Z",
+   "body": "Thanks for the detailed review. Pushed in c25e71cc63:\n\n1. Dropped the `index is None` fallback.\n2. The aggregator now uses `StreamedToolCalls` (`add` per delta tool call, `to_list()` at the end); `_merge_tool_call_deltas` is gone. `_streamed_tool_calls.py` and its unit test are copied unchanged from #8995 (as in #8995 c1d681d08d), so the two PRs add an identical file and merge cleanly in either order.\n3. The tests assert the whole aggregated message (`message.model_dump()` against an expected dict) with random ids, names and arguments.\n4. Added a stream with both text and a tool call, and a single call whose id and name arrive only on the first fragment with the arguments spread over several chunks.\n5. `type` now comes from the first fragment that carries it (the helper does this).\n\nNot done: 6 (a `tools=` + `stream=True` case in `tests/library_integration/litellm/test_litellm_streaming.py`). Those tests call the live provider and need an API key that was not available here, so the span output through `track_completion` was not exercised end to end; the aggregator is covered with real LiteLLM chunk types instead. It can be added if someone with a key can run it.\n\nThe unindexed-case Baz comment no longer applies since that path is gone. The Baz comment about `+=` on the arguments now concerns the shared helper in #8995, not this PR.\n"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-21T08:19:11Z",
+   "body": "Thanks for the thorough update. The shared helper and expanded aggregation coverage address the prior concerns; understood on the live-provider test constraint."
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-10-21T11:45:29Z",
+   "body": "Thanks for the quick update, @pcbeingused333, and for moving to the shared `StreamedToolCalls` helper. Before we take another look, could you go through the open Baz threads? For each one, either push a change or reply with a short note if you think the current code is right:\n\n- [Unindexed tool calls lack regression coverage](https://github.com/comet-ml/opik/pull/9092#discussion_r4331417161)\n- [Tool arguments incur quadratic assembly cost](https://github.com/comet-ml/opik/pull/9092#discussion_r4331417171)\n- [Tool-call output behavior lacks public documentation](https://github.com/comet-ml/opik/pull/9092#discussion_r4331417179)\n- [Tool arguments merge under truncated indices](https://github.com/comet-ml/opik/pull/9092#discussion_r4334572020)\n- [Streamed tool-call span output lacks integration test](https://github.com/comet-ml/opik/pull/9092#discussion_r4334572030)\n- [Unit test imports undeclared together package](https://github.com/comet-ml/opik/pull/9092#discussion_r4334572037)\n\nThanks again!\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-22T23:54:04Z",
+   "body": "Thanks for the pointers. All six open threads now have a reply, and the code for each is in 0fdf596b8c (the head of this branch):\n\n- Unindexed fallback: it now lives in `StreamedToolCalls` and is covered in `tests/unit/integrations/test_streamed_tool_calls.py`; a LiteLLM-level `index=None` case can't be built because the field is a required `int`.\n- Quadratic argument assembly: `StreamedToolCalls` keeps the fragments in a list and joins them once in `to_list()`.\n- Docstring: `aggregate()` documents the merge by `index`, the fallback by `id`, argument concatenation, ordering and text-only streams.\n- Truncated indices: a non-integral index is treated as missing instead of being cast to `int`, with a regression test.\n- Span output: `test_tracked_stream_tool_calls.py` streams a tool call through `track_completion` with LiteLLM's `mock_response` and asserts `choices[0].message.tool_calls` on the recorded span output. The live-provider case from your point 6 still needs an API key, so it is not included.\n- `together` import: the unit test no longer imports it.\n"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-03T09:48:57Z",
+   "body": "<!-- baz-pr-header -->\n<a href=\"https://baz.co/changes/comet-ml/opik/9092?tool=ast&amp;src=pr_comment&amp;cta=review\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://baz.co/api/v2/badges?type=announcement&amp;content=Review&amp;theme=dark\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://baz.co/api/v2/badges?type=announcement&amp;content=Review&amp;theme=light\"><img alt=\"Review this PR on Baz\" src=\"https://baz.co/api/v2/badges?type=announcement&amp;content=Review&amp;theme=light\" height=\"24\" align=\"right\" /></picture></a>\n\n<!-- baz-merge-verdict -->\n<details><summary><h4>Merger&nbsp;&nbsp;&nbsp;<small>🟠 Needs Review</small></h4></summary>\n\nNot ready to merge: PR has unresolved findings that need to be addressed.\n\n</details>\n\n<hr>"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-11-03T14:20:44Z",
+   "body": "Thanks a lot for your hard work on this, @pcbeingused333, and for sticking with it through the review rounds to get it over the line. Much appreciated!"
+  }
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "posit-dev/chatlas",
+ "number": 472,
+ "url": "https://github.com/posit-dev/chatlas/pull/472",
+ "title": "fix(openai): show the invalid tool arguments in the JSON error message",
+ "merged_at": "2026-10-21T14:40:10Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0\n \n ### Bug fixes\n \n+* The error raised for a tool request with invalid JSON arguments from `ChatOpenAI()` and `ChatOpenAICompletions()` (and the providers built on them) now shows the offending arguments, instead of the literal text `{args}`.\n * `content_image_url()` with a `data:` URL no longer silently drops the `detail` argument: the setting is now carried by inline image content and forwarded to OpenAI's Responses and Chat Completions APIs (regular image URLs already forwarded it). Other providers continue to ignore `detail`. (#467)\n * `ChatBedrockAnthropic()` now uses native structured outputs for `data_model` on Claude 4.5 and later, as `ChatAnthropic()` does. Its Bedrock model IDs (`anthropic.claude-...`, `us.anthropic.claude-...`) weren't recognized, so it fell back to forcing a tool call, which Claude Opus 5.5 and Sonnet 5.5 reject with a 400.\n * A tool written as a generator (see \"Progressive results\" in the tool-calling docs) now reports each yielded value in `.chat_async()` and `.stream_async()`, as it does in `.chat()`. A synchronous generator tool used to send the generator object itself (`<generator object ...>`) as its result. An `async def` generator tool now counts as an async tool, so `.chat()` raises the usual \"Cannot use async tools in a synchronous chat\" error instead of sending `<async_generator object ...>` as the result."
+  },
+  {
+   "filename": "chatlas/_provider_openai_completions.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -612,7 +612,7 @@ def load_tool_request_args(args: str, name: str) -> dict[str, Any]:\n     except orjson.JSONDecodeError:\n         raise ValueError(\n             f\"The model's completion included a tool request ({name}) \"\n-            \"with invalid JSON for input arguments: '{args}'\"\n+            f\"with invalid JSON for input arguments: '{args}'. \"\n             \"This can happen if the model hallucinates parameters not defined by \"\n             \"your function schema. Try revising your tool description and system \"\n             \"prompt to be more specific about the expected input arguments to this function.\""
+  },
+  {
+   "filename": "tests/test_provider_openai_completions.py",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -564,3 +564,16 @@ def test_azure_completions_opts_into_strict():\n         api_version=\"2024-10-21\",\n     )\n     assert provider._strict is True\n+\n+\n+def test_load_tool_request_args_error_names_the_arguments():\n+    from chatlas._provider_openai_completions import load_tool_request_args\n+\n+    with pytest.raises(ValueError) as excinfo:\n+        load_tool_request_args('{\"city\": \"Paris\"', \"get_weather\")\n+\n+    message = str(excinfo.value)\n+    assert \"(get_weather)\" in message\n+    assert '\\'{\"city\": \"Paris\"\\'' in message\n+    assert \"{args}\" not in message\n+    assert 'input arguments: \\'{\"city\": \"Paris\"\\'. This can happen' in message"
+  }
+ ],
+ "test_files": [
+  "tests/test_provider_openai_completions.py"
+ ]
+}

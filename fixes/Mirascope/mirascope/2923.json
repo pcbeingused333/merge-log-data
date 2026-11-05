@@ -1,0 +1,26 @@
+{
+ "repo": "Mirascope/mirascope",
+ "number": 2923,
+ "url": "https://github.com/Mirascope/mirascope/pull/2923",
+ "title": "fix(llm): raise when an OpenAI Responses stream ends with response.failed",
+ "merged_at": "2026-10-21T15:39:51Z",
+ "files": [
+  {
+   "filename": "typescript/src/llm/providers/openai/responses/decode-stream.test.ts",
+   "status": "added",
+   "additions": 74,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,74 @@\n+import type { ResponseStreamEvent } from \"openai/resources/responses/responses\";\n+\n+import { describe, expect, it } from \"vitest\";\n+\n+import { APIError } from \"@/llm/exceptions\";\n+\n+import { decodeStream } from \"./decode-stream\";\n+\n+async function* events(list: unknown[]): AsyncGenerator<ResponseStreamEvent> {\n+  for (const event of list) {\n+    yield event as ResponseStreamEvent;\n+  }\n+}\n+\n+async function collect(list: unknown[]) {\n+  const chunks = [];\n+  for await (const chunk of decodeStream(events(list), false)) {\n+    chunks.push(chunk);\n+  }\n+  return chunks;\n+}\n+\n+describe(\"OpenAI Responses decodeStream\", () => {\n+  it(\"raises when the stream reports response.failed\", async () => {\n+    const stream = collect([\n+      { type: \"response.created\", response: { id: \"resp_1\", output: [] } },\n+      {\n+        type: \"response.failed\",\n+        response: {\n+          id: \"resp_1\",\n+          status: \"failed\",\n+          error: { code: \"server_error\", message: \"The model crashed.\" },\n+          output: [],\n+        },\n+      },\n+    ]);\n+\n+    await expect(stream).rejects.toThrow(APIError);\n+    await expect(stream).rejects.toThrow(/server_error.*The model crashed/);\n+  });\n+\n+  it(\"raises with defaults when response.failed carries no error\", async () => {\n+    const stream = collect([\n+      { type: \"response.created\", response: { id: \"resp_1\", output: [] } },\n+      {\n+        type: \"response.failed\",\n+        response: { id: \"resp_1\", status: \"failed\", output: [] },\n+      },\n+    ]);\n+\n+    await expect(stream).rejects.toThrow(\n+      \"OpenAI response failed: unknown_error: no error message\",\n+    );\n+  });\n+\n+  it(\"still completes a stream that ends with response.completed\", async () => {\n+    const chunks = await collect([\n+      { type: \"response.created\", response: { id: \"resp_1\", output: [] } },\n+      {\n+        type: \"response.completed\",\n+        response: {\n+          id: \"resp_1\",\n+          status: \"completed\",\n+          output: [],\n+          usage: { input_tokens: 3, output_tokens: 2 },\n+        },\n+      },\n+    ]);\n+\n+    expect(chunks.some((chunk) => chunk.type === \"usage_delta_chunk\")).toBe(\n+      true,\n+    );\n+  });\n+});"
+  },
+  {
+   "filename": "typescript/src/llm/providers/openai/responses/decode-stream.ts",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -26,6 +26,7 @@ import {\n   toolCallChunk,\n   toolCallEnd,\n } from \"@/llm/content\";\n+import { APIError } from \"@/llm/exceptions\";\n import { serializeOutputItem } from \"@/llm/providers/openai/responses/_utils\";\n import {\n   finishReasonChunk,\n@@ -146,6 +147,16 @@ export function decodeStreamEvent(\n       handleCompleted(event, chunks);\n       break;\n \n+    case \"response.failed\": {\n+      const error = event.response.error;\n+      throw new APIError(\n+        `OpenAI response failed: ${error?.code ?? \"unknown_error\"}: ${\n+          error?.message ?? \"no error message\"\n+        }`,\n+        { provider: \"openai\" },\n+      );\n+    }\n+\n     // Handle other events we might want to process\n     /* v8 ignore start - refusal events are rare edge cases */\n     case \"response.refusal.delta\":"
+  }
+ ],
+ "test_files": [
+  "typescript/src/llm/providers/openai/responses/decode-stream.test.ts"
+ ]
+}

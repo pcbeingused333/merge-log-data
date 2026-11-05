@@ -1,0 +1,33 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 251,
+ "url": "https://github.com/lofcz/LLMTornado/pull/251",
+ "title": "Google streaming: keep the usage when a chunk has no usageMetadata",
+ "merged_at": "2026-10-22T03:21:47Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/GoogleStreamMissingUsageTests.cs",
+   "status": "added",
+   "additions": 52,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,52 @@\n+using System.IO;\n+using System.Text;\n+using LlmTornado.Chat;\n+using LlmTornado.Code;\n+using LlmTornado.Code.Vendor;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class GoogleStreamMissingUsageTests\n+{\n+    [Test]\n+    public async Task InboundStream_ChunkWithoutUsageMetadataKeepsTheEarlierUsage()\n+    {\n+        const string json = \"\"\"\n+            [\n+              {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"Once upon a\"}]},\"index\":0}],\"usageMetadata\":{\"promptTokenCount\":5,\"candidatesTokenCount\":3,\"totalTokenCount\":8}},\n+              {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\" time.\"}]},\"finishReason\":\"STOP\",\"index\":0}]}\n+            ]\n+            \"\"\";\n+\n+        List<ChatResult> chunks = await Collect(json);\n+\n+        ChatResult finish = chunks.Single(x => x.StreamInternalKind is ChatResultStreamInternalKinds.FinishData);\n+        Assert.That(finish.Usage, Is.Not.Null);\n+        Assert.That(finish.Usage!.TotalTokens, Is.EqualTo(8));\n+        Assert.That(finish.Choices![0].FinishReason, Is.EqualTo(ChatMessageFinishReasons.EndTurn));\n+    }\n+\n+    private static async Task<List<ChatResult>> Collect(string json)\n+    {\n+        GoogleEndpointProvider provider = new GoogleEndpointProvider();\n+        StreamReader reader = new StreamReader(new MemoryStream(Encoding.UTF8.GetBytes(json)));\n+        ChatRequest request = new ChatRequest\n+        {\n+            Stream = true,\n+            Messages = [new ChatMessage(ChatMessageRoles.User, \"test\")]\n+        };\n+\n+        List<ChatResult> chunks = [];\n+        await foreach (ChatResult? chunk in provider.InboundStream(reader, request, null))\n+        {\n+            if (chunk is not null)\n+            {\n+                chunks.Add(chunk);\n+            }\n+        }\n+\n+        return chunks;\n+    }\n+}\n+"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/Vendors/Google/VendorGoogleChatResult.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -110,7 +110,7 @@ public override ChatResult ToChatResult(string? postData, object? requestObject)\n         ChatResult result = new ChatResult\n         {\n             Choices = [],\n-            Usage = new ChatUsage(Meta),\n+            Usage = Meta is null ? null : new ChatUsage(Meta),\n             ProcessingTime = TimeSpan.Zero\n         };\n "
+  },
+  {
+   "filename": "src/LlmTornado/Vendor/Google/GoogleEndpointProvider.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -206,7 +206,7 @@ await eventHandler.FunctionCallDeltaHandler.Invoke(new FunctionCallStreamUpdate\n                         }\n                         \n                         ChatResult chatResult = obj.ToChatResult(null, request);\n-                        usage = chatResult.Usage;\n+                        usage = chatResult.Usage ?? usage;\n                         \n                         string? strFinishReason = obj.Candidates.FirstOrDefault()?.FinishReason;\n "
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/GoogleStreamMissingUsageTests.cs"
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "pipecat-ai/pipecat",
+ "number": 6282,
+ "url": "https://github.com/pipecat-ai/pipecat/pull/6282",
+ "title": "fix: stop redact_secrets recursing without limit on chained pairs",
+ "merged_at": "2026-10-21T14:05:22Z",
+ "files": [
+  {
+   "filename": "changelog/6282.fixed.md",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+- Fixed `redact_secrets()` (and so `ErrorFrame`) raising `RecursionError` on long text made of chained `name:value` pairs such as `a:a:a:...`. Pairs nested more than 16 deep now have their remaining value masked instead of searched further."
+  },
+  {
+   "filename": "src/pipecat/utils/security/redaction.py",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 4,
+   "patch": "@@ -94,23 +94,37 @@\n )\n \n \n+# How many pairs deep a value is searched for more pairs; deeper than that, the\n+# rest of the value is masked. Real messages nest two or three\n+# (`URL: https://...?token=...`); a longer chain is a pathological input.\n+_MAX_PAIR_DEPTH = 16\n+\n+\n def _is_credential_name(name: str) -> bool:\n     words = re.sub(r\"([a-z0-9])([A-Z])\", r\"\\1_\\2\", name.strip(\"\\\"'\")).lower()\n     parts = [p for p in re.split(r\"[-_.]\", words) if p]\n     return \"\".join(parts) in _CREDENTIAL_WORDS or any(p in _CREDENTIAL_WORDS for p in parts)\n \n \n-def _redact_pair(match: re.Match) -> str:\n+def _redact_pair(match: re.Match, depth: int = 0) -> str:\n     quote = match[\"vq\"] or \"\"\n     if _is_credential_name(match[\"name\"]):\n         value = REDACTED\n     else:\n-        # The value may itself hold pairs, as `URL: https://...?token=...` does.\n-        value = _PAIR.sub(_redact_pair, match[\"quoted\"] or match[\"bare\"] or \"\")\n+        value = match[\"quoted\"] or match[\"bare\"] or \"\"\n+        if value and depth >= _MAX_PAIR_DEPTH:\n+            value = REDACTED\n+        elif value:\n+            # The value may itself hold pairs, as `URL: https://...?token=...` does.\n+            value = _redact_pairs(value, depth + 1)\n     opening = match[\"oq\"] or \"\"\n     return f\"{match['name']}{match['sep']}{match['scheme'] or ''}{quote or opening}{value}{quote}\"\n \n \n+def _redact_pairs(text: str, depth: int = 0) -> str:\n+    return _PAIR.sub(lambda match: _redact_pair(match, depth), text)\n+\n+\n def redact_secrets(text: str) -> str:\n     \"\"\"Mask the credentials in `text`, leaving the rest as written.\n \n@@ -123,5 +137,5 @@ def redact_secrets(text: str) -> str:\n     # Known formats go first: a PEM key spans lines, and masking its first line\n     # as a pair's value would leave the rest unrecognizable.\n     text = _KNOWN_TOKENS.sub(REDACTED, text)\n-    text = _PAIR.sub(_redact_pair, text)\n+    text = _redact_pairs(text)\n     return _URL_PASSWORD.sub(rf\"\\g<prefix>{REDACTED}\", text)"
+  },
+  {
+   "filename": "tests/test_redaction.py",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 1,
+   "patch": "@@ -9,7 +9,7 @@\n import unittest\n \n from pipecat.frames.frames import ErrorFrame\n-from pipecat.utils.security.redaction import redact_secrets\n+from pipecat.utils.security.redaction import _MAX_PAIR_DEPTH, REDACTED, redact_secrets\n \n \n class TestRedactSecrets(unittest.TestCase):\n@@ -148,6 +148,30 @@ def test_redacting_twice_reads_the_same_as_redacting_once(self):\n         once = redact_secrets(message)\n         self.assertEqual(redact_secrets(once), once)\n \n+    def test_a_long_chain_of_pairs_does_not_exhaust_the_stack(self):\n+        message = \"a:\" * 5000 + \"a\"\n+        self.assertIsInstance(redact_secrets(message), str)\n+\n+    def test_a_credential_at_the_end_of_a_long_chain_is_still_masked(self):\n+        result = redact_secrets(\"a:\" * 5000 + \"token=hunter2\")\n+        self.assertNotIn(\"hunter2\", result)\n+\n+    def test_masks_a_credential_nested_a_few_pairs_deep(self):\n+        self.assertEqual(\n+            redact_secrets(\"a:b:c:https://x/p?token=abc&n=1\"),\n+            \"a:b:c:https://x/p?token=[REDACTED]&n=1\",\n+        )\n+\n+    def test_keeps_a_chain_as_deep_as_the_limit(self):\n+        message = \"a:\" * _MAX_PAIR_DEPTH + \"z\"\n+        self.assertEqual(redact_secrets(message), message)\n+\n+    def test_masks_the_rest_of_a_chain_deeper_than_the_limit(self):\n+        self.assertEqual(\n+            redact_secrets(\"a:\" * (_MAX_PAIR_DEPTH + 1) + \"z\"),\n+            \"a:\" * (_MAX_PAIR_DEPTH + 1) + REDACTED,\n+        )\n+\n \n class TestErrorFrameRedaction(unittest.TestCase):\n     def test_an_error_frame_masks_the_credentials_its_message_quotes(self):\n@@ -156,6 +180,10 @@ def test_an_error_frame_masks_the_credentials_its_message_quotes(self):\n             frame.error, \"Sarvam API error: headers: {'api-subscription-key': '[REDACTED]'}\"\n         )\n \n+    def test_an_error_frame_accepts_a_long_chain_of_pairs(self):\n+        frame = ErrorFrame(error=\"a:\" * 5000 + \"a\")\n+        self.assertIsInstance(frame.error, str)\n+\n \n if __name__ == \"__main__\":\n     unittest.main()"
+  }
+ ],
+ "test_files": [
+  "tests/test_redaction.py"
+ ]
+}

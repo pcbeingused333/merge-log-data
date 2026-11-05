@@ -1,0 +1,55 @@
+{
+ "repo": "GoDiao/dreamcoder",
+ "number": 148,
+ "url": "https://github.com/GoDiao/dreamcoder/pull/148",
+ "title": "fix(proxy): return the upstream error when a collapsed Responses stream fails",
+ "merged_at": "2026-10-24T04:02:23Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -33,6 +33,7 @@ All notable changes to DreamCoder will be documented in this file.\n \n ### Fixed\n \n+- **Proxy** (#148): when the ChatGPT sign-in path streams a non-streaming request and the upstream ends with `response.failed` or `error`, the caller now gets an `api_error` (HTTP 502) with the upstream message, instead of an empty `end_turn` reply. Thanks @pcbeingused333.\n - **Sidebar re-renders** (#157, #158): the sidebar no longer re-renders on streamed text updates. Running indicators still follow session and tab status. Thanks @tedy69.\n - **Re-renders while a reply runs** (#156, #165): the session page no longer re-renders every second during a reply. Only the elapsed time updates, and it now counts from when the server starts the turn. Thanks @princecherry9905.\n - New sessions start on the active provider's main model. Before, activating a provider saved its main model in a hidden setting, and that saved value kept overriding the provider after its main model was edited."
+  },
+  {
+   "filename": "src/server/__tests__/proxy-streaming.test.ts",
+   "status": "modified",
+   "additions": 45,
+   "deletions": 1,
+   "patch": "@@ -1,7 +1,10 @@\n import { describe, test, expect } from 'bun:test'\n import { openaiChatStreamToAnthropic } from '../proxy/streaming/openaiChatStreamToAnthropic.js'\n import { openaiResponsesStreamToAnthropic } from '../proxy/streaming/openaiResponsesStreamToAnthropic.js'\n-import { openaiResponsesStreamToAnthropicResponse } from '../proxy/streaming/openaiResponsesStreamToAnthropicResponse.js'\n+import {\n+  OpenAIResponsesStreamError,\n+  openaiResponsesStreamToAnthropicResponse,\n+} from '../proxy/streaming/openaiResponsesStreamToAnthropicResponse.js'\n \n function makeStream(chunks: string[]): ReadableStream<Uint8Array> {\n   const encoder = new TextEncoder()\n@@ -566,6 +569,47 @@ describe('openaiResponsesStreamToAnthropicResponse', () => {\n   })\n })\n \n+describe('openaiResponsesStreamToAnthropicResponse upstream errors', () => {\n+  test.each([\n+    [\n+      'response.failed',\n+      { type: 'response.failed', response: { id: 'resp_1', status: 'failed', error: { message: 'model overloaded' } } },\n+      'model overloaded',\n+    ],\n+    ['error', { type: 'error', error: { message: 'rate limited' } }, 'rate limited'],\n+    ['error', { type: 'error' }, 'Upstream Responses stream failed'],\n+  ])('rejects on a %s event instead of returning an empty reply', async (event, payload, message) => {\n+    const result = openaiResponsesStreamToAnthropicResponse(\n+      makeStream([\n+        'event: response.created\\ndata: {\"type\":\"response.created\",\"id\":\"resp_1\",\"status\":\"in_progress\"}\\n\\n',\n+        `event: ${event}\\ndata: ${JSON.stringify(payload)}\\n\\n`,\n+      ]),\n+      'm',\n+    )\n+\n+    await expect(result).rejects.toBeInstanceOf(OpenAIResponsesStreamError)\n+    await expect(result).rejects.toThrow(message)\n+  })\n+\n+  test('keeps a completed response that follows an earlier error event', async () => {\n+    const response = {\n+      id: 'resp_1',\n+      model: 'm',\n+      status: 'completed',\n+      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'ok' }] }],\n+    }\n+    const result = await openaiResponsesStreamToAnthropicResponse(\n+      makeStream([\n+        'event: error\\ndata: {\"type\":\"error\",\"error\":{\"message\":\"transient\"}}\\n\\n',\n+        `event: response.completed\\ndata: ${JSON.stringify({ type: 'response.completed', response })}\\n\\n`,\n+      ]),\n+      'm',\n+    )\n+\n+    expect(result.content).toEqual([{ type: 'text', text: 'ok' }])\n+  })\n+})\n+\n describe('stream cancellation', () => {\n   test.each([\n     ['openaiChatStreamToAnthropic', openaiChatStreamToAnthropic, 'data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"x\"},\"finish_reason\":null}]}\\n\\n'],"
+  },
+  {
+   "filename": "src/server/proxy/streaming/openaiResponsesStreamToAnthropic.ts",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 5,
+   "patch": "@@ -12,6 +12,14 @@ type StreamState = {\n   messageStopped: boolean\n }\n \n+export function upstreamErrorMessage(data: Record<string, unknown>): string {\n+  const response = data.response as Record<string, unknown> | undefined\n+  const error = (response?.error ?? data.error ?? data) as Record<string, unknown> | undefined\n+  return typeof error?.message === 'string' && error.message\n+    ? error.message\n+    : 'Upstream Responses stream failed'\n+}\n+\n function formatSse(event: string, data: unknown): string {\n   return `event: ${event}\\ndata: ${JSON.stringify(data)}\\n\\n`\n }\n@@ -298,11 +306,7 @@ function processEvent(\n \n     case 'response.failed':\n     case 'error': {\n-      const response = data.response as Record<string, unknown> | undefined\n-      const error = (response?.error ?? data.error ?? data) as Record<string, unknown> | undefined\n-      const message = typeof error?.message === 'string' && error.message\n-        ? error.message\n-        : 'Upstream Responses stream failed'\n+      const message = upstreamErrorMessage(data)\n       state.messageStopped = true\n       controller.enqueue(encoder.encode(formatSse('error', {\n         type: 'error',"
+  },
+  {
+   "filename": "src/server/proxy/streaming/openaiResponsesStreamToAnthropicResponse.ts",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -1,4 +1,5 @@\n import { openaiResponsesToAnthropic } from '../transform/openaiResponsesToAnthropic.js'\n+import { upstreamErrorMessage } from './openaiResponsesStreamToAnthropic.js'\n import type {\n   AnthropicResponse,\n   OpenAIResponsesResponse,\n@@ -13,6 +14,8 @@ type StreamFallbackState = {\n   usage: OpenAIResponsesResponse['usage']\n }\n \n+export class OpenAIResponsesStreamError extends Error {}\n+\n export async function openaiResponsesStreamToAnthropicResponse(\n   upstream: ReadableStream<Uint8Array>,\n   model: string,\n@@ -22,6 +25,7 @@ export async function openaiResponsesStreamToAnthropicResponse(\n   let buffer = ''\n   let currentEvent = ''\n   let completedResponse: OpenAIResponsesResponse | null = null\n+  let upstreamError: string | null = null\n \n   const fallback: StreamFallbackState = {\n     id: `resp_${Date.now()}`,\n@@ -71,13 +75,19 @@ export async function openaiResponsesStreamToAnthropicResponse(\n         if (isOpenAIResponsesResponse(response)) {\n           completedResponse = response\n         }\n+      } else if (currentEvent === 'response.failed' || currentEvent === 'error') {\n+        upstreamError = upstreamErrorMessage(data)\n       } else {\n         updateFallbackState(currentEvent, data, fallback)\n       }\n       currentEvent = ''\n     }\n   }\n \n+  if (!completedResponse && upstreamError !== null) {\n+    throw new OpenAIResponsesStreamError(upstreamError)\n+  }\n+\n   return openaiResponsesToAnthropic(\n     completedResponse ?? buildFallbackResponse(fallback),\n     model,"
+  },
+  {
+   "filename": "src/services/openaiAuth/fetch.test.ts",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -130,4 +130,31 @@ describe('buildOpenAICodexFetch', () => {\n       content: [{ type: 'text', text: 'streamed ok' }],\n     })\n   })\n+\n+  test('returns an error when a streamed Codex response fails for a non-streaming caller', async () => {\n+    const fetchOverride: typeof fetch = async () =>\n+      new Response([\n+        'event: response.failed',\n+        'data: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_789\",\"status\":\"failed\",\"error\":{\"message\":\"model overloaded\"}}}',\n+        '',\n+      ].join('\\n'), {\n+        headers: { 'Content-Type': 'text/event-stream' },\n+      })\n+\n+    const openAIFetch = buildOpenAICodexFetch(fetchOverride, 'test')\n+    const response = await openAIFetch('https://api.anthropic.com/v1/messages', {\n+      method: 'POST',\n+      body: JSON.stringify({\n+        model: 'gpt-5.5',\n+        max_tokens: 64,\n+        messages: [{ role: 'user', content: 'Say ok' }],\n+      }),\n+    })\n+\n+    expect(response.status).toBe(502)\n+    await expect(response.json()).resolves.toEqual({\n+      type: 'error',\n+      error: { type: 'api_error', message: 'model overloaded' },\n+    })\n+  })\n })"
+  },
+  {
+   "filename": "src/services/openaiAuth/fetch.ts",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 6,
+   "patch": "@@ -7,7 +7,10 @@ import { getOpenAIOAuthTokens } from './storage.js'\n import { anthropicToOpenaiResponses } from '../../server/proxy/transform/anthropicToOpenaiResponses.js'\n import { openaiResponsesToAnthropic } from '../../server/proxy/transform/openaiResponsesToAnthropic.js'\n import { openaiResponsesStreamToAnthropic } from '../../server/proxy/streaming/openaiResponsesStreamToAnthropic.js'\n-import { openaiResponsesStreamToAnthropicResponse } from '../../server/proxy/streaming/openaiResponsesStreamToAnthropicResponse.js'\n+import {\n+  OpenAIResponsesStreamError,\n+  openaiResponsesStreamToAnthropicResponse,\n+} from '../../server/proxy/streaming/openaiResponsesStreamToAnthropicResponse.js'\n import type { AnthropicRequest } from '../../server/proxy/transform/types.js'\n import { logForDebugging } from '../../utils/debug.js'\n \n@@ -109,11 +112,22 @@ export function buildOpenAICodexFetch(\n     }\n \n     if (upstream.body && isEventStreamResponse(upstream)) {\n-      const responseBody = await openaiResponsesStreamToAnthropicResponse(\n-        upstream.body,\n-        mappedModel,\n-      )\n-      return Response.json(responseBody)\n+      try {\n+        const responseBody = await openaiResponsesStreamToAnthropicResponse(\n+          upstream.body,\n+          mappedModel,\n+        )\n+        return Response.json(responseBody)\n+      } catch (error) {\n+        if (!(error instanceof OpenAIResponsesStreamError)) throw error\n+        return Response.json(\n+          {\n+            type: 'error',\n+            error: { type: 'api_error', message: error.message },\n+          },\n+          { status: 502 },\n+        )\n+      }\n     }\n \n     const responseBody = await upstream.json()"
+  }
+ ],
+ "test_files": [
+  "src/server/__tests__/proxy-streaming.test.ts",
+  "src/services/openaiAuth/fetch.test.ts"
+ ]
+}

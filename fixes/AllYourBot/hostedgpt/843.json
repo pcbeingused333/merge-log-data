@@ -1,0 +1,26 @@
+{
+ "repo": "AllYourBot/hostedgpt",
+ "number": 843,
+ "url": "https://github.com/AllYourBot/hostedgpt/pull/843",
+ "title": "Count cached prompt tokens in the Anthropic input token count",
+ "merged_at": "2026-10-22T11:24:52Z",
+ "files": [
+  {
+   "filename": "app/services/ai_backend/anthropic.rb",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -171,9 +171,12 @@ def stream_handler(&chunk_handler)\n \n       handle_tool_use_streaming(intermediate_response)\n \n-      if (input_tokens = intermediate_response.dig(\"message\", \"usage\", \"input_tokens\"))\n+      if (usage = intermediate_response.dig(\"message\", \"usage\")) && usage[\"input_tokens\"]\n         # https://docs.anthropic.com/en/api/messages-streaming\n-        @message.input_token_count = input_tokens\n+        # input_tokens only counts what comes after the last cache breakpoint, and we cache the\n+        # instructions and the conversation prefix, so add the cache writes and reads to get the prompt size\n+        @message.input_token_count = usage[\"input_tokens\"] +\n+          usage[\"cache_creation_input_tokens\"].to_i + usage[\"cache_read_input_tokens\"].to_i\n       end\n       if (output_tokens = intermediate_response.dig(\"usage\", \"output_tokens\"))\n         @message.output_token_count = output_tokens # no += because an early token count is partial, but the final one is the total"
+  },
+  {
+   "filename": "test/services/ai_backend/anthropic_test.rb",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 0,
+   "patch": "@@ -191,6 +191,27 @@ class AIBackend::AnthropicTest < ActiveSupport::TestCase\n     assert_equal [], result\n   end\n \n+  test \"stream_handler counts cached prompt tokens in the input token count\" do\n+    @anthropic.instance_variable_set(:@stream_response_text, \"\")\n+    @anthropic.instance_variable_set(:@stream_response_tool_calls, {})\n+    message = @anthropic.instance_variable_get(:@message)\n+\n+    handler = @anthropic.send(:stream_handler) { |chunk| }\n+    handler.call({\n+      \"type\" => \"message_start\",\n+      \"message\" => { \"usage\" => {\n+        \"input_tokens\" => 12,\n+        \"cache_creation_input_tokens\" => 300,\n+        \"cache_read_input_tokens\" => 4000,\n+        \"output_tokens\" => 1\n+      } }\n+    }, 0)\n+    handler.call({ \"type\" => \"message_delta\", \"usage\" => { \"output_tokens\" => 25 } }, 0)\n+\n+    assert_equal 4312, message.input_token_count\n+    assert_equal 25, message.output_token_count\n+  end\n+\n   test \"handle_tool_use_streaming initializes tool call on content_block_start\" do\n     @anthropic.instance_variable_set(:@stream_response_tool_calls, {})\n "
+  }
+ ],
+ "test_files": [
+  "test/services/ai_backend/anthropic_test.rb"
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "danielmiessler/Fabric",
+ "number": 2285,
+ "url": "https://github.com/danielmiessler/Fabric/pull/2285",
+ "title": "fix(bedrock): emit usage after MessageStop and return mid-stream errors",
+ "merged_at": "2026-10-22T16:56:58Z",
+ "files": [
+  {
+   "filename": "cmd/generate_changelog/incoming/2285.txt",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+### PR [#2285](https://github.com/danielmiessler/Fabric/pull/2285) by [pcbeingused333](https://github.com/pcbeingused333): fix(bedrock): emit usage after MessageStop and return mid-stream errors\n+\n+- Report the token usage of a Bedrock stream and return the error that ends it instead of a cut-off answer."
+  },
+  {
+   "filename": "internal/plugins/ai/bedrock/bedrock.go",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -513,7 +513,7 @@ func (c *BedrockClient) SendStream(_ context.Context, msgs []*chat.ChatCompletio\n \t\t\t\tType:    domain.StreamTypeContent,\n \t\t\t\tContent: \"\\n\",\n \t\t\t}\n-\t\t\treturn nil // The deferred func closes the channel.\n+\t\t\t// Keep reading: the usage arrives in the Metadata event after MessageStop.\n \n \t\tcase *types.ConverseStreamOutputMemberMetadata:\n \t\t\tif v.Value.Usage != nil {\n@@ -537,6 +537,12 @@ func (c *BedrockClient) SendStream(_ context.Context, msgs []*chat.ChatCompletio\n \t\t}\n \t}\n \n+\t// A stream cut short by an error ends the loop like a finished one: report it, so the\n+\t// partial answer is not taken for a complete one.\n+\tif streamErr := response.GetStream().Err(); streamErr != nil {\n+\t\treturn fmt.Errorf(i18n.T(\"bedrock_conversestream_failed\"), opts.Model, streamErr)\n+\t}\n+\n \treturn nil\n }\n "
+  },
+  {
+   "filename": "internal/plugins/ai/bedrock/bedrock_stream_test.go",
+   "status": "added",
+   "additions": 103,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,103 @@\n+package bedrock\n+\n+import (\n+\t\"bytes\"\n+\t\"context\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"testing\"\n+\n+\t\"github.com/danielmiessler/fabric/internal/chat\"\n+\t\"github.com/danielmiessler/fabric/internal/domain\"\n+\n+\t\"github.com/aws/aws-sdk-go-v2/aws\"\n+\t\"github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream\"\n+\t\"github.com/aws/aws-sdk-go-v2/credentials\"\n+\t\"github.com/aws/aws-sdk-go-v2/service/bedrockruntime\"\n+\t\"github.com/stretchr/testify/assert\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+// streamMessage encodes one event of a ConverseStream response.\n+func streamMessage(t *testing.T, buf *bytes.Buffer, messageType, name, payload string) {\n+\tt.Helper()\n+\tkind := \":event-type\"\n+\tif messageType == \"exception\" {\n+\t\tkind = \":exception-type\"\n+\t}\n+\tmsg := eventstream.Message{\n+\t\tHeaders: eventstream.Headers{\n+\t\t\t{Name: \":message-type\", Value: eventstream.StringValue(messageType)},\n+\t\t\t{Name: kind, Value: eventstream.StringValue(name)},\n+\t\t\t{Name: \":content-type\", Value: eventstream.StringValue(\"application/json\")},\n+\t\t},\n+\t\tPayload: []byte(payload),\n+\t}\n+\trequire.NoError(t, eventstream.NewEncoder().Encode(buf, msg))\n+}\n+\n+// streamClient serves body as the ConverseStream response.\n+func streamClient(t *testing.T, body []byte) *BedrockClient {\n+\tt.Helper()\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tw.Header().Set(\"Content-Type\", \"application/vnd.amazon.eventstream\")\n+\t\t_, _ = w.Write(body)\n+\t}))\n+\tt.Cleanup(server.Close)\n+\n+\tclient := NewClient()\n+\tclient.runtimeClient = bedrockruntime.New(bedrockruntime.Options{\n+\t\tRegion:       \"us-east-1\",\n+\t\tBaseEndpoint: aws.String(server.URL),\n+\t\tCredentials:  credentials.NewStaticCredentialsProvider(\"id\", \"secret\", \"\"),\n+\t})\n+\treturn client\n+}\n+\n+func sendStream(t *testing.T, client *BedrockClient) (updates []domain.StreamUpdate, err error) {\n+\tt.Helper()\n+\tchannel := make(chan domain.StreamUpdate, 16)\n+\tmsgs := []*chat.ChatCompletionMessage{{Role: chat.ChatMessageRoleUser, Content: \"hi\"}}\n+\terr = client.SendStream(context.Background(), msgs, &domain.ChatOptions{Model: \"test-model\"}, channel)\n+\tfor u := range channel {\n+\t\tupdates = append(updates, u)\n+\t}\n+\treturn updates, err\n+}\n+\n+// The usage is in the Metadata event, which follows MessageStop, so it must still be read\n+// after the stop event.\n+func TestSendStream_EmitsUsageAfterMessageStop(t *testing.T) {\n+\tvar body bytes.Buffer\n+\tstreamMessage(t, &body, \"event\", \"contentBlockDelta\", `{\"contentBlockIndex\":0,\"delta\":{\"text\":\"Hello\"}}`)\n+\tstreamMessage(t, &body, \"event\", \"messageStop\", `{\"stopReason\":\"end_turn\"}`)\n+\tstreamMessage(t, &body, \"event\", \"metadata\", `{\"usage\":{\"inputTokens\":7,\"outputTokens\":3,\"totalTokens\":10},\"metrics\":{\"latencyMs\":1}}`)\n+\n+\tupdates, err := sendStream(t, streamClient(t, body.Bytes()))\n+\trequire.NoError(t, err)\n+\n+\tvar usage *domain.UsageMetadata\n+\tfor _, u := range updates {\n+\t\tif u.Type == domain.StreamTypeUsage {\n+\t\t\tusage = u.Usage\n+\t\t}\n+\t}\n+\trequire.NotNil(t, usage, \"the usage in the Metadata event was never emitted\")\n+\tassert.Equal(t, 7, usage.InputTokens)\n+\tassert.Equal(t, 3, usage.OutputTokens)\n+\tassert.Equal(t, 10, usage.TotalTokens)\n+}\n+\n+// An error in the middle of the stream must be returned, not reported as a finished answer.\n+func TestSendStream_ReturnsMidStreamError(t *testing.T) {\n+\tvar body bytes.Buffer\n+\tstreamMessage(t, &body, \"event\", \"contentBlockDelta\", `{\"contentBlockIndex\":0,\"delta\":{\"text\":\"Hel\"}}`)\n+\tstreamMessage(t, &body, \"exception\", \"modelStreamErrorException\", `{\"message\":\"model stream failed\"}`)\n+\n+\tupdates, err := sendStream(t, streamClient(t, body.Bytes()))\n+\trequire.Error(t, err, \"a stream that ended in an error was reported as a success\")\n+\tassert.Contains(t, err.Error(), \"model stream failed\")\n+\n+\trequire.NotEmpty(t, updates)\n+\tassert.Equal(t, \"Hel\", updates[0].Content)\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/plugins/ai/bedrock/bedrock_stream_test.go"
+ ]
+}

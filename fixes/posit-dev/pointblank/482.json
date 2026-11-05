@@ -1,0 +1,26 @@
+{
+ "repo": "posit-dev/pointblank",
+ "number": 482,
+ "url": "https://github.com/posit-dev/pointblank/pull/482",
+ "title": "fix: let col_vals_within_spec() check Categorical and Enum columns on Polars",
+ "merged_at": "2026-10-23T15:14:09Z",
+ "files": [
+  {
+   "filename": "pointblank/_interrogation.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -1372,11 +1372,11 @@ def interrogate_within_spec(\n         # Use regex validation through Narwhals (works for all backends including Ibis!)\n         pattern = regex_specs[spec_lower]\n \n+        col_expr = _string_expr(nw_tbl, column)\n+\n         # For SWIFT/BIC, need to uppercase first\n         if spec_lower in (\"swift\", \"swift_bic\", \"bic\"):\n-            col_expr = nw.col(column).str.to_uppercase()\n-        else:\n-            col_expr = nw.col(column)\n+            col_expr = col_expr.str.to_uppercase()\n \n         result_tbl = nw_tbl.with_columns(\n             pb_is_good_1=nw.col(column).is_null() & na_pass,"
+  },
+  {
+   "filename": "tests/test_within_spec_categorical_columns.py",
+   "status": "added",
+   "additions": 69,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,69 @@\n+import pandas as pd\n+import polars as pl\n+import pyarrow as pa\n+import pytest\n+\n+from pointblank import Validate\n+\n+EMAILS = [\"a@example.com\", None, \"not-an-email\", \"b@example.org\"]\n+CODES = [\"DEUTDEFF\", None, \"nope\", \"deutdeff\"]\n+\n+\n+def _table(tbl_type: str, values):\n+    if tbl_type == \"polars_str\":\n+        return pl.DataFrame({\"a\": values})\n+    if tbl_type == \"polars_categorical\":\n+        return pl.DataFrame({\"a\": values}, schema={\"a\": pl.Categorical})\n+    if tbl_type == \"polars_enum\":\n+        enum = pl.Enum(sorted({v for v in values if v is not None}))\n+        return pl.DataFrame({\"a\": values}, schema={\"a\": enum})\n+    if tbl_type == \"polars_lazy_enum\":\n+        enum = pl.Enum(sorted({v for v in values if v is not None}))\n+        return pl.LazyFrame({\"a\": values}, schema={\"a\": enum})\n+    if tbl_type == \"pandas_category\":\n+        return pd.DataFrame({\"a\": pd.Categorical(values)})\n+    if tbl_type == \"pandas_pyarrow_dictionary\":\n+        return pd.DataFrame({\"a\": pd.Categorical(values)}).astype(\n+            {\"a\": pd.ArrowDtype(pa.dictionary(pa.int32(), pa.string()))}\n+        )\n+    raise ValueError(tbl_type)\n+\n+\n+TBL_TYPES = [\n+    \"polars_str\",\n+    \"polars_categorical\",\n+    \"polars_enum\",\n+    \"polars_lazy_enum\",\n+    \"pandas_category\",\n+    \"pandas_pyarrow_dictionary\",\n+]\n+\n+\n+@pytest.mark.parametrize(\"tbl_type\", TBL_TYPES)\n+@pytest.mark.parametrize(\"na_pass, expected\", [(False, (2, 2)), (True, (3, 1))])\n+def test_col_vals_within_spec_email_on_categorical_columns(tbl_type, na_pass, expected) -> None:\n+    validation = (\n+        Validate(_table(tbl_type, EMAILS))\n+        .col_vals_within_spec(columns=\"a\", spec=\"email\", na_pass=na_pass)\n+        .interrogate()\n+    )\n+\n+    assert (\n+        validation.n_passed(i=1, scalar=True),\n+        validation.n_failed(i=1, scalar=True),\n+    ) == expected\n+\n+\n+@pytest.mark.parametrize(\"tbl_type\", TBL_TYPES)\n+def test_col_vals_within_spec_swift_on_categorical_columns(tbl_type) -> None:\n+    # SWIFT/BIC codes are upper-cased before they are matched\n+    validation = (\n+        Validate(_table(tbl_type, CODES))\n+        .col_vals_within_spec(columns=\"a\", spec=\"swift\")\n+        .interrogate()\n+    )\n+\n+    assert (\n+        validation.n_passed(i=1, scalar=True),\n+        validation.n_failed(i=1, scalar=True),\n+    ) == (2, 2)"
+  }
+ ],
+ "test_files": [
+  "tests/test_within_spec_categorical_columns.py"
+ ]
+}

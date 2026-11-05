@@ -1,0 +1,77 @@
+{
+ "repo": "activeagents/activeagent",
+ "number": 613,
+ "url": "https://github.com/activeagents/activeagent/pull/613",
+ "title": "Report why an OpenAI Responses generation stopped",
+ "merged_at": "2026-10-21T23:32:43Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -63,6 +63,21 @@ engine: the file chooser relay and the per-turn browser tokens are in the\n   `connections.codex`, and the Codex card in Settings shows the machine's\n   login instead of a key form. The default stays `:api_key`.\n \n+### Fixed\n+\n+- **OpenAI Responses generations now report why they stopped.**\n+  `response.finish_reason` (and `stop_reason`) was `nil` for every Responses\n+  generation, streamed or not. It is now `incomplete_details.reason` when the\n+  response was cut short (`max_output_tokens`, `content_filter`), else the\n+  response's `status` (`completed`).\n+\n+- **A streamed generation now reports why it stopped.** `response.finish_reason`\n+  (and `stop_reason`), and the `finish_reason` of the `prompt.active_agent`\n+  event, were `nil` for every streamed Chat and Anthropic generation, since a\n+  stream has no response body to read it from. The Chat provider now records\n+  the chunk's `finish_reason` and the Anthropic provider the `message_delta`'s\n+  `stop_reason`, and the response falls back to it.\n+\n ## [1.9.2] - 2026-10-20\n \n Releases `activeagent` and `actionagent` 1.9.2, with the matching browser"
+  },
+  {
+   "filename": "lib/active_agent/providers/_base_provider.rb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -132,6 +132,7 @@ class ProvidersError < StandardError; end\n                     :stream_broadcaster, :streaming,   # Callback (Streams)\n                     :stream_completion_pending,        # Callback (Streams)\n                     :stream_completion_result,         # Callback (Streams)\n+                    :stream_finish_reason,             # Callback (Streams)\n                     :tools_function,                   # Callback (Tools)\n                     :usage_stack,                      # Usage Tracking\n                     :stream_usage_index,               # Usage Tracking (Streams)\n@@ -607,6 +608,7 @@ def build_prompt_response(api_response, **attributes)\n           messages:,\n           raw_request:  prompt_request_type.serialize(request),\n           raw_response: api_response,\n+          streamed_finish_reason: stream_finish_reason,\n           usages: usage_stack,\n           **attributes\n         )"
+  },
+  {
+   "filename": "lib/active_agent/providers/anthropic_provider.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -237,6 +237,7 @@ def process_stream_chunk(api_response_chunk)\n         when :message_delta\n           delta = Anthropic::Transforms.gem_to_hash(api_response_chunk.delta)\n           self.message_stack.last.merge!(delta)\n+          self.stream_finish_reason = delta[:stop_reason] if delta[:stop_reason]\n \n         # Message Completed [Full Message]\n         when :message_stop"
+  },
+  {
+   "filename": "lib/active_agent/providers/common/responses/base.rb",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 2,
+   "patch": "@@ -63,6 +63,16 @@ class Base < BaseModel\n           #   @return [Array<Usage>]\n           attribute :usages, default: -> { [] }, writable: false\n \n+          # @!attribute [r] streamed_finish_reason\n+          #   Why a streamed generation stopped, as the provider reported it.\n+          #\n+          #   A streamed generation has no response body to read it from, so\n+          #   the provider records it from the stream. {#finish_reason} falls\n+          #   back to it.\n+          #\n+          #   @return [String, nil]\n+          attribute :streamed_finish_reason, writable: false\n+\n           # Initializes response with deep-duplicated attributes.\n           #\n           # Deep duplication prevents external modifications from affecting internal state.\n@@ -180,14 +190,17 @@ def model\n           #   response.stop_reason    #=> \"stop\" (alias)\n           def finish_reason\n             @finish_reason ||= begin\n-              return nil unless raw_response\n+              return streamed_finish_reason unless raw_response\n \n               if raw_response.is_a?(Hash)\n                 # OpenAI format: choices[0].finish_reason or choices[0].message.finish_reason\n                 raw_response.dig(:choices, 0, :finish_reason) ||\n                   raw_response.dig(:choices, 0, :message, :finish_reason) ||\n                   # Anthropic format: stop_reason\n-                  raw_response[:stop_reason]\n+                  raw_response[:stop_reason] ||\n+                  # OpenAI Responses format: why it was cut short, else its status\n+                  raw_response.dig(:incomplete_details, :reason) ||\n+                  raw_response[:status]\n               end\n             end\n           end"
+  },
+  {
+   "filename": "lib/active_agent/providers/open_ai/chat_provider.rb",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -117,6 +117,10 @@ def process_stream_chunk(api_response_event)\n             return if api_message.nil?\n \n             # If we have a delta, we need to update a message in the stack\n+            if (finish_reason = api_message.try(:finish_reason))\n+              self.stream_finish_reason = finish_reason.to_s\n+            end\n+\n             message = find_or_create_message(api_message.index)\n             message_merge_delta(message, api_message.delta.deep_to_h)\n "
+  },
+  {
+   "filename": "lib/active_agent/providers/open_ai/responses_provider.rb",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -181,6 +181,9 @@ def process_stream_chunk(api_response_event)\n             # usage from, so it is recorded from the final event.\n             record_stream_usage(api_response_event.response.usage)\n \n+            response = api_response_event.response\n+            self.stream_finish_reason = (response.incomplete_details&.reason || response.status).to_s\n+\n             # Completion, tool loop included, runs from stream_finished! once\n             # the stream has drained, so each turn's tool calls run once.\n             self.stream_completion_pending = true"
+  },
+  {
+   "filename": "test/providers/anthropic/streaming_finish_reason_test.rb",
+   "status": "added",
+   "additions": 53,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,53 @@\n+# frozen_string_literal: true\n+\n+require \"test_helper\"\n+require_relative \"../../../lib/active_agent/providers/anthropic_provider\"\n+\n+module Providers\n+  module Anthropic\n+    # A streamed generation has no response body, so why it stopped has to be\n+    # read from the message_delta event and reach the response.\n+    class StreamingFinishReasonTest < ActiveSupport::TestCase\n+      include WebMock::API\n+\n+      ENDPOINT = \"https://api.anthropic.com/v1/messages\"\n+\n+      def sse(stop_reason)\n+        message = { id: \"msg_1\", type: \"message\", role: \"assistant\", model: \"claude-sonnet-4-5\", content: [],\n+                    stop_reason: nil, stop_sequence: nil, usage: { input_tokens: 20, output_tokens: 1 } }\n+        events = [\n+          [ \"message_start\", { type: \"message_start\", message: } ],\n+          [ \"content_block_start\", { type: \"content_block_start\", index: 0, content_block: { type: \"text\", text: \"\" } } ],\n+          [ \"content_block_delta\", { type: \"content_block_delta\", index: 0, delta: { type: \"text_delta\", text: \"Hello\" } } ],\n+          [ \"content_block_stop\", { type: \"content_block_stop\", index: 0 } ],\n+          [ \"message_delta\", { type: \"message_delta\", delta: { stop_reason:, stop_sequence: nil }, usage: { output_tokens: 6 } } ],\n+          [ \"message_stop\", { type: \"message_stop\" } ]\n+        ]\n+\n+        events.map { |name, data| \"event: #{name}\\ndata: #{data.to_json}\\n\\n\" }.join\n+      end\n+\n+      def stream_prompt(stop_reason)\n+        stub_request(:post, ENDPOINT)\n+          .to_return(status: 200, headers: { \"Content-Type\" => \"text/event-stream\" }, body: sse(stop_reason))\n+\n+        ActiveAgent::Providers::AnthropicProvider.new(\n+          service: \"Anthropic\",\n+          model: \"claude-sonnet-4-5\",\n+          api_key: \"test-key\",\n+          stream: true,\n+          messages: [ { role: \"user\", content: \"Hi\" } ],\n+          stream_broadcaster: ->(_message, _delta, _event_type) { }\n+        ).prompt\n+      end\n+\n+      test \"a streamed generation reports why it stopped\" do\n+        assert_equal \"end_turn\", stream_prompt(\"end_turn\").finish_reason\n+      end\n+\n+      test \"a streamed generation cut off at the token limit reports max_tokens\" do\n+        assert_equal \"max_tokens\", stream_prompt(\"max_tokens\").stop_reason\n+      end\n+    end\n+  end\n+end"
+  },
+  {
+   "filename": "test/providers/open_ai/chat/streaming_finish_reason_test.rb",
+   "status": "added",
+   "additions": 52,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,52 @@\n+# frozen_string_literal: true\n+\n+require \"test_helper\"\n+\n+begin\n+  require \"openai\"\n+rescue LoadError\n+  puts \"OpenAI gem not available, skipping OpenAI Chat streaming finish reason tests\"\n+  return\n+end\n+\n+require_relative \"../../../../lib/active_agent/providers/open_ai/chat_provider\"\n+\n+module Providers\n+  module OpenAI\n+    module Chat\n+      class StreamingFinishReasonTest < ActiveSupport::TestCase\n+        include WebMock::API\n+\n+        ENDPOINT = \"https://api.openai.com/v1/chat/completions\"\n+\n+        def stream_prompt(finish_reason)\n+          chunks = [\n+            { choices: [ { index: 0, delta: { role: \"assistant\", content: \"Hi\" }, finish_reason: nil } ] },\n+            { choices: [ { index: 0, delta: {}, finish_reason: finish_reason } ] }\n+          ]\n+          body = chunks.map { |chunk|\n+            \"data: #{{ id: \"chatcmpl-1\", object: \"chat.completion.chunk\", created: 1_761_502_994, model: \"gpt-5.6-terra\" }.merge(chunk).to_json}\\n\\n\"\n+          }.join + \"data: [DONE]\\n\\n\"\n+          stub_request(:post, ENDPOINT).to_return(status: 200, headers: { \"Content-Type\" => \"text/event-stream\" }, body:)\n+\n+          ActiveAgent::Providers::OpenAI::ChatProvider.new(\n+            service: \"OpenAI\",\n+            api_key: \"test-api-key\",\n+            model: \"gpt-5.6-terra\",\n+            messages: [ { role: \"user\", content: \"Hello\" } ],\n+            stream: true,\n+            stream_broadcaster: ->(_message, _delta, _event_type) { }\n+          ).prompt\n+        end\n+\n+        test \"a streamed generation reports why it stopped\" do\n+          assert_equal \"stop\", stream_prompt(\"stop\").finish_reason\n+        end\n+\n+        test \"a streamed generation cut off at the token limit reports length\" do\n+          assert_equal \"length\", stream_prompt(\"length\").finish_reason\n+        end\n+      end\n+    end\n+  end\n+end"
+  },
+  {
+   "filename": "test/providers/open_ai/responses/finish_reason_test.rb",
+   "status": "added",
+   "additions": 69,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,69 @@\n+# frozen_string_literal: true\n+\n+require \"test_helper\"\n+require_relative \"../../../../lib/active_agent/providers/open_ai/responses_provider\"\n+\n+module Providers\n+  module OpenAI\n+    module Responses\n+      # The Responses API reports why it stopped as the response's `status`,\n+      # plus `incomplete_details.reason` when it was cut short.\n+      class FinishReasonTest < ActiveSupport::TestCase\n+        include WebMock::API\n+\n+        ENDPOINT = \"https://api.openai.com/v1/responses\"\n+\n+        MESSAGE = { id: \"msg_1\", type: \"message\", role: \"assistant\", status: \"completed\",\n+                    content: [ { type: \"output_text\", text: \"Hi\", annotations: [] } ] }.freeze\n+        RESPONSE = { id: \"resp_1\", object: \"response\", created_at: 1_761_502_994, model: \"gpt-5\",\n+                     parallel_tool_calls: true, tool_choice: \"auto\", tools: [], output: [ MESSAGE ],\n+                     usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2,\n+                              input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } } }.freeze\n+\n+        def provider(stream:)\n+          ActiveAgent::Providers::OpenAI::ResponsesProvider.new(\n+            service: \"OpenAI\",\n+            api_key: \"test-key\",\n+            model: \"gpt-5\",\n+            stream:,\n+            messages: [ { role: \"user\", content: \"Hello\" } ],\n+            stream_broadcaster: ->(_message, _delta, _event_type) { }\n+          )\n+        end\n+\n+        def stream_finishing_with(response)\n+          type = response[:status] == \"incomplete\" ? \"response.incomplete\" : \"response.completed\"\n+          events = [\n+            { type: \"response.created\", response: RESPONSE.merge(status: \"in_progress\", output: []) },\n+            { type: \"response.output_item.added\", output_index: 0, item: MESSAGE.merge(status: \"in_progress\", content: []) },\n+            { type: \"response.output_item.done\", output_index: 0, item: MESSAGE },\n+            { type:, response: }\n+          ]\n+          body = events.each_with_index.map { |event, index| \"event: #{event[:type]}\\ndata: #{event.merge(sequence_number: index).to_json}\\n\\n\" }.join\n+          stub_request(:post, ENDPOINT).to_return(status: 200, headers: { \"Content-Type\" => \"text/event-stream\" }, body:)\n+\n+          provider(stream: true).prompt\n+        end\n+\n+        test \"a streamed response reports the status it completed with\" do\n+          assert_equal \"completed\", stream_finishing_with(RESPONSE.merge(status: \"completed\")).finish_reason\n+        end\n+\n+        test \"a streamed response cut short reports why\" do\n+          response = RESPONSE.merge(status: \"incomplete\", incomplete_details: { reason: \"max_output_tokens\" })\n+\n+          assert_equal \"max_output_tokens\", stream_finishing_with(response).finish_reason\n+        end\n+\n+        test \"a response that was not streamed reports the status it completed with\" do\n+          stub_request(:post, ENDPOINT).to_return(\n+            status: 200, headers: { \"Content-Type\" => \"application/json\" },\n+            body: RESPONSE.merge(status: \"completed\").to_json\n+          )\n+\n+          assert_equal \"completed\", provider(stream: false).prompt.finish_reason\n+        end\n+      end\n+    end\n+  end\n+end"
+  }
+ ],
+ "test_files": [
+  "test/providers/anthropic/streaming_finish_reason_test.rb",
+  "test/providers/open_ai/chat/streaming_finish_reason_test.rb",
+  "test/providers/open_ai/responses/finish_reason_test.rb"
+ ]
+}

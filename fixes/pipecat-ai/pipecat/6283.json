@@ -1,0 +1,33 @@
+{
+ "repo": "pipecat-ai/pipecat",
+ "number": 6283,
+ "url": "https://github.com/pipecat-ai/pipecat/pull/6283",
+ "title": "fix: keep the detail after an exception name in redact_secrets",
+ "merged_at": "2026-10-21T15:53:49Z",
+ "files": [
+  {
+   "filename": "changelog/6283.fixed.md",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+- Fixed `redact_secrets()` (and so `ErrorFrame`) masking the detail after an exception class name that contains a credential word, such as `KeyError: 'audio_content'` or `InvalidTokenError: signature has expired`."
+  },
+  {
+   "filename": "src/pipecat/utils/security/redaction.py",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 2,
+   "patch": "@@ -16,7 +16,8 @@\n - The value of any ``name=value`` or ``name: value`` pair, quoted or not,\n   whose name marks a credential (``api_key``, ``Authorization``,\n   ``X-Amz-Signature``, ``apiKey``...). This covers query strings, printed\n-  header dicts and plain prose alike.\n+  header dicts and plain prose alike. An exception class name followed by\n+  its message (``KeyError: ...``) is not a credential name.\n - A URL's password (``scheme://user:password@host``).\n - Tokens recognizable by their format alone: provider key prefixes, AWS\n   access key IDs and JWTs.\n@@ -93,6 +94,10 @@\n     r\"\"\"(?:[\\s\\S]*?-----END[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----|[\\s\\S]*)\"\"\"\n )\n \n+# An exception or warning class name, optionally module-qualified (`KeyError`,\n+# `jwt.exceptions.InvalidTokenError`). It names what went wrong, so the text\n+# after it is the explanation, not a credential.\n+_EXCEPTION_NAME = re.compile(r\"(?:[a-z_][a-z0-9_]*\\.)*[A-Z][A-Za-z0-9]*(?:Error|Exception|Warning)\")\n \n # How many pairs deep a value is searched for more pairs; deeper than that, the\n # rest of the value is masked. Real messages nest two or three\n@@ -106,9 +111,18 @@ def _is_credential_name(name: str) -> bool:\n     return \"\".join(parts) in _CREDENTIAL_WORDS or any(p in _CREDENTIAL_WORDS for p in parts)\n \n \n+def _is_exception_name(match: re.Match) -> bool:\n+    return (\n+        not match[\"nq\"]\n+        and not match[\"scheme\"]\n+        and match[\"sep\"].strip() == \":\"\n+        and _EXCEPTION_NAME.fullmatch(match[\"name\"]) is not None\n+    )\n+\n+\n def _redact_pair(match: re.Match, depth: int = 0) -> str:\n     quote = match[\"vq\"] or \"\"\n-    if _is_credential_name(match[\"name\"]):\n+    if _is_credential_name(match[\"name\"]) and not _is_exception_name(match):\n         value = REDACTED\n     else:\n         value = match[\"quoted\"] or match[\"bare\"] or \"\""
+  },
+  {
+   "filename": "tests/test_redaction.py",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -172,6 +172,41 @@ def test_masks_the_rest_of_a_chain_deeper_than_the_limit(self):\n             \"a:\" * (_MAX_PAIR_DEPTH + 1) + REDACTED,\n         )\n \n+    def test_keeps_the_detail_after_an_exception_name_holding_a_credential_word(self):\n+        for message in (\n+            \"KeyError: 'audio_content'\",\n+            \"InvalidTokenError: signature has expired\",\n+            \"ExpiredSignatureError: Signature has expired\",\n+            \"TokenExpiredError: jwt expired\",\n+            \"NoCredentialsError: Unable to locate credentials\",\n+            \"jwt.exceptions.ExpiredSignatureError: Signature has expired\",\n+            \"jwt.exceptions.InvalidTokenError: bad\",\n+            \"SomeWarning: a warning\",\n+        ):\n+            with self.subTest(message=message):\n+                self.assertEqual(redact_secrets(message), message)\n+\n+    def test_still_masks_a_credential_after_an_exception_name(self):\n+        self.assertEqual(\n+            redact_secrets(\"KeyError: 'k' api_key=abc123\"),\n+            \"KeyError: 'k' api_key=[REDACTED]\",\n+        )\n+\n+    def test_still_masks_what_only_looks_like_an_exception_name(self):\n+        for message, expected in (\n+            (\"AuthError: Bearer abc123\", \"AuthError: Bearer [REDACTED]\"),\n+            (\"TokenError: Basic dXNlcjpwYXNz\", \"TokenError: Basic [REDACTED]\"),\n+            (\"credentials_error: hunter2\", \"credentials_error: [REDACTED]\"),\n+            (\"secret_warning: hunter2\", \"secret_warning: [REDACTED]\"),\n+            (\"X-Auth-Error: xyz789\", \"X-Auth-Error: [REDACTED]\"),\n+            (\"{'api_key_error': 'abc'}\", \"{'api_key_error': '[REDACTED]'}\"),\n+            (\"'TokenError': 'abc'\", \"'TokenError': '[REDACTED]'\"),\n+            ('\"TokenError\": \"abc\"', '\"TokenError\": \"[REDACTED]\"'),\n+            (\"TokenError=abc\", \"TokenError=[REDACTED]\"),\n+        ):\n+            with self.subTest(message=message):\n+                self.assertEqual(redact_secrets(message), expected)\n+\n \n class TestErrorFrameRedaction(unittest.TestCase):\n     def test_an_error_frame_masks_the_credentials_its_message_quotes(self):"
+  }
+ ],
+ "test_files": [
+  "tests/test_redaction.py"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 247,
+ "url": "https://github.com/lofcz/LLMTornado/pull/247",
+ "title": "Send EmbeddingRequest.Dimensions to Cohere as output_dimension",
+ "merged_at": "2026-10-21T08:19:09Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/CohereEmbeddingDimensionsTests.cs",
+   "status": "added",
+   "additions": 32,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,32 @@\n+using LlmTornado.Code;\n+using LlmTornado.Embedding;\n+using LlmTornado.Embedding.Models;\n+using Newtonsoft.Json.Linq;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class CohereEmbeddingDimensionsTests\n+{\n+    private static JObject Serialize(EmbeddingRequest request)\n+    {\n+        TornadoRequestContent serialized = request.Serialize(new TornadoApi(\"test-key\").GetProvider(LLmProviders.Cohere));\n+        return JObject.Parse(serialized.Body.ToString()!);\n+    }\n+\n+    [Test]\n+    public void Dimensions_AreSentAsOutputDimension()\n+    {\n+        EmbeddingRequest request = new EmbeddingRequest(EmbeddingModel.Cohere.Gen4.V4, \"hello\", 512);\n+\n+        Assert.That(Serialize(request)[\"output_dimension\"]?.Value<int>(), Is.EqualTo(512));\n+    }\n+\n+    [Test]\n+    public void OutputDimension_IsOmitted_WhenDimensionsAreNotSet()\n+    {\n+        EmbeddingRequest request = new EmbeddingRequest(EmbeddingModel.Cohere.Gen4.V4, \"hello\");\n+\n+        Assert.That(Serialize(request).ContainsKey(\"output_dimension\"), Is.False);\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Embedding/Vendors/Cohere/VendorCohereEmbeddingRequest.cs",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -41,6 +41,12 @@ internal class VendorCohereEmbeddingRequest\n     [JsonProperty(\"truncate\")]\n     internal string? Truncate { get; set; }\n \n+    /// <summary>\n+    /// The number of dimensions of the output embedding. Supported by embed-v4.0 only.\n+    /// </summary>\n+    [JsonProperty(\"output_dimension\")]\n+    internal int? OutputDimension { get; set; }\n+\n     private static readonly Dictionary<EmbeddingVendorCohereExtensionInputTypes, string> inputTypesMap = new Dictionary<EmbeddingVendorCohereExtensionInputTypes, string>\n     {\n         { EmbeddingVendorCohereExtensionInputTypes.SearchDocument, \"search_document\" },\n@@ -71,6 +77,11 @@ public VendorCohereEmbeddingRequest(EmbeddingRequest request, IEndpointProvider\n             ];\n         }\n \n+        if (request.Dimensions is > 0)\n+        {\n+            OutputDimension = request.Dimensions;\n+        }\n+\n         InputType = request.VendorExtensions?.Cohere is not null ? inputTypesMap.GetValueOrDefault(request.VendorExtensions.Cohere.InputType, \"search_document\") : \"search_document\";\n \n         if (request.VendorExtensions?.Cohere is not null)"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/CohereEmbeddingDimensionsTests.cs"
+ ]
+}

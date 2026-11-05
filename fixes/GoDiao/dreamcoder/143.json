@@ -1,0 +1,33 @@
+{
+ "repo": "GoDiao/dreamcoder",
+ "number": 143,
+ "url": "https://github.com/GoDiao/dreamcoder/pull/143",
+ "title": "fix(proxy): keep the final response of a response.incomplete event",
+ "merged_at": "2026-10-20T15:21:58Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -22,6 +22,7 @@ All notable changes to DreamCoder will be documented in this file.\n ### Fixed\n \n - **Gemini and similar OpenAI-compatible providers** (#139): parallel tool calls streamed without an `index` run as separate calls instead of being merged into one. A turn that calls tools and ends with finish_reason `stop` now reports `tool_use`. Thanks @pcbeingused333.\n+- **ChatGPT sign-in:** a reply that stops at the output limit (`response.incomplete`) is reported as `max_tokens` with its tool calls and token usage, instead of `end_turn` with plain text and zero usage.\n - **Agent teams:** opening a teammate from the team view shows its conversation instead of an empty page.\n   - Each teammate now keeps one transcript. Before, every message it received started a new file with its whole history copied in.\n   - Transcripts written before this update still open."
+  },
+  {
+   "filename": "src/server/__tests__/proxy-streaming.test.ts",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -1,6 +1,7 @@\n import { describe, test, expect } from 'bun:test'\n import { openaiChatStreamToAnthropic } from '../proxy/streaming/openaiChatStreamToAnthropic.js'\n import { openaiResponsesStreamToAnthropic } from '../proxy/streaming/openaiResponsesStreamToAnthropic.js'\n+import { openaiResponsesStreamToAnthropicResponse } from '../proxy/streaming/openaiResponsesStreamToAnthropicResponse.js'\n \n function makeStream(chunks: string[]): ReadableStream<Uint8Array> {\n   const encoder = new TextEncoder()\n@@ -537,6 +538,34 @@ describe('openaiResponsesStreamToAnthropic', () => {\n   })\n })\n \n+describe('openaiResponsesStreamToAnthropicResponse', () => {\n+  const output = [\n+    { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'partial' }] },\n+    { type: 'function_call', call_id: 'call_1', name: 'Read', arguments: '{\"path\":\"a\"}' },\n+  ]\n+\n+  test.each([\n+    ['response.completed', 'completed', 'tool_use'],\n+    ['response.incomplete', 'incomplete', 'max_tokens'],\n+  ])('keeps the final response of a %s event', async (event, status, stopReason) => {\n+    const response = {\n+      id: 'resp_1',\n+      model: 'gpt-5.6-terra',\n+      status,\n+      output,\n+      usage: { input_tokens: 12, output_tokens: 7 },\n+    }\n+    const result = await openaiResponsesStreamToAnthropicResponse(\n+      makeStream([`event: ${event}\\ndata: ${JSON.stringify({ type: event, response })}\\n\\n`]),\n+      'm',\n+    )\n+\n+    expect(result.stop_reason).toBe(stopReason)\n+    expect(result.usage).toEqual({ input_tokens: 12, output_tokens: 7 })\n+    expect(result.content.map(block => block.type)).toEqual(['text', 'tool_use'])\n+  })\n+})\n+\n describe('stream cancellation', () => {\n   test.each([\n     ['openaiChatStreamToAnthropic', openaiChatStreamToAnthropic, 'data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"x\"},\"finish_reason\":null}]}\\n\\n'],"
+  },
+  {
+   "filename": "src/server/proxy/streaming/openaiResponsesStreamToAnthropicResponse.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -66,7 +66,7 @@ export async function openaiResponsesStreamToAnthropicResponse(\n         continue\n       }\n \n-      if (currentEvent === 'response.completed') {\n+      if (currentEvent === 'response.completed' || currentEvent === 'response.incomplete') {\n         const response = data.response\n         if (isOpenAIResponsesResponse(response)) {\n           completedResponse = response"
+  }
+ ],
+ "test_files": [
+  "src/server/__tests__/proxy-streaming.test.ts"
+ ]
+}

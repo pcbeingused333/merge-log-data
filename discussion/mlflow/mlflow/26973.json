@@ -1,0 +1,48 @@
+{
+ "repo": "mlflow/mlflow",
+ "number": 26973,
+ "url": "https://github.com/mlflow/mlflow/pull/26973",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-22T08:03:31Z",
+   "body": "In general LGTM, but have we tested this against a live endpoint? If not, can we please do it, and put the logs in the PR description? Thanks"
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-26T12:09:16Z",
+   "body": "lgtm"
+  }
+ ],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-10-21T13:06:41Z",
+   "body": "<details><summary>Install mlflow from this PR</summary>\n<p>\n\n#### Install mlflow from this PR\n\n```bash\n# mlflow\npip install git+https://github.com/mlflow/mlflow.git@refs/pull/26973/merge\n# mlflow-skinny\npip install git+https://github.com/mlflow/mlflow.git@refs/pull/26973/merge#subdirectory=libs/skinny\n```\n\nFor Databricks, use the following command:\n\n```bash\n%sh curl -LsSf https://raw.githubusercontent.com/mlflow/mlflow/HEAD/dev/install-skinny.sh | sh -s pull/26973/merge\n```\n\n</p>\n</details>\n\n<details><summary>PR author's recent activity</summary>\n\nIn the last 14 days, @pcbeingused333 opened **523 PRs** across **164 repos** (showing top 10):\n\n| Repository | Open | Closed | Merged | Total |\n| ---------- | ---- | ------ | ------ | ----- |\n| [lofcz/LLMTornado](https://github.com/lofcz/LLMTornado/pulls/pcbeingused333) | 12 | 0 | 41 | 53 |\n| [patterns-ai-core/langchainrb](https://github.com/patterns-ai-core/langchainrb/pulls/pcbeingused333) | 5 | 0 | 25 | 30 |\n| [Mirascope/mirascope](https://github.com/Mirascope/mirascope/pulls/pcbeingused333) | 11 | 0 | 6 | 17 |\n| [we-promise/sure](https://github.com/we-promise/sure/pulls/pcbeingused333) | 4 | 0 | 13 | 17 |\n| [posit-dev/chatlas](https://github.com/posit-dev/chatlas/pulls/pcbeingused333) | 10 | 0 | 4 | 14 |\n| [micro/go-micro](https://github.com/micro/go-micro/pulls/pcbeingused333) | 4 | 1 | 8 | 13 |\n| [danielmiessler/Fabric](https://github.com/danielmiessler/Fabric/pulls/pcbeingused333) | 10 | 0 | 3 | 13 |\n| [pydantic/logfire](https://github.com/pydantic/logfire/pulls/pcbeingused333) | 1 | 1 | 7 | 9 |\n| [pypa/pipenv](https://github.com/pypa/pipenv/pulls/pcbeingused333) | 0 | 0 | 9 | 9 |\n| [activeagents/activeagent](https://github.com/activeagents/activeagent/pulls/pcbeingused333) | 5 | 0 | 3 | 8 |\n\n</details>"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-22T05:38:34Z",
+   "body": "<!-- documentation preview -->\n\n\nDocumentation preview for 61e21579221c5441ef769c2b8494e3527dcf503f is available at:\n\n- https://pr-26973--mlflow-docs-preview.netlify.app/docs/latest/\n\n<details>\n<summary>More info</summary>\n\n- Ignore this comment if this PR does not change the documentation.\n- The preview is updated when a new commit is pushed to this PR.\n- This comment was created by [this workflow run](https://github.com/mlflow/mlflow/actions/runs/40336691638).\n- The documentation was built by [this workflow run](https://github.com/mlflow/mlflow/actions/runs/40334061879).\n\n</details>\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-22T22:37:12Z",
+   "body": "Not yet: the change has only been tested with streamed chunks built in the unit tests (a tool call arriving in several deltas, and the final `finish_reason`), not against a live OpenAI endpoint, and there are no logs from one to add to the description. A live run needs an API key that I can't use here, so I'd rather not post unverified output. If it is blocking, I can add a short script that streams a tool call through `mlflow.openai.autolog()` and prints the recorded span, so someone with a key can run it and paste the result.\n"
+  },
+  {
+   "role": "collaborator",
+   "created_at": "2026-10-23T00:04:29Z",
+   "body": "@pcbeingused333 Yes, I would want a fix to be tested against a live API endpoint to make sure it works. "
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-24T00:04:46Z",
+   "body": "The change was run against a live streaming server rather than only the unit-test chunks. api.openai.com could not be used (no API credits available), so the endpoint is a local OpenAI-compatible server, Ollama 0.40.9 with `qwen2.5:3b`, called through the `openai` 3.37.0 client with `mlflow.openai.autolog()` on `mlflow` 3.17.3.dev0. The script streams a chat completion (`stream=True`) with a `get_weather` tool and the prompt \"What is the weather in Paris and in Rome? Call the tool once for each city.\", then prints the output of the recorded span.\n\nBefore the change (`main`), the trace loses the tool calls:\n\n```json\n{\n  \"id\": \"chatcmpl-148\",\n  \"choices\": [{\n    \"finish_reason\": \"tool_calls\",\n    \"index\": 0,\n    \"message\": {\"content\": \"\", \"role\": \"assistant\", \"tool_calls\": null}\n  }],\n  \"model\": \"qwen2.5:3b\",\n  \"object\": \"chat.completion\"\n}\n```\n\nWith this change, both calls and the finish reason are kept:\n\n```json\n{\n  \"id\": \"chatcmpl-727\",\n  \"choices\": [{\n    \"finish_reason\": \"tool_calls\",\n    \"index\": 0,\n    \"message\": {\n      \"content\": null,\n      \"role\": \"assistant\",\n      \"tool_calls\": [\n        {\"id\": \"call_y6dgyqzr\", \"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"arguments\": \"{\\\"city\\\":\\\"Paris\\\"}\"}},\n        {\"id\": \"call_oymwgxrb\", \"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"arguments\": \"{\\\"city\\\":\\\"Rome\\\"}\"}}\n      ]\n    }\n  }],\n  \"model\": \"qwen2.5:3b\",\n  \"object\": \"chat.completion\"\n}\n```\n\n(The two runs are separate model calls, so the ids differ.) If you need the run against api.openai.com itself, someone with API credits would have to run the same script with `model=` set to an OpenAI model.\n"
+  }
+ ]
+}

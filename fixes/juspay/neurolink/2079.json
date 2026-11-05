@@ -1,0 +1,68 @@
+{
+ "repo": "juspay/neurolink",
+ "number": 2079,
+ "url": "https://github.com/juspay/neurolink/pull/2079",
+ "title": "fix(vertex): default to gemini-3.8-flash now that gemini-2.5-flash is retired on Vertex",
+ "merged_at": "2026-10-31T04:08:39Z",
+ "files": [
+  {
+   "filename": "src/lib/adapters/video/videoAnalyzer.ts",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 2,
+   "patch": "@@ -21,12 +21,13 @@ import \"../../services/server/ai/observability/instrumentation.js\";\n import { readFile } from \"node:fs/promises\";\n import { NeuroLinkError, ErrorFactory } from \"../../utils/errorHandling.js\";\n import type { ModelMessage } from \"../../types/index.js\";\n+import { resolveVertexLocation } from \"../../providers/googleVertex/client.js\";\n \n // ---------------------------------------------------------------------------\n // Shared config\n // ---------------------------------------------------------------------------\n \n-const DEFAULT_MODEL = \"gemini-2.5-flash\";\n+const DEFAULT_MODEL = \"gemini-3.8-flash\";\n const DEFAULT_LOCATION = \"us-central1\";\n \n /**\n@@ -138,6 +139,17 @@ Ensure the final response is fully self-sufficient and does not reference extern\n // Vertex AI\n // ---------------------------------------------------------------------------\n \n+/**\n+ * Same policy as the text path: gemini-* models go to the global endpoint,\n+ * since regional endpoints 404 for Gemini 3.x.\n+ */\n+export function resolveVideoLocation(\n+  model: string,\n+  configuredLocation: string,\n+): string {\n+  return resolveVertexLocation(model, configuredLocation);\n+}\n+\n export async function analyzeVideoWithVertexAI(\n   messages: ModelMessage[],\n   options: {\n@@ -152,8 +164,11 @@ export async function analyzeVideoWithVertexAI(\n   // Get default config and merge with provided options\n   const config = await getVertexConfig();\n   const project = options.project ?? config.project;\n-  const location = options.location ?? config.location;\n   const model = options.model || DEFAULT_MODEL;\n+  const location = resolveVideoLocation(\n+    model,\n+    options.location ?? config.location,\n+  );\n \n   // Convert frames content to parts array for Gemini\n   const parts = buildContentParts(messages);"
+  },
+  {
+   "filename": "src/lib/core/constants.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -206,7 +206,7 @@ export const DEFAULT_DOCUMENTATION_MAX_TOKENS = 12000; // For documentation gene\n export const PROVIDER_CONFIG = {\n   evaluation: {\n     maxTokens: DEFAULT_EVALUATION_MAX_TOKENS,\n-    model: \"gemini-2.5-flash\",\n+    model: \"gemini-3.8-flash\",\n     temperature: 0.3, // Lower temperature for consistent evaluation\n   },\n   analysis: {"
+  },
+  {
+   "filename": "src/lib/factories/providerFactory.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -158,8 +158,8 @@ export class ProviderFactory {\n       if (!model) {\n         // Check for provider-specific environment variables\n         if (resolvedProviderName.toLowerCase().includes(\"vertex\")) {\n-          // Use gemini-2.5-flash as default - latest GA model with best price-performance\n-          model = process.env.VERTEX_MODEL || \"gemini-2.5-flash\";\n+          // Use gemini-3.8-flash as default - gemini-2.5-flash has a scheduled Vertex retirement date of 2026-10-20 (https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions)\n+          model = process.env.VERTEX_MODEL || \"gemini-3.8-flash\";\n         } else if (resolvedProviderName.toLowerCase().includes(\"bedrock\")) {\n           model = process.env.BEDROCK_MODEL || process.env.BEDROCK_MODEL_ID;\n         }"
+  },
+  {
+   "filename": "src/lib/providers/googleVertex/client.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -582,9 +582,9 @@ export const resolveVertexLocation = (\n const resolveVertexRegionForModel = resolveVertexLocation;\n \n const getDefaultVertexModel = (): string => {\n-  // Use gemini-2.5-flash as default - latest and best price-performance model\n+  // Use gemini-3.8-flash as default: gemini-2.5-flash has a scheduled Vertex retirement date of 2026-10-20 (https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions)\n   // Override with VERTEX_MODEL environment variable if needed\n-  return process.env.VERTEX_MODEL || \"gemini-2.5-flash\";\n+  return process.env.VERTEX_MODEL || \"gemini-3.8-flash\";\n };\n \n const hasGoogleCredentials = (): boolean => {"
+  },
+  {
+   "filename": "src/lib/utils/modelRouter.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -28,7 +28,7 @@ const MODEL_CONFIGS = {\n   fast: {\n     primary: {\n       provider: \"vertex\",\n-      model: \"gemini-2.5-flash\",\n+      model: \"gemini-3.8-flash\",\n       capabilities: [\"speed\", \"general\", \"code\", \"basic-reasoning\"],\n       avgResponseTime: 800,\n       costPerToken: 0.0001,"
+  },
+  {
+   "filename": "src/lib/utils/pricing.ts",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -575,6 +575,14 @@ const PRICING: Record<string, Record<string, ModelPricingRates>> = {\n       output: 1.5 / 1_000_000,\n       cacheRead: 0.025 / 1_000_000,\n     },\n+    // Gemini 3.8 Flash (default Vertex model). Standard paid-tier rate through\n+    // 2026-12-31 (input $1.50 / output $7.50 / cache $0.15 per 1M from 2027-01-01):\n+    // https://ai.google.dev/gemini-api/docs/pricing\n+    \"gemini-3.8-flash\": {\n+      input: 0.75 / 1_000_000,\n+      output: 3.75 / 1_000_000,\n+      cacheRead: 0.075 / 1_000_000,\n+    },\n     // Gemini 3.1 preview family\n     // cacheRead = 0.25x input (cached content tokens; explicit-cache storage is\n     // billed separately by TTL/time, so no per-token cacheCreation rate here)."
+  },
+  {
+   "filename": "src/lib/utils/videoAnalysisProcessor.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -70,7 +70,7 @@ export async function executeVideoAnalysis(\n       ? undefined\n       : process.env.GOOGLE_VERTEX_PROJECT || process.env.GOOGLE_CLOUD_PROJECT,\n     location: options.region || process.env.GOOGLE_VERTEX_LOCATION,\n-    model: options.model || \"gemini-2.5-flash\",\n+    model: options.model || \"gemini-3.8-flash\",\n   });\n \n   logger.debug(\"[VideoAnalysisProcessor] Video analysis completed\", {"
+  },
+  {
+   "filename": "test/continuous-test-suite-bugfixes.ts",
+   "status": "modified",
+   "additions": 39,
+   "deletions": 1,
+   "patch": "@@ -100,7 +100,8 @@ import type {\n import iconv from \"iconv-lite\";\n import { Readable, Transform } from \"node:stream\";\n import { PDFProcessor } from \"../src/lib/utils/pdfProcessor.js\";\n-import { PDF_LIMITS } from \"../src/lib/core/constants.js\";\n+import { PDF_LIMITS, PROVIDER_CONFIG } from \"../src/lib/core/constants.js\";\n+import { ModelRouter as UtilsModelRouter } from \"../src/lib/utils/modelRouter.js\";\n import { CLICommandFactory } from \"../src/cli/factories/commandFactory.js\";\n import { SIZE_LIMITS_BYTES } from \"../src/lib/processors/config/sizeLimits.js\";\n import { directAgentTools } from \"../src/lib/agent/directTools.js\";\n@@ -12222,6 +12223,19 @@ exit 127\n       );\n     },\n   },\n+  // ---------- Vertex defaults ----------\n+  {\n+    name: \"Vertex defaults: no default points at gemini-2.5-flash, retired on Vertex on 2026-10-20\",\n+    category: \"vertex-default-model\",\n+    fn: async () => {\n+      const route = UtilsModelRouter.route(\"hi\", { forceTaskType: \"fast\" });\n+      return (\n+        PROVIDER_CONFIG.evaluation.model === \"gemini-3.8-flash\" &&\n+        route.provider === \"vertex\" &&\n+        route.model === \"gemini-3.8-flash\"\n+      );\n+    },\n+  },\n   {\n     name: \"parseSSEStream merges argument fragments of one unindexed tool call\",\n     category: \"openai-compatible-sse\",\n@@ -12430,6 +12444,30 @@ exit 127\n       );\n     },\n   },\n+  {\n+    name: \"Vertex video analysis: Gemini models use the global endpoint, not us-central1\",\n+    category: \"vertex-default-model\",\n+    fn: async () => {\n+      const { resolveVideoLocation } =\n+        await import(\"../src/lib/adapters/video/videoAnalyzer.js\");\n+      return (\n+        resolveVideoLocation(\"gemini-3.8-flash\", \"us-central1\") === \"global\" &&\n+        resolveVideoLocation(\"gemini-3.8-flash\", \"us\") === \"global\"\n+      );\n+    },\n+  },\n+  {\n+    name: \"Pricing: the Vertex default model gemini-3.8-flash has a rate, so its cost is not reported as 0\",\n+    category: \"vertex-default-model\",\n+    fn: async () => {\n+      const { calculateCost } = await import(\"../src/lib/utils/pricing.js\");\n+      const usage = { input: 1_000_000, output: 1_000_000, total: 2_000_000 };\n+      return (\n+        calculateCost(\"vertex\", \"gemini-3.8-flash\", usage) > 0 &&\n+        calculateCost(\"google\", \"gemini-3.8-flash\", usage) > 0\n+      );\n+    },\n+  },\n ];\n \n function sseBody(events: unknown[]): ReadableStream<Uint8Array> {"
+  }
+ ],
+ "test_files": [
+  "test/continuous-test-suite-bugfixes.ts"
+ ]
+}

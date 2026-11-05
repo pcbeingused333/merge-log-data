@@ -1,0 +1,64 @@
+{
+ "repo": "getsentry/sentry-javascript",
+ "number": 25622,
+ "url": "https://github.com/getsentry/sentry-javascript/pull/25622",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-26T17:03:58Z",
+   "body": "Thanks for picking this up! the approach makes sense. ran the suite plus some edge cases locally, a couple of things inline around other shapes Gemini's been reported sending and test coverage for them"
+  },
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-28T09:19:52Z",
+   "body": "Thanks for the follow up! a couple more things inline. also could you update the description? it still says deltas with an index are grouped exactly as before, but a new id on a taken index now opens a new call"
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-28T09:52:48Z",
+   "body": "lgtm! ran the unit tests and both openai node-integration suites locally (they fail on develop and pass here), plus a few out of order index cases, all good 👍\n"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "collaborator",
+   "path": "packages/server-utils/src/ai/openai/streaming.ts",
+   "created_at": "2026-10-26T16:58:59Z",
+   "body": "m: this covers undefined indexes, but we can still get \"index\": null or index: 0 on every call, and those still get merged into one call. could you start a new call when a different non empty id lands on a taken index and treat null like missing? and could you add test cases for those two shapes?"
+  },
+  {
+   "role": "collaborator",
+   "path": "packages/server-utils/test/ai/lib/tracing/openai-streaming-tool-calls.test.ts",
+   "created_at": "2026-10-26T17:01:38Z",
+   "body": "could we also get a node-integration test for this? a Gemini style stream in dev-packages/node-integration-tests/suites/tracing/openai/openai-tool-calls/scenario.mjs (whole parallel calls, no index) so it goes through the real openai SDK, the unit tests call instrumentStream directly"
+  },
+  {
+   "role": "collaborator",
+   "path": "packages/server-utils/src/ai/openai/streaming.ts",
+   "created_at": "2026-10-28T09:10:08Z",
+   "body": "m: the tool calls can come out of order now, index 0 call_a, index 0 call_b, then index 1 call_c gets recorded as [a, c, b]. \n\nObject.values puts integer keys ahead of string ones so index-0-1 lands last. the .sort() in the \"later real index\" test hides the same thing for no-index then indexed. could you key every call by a string (or use a Map) and assert the order in those tests?"
+  },
+  {
+   "role": "collaborator",
+   "path": "dev-packages/node-integration-tests/suites/tracing/openai/openai-tool-calls/scenario.mjs",
+   "created_at": "2026-10-28T09:17:46Z",
+   "body": "l: thanks for adding it! ran it locally and the gemini case fails on develop, so it catches the bug 👍 we can keep it, but could you also add the same stream to scenario-chat.mjs? that one uses the real OpenAI client against an express server sending SSE, so the SDK actually parses the chunks"
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-10-26T20:34:36Z",
+   "body": "Thanks for the careful review. Pushed a follow-up commit:\n\n- `index: null` is now treated like a missing index, and a different non-empty `id` arriving on an index that is already taken starts a new call (an `id` that is already known still continues its own call, and a delta with no `id` continues the latest call opened on that index). Four unit test cases cover null indexes, `index: 0` on every call, a fragment after a reused index, and a repeated `id` not splitting its call; three of them fail without the change.\n- Added a Gemini-style stream to the `openai-tool-calls` node-integration scenario (two whole parallel calls, no `index`), with the expectations in both the recording-enabled and recording-disabled tests. The node-integration suite was not run locally (no built `@sentry/node`), so that part has only been syntax-checked; CI will be its first run.\n\nThis comment was prepared with AI assistance (Claude Code).\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-28T09:38:13Z",
+   "body": "Thanks, all three done in the follow-up commit:\n\n- Order: tool calls are now keyed by string in a `Map`, so they come out in the order they were opened. Added your case (index 0 `call_a`, index 0 `call_b`, index 1 `call_c` -> `[a, b, c]`), and the no-index-then-indexed test asserts the order instead of using `.sort()`.\n- `scenario-chat.mjs` now streams the Gemini-style tool calls (two whole calls, no `index`) from the Express SSE server, so the real `openai` SDK parses the chunks; the three `scenario-chat` tests expect 9 spans and check the tool calls with recording on and off.\n- Updated the description.\n\nThe node-integration suite was not run locally (no built `@sentry/node`), only the unit tests (`packages/server-utils` ai tests pass) and a syntax check of the scenario, so CI will be its first run.\n\nThis comment was prepared with AI assistance (Claude Code).\n\n"
+  }
+ ]
+}

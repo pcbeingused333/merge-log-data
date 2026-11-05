@@ -1,0 +1,26 @@
+{
+ "repo": "LLPhant/LLPhant",
+ "number": 539,
+ "url": "https://github.com/LLPhant/LLPhant/pull/539",
+ "title": "Throw a readable HttpException on an error event in AnthropicChat streams",
+ "merged_at": "2026-10-21T20:00:20Z",
+ "files": [
+  {
+   "filename": "src/Chat/Anthropic/AnthropicStreamResponse.php",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -38,7 +38,11 @@ public function getStream(): StreamInterface\n             $json = Utility::decodeJson(str_replace('data:', '', $data));\n \n             if (isset($json['error'])) {\n-                throw new HttpException($json['error']);\n+                // The error event carries an object: {\"type\": \"overloaded_error\", \"message\": \"...\"}\n+                $error = $json['error'];\n+                throw new HttpException(\\is_array($error)\n+                    ? sprintf('%s: %s', $error['type'] ?? 'error', $error['message'] ?? json_encode($error))\n+                    : (string) $error);\n             }\n \n             $type = $json['type'];"
+  },
+  {
+   "filename": "tests/Unit/Chat/Anthropic/AnthropicStreamResponseTest.php",
+   "status": "added",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,38 @@\n+<?php\n+\n+namespace Tests\\Unit\\Chat\\Anthropic;\n+\n+use GuzzleHttp\\Psr7\\Response;\n+use GuzzleHttp\\Psr7\\Utils;\n+use LLPhant\\Chat\\Anthropic\\AnthropicStreamResponse;\n+use LLPhant\\Exception\\HttpException;\n+\n+function anthropicStream(string ...$events): AnthropicStreamResponse\n+{\n+    $body = '';\n+    foreach ($events as $event) {\n+        $body .= $event.\"\\n\\n\";\n+    }\n+\n+    return new AnthropicStreamResponse(new Response(200, [], $body), Utils::streamFor(''));\n+}\n+\n+it('returns the text of the stream', function () {\n+    $stream = anthropicStream(\n+        'event: content_block_delta'.\"\\n\".'data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hel\"}}',\n+        'event: content_block_delta'.\"\\n\".'data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"lo\"}}',\n+        'event: message_stop'.\"\\n\".'data: {\"type\":\"message_stop\"}',\n+    )->getStream();\n+\n+    expect($stream->getContents())->toBe('Hello');\n+});\n+\n+it('throws an HttpException that names the error event of the stream', function () {\n+    $stream = anthropicStream(\n+        'event: content_block_delta'.\"\\n\".'data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hel\"}}',\n+        'event: error'.\"\\n\".'data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}',\n+    );\n+\n+    expect(fn () => $stream->getStream())\n+        ->toThrow(HttpException::class, 'overloaded_error: Overloaded');\n+});"
+  }
+ ],
+ "test_files": [
+  "tests/Unit/Chat/Anthropic/AnthropicStreamResponseTest.php"
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "tidyverse/ellmer",
+ "number": 1194,
+ "url": "https://github.com/tidyverse/ellmer/pull/1194",
+ "title": "fix(anthropic): take cumulative usage from message_delta when streaming",
+ "merged_at": "2026-11-03T12:05:03Z",
+ "files": [
+  {
+   "filename": "NEWS.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -2,6 +2,7 @@\n \n * `chat_anthropic()` and the other Claude providers now default `max_tokens` to 32,000, rather than 4096 (#1150).\n * New `vignette(\"otel\")` describes how to turn on OpenTelemetry tracing and metrics, what ellmer records, and how ellmer's spans join your own traces (@schloerke, #1187).\n+* `chat_anthropic()` and `chat_aws_bedrock()` now report the correct input and cache token counts when a streamed response uses server tools such as web search, so `$get_tokens()` and `$get_cost()` match the same request without streaming (@pcbeingused333, #1194).\n * `chat_google_vertex()` and `chat_openai()` now report `finish_reason = \"tool_use\"` rather than `\"success\"` for turns that call a tool, matching the other providers. `chat_google_vertex()` also reports the `LANGUAGE`, `IMAGE_SAFETY`, `IMAGE_PROHIBITED_CONTENT`, and `IMAGE_RECITATION` finish reasons as `\"content_filter\"` (@pcbeingused333, #1199).\n * Default models have been updated for a number of providers (@thisisnic, #1176):\n   * `chat_anthropic()` now uses `claude-sonnet-5-5`."
+  },
+  {
+   "filename": "R/provider-claude.R",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -415,7 +415,9 @@ method(stream_merge_chunks, ProviderAnthropic) <- function(\n   } else if (chunk$type == \"message_delta\") {\n     result$stop_reason <- chunk$delta$stop_reason\n     result$stop_sequence <- chunk$delta$stop_sequence\n-    result$usage$output_tokens <- chunk$usage$output_tokens\n+    # `message_delta` usage is cumulative, and for server tools its input and\n+    # cache counts can exceed those reported by `message_start`.\n+    result$usage <- modify_list(result$usage, compact(chunk$usage))\n   } else if (chunk$type == \"error\") {\n     if (chunk$error$type == \"overloaded_error\") {\n       # https://docs.anthropic.com/en/api/messages-streaming#error-events"
+  },
+  {
+   "filename": "tests/testthat/test-provider-claude.R",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -478,6 +478,42 @@ test_that(\"stream_merge_chunks() handles citations_delta\", {\n   expect_equal(result$content[[1]]$citations[[1]]$url, \"https://example.com\")\n })\n \n+test_that(\"stream_merge_chunks() takes cumulative usage from message_delta\", {\n+  provider <- chat_anthropic_test()$get_provider()\n+  chunks <- list(\n+    list(\n+      type = \"message_start\",\n+      message = list(\n+        content = list(),\n+        usage = list(\n+          input_tokens = 2247,\n+          cache_creation_input_tokens = 0,\n+          output_tokens = 1\n+        )\n+      )\n+    ),\n+    list(\n+      type = \"message_delta\",\n+      delta = list(stop_reason = \"end_turn\"),\n+      usage = list(\n+        input_tokens = 2254,\n+        cache_creation_input_tokens = 17269,\n+        output_tokens = 40\n+      )\n+    )\n+  )\n+\n+  completion <- NULL\n+  for (chunk in chunks) {\n+    completion <- stream_merge_chunks(provider, completion, chunk)\n+  }\n+\n+  expect_equal(\n+    value_tokens(provider, completion),\n+    tokens(input = 2254 + 17269, output = 40, cached_input = 0)\n+  )\n+})\n+\n test_that(\"stream_content() emits Anthropic citations after completed text\", {\n   provider <- chat_anthropic_test()$get_provider()\n   chunks <- list("
+  }
+ ],
+ "test_files": [
+  "tests/testthat/test-provider-claude.R"
+ ]
+}

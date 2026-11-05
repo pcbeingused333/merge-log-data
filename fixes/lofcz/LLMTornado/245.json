@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 245,
+ "url": "https://github.com/lofcz/LLMTornado/pull/245",
+ "title": "Send TranscriptionRequest.Temperature in multipart transcription requests",
+ "merged_at": "2026-10-21T08:18:20Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/TranscriptionTemperatureTests.cs",
+   "status": "added",
+   "additions": 75,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,75 @@\n+using System.Net;\n+using System.Net.Sockets;\n+using System.Text;\n+using System.Text.RegularExpressions;\n+using LlmTornado.Audio;\n+using LlmTornado.Audio.Models;\n+using LlmTornado.Code;\n+using LlmTornado.Code.Vendor;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class TranscriptionTemperatureTests\n+{\n+    private static async Task<string> PostTranscription(float? temperature)\n+    {\n+        TcpListener probe = new TcpListener(IPAddress.Loopback, 0);\n+        probe.Start();\n+        int port = ((IPEndPoint)probe.LocalEndpoint).Port;\n+        probe.Stop();\n+\n+        using HttpListener listener = new HttpListener();\n+        listener.Prefixes.Add($\"http://127.0.0.1:{port}/\");\n+        listener.Start();\n+\n+        Task<string> served = Task.Run(async () =>\n+        {\n+            HttpListenerContext context = await listener.GetContextAsync();\n+            using StreamReader reader = new StreamReader(context.Request.InputStream, Encoding.Latin1);\n+            string body = await reader.ReadToEndAsync();\n+            byte[] bytes = Encoding.UTF8.GetBytes(\"{\\\"text\\\":\\\"hello\\\"}\");\n+            context.Response.ContentType = \"application/json\";\n+            await context.Response.OutputStream.WriteAsync(bytes);\n+            context.Response.Close();\n+            return body;\n+        });\n+\n+        TornadoApi api = new TornadoApi(new OpenAiEndpointProvider(LLmProviders.OpenAi)\n+        {\n+            Auth = new ProviderAuthentication(LLmProviders.OpenAi, \"test-key\"),\n+            UrlResolver = (_, _, _) => $\"http://127.0.0.1:{port}/v1/{{0}}{{1}}\"\n+        });\n+\n+        await api.Audio.CreateTranscription(new TranscriptionRequest\n+        {\n+            Model = AudioModel.OpenAi.Whisper.V2,\n+            File = new AudioFile([1, 2, 3], AudioFileTypes.Wav),\n+            Temperature = temperature\n+        });\n+\n+        return await served;\n+    }\n+\n+    private static string? Field(string multipart, string name)\n+    {\n+        Match match = Regex.Match(multipart, $\"name=\\\"?{Regex.Escape(name)}\\\"?\\\\r\\\\n\\\\r\\\\n([^\\\\r]*)\\\\r\\\\n\");\n+        return match.Success ? match.Groups[1].Value : null;\n+    }\n+\n+    [Test]\n+    public async Task Temperature_SetByTheCaller_IsSent()\n+    {\n+        string body = await PostTranscription(0.4f);\n+\n+        Assert.That(Field(body, \"temperature\"), Is.EqualTo(\"0.4\"));\n+    }\n+\n+    [Test]\n+    public async Task Temperature_Unset_DefaultsToZero()\n+    {\n+        string body = await PostTranscription(null);\n+\n+        Assert.That(Field(body, \"temperature\"), Is.EqualTo(\"0\"));\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Audio/AudioEndpoint.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 4,
+   "patch": "@@ -295,10 +295,7 @@ private static TranscriptionSerializedRequest SerializeRequest(TranscriptionRequ\n         \n         serializedRequest.Content.Add(new StringContent(request.GetResponseFormat), \"response_format\");\n \n-        if (!request.Temperature.HasValue)\n-        {\n-            serializedRequest.Content.Add(new StringContent(0f.ToString(CultureInfo.InvariantCulture)), \"temperature\");\n-        }\n+        serializedRequest.Content.Add(new StringContent((request.Temperature ?? 0f).ToString(CultureInfo.InvariantCulture)), \"temperature\");\n \n         if (!request.Language.IsNullOrWhiteSpace())\n         {"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/TranscriptionTemperatureTests.cs"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "posit-dev/great-tables",
+ "number": 1009,
+ "url": "https://github.com/posit-dev/great-tables/pull/1009",
+ "title": "fix: let fmt_nanoplot() draw numeric pandas columns that hold pd.NA",
+ "merged_at": "2026-10-23T14:15:12Z",
+ "files": [
+  {
+   "filename": "great_tables/_formats.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -9369,7 +9369,11 @@ def fmt_nanoplot(\n     # on a scale shared by all of the targeted cells (so autoscaling doesn't apply)\n     # (dtype names differ between libraries: PyArrow calls float64 `double` and has `decimal128(...)`)\n     if col_class.startswith((\"int\", \"uint\", \"float\", \"double\", \"decimal\")):\n-        all_single_y_vals = [float(v) if isinstance(v, Decimal) else v for v in target_vals]\n+        # Missing values (e.g., `pd.NA` in a nullable pandas column) are given as `None`\n+        all_single_y_vals = [\n+            None if is_na(data_tbl, v) else float(v) if isinstance(v, Decimal) else v\n+            for v in target_vals\n+        ]\n         autoscale = False\n     else:\n         all_single_y_vals = None"
+  },
+  {
+   "filename": "tests/test_formats_nanoplots.py",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -35,6 +35,21 @@ def test_generate_data_vals_fails_novals():\n         _generate_data_vals(\"abc\")\n \n \n+def test_fmt_nanoplot_pandas_nullable_float_with_missing_value():\n+    np = pytest.importorskip(\"numpy\")\n+    pd = pytest.importorskip(\"pandas\")\n+\n+    values = [1.5, None, 3.0]\n+    gt_nullable = GT(pd.DataFrame({\"x\": pd.array(values, dtype=\"Float64\")}), id=\"t\")\n+    gt_numpy = GT(pd.DataFrame({\"x\": [1.5, np.nan, 3.0]}), id=\"t\")\n+\n+    html_nullable = gt_nullable.fmt_nanoplot(\"x\").as_raw_html()\n+\n+    # The missing value gets no plot, and the others share the scale as with a NumPy column\n+    assert html_nullable.count(\"<svg\") == 2\n+    assert html_nullable == gt_numpy.fmt_nanoplot(\"x\").as_raw_html()\n+\n+\n def test_generate_data_vals_fails_date_strings():\n     with pytest.raises(ValueError) as exc_info:\n         _generate_data_vals([\"2022-01-01\"])"
+  }
+ ],
+ "test_files": [
+  "tests/test_formats_nanoplots.py"
+ ]
+}

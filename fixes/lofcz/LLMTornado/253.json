@@ -1,0 +1,33 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 253,
+ "url": "https://github.com/lofcz/LLMTornado/pull/253",
+ "title": "List Gemini files for the resolved provider and return the next page token",
+ "merged_at": "2026-10-22T03:22:35Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/GoogleFilesListTests.cs",
+   "status": "added",
+   "additions": 57,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,57 @@\n+using System.Net;\n+using System.Text;\n+using LlmTornado.Code;\n+using LlmTornado.Files;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class GoogleFilesListTests\n+{\n+    private const string FilesJson = \"\"\"\n+        { \"files\": [ { \"name\": \"files/abc\", \"mimeType\": \"text/plain\", \"uri\": \"https://example.com/files/abc\", \"state\": \"ACTIVE\" } ], \"nextPageToken\": \"next\" }\n+        \"\"\";\n+\n+    [Test]\n+    public async Task Get_WithoutProvider_ListsGoogleFilesWhenGoogleIsTheAuthenticatedProvider()\n+    {\n+        TornadoPagingList<TornadoFile>? files = await ListFiles(api => api.Files.Get());\n+\n+        Assert.That(files, Is.Not.Null);\n+        Assert.That(files!.Items, Has.Count.EqualTo(1));\n+    }\n+\n+    [Test]\n+    public async Task Get_WithGoogleProvider_ReturnsTheNextPageToken()\n+    {\n+        TornadoPagingList<TornadoFile>? files = await ListFiles(api => api.Files.Get(provider: LLmProviders.Google));\n+\n+        Assert.That(files?.PageToken, Is.EqualTo(\"next\"));\n+    }\n+\n+    private static async Task<TornadoPagingList<TornadoFile>?> ListFiles(Func<TornadoApi, Task<TornadoPagingList<TornadoFile>?>> list)\n+    {\n+        Func<IEndpointProvider, Task<HttpClient?>>? previous = TornadoConfig.CreateClientAsync;\n+        TornadoConfig.CreateClientAsync = _ => Task.FromResult<HttpClient?>(new HttpClient(new StubHandler(FilesJson)));\n+\n+        try\n+        {\n+            return await list(new TornadoApi(LLmProviders.Google, \"key\"));\n+        }\n+        finally\n+        {\n+            TornadoConfig.CreateClientAsync = previous;\n+        }\n+    }\n+\n+    private sealed class StubHandler(string json) : HttpMessageHandler\n+    {\n+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)\n+        {\n+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)\n+            {\n+                Content = new StringContent(json, Encoding.UTF8, \"application/json\")\n+            });\n+        }\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Files/FilesEndpoint.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -47,7 +47,7 @@ internal FilesEndpoint(TornadoApi api) : base(api)\n \t{\n \t\tIEndpointProvider resolvedProvider = Api.ResolveProvider(provider);\n \n-\t\tif (provider is LLmProviders.Google)\n+\t\tif (resolvedProvider.Provider is LLmProviders.Google)\n \t\t{\n \t\t\tVendorGoogleTornadoFilesList? ilResult = (await HttpGet<VendorGoogleTornadoFilesList>(resolvedProvider, Endpoint, queryParams: query?.ToQueryParams(resolvedProvider), ct: token).ConfigureAwait(false)).Data;\n \t\t\t"
+  },
+  {
+   "filename": "src/LlmTornado/Files/Vendors/Google/VendorGoogleTornadoFilesList.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -8,6 +8,6 @@ internal class VendorGoogleTornadoFilesList\n     [JsonProperty(\"files\")] \n     public List<VendorGoogleTornadoFileContent> Files { get; set; } = [];\n     \n-    [JsonProperty(\"pageToken\")]\n+    [JsonProperty(\"nextPageToken\")]\n     public string? PageToken { get; set; }\n }\n\\ No newline at end of file"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/GoogleFilesListTests.cs"
+ ]
+}

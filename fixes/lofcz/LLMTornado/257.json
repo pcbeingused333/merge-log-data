@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 257,
+ "url": "https://github.com/lofcz/LLMTornado/pull/257",
+ "title": "Do not throw when TornadoRunner is given a responseId and the agent has no response parameters",
+ "merged_at": "2026-10-22T03:24:00Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Agents/TornadoRunner.cs",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -5,6 +5,7 @@\n using LlmTornado.Code;\n using LlmTornado.Common;\n using LlmTornado.Agents.Utility;\n+using LlmTornado.Responses;\n \n namespace LlmTornado.Agents;\n \n@@ -290,7 +291,8 @@ private static Conversation SetupConversation(TornadoAgent agent, List<ChatMessa\n         //Set response id\n         if (!string.IsNullOrEmpty(responseId))\n         {\n-            chat.RequestParameters.ResponseRequestParameters!.PreviousResponseId = responseId;\n+            chat.RequestParameters.ResponseRequestParameters ??= new ResponseRequest();\n+            chat.RequestParameters.ResponseRequestParameters.PreviousResponseId = responseId;\n         }\n \n         //Setting up system message at the end."
+  },
+  {
+   "filename": "src/LlmTornado.Tests/TornadoRunnerResponseIdTests.cs",
+   "status": "added",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,45 @@\n+using System.Reflection;\n+using LlmTornado.Agents;\n+using LlmTornado.Chat;\n+using LlmTornado.Chat.Models;\n+using LlmTornado.Code;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class TornadoRunnerResponseIdTests\n+{\n+    [Test]\n+    public void SetupConversation_WithResponseId_SetsThePreviousResponseId()\n+    {\n+        TornadoAgent agent = new TornadoAgent(new TornadoApi(LLmProviders.OpenAi, \"key\"), ChatModel.OpenAi.Gpt4.O);\n+\n+        Conversation conversation = Setup(agent, \"resp_123\");\n+\n+        Assert.That(conversation.RequestParameters.ResponseRequestParameters?.PreviousResponseId, Is.EqualTo(\"resp_123\"));\n+    }\n+\n+    [Test]\n+    public void SetupConversation_WithoutResponseId_LeavesTheResponseParametersAlone()\n+    {\n+        TornadoAgent agent = new TornadoAgent(new TornadoApi(LLmProviders.OpenAi, \"key\"), ChatModel.OpenAi.Gpt4.O);\n+\n+        Conversation conversation = Setup(agent, null);\n+\n+        Assert.That(conversation.RequestParameters.ResponseRequestParameters, Is.Null);\n+    }\n+\n+    private static Conversation Setup(TornadoAgent agent, string? responseId)\n+    {\n+        MethodInfo method = typeof(TornadoRunner).GetMethod(\"SetupConversation\", BindingFlags.NonPublic | BindingFlags.Static)!;\n+\n+        try\n+        {\n+            return (Conversation)method.Invoke(null, [agent, new List<ChatMessagePart> { new ChatMessagePart(\"hi\") }, null, responseId, null, CancellationToken.None])!;\n+        }\n+        catch (TargetInvocationException e) when (e.InnerException is not null)\n+        {\n+            throw e.InnerException;\n+        }\n+    }\n+}"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/TornadoRunnerResponseIdTests.cs"
+ ]
+}

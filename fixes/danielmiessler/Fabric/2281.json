@@ -1,0 +1,33 @@
+{
+ "repo": "danielmiessler/Fabric",
+ "number": 2281,
+ "url": "https://github.com/danielmiessler/Fabric/pull/2281",
+ "title": "fix(anthropic): return the error that ends a stream",
+ "merged_at": "2026-10-21T16:19:26Z",
+ "files": [
+  {
+   "filename": "cmd/generate_changelog/incoming/2281.txt",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+### PR [#2281](https://github.com/danielmiessler/Fabric/pull/2281) by [pcbeingused333](https://github.com/pcbeingused333): fix(anthropic): return the error that ends a stream\n+\n+- Return a mid-stream Anthropic error from SendStream instead of printing it and exiting with status 0."
+  },
+  {
+   "filename": "internal/plugins/ai/anthropic/anthropic.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 3,
+   "patch": "@@ -4,7 +4,6 @@ import (\n \t\"context\"\n \t\"fmt\"\n \tneturl \"net/url\"\n-\t\"os\"\n \t\"path\"\n \t\"slices\"\n \t\"strconv\"\n@@ -280,8 +279,8 @@ func (an *Client) SendStream(\n \t\t}\n \t}\n \n-\tif stream.Err() != nil {\n-\t\tfmt.Fprintf(os.Stderr, i18n.T(\"anthropic_stream_error\"), stream.Err())\n+\tif streamErr := stream.Err(); streamErr != nil {\n+\t\terr = fmt.Errorf(i18n.T(\"anthropic_stream_error\"), streamErr)\n \t}\n \tclose(channel)\n \treturn"
+  },
+  {
+   "filename": "internal/plugins/ai/anthropic/anthropic_stream_test.go",
+   "status": "added",
+   "additions": 64,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,64 @@\n+package anthropic\n+\n+import (\n+\t\"context\"\n+\t\"fmt\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"strings\"\n+\t\"testing\"\n+\n+\t\"github.com/anthropics/anthropic-sdk-go\"\n+\t\"github.com/anthropics/anthropic-sdk-go/option\"\n+\t\"github.com/danielmiessler/fabric/internal/chat\"\n+\t\"github.com/danielmiessler/fabric/internal/domain\"\n+)\n+\n+// An error event in the middle of a stream must come back as the error of\n+// SendStream, as it does for the other vendors, so that the command fails\n+// instead of printing a cut-off answer and exiting with status 0.\n+func TestSendStream_ReturnsMidStreamError(t *testing.T) {\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tw.Header().Set(\"Content-Type\", \"text/event-stream\")\n+\t\tevents := []string{\n+\t\t\t`event: message_start` + \"\\n\" + `data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-5-5\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}}`,\n+\t\t\t`event: content_block_start` + \"\\n\" + `data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}`,\n+\t\t\t`event: content_block_delta` + \"\\n\" + `data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hel\"}}`,\n+\t\t\t`event: error` + \"\\n\" + `data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}`,\n+\t\t}\n+\t\tfmt.Fprint(w, strings.Join(events, \"\\n\\n\")+\"\\n\\n\")\n+\t}))\n+\tdefer server.Close()\n+\n+\tclient := &Client{\n+\t\tmaxTokens: 4096,\n+\t\tclient: anthropic.NewClient(\n+\t\t\toption.WithBaseURL(server.URL),\n+\t\t\toption.WithAPIKey(\"test-key\"),\n+\t\t\toption.WithMaxRetries(0),\n+\t\t),\n+\t}\n+\n+\tchannel := make(chan domain.StreamUpdate, 16)\n+\terr := client.SendStream(\n+\t\tcontext.Background(),\n+\t\t[]*chat.ChatCompletionMessage{{Role: chat.ChatMessageRoleUser, Content: \"hi\"}},\n+\t\t&domain.ChatOptions{Model: \"claude-sonnet-5-5\", Temperature: domain.DefaultTemperature, TopP: domain.DefaultTopP},\n+\t\tchannel,\n+\t)\n+\n+\tif err == nil {\n+\t\tt.Fatal(\"expected the stream error to be returned, got nil\")\n+\t}\n+\tif !strings.Contains(err.Error(), \"Overloaded\") {\n+\t\tt.Errorf(\"expected the error to name the cause, got %v\", err)\n+\t}\n+\n+\tvar got string\n+\tfor update := range channel {\n+\t\tgot += update.Content\n+\t}\n+\tif got != \"Hel\" {\n+\t\tt.Errorf(\"expected the text streamed before the error, got %q\", got)\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/plugins/ai/anthropic/anthropic_stream_test.go"
+ ]
+}

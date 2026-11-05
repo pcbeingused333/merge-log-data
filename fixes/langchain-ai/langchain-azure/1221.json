@@ -1,0 +1,26 @@
+{
+ "repo": "langchain-ai/langchain-azure",
+ "number": 1221,
+ "url": "https://github.com/langchain-ai/langchain-azure/pull/1221",
+ "title": "fix(azure-ai): preserve streamed tool calls without an index",
+ "merged_at": "2026-10-23T01:30:13Z",
+ "files": [
+  {
+   "filename": "libs/azure-ai/langchain_azure_ai/chat_models/inference.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -264,7 +264,7 @@ def _convert_delta_to_message_chunk(\n                     name=rtc[\"function\"].get(\"name\"),\n                     args=rtc[\"function\"].get(\"arguments\"),\n                     id=rtc.get(\"id\"),\n-                    index=rtc[\"index\"],\n+                    index=rtc.get(\"index\"),\n                 )\n                 for rtc in raw_tool_calls\n             ]"
+  },
+  {
+   "filename": "libs/azure-ai/tests/unit_tests/test_chat_models.py",
+   "status": "modified",
+   "additions": 57,
+   "deletions": 0,
+   "patch": "@@ -23,9 +23,11 @@\n     ChatResponseMessage,\n     CompletionsFinishReason,\n     ModelInfo,\n+    StreamingChatResponseMessageUpdate,\n )\n from langchain_core.messages import (  # noqa: E402\n     AIMessage,\n+    AIMessageChunk,\n     ChatMessage,\n     HumanMessage,\n     SystemMessage,\n@@ -35,6 +37,7 @@\n \n from langchain_azure_ai.chat_models.inference import (  # noqa: E402\n     AzureAIChatCompletionsModel,\n+    _convert_delta_to_message_chunk,\n     _convert_message_content,\n     _format_tool_call_for_azure_inference,\n     to_inference_message,\n@@ -370,6 +373,60 @@ def test_format_tool_call_has_function_type() -> None:\n     assert result.get(\"function\", {}).get(\"name\") == \"echo\"\n \n \n+def test_convert_delta_keeps_tool_calls_without_index() -> None:\n+    delta = StreamingChatResponseMessageUpdate(\n+        {\n+            \"role\": \"assistant\",\n+            \"tool_calls\": [\n+                {\n+                    \"id\": \"call_a\",\n+                    \"function\": {\"name\": \"get_weather\", \"arguments\": \"{}\"},\n+                },\n+                {\"id\": \"call_b\", \"function\": {\"name\": \"get_time\", \"arguments\": \"{}\"}},\n+            ],\n+        }\n+    )\n+\n+    chunk = _convert_delta_to_message_chunk(delta, AIMessageChunk)\n+\n+    assert isinstance(chunk, AIMessageChunk)\n+    assert [(c[\"id\"], c[\"name\"], c[\"index\"]) for c in chunk.tool_call_chunks] == [\n+        (\"call_a\", \"get_weather\", None),\n+        (\"call_b\", \"get_time\", None),\n+    ]\n+\n+\n+def test_aggregated_deltas_keep_complete_tool_calls_without_index_apart() -> None:\n+    def delta(call_id: str, name: str) -> StreamingChatResponseMessageUpdate:\n+        return StreamingChatResponseMessageUpdate(\n+            {\n+                \"role\": \"assistant\",\n+                \"tool_calls\": [\n+                    {\"id\": call_id, \"function\": {\"name\": name, \"arguments\": \"{}\"}}\n+                ],\n+            }\n+        )\n+\n+    first = _convert_delta_to_message_chunk(\n+        delta(\"call_a\", \"get_weather\"), AIMessageChunk\n+    )\n+    second = _convert_delta_to_message_chunk(\n+        delta(\"call_b\", \"get_time\"), AIMessageChunk\n+    )\n+\n+    merged = first + second\n+\n+    assert isinstance(merged, AIMessageChunk)\n+    assert [(c[\"id\"], c[\"name\"], c[\"args\"]) for c in merged.tool_call_chunks] == [\n+        (\"call_a\", \"get_weather\", \"{}\"),\n+        (\"call_b\", \"get_time\", \"{}\"),\n+    ]\n+    assert [(c[\"id\"], c[\"name\"], c[\"args\"]) for c in merged.tool_calls] == [\n+        (\"call_a\", \"get_weather\", {}),\n+        (\"call_b\", \"get_time\", {}),\n+    ]\n+\n+\n # ---------------------------------------------------------------------------\n # _convert_message_content\n # ---------------------------------------------------------------------------"
+  }
+ ],
+ "test_files": [
+  "libs/azure-ai/tests/unit_tests/test_chat_models.py"
+ ]
+}

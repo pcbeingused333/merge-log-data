@@ -1,0 +1,39 @@
+{
+ "repo": "GoDiao/dreamcoder",
+ "number": 148,
+ "url": "https://github.com/GoDiao/dreamcoder/pull/148",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "owner",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-21T17:16:41Z",
+   "body": "Thanks again! The fix is right. `fetch.ts` is the only caller, so the new throw stays contained, the 502 `api_error` body matches the other upstream failures there, and a later `response.completed` still wins. The tests cover each case.\n\nA few small things before we merge:\n\n1. **Share the error lookup instead of copying it.** `upstreamErrorMessage` is a copy of the lookup inside the `response.failed` / `error` case in `openaiResponsesStreamToAnthropic.ts`. If one copy changes later, the streaming and non-streaming paths will report different messages. Please extract it into an exported function there and call it from both places:\n\n   ```ts\n   // openaiResponsesStreamToAnthropic.ts\n   export function upstreamErrorMessage(data: Record<string, unknown>): string {\n     const response = data.response as Record<string, unknown> | undefined\n     const error = (response?.error ?? data.error ?? data) as Record<string, unknown> | undefined\n     return typeof error?.message === 'string' && error.message\n       ? error.message\n       : 'Upstream Responses stream failed'\n   }\n   ```\n\n   Then `const message = upstreamErrorMessage(data)` in that case, and import it in `openaiResponsesStreamToAnthropicResponse.ts`. This touches one more file than you intended, but it's a small extraction and moves with the #119 rework just as easily.\n\n2. **No comments in new code.** The project keeps new code free of comments, including JSDoc. This isn't written down in CONTRIBUTING yet, which is on us. Please drop the JSDoc on `OpenAIResponsesStreamError` and the \"Same message lookup…\" comment; the shared function makes the second one unnecessary anyway.\n\n3. **Rebase on main.** `CHANGELOG.md` conflicts, because `[Unreleased]` on main already has a `### Fixed` section. Moving your entry into it is enough.\n\nThanks for keeping these proxy fixes coming!\n"
+  },
+  {
+   "role": "owner",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-10-22T01:12:53Z",
+   "body": ""
+  },
+  {
+   "role": "owner",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-24T04:02:19Z",
+   "body": "Thanks! All three points are in, and the tests cover each case."
+  }
+ ],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-10-24T03:26:17Z",
+   "body": "Thanks for the review, and sorry for the delay. All three points are addressed in the pushed commits:\n\n1. `upstreamErrorMessage` is now one exported function in `openaiResponsesStreamToAnthropic.ts`, used by the `response.failed` / `error` case there and by `openaiResponsesStreamToAnthropicResponse.ts`; the copy is gone.\n2. The JSDoc on `OpenAIResponsesStreamError` and the \"Same message lookup…\" comment are removed. Neither the new code nor the new tests carry comments.\n3. Merged `main` into the branch (no force-push). The `CHANGELOG.md` entry now sits under the existing `### Fixed` in `[Unreleased]`.\n\n`proxy-streaming`, `fetch` and `proxy-transform` tests still pass (75).\n\nThis update was prepared with Claude Code.\n"
+  },
+  {
+   "role": "owner",
+   "created_at": "2026-10-24T04:02:34Z",
+   "body": "Merged, thanks @pcbeingused333! Sharing the error lookup keeps the streaming and non-streaming paths reporting the same message, and the late-completion test pins the one case that's easy to get wrong. That's your third proxy fix here, and each one has come with tests that fail on the old code, which makes them easy to review.\n\nYour CHANGELOG entry is in. If DreamCoder is useful to you, a ⭐ on the repo would mean a lot. Looking forward to the next one!"
+  }
+ ]
+}

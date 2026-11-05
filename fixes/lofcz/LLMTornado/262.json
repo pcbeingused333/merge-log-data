@@ -1,0 +1,68 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 262,
+ "url": "https://github.com/lofcz/LLMTornado/pull/262",
+ "title": "Default to gpt-5.6-terra instead of the retiring gpt-3.5-turbo",
+ "merged_at": "2026-10-22T23:45:26Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/ChatDefaultModelTests.cs",
+   "status": "added",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,34 @@\n+using LlmTornado.Chat;\n+using LlmTornado.Chat.Models;\n+using LlmTornado.Code;\n+using Newtonsoft.Json;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class ChatDefaultModelTests\n+{\n+    [Test]\n+    public void ChatRequest_DefaultModelIsNotTheRetiredGpt35Turbo()\n+    {\n+        ChatRequest request = new ChatRequest();\n+\n+        Assert.That(request.Model?.Name, Is.EqualTo(ChatModel.OpenAi.Gpt56.V56Terra.Name));\n+    }\n+\n+    [Test]\n+    public void ChatRequest_DefaultsLeaveSamplingAndTokenLimitsUnset()\n+    {\n+        ChatRequest request = new ChatRequest\n+        {\n+            Messages = [new ChatMessage(ChatMessageRoles.User, \"hi\")]\n+        };\n+\n+        string json = JsonConvert.SerializeObject(request);\n+\n+        Assert.That(json, Does.Contain(\"\\\"model\\\":\\\"gpt-5.6-terra\\\"\"));\n+        Assert.That(json, Does.Contain(\"\\\"temperature\\\":null\"));\n+        Assert.That(json, Does.Contain(\"\\\"top_p\\\":null\"));\n+        Assert.That(json, Does.Contain(\"\\\"max_tokens\\\":null\"));\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Assistants/CreateAssistantRequest.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -93,7 +93,7 @@ public CreateAssistantRequest(ChatModel? model = null, string? name = null, stri\n         string? instructions = null, IEnumerable<AssistantTool>? tools = null, ToolResources? toolResources = null,\n         IReadOnlyDictionary<string, string>? metadata = null)\n     {\n-        Model = string.IsNullOrWhiteSpace(model?.Name) ? ChatModel.OpenAi.Gpt35.Turbo : model;\n+        Model = string.IsNullOrWhiteSpace(model?.Name) ? ChatModel.OpenAi.Gpt56.V56Terra : model;\n         Name = name;\n         Description = description;\n         Instructions = instructions;"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/ChatEndpoint.cs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -37,7 +37,7 @@ internal ChatEndpoint(TornadoApi api) : base(api)\n     /// </summary>\n     public ChatRequest DefaultChatRequestArgs { get; set; } = new ChatRequest\n     {\n-        Model = ChatModel.OpenAi.Gpt35.Turbo\n+        Model = ChatModel.OpenAi.Gpt56.V56Terra\n     };\n \n     /// <summary>\n@@ -180,7 +180,7 @@ private static void NormalizeChatResult(HttpCallResult<ChatResult> result)\n     public async Task<HttpCallResult<ChatResult>> CreateChatCompletionSafe(ChatRequest request)\n     {\n         request.Stream = null;\n-        IEndpointProvider provider = Api.GetProvider(request.Model ?? ChatModel.OpenAi.Gpt35.Turbo);\n+        IEndpointProvider provider = Api.GetProvider(request.Model ?? ChatModel.OpenAi.Gpt56.V56Terra);\n         TornadoRequestContent requestBody = request.Serialize(provider);\n         HttpCallResult<ChatResult> result = await HttpPost<ChatResult>(provider, Endpoint, requestBody.Url, requestBody.Body, request.Model, request, request.CancellationToken).ConfigureAwait(false);\n         "
+  },
+  {
+   "filename": "src/LlmTornado/Chat/ChatRequest.cs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -132,7 +132,7 @@ private void CopyData(ChatRequest basedOn)\n \t/// </summary>\n \t[JsonProperty(\"model\")]\n \t[JsonConverter(typeof(ChatModelJsonConverter))]\n-\tpublic ChatModel? Model { get; set; } = ChatModel.OpenAi.Gpt35.Turbo;\n+\tpublic ChatModel? Model { get; set; } = ChatModel.OpenAi.Gpt56.V56Terra;\n \n \t[JsonIgnore]\n \tIModel? IModelRequest.RequestModel => Model;\n@@ -979,7 +979,7 @@ internal void Preserialize(IEndpointProvider provider)\n \tinternal static TornadoRequestContentWithProvider Serialize(TornadoApi api, ChatRequest request, bool pretty = false)\n \t{\n \t\tChatModel? modelToUse = request.Model;\n-\t\tIEndpointProvider provider = api.GetProvider(request.Model ?? ChatModel.OpenAi.Gpt35.Turbo);\n+\t\tIEndpointProvider provider = api.GetProvider(request.Model ?? ChatModel.OpenAi.Gpt56.V56Terra);\n         \n \t\t// the resolved model is potentially incorrect - optimistically resolved models pick the first provider by name, but multiple providers\n \t\t// offer the same models, we need to correlate with the available API keys"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/Conversation.cs",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 5,
+   "patch": "@@ -53,7 +53,7 @@ public Conversation(ChatEndpoint endpoint, ChatModel? model = null, ChatRequest?\n             RequestParameters.Model = model;\n         }\n \n-        RequestParameters.Model ??= ChatModel.OpenAi.Gpt35.Turbo;\n+        RequestParameters.Model ??= ChatModel.OpenAi.Gpt56.V56Terra;\n \n         messages = [];\n         this.endpoint = endpoint;\n@@ -71,7 +71,7 @@ public Conversation(ChatEndpoint endpoint, ChatModel? model = null, ChatRequest?\n     /// </summary>\n     public ChatModel Model\n     {\n-        get => RequestParameters.Model ?? ChatModel.OpenAi.Gpt35.Turbo;\n+        get => RequestParameters.Model ?? ChatModel.OpenAi.Gpt56.V56Terra;\n         set => RequestParameters.Model = value;\n     }\n \n@@ -916,7 +916,7 @@ public async Task<RestDataOrException<ChatRichResponse>> GetResponseRichSafe(Fun\n \n         if (capabilityEndpoint is CapabilityEndpoints.Responses)\n         {\n-            IEndpointProvider provider = responsesEndpoint.Api.GetProvider(req.Model ?? ChatModel.OpenAi.Gpt35.Turbo);\n+            IEndpointProvider provider = responsesEndpoint.Api.GetProvider(req.Model ?? ChatModel.OpenAi.Gpt56.V56Terra);\n             ResponseRequest responsesReq = ResponseHelpers.ToResponseRequest(provider, req.ResponseRequestParameters, req);\n             HttpCallResult<ResponseResult> result = await responsesEndpoint.CreateResponseSafe(responsesReq).ConfigureAwait(false);\n \n@@ -1178,7 +1178,7 @@ private async Task<ChatRichResponse> GetResponseRichInternal(Func<List<FunctionC\n         if (capabilityEndpoint is CapabilityEndpoints.Responses)\n         {\n             // avoid double-serializing, use provider resolved without regards to available API keys\n-            IEndpointProvider provider = endpoint.Api.GetProvider(req.Model ?? ChatModel.OpenAi.Gpt35.Turbo);\n+            IEndpointProvider provider = endpoint.Api.GetProvider(req.Model ?? ChatModel.OpenAi.Gpt56.V56Terra);\n             ResponseRequest responsesReq = ResponseHelpers.ToResponseRequest(provider, req.ResponseRequestParameters, req);\n             HttpCallResult<ResponseResult> resultSafe = await responsesEndpoint.CreateResponseSafe(responsesReq).ConfigureAwait(false);\n \n@@ -1330,7 +1330,7 @@ public async IAsyncEnumerable<string> StreamResponseEnumerable(Guid? messageId =\n         StringBuilder responseStringBuilder = new StringBuilder();\n         ChatMessageRoles? responseRole = null;\n         bool assistantMessageAppended = false;\n-        bool anthropicStream = endpoint.Api.GetProvider(req.Model ?? ChatModel.OpenAi.Gpt35.Turbo).Provider == LLmProviders.Anthropic;\n+        bool anthropicStream = endpoint.Api.GetProvider(req.Model ?? ChatModel.OpenAi.Gpt56.V56Terra).Provider == LLmProviders.Anthropic;\n \n         await foreach (ChatResult res in endpoint.StreamChatEnumerable(req).WithCancellation(token))\n         {"
+  },
+  {
+   "filename": "src/LlmTornado/Responses/ResponsesEndpoint.cs",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 4,
+   "patch": "@@ -334,7 +334,7 @@ public async Task<ResponseCompactResult> CompactResponse(ResponseCompactRequest\n     /// <param name=\"request\">The compact request.</param>\n     public async Task<HttpCallResult<ResponseCompactResult>> CompactResponseSafe(ResponseCompactRequest request)\n     {\n-        IEndpointProvider provider = Api.GetProvider(request.Model ?? ChatModel.OpenAi.Gpt35.Turbo);\n+        IEndpointProvider provider = Api.GetProvider(request.Model ?? ChatModel.OpenAi.Gpt56.V56Terra);\n         string body = request.Serialize();\n         return await HttpPost<ResponseCompactResult>(provider, Endpoint, url: GetUrl(provider, \"/compact\"), postData: body, ct: request.CancellationToken).ConfigureAwait(false);\n     }\n@@ -363,7 +363,7 @@ public async Task<ResponseInputTokensResult> CountInputTokens(ResponseRequest re\n     /// <param name=\"cancellationToken\">Cancellation token.</param>\n     public async Task<HttpCallResult<ResponseInputTokensResult>> CountInputTokensSafe(ResponseRequest request, CancellationToken cancellationToken = default)\n     {\n-        IEndpointProvider provider = Api.GetProvider(request.Model ?? ChatModel.OpenAi.Gpt35.Turbo);\n+        IEndpointProvider provider = Api.GetProvider(request.Model ?? ChatModel.OpenAi.Gpt56.V56Terra);\n         TornadoRequestContent requestBody = request.Serialize(provider);\n         return await HttpPost<ResponseInputTokensResult>(provider, Endpoint, url: GetUrl(provider, \"/input_tokens\"), postData: requestBody.Body, model: request.Model, requestObj: request, ct: cancellationToken).ConfigureAwait(false);\n     }\n@@ -390,7 +390,7 @@ public async Task<ResponseResult> CreateResponse(ResponseRequest request)\n     /// <param name=\"request\">The request</param>\n     public async Task<HttpCallResult<ResponseResult>> CreateResponseSafe(ResponseRequest request)\n     {\n-        IEndpointProvider provider = Api.GetProvider(request.Model ?? ChatModel.OpenAi.Gpt35.Turbo);\n+        IEndpointProvider provider = Api.GetProvider(request.Model ?? ChatModel.OpenAi.Gpt56.V56Terra);\n         TornadoRequestContent requestBody = request.Serialize(provider);\n         HttpCallResult<ResponseResult> result = await HttpPost<ResponseResult>(provider, Endpoint, url: requestBody.Url, postData: requestBody.Body, model: request.Model, requestObj: request, ct: request.CancellationToken).ConfigureAwait(false);\n \n@@ -559,7 +559,7 @@ internal async Task StreamResponseRichInternal(ResponseRequest request, Response\n         using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(token, request.CancellationToken);\n         token = linked.Token;\n         bool? streamOption = request.Stream;\n-        IEndpointProvider provider = Api.GetProvider(request.Model ?? ChatModel.OpenAi.Gpt35.Turbo);\n+        IEndpointProvider provider = Api.GetProvider(request.Model ?? ChatModel.OpenAi.Gpt56.V56Terra);\n         TornadoRequestContent requestBody;\n         try\n         {"
+  },
+  {
+   "filename": "src/LlmTornado/Responses/ResponsesSession.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -104,7 +104,7 @@ public async Task StreamResponseRich(ResponseRequest? request = null, ResponseSt\n             toSerialize.Stream = true;   \n         }\n         \n-        IEndpointProvider provider = Endpoint.Api.GetProvider(toSerialize.Model ?? ChatModel.OpenAi.Gpt35.Turbo);\n+        IEndpointProvider provider = Endpoint.Api.GetProvider(toSerialize.Model ?? ChatModel.OpenAi.Gpt56.V56Terra);\n         TornadoRequestContent requestBody = toSerialize.Serialize(provider, options);\n         \n         if (streamOption is not null)"
+  },
+  {
+   "filename": "src/LlmTornado/Tokenize/TokenizeEndpoint.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -49,7 +49,7 @@ internal TokenizeEndpoint(TornadoApi api) : base(api)\n     /// </returns>\n     public async Task<HttpCallResult<TokenizeResult>> CountTokensSafe(TokenizeRequest request, CancellationToken ct = default)\n     {\n-        IEndpointProvider provider = Api.GetProvider(request.Model ?? ChatModel.OpenAi.Gpt35.Turbo);\n+        IEndpointProvider provider = Api.GetProvider(request.Model ?? ChatModel.OpenAi.Gpt56.V56Terra);\n         TornadoRequestContent requestBody = request.Serialize(provider);\n         return await HttpPost<TokenizeResult>(provider, Endpoint, requestBody.Url, requestBody.Body, request.Model, request, ct).ConfigureAwait(false);\n     }"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/ChatDefaultModelTests.cs"
+ ]
+}

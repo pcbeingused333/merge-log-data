@@ -1,0 +1,33 @@
+{
+ "repo": "danielmiessler/Fabric",
+ "number": 2291,
+ "url": "https://github.com/danielmiessler/Fabric/pull/2291",
+ "title": "fix(lmstudio): close the stream channel on every error path",
+ "merged_at": "2026-10-21T22:04:41Z",
+ "files": [
+  {
+   "filename": "cmd/generate_changelog/incoming/2291.txt",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+### PR [#2291](https://github.com/danielmiessler/Fabric/pull/2291) by [pcbeingused333](https://github.com/pcbeingused333) and [ksylvan](https://github.com/ksylvan): fix(lmstudio): close the stream channel on every error path\n+\n+- Fixed LM Studio streaming so the stream channel is closed on every error path, preventing hangs and leaked goroutines.\n+- Consolidated the LM Studio stream error channel closure tests, combining HTTP failure and unavailable server scenarios into subtests.\n+- Updated tests to call `SendStream` directly and verify immediate channel closure, removing redundant goroutines, error channels, and timeout dependencies."
+  },
+  {
+   "filename": "internal/plugins/ai/lmstudio/lmstudio.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -90,6 +90,8 @@ func (c *Client) ListModels(_ context.Context) ([]string, error) {\n }\n \n func (c *Client) SendStream(_ context.Context, msgs []*chat.ChatCompletionMessage, opts *domain.ChatOptions, channel chan domain.StreamUpdate) (err error) {\n+\tdefer close(channel)\n+\n \turl := fmt.Sprintf(\"%s/chat/completions\", c.ApiUrl.Value)\n \n \tpayload := map[string]any{\n@@ -128,8 +130,6 @@ func (c *Client) SendStream(_ context.Context, msgs []*chat.ChatCompletionMessag\n \t\treturn\n \t}\n \n-\tdefer close(channel)\n-\n \treader := bufio.NewReader(resp.Body)\n \tfor {\n \t\tvar line []byte"
+  },
+  {
+   "filename": "internal/plugins/ai/lmstudio/lmstudio_test.go",
+   "status": "modified",
+   "additions": 31,
+   "deletions": 0,
+   "patch": "@@ -90,3 +90,34 @@ func TestListModelsDoesNotSendBearerForWhitespaceOnlyKey(t *testing.T) {\n \trequire.NoError(t, err)\n \trequire.Equal(t, []string{\"model-1\"}, models)\n }\n+\n+func TestSendStreamClosesChannelOnError(t *testing.T) {\n+\tt.Parallel()\n+\n+\tfailing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tw.WriteHeader(http.StatusInternalServerError)\n+\t}))\n+\tdefer failing.Close()\n+\n+\tdown := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))\n+\tdown.Close()\n+\n+\tfor name, url := range map[string]string{\"http 500\": failing.URL, \"server down\": down.URL} {\n+\t\tt.Run(name, func(t *testing.T) {\n+\t\t\tclient := NewClient()\n+\t\t\tclient.ApiUrl.Value = url\n+\t\t\tclient.HttpClient = &http.Client{}\n+\n+\t\t\tch := make(chan domain.StreamUpdate)\n+\t\t\trequire.Error(t, client.SendStream(context.Background(), []*chat.ChatCompletionMessage{{Role: \"user\", Content: \"hi\"}}, &domain.ChatOptions{Model: \"m\"}, ch))\n+\n+\t\t\t// chatter.go ranges over the channel until the vendor closes it.\n+\t\t\tselect {\n+\t\t\tcase _, ok := <-ch:\n+\t\t\t\trequire.False(t, ok, \"unexpected update\")\n+\t\t\tdefault:\n+\t\t\t\tt.Fatal(\"channel was not closed\")\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/plugins/ai/lmstudio/lmstudio_test.go"
+ ]
+}

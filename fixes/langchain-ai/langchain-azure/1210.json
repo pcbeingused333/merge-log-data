@@ -1,0 +1,26 @@
+{
+ "repo": "langchain-ai/langchain-azure",
+ "number": 1210,
+ "url": "https://github.com/langchain-ai/langchain-azure/pull/1210",
+ "title": "fix(azure-ai): raise on a non-200 status in AzureAISearchRetriever async search",
+ "merged_at": "2026-10-22T01:35:53Z",
+ "files": [
+  {
+   "filename": "libs/azure-ai/langchain_azure_ai/retrievers/azure_ai_search.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -202,11 +202,15 @@ async def _asearch(self, query: str) -> List[dict]:\n         if not self.aiosession:\n             async with aiohttp.ClientSession() as session:\n                 async with session.get(search_url, headers=self._headers) as response:\n+                    if response.status != 200:\n+                        raise Exception(f\"Error in search request: {response}\")\n                     response_json = await response.json()\n         else:\n             async with self.aiosession.get(\n                 search_url, headers=self._headers\n             ) as response:\n+                if response.status != 200:\n+                    raise Exception(f\"Error in search request: {response}\")\n                 response_json = await response.json()\n \n         return response_json[\"value\"]"
+  },
+  {
+   "filename": "libs/azure-ai/tests/unit_tests/test_azure_ai_search_retriever.py",
+   "status": "modified",
+   "additions": 32,
+   "deletions": 4,
+   "patch": "@@ -4,6 +4,8 @@\n from unittest.mock import AsyncMock, MagicMock, patch\n from urllib.parse import parse_qs, urlparse\n \n+import pytest\n+\n from langchain_azure_ai.retrievers.azure_ai_search import AzureAISearchRetriever\n \n \n@@ -70,11 +72,10 @@ def test_get_relevant_documents_sends_full_query() -> None:\n     assert docs[0].metadata == {\"id\": \"1\", \"score\": 0.9}\n \n \n-async def test_aget_relevant_documents_sends_full_query() -> None:\n+def make_async_session(status: int, body: dict) -> tuple[MagicMock, MagicMock]:\n     response = AsyncMock()\n-    response.json = AsyncMock(\n-        return_value={\"value\": [{\"id\": \"1\", \"content\": \"hello world\"}]}\n-    )\n+    response.status = status\n+    response.json = AsyncMock(return_value=body)\n     response_cm = MagicMock()\n     response_cm.__aenter__ = AsyncMock(return_value=response)\n     response_cm.__aexit__ = AsyncMock(return_value=False)\n@@ -84,6 +85,13 @@ async def test_aget_relevant_documents_sends_full_query() -> None:\n     session_cm = MagicMock()\n     session_cm.__aenter__ = AsyncMock(return_value=session)\n     session_cm.__aexit__ = AsyncMock(return_value=False)\n+    return session_cm, session\n+\n+\n+async def test_aget_relevant_documents_sends_full_query() -> None:\n+    session_cm, session = make_async_session(\n+        200, {\"value\": [{\"id\": \"1\", \"content\": \"hello world\"}]}\n+    )\n \n     retriever = make_retriever()\n     with patch(\"aiohttp.ClientSession\", return_value=session_cm):\n@@ -96,3 +104,23 @@ async def test_aget_relevant_documents_sends_full_query() -> None:\n     assert query_params[\"search\"] == [\"cats & dogs\"]\n     assert len(docs) == 1\n     assert docs[0].page_content == \"hello world\"\n+\n+\n+def test_get_relevant_documents_raises_on_error_status() -> None:\n+    response = MagicMock(status_code=403)\n+    response.text = json.dumps({\"error\": {\"message\": \"Access denied\"}})\n+\n+    with patch(\"requests.get\", return_value=response):\n+        with pytest.raises(Exception, match=\"Error in search request\"):\n+            make_retriever()._get_relevant_documents(\"cats\", run_manager=MagicMock())\n+\n+\n+async def test_aget_relevant_documents_raises_on_error_status() -> None:\n+    \"\"\"The sync path raises on a non-200 status; the async path must too.\"\"\"\n+    session_cm, _ = make_async_session(403, {\"error\": {\"message\": \"Access denied\"}})\n+\n+    with patch(\"aiohttp.ClientSession\", return_value=session_cm):\n+        with pytest.raises(Exception, match=\"Error in search request\"):\n+            await make_retriever()._aget_relevant_documents(\n+                \"cats\", run_manager=MagicMock()\n+            )"
+  }
+ ],
+ "test_files": [
+  "libs/azure-ai/tests/unit_tests/test_azure_ai_search_retriever.py"
+ ]
+}

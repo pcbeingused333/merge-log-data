@@ -1,0 +1,228 @@
+{
+ "repo": "danielmiessler/Fabric",
+ "number": 2289,
+ "url": "https://github.com/danielmiessler/Fabric/pull/2289",
+ "title": "fix(plugins): refuse plaintext http to remote hosts for OpenAI, Exolab and Codex",
+ "merged_at": "2026-10-21T21:36:23Z",
+ "files": [
+  {
+   "filename": "cmd/generate_changelog/incoming/2289.txt",
+   "status": "added",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,8 @@\n+### PR [#2289](https://github.com/danielmiessler/Fabric/pull/2289) by [pcbeingused333](https://github.com/pcbeingused333) and [ksylvan](https://github.com/ksylvan): fix(plugins): refuse plaintext http to remote hosts for OpenAI, Exolab and Codex\n+\n+- Fixed a security issue where plaintext HTTP connections to remote hosts could expose API keys and prompts; OpenAI-compatible clients, Exolab, and Codex now require HTTPS.\n+- Allowed HTTP only for localhost, loopback addresses, and `*.localhost`, leaving all built-in defaults unchanged.\n+- Tightened server bind authentication by requiring API keys for binds using localhost subdomains.\n+- Consolidated Codex authentication and API endpoint security checks, with shared loopback detection across endpoint validation and middleware.\n+- Localized base URL validation errors across all supported locales.\n+- If you use an `http://` base URL to a host other than localhost, change it to `https://` or use a local tunnel. Otherwise the vendor is not loaded. Run with `--debug=3` to see the reason."
+  },
+  {
+   "filename": "internal/core/plugin_registry.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -454,7 +454,9 @@ func (o *PluginRegistry) ConfigureVendors() {\n \tdefer o.vendorMu.Unlock()\n \to.VendorManager.Clear()\n \tfor _, vendor := range o.VendorsAll.Vendors {\n-\t\tif vendorErr := vendor.Configure(); vendorErr == nil && vendor.IsConfigured() {\n+\t\tif vendorErr := vendor.Configure(); vendorErr != nil {\n+\t\t\tdebuglog.Debug(debuglog.Trace, \"vendor %s not configured: %v\\n\", vendor.GetName(), vendorErr)\n+\t\t} else if vendor.IsConfigured() {\n \t\t\to.VendorManager.AddVendors(vendor)\n \t\t}\n \t}"
+  },
+  {
+   "filename": "internal/i18n/i18n_test.go",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -1,6 +1,7 @@\n package i18n\n \n import (\n+\t\"encoding/json\"\n \t\"testing\"\n \n \tgi18n \"github.com/nicksnyder/go-i18n/v2/i18n\"\n@@ -39,3 +40,32 @@ func TestTranslation(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+// TestLocaleKeyParity makes sure that each locale has all the keys in en.json.\n+// i18n.T panics for a key that the active locale does not have.\n+func TestLocaleKeyParity(t *testing.T) {\n+\tload := func(name string) map[string]any {\n+\t\tdata, err := localeFS.ReadFile(\"locales/\" + name)\n+\t\tif err != nil {\n+\t\t\tt.Fatal(err)\n+\t\t}\n+\t\tvar m map[string]any\n+\t\tif err := json.Unmarshal(data, &m); err != nil {\n+\t\t\tt.Fatalf(\"%s: %v\", name, err)\n+\t\t}\n+\t\treturn m\n+\t}\n+\ten := load(\"en.json\")\n+\tfiles, err := localeFS.ReadDir(\"locales\")\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tfor _, f := range files {\n+\t\tlocale := load(f.Name())\n+\t\tfor key := range en {\n+\t\t\tif _, ok := locale[key]; !ok {\n+\t\t\t\tt.Errorf(\"%s: missing key %q\", f.Name(), key)\n+\t\t\t}\n+\t\t}\n+\t}\n+}"
+  },
+  {
+   "filename": "internal/i18n/locales/ar-BH.json",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -491,6 +491,8 @@\n   \"plugin_configured\": \" ✓\",\n   \"plugin_enable_bool_question\": \"تفعيل %v %v (true/false)\",\n   \"plugin_enter_value\": \"أدخل %v %v\",\n+  \"plugin_insecure_base_url\": \"لا يرسل Fabric بيانات الاعتماد والمطالبات إلى %s كنص عادي. استخدم عنوان URL يبدأ بـ https://. يُسمح بـ http:// فقط لـ localhost.\",\n+  \"plugin_invalid_base_url\": \"عنوان URL الأساسي غير صالح.\",\n   \"plugin_invalid_bool\": \"قيمة منطقية غير صالحة: %q\",\n   \"plugin_invalid_boolean_value\": \"قيمة منطقية غير صالحة: %v\",\n   \"plugin_not_configured\": \" ⚠️  غير مُكوَّن\","
+  },
+  {
+   "filename": "internal/i18n/locales/ar-SA.json",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -491,6 +491,8 @@\n   \"plugin_configured\": \" ✓\",\n   \"plugin_enable_bool_question\": \"تفعيل %v %v (true/false)\",\n   \"plugin_enter_value\": \"أدخل %v %v\",\n+  \"plugin_insecure_base_url\": \"لا يرسل Fabric بيانات الاعتماد والمطالبات إلى %s كنص عادي. استخدم عنوان URL يبدأ بـ https://. يُسمح بـ http:// فقط لـ localhost.\",\n+  \"plugin_invalid_base_url\": \"عنوان URL الأساسي غير صالح.\",\n   \"plugin_invalid_bool\": \"قيمة منطقية غير صالحة: %q\",\n   \"plugin_invalid_boolean_value\": \"قيمة منطقية غير صالحة: %v\",\n   \"plugin_not_configured\": \" ⚠️  غير مُكوَّن\","
+  },
+  {
+   "filename": "internal/i18n/locales/de.json",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -491,6 +491,8 @@\n   \"plugin_configured\": \" ✓\",\n   \"plugin_enable_bool_question\": \"%v %v aktivieren (true/false)\",\n   \"plugin_enter_value\": \"Geben Sie Ihren %v %v ein\",\n+  \"plugin_insecure_base_url\": \"Fabric sendet keine Zugangsdaten und Prompts im Klartext an %s. Verwenden Sie eine https://-URL. http:// ist nur für localhost erlaubt.\",\n+  \"plugin_invalid_base_url\": \"Die Basis-URL ist ungültig.\",\n   \"plugin_invalid_bool\": \"Ungültiger boolescher Wert: %q\",\n   \"plugin_invalid_boolean_value\": \"Ungültiger Boolescher Wert: %v\",\n   \"plugin_not_configured\": \" ⚠️  NICHT KONFIGURIERT\","
+  },
+  {
+   "filename": "internal/i18n/locales/en.json",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -491,6 +491,8 @@\n   \"plugin_configured\": \" ✓\",\n   \"plugin_enable_bool_question\": \"Enable %v %v (true/false)\",\n   \"plugin_enter_value\": \"Enter your %v %v\",\n+  \"plugin_insecure_base_url\": \"Fabric does not send credentials and prompts to %s as plaintext. Use an https:// URL. You can use http:// only for localhost.\",\n+  \"plugin_invalid_base_url\": \"The base URL is not valid.\",\n   \"plugin_invalid_bool\": \"invalid bool: %q\",\n   \"plugin_invalid_boolean_value\": \"invalid boolean value: %v\",\n   \"plugin_not_configured\": \" ⚠️  NOT CONFIGURED\","
+  },
+  {
+   "filename": "internal/i18n/locales/es.json",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -491,6 +491,8 @@\n   \"plugin_configured\": \" ✓\",\n   \"plugin_enable_bool_question\": \"Habilitar %v %v (true/false)\",\n   \"plugin_enter_value\": \"Introduce tu %v %v\",\n+  \"plugin_insecure_base_url\": \"Fabric no envía credenciales ni prompts a %s en texto sin cifrar. Use una URL https://. http:// solo se permite para localhost.\",\n+  \"plugin_invalid_base_url\": \"La URL base no es válida.\",\n   \"plugin_invalid_bool\": \"bool no válido: %q\",\n   \"plugin_invalid_boolean_value\": \"valor booleano no válido: %v\",\n   \"plugin_not_configured\": \" ⚠️  NO CONFIGURADO\","
+  },
+  {
+   "filename": "internal/i18n/locales/fa.json",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -491,6 +491,8 @@\n   \"plugin_configured\": \" ✓\",\n   \"plugin_enable_bool_question\": \"%v %v را فعال کنید (true/false)\",\n   \"plugin_enter_value\": \"مقدار %v %v خود را وارد کنید\",\n+  \"plugin_insecure_base_url\": \"Fabric اعتبارنامه‌ها و پرامپت‌ها را به‌صورت متن ساده به %s ارسال نمی‌کند. از یک نشانی https:// استفاده کنید. http:// فقط برای localhost مجاز است.\",\n+  \"plugin_invalid_base_url\": \"نشانی پایه معتبر نیست.\",\n   \"plugin_invalid_bool\": \"مقدار bool نامعتبر: %q\",\n   \"plugin_invalid_boolean_value\": \"مقدار بولی نامعتبر: %v\",\n   \"plugin_not_configured\": \" ⚠️  پیکربندی نشده\","
+  },
+  {
+   "filename": "internal/i18n/locales/fr.json",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -491,6 +491,8 @@\n   \"plugin_configured\": \" ✓\",\n   \"plugin_enable_bool_question\": \"Activer %v %v (true/false)\",\n   \"plugin_enter_value\": \"Saisissez votre %v %v\",\n+  \"plugin_insecure_base_url\": \"Fabric n'envoie pas d'identifiants ni de prompts à %s en clair. Utilisez une URL https://. http:// n'est autorisé que pour localhost.\",\n+  \"plugin_invalid_base_url\": \"L'URL de base n'est pas valide.\",\n   \"plugin_invalid_bool\": \"booléen invalide : %q\",\n   \"plugin_invalid_boolean_value\": \"valeur booléenne invalide : %v\",\n   \"plugin_not_configured\": \" ⚠️  NON CONFIGURÉ\","
+  },
+  {
+   "filename": "internal/i18n/locales/it.json",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -491,6 +491,8 @@\n   \"plugin_configured\": \" ✓\",\n   \"plugin_enable_bool_question\": \"Abilita %v %v (true/false)\",\n   \"plugin_enter_value\": \"Inserisci il tuo %v %v\",\n+  \"plugin_insecure_base_url\": \"Fabric non invia credenziali e prompt a %s in chiaro. Usa un URL https://. http:// è consentito solo per localhost.\",\n+  \"plugin_invalid_base_url\": \"L'URL di base non è valido.\",\n   \"plugin_invalid_bool\": \"bool non valido: %q\",\n   \"plugin_invalid_boolean_value\": \"valore booleano non valido: %v\",\n   \"plugin_not_configured\": \" ⚠️  NON CONFIGURATO\","
+  },
+  {
+   "filename": "internal/i18n/locales/ja.json",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -491,6 +491,8 @@\n   \"plugin_configured\": \" ✓\",\n   \"plugin_enable_bool_question\": \"%v の %v を有効にしますか (true/false)\",\n   \"plugin_enter_value\": \"%v の %v を入力してください\",\n+  \"plugin_insecure_base_url\": \"Fabric は認証情報とプロンプトを %s に平文で送信しません。https:// の URL を使用してください。http:// は localhost でのみ使用できます。\",\n+  \"plugin_invalid_base_url\": \"ベース URL が無効です。\",\n   \"plugin_invalid_bool\": \"無効な bool です: %q\",\n   \"plugin_invalid_boolean_value\": \"無効なブール値です: %v\",\n   \"plugin_not_configured\": \" ⚠️  未設定\","
+  },
+  {
+   "filename": "internal/i18n/locales/pl.json",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -491,6 +491,8 @@\n   \"plugin_configured\": \" ✓\",\n   \"plugin_enable_bool_question\": \"Włącz %v %v (true/false)\",\n   \"plugin_enter_value\": \"Podaj swój %v %v\",\n+  \"plugin_insecure_base_url\": \"Fabric nie wysyła danych uwierzytelniających ani promptów do %s jawnym tekstem. Użyj adresu URL https://. http:// jest dozwolone tylko dla localhost.\",\n+  \"plugin_invalid_base_url\": \"Bazowy adres URL jest nieprawidłowy.\",\n   \"plugin_invalid_bool\": \"nieprawidłowa wartość logiczna: %q\",\n   \"plugin_invalid_boolean_value\": \"nieprawidłowa wartość logiczna: %v\",\n   \"plugin_not_configured\": \" ⚠️  NIE SKONFIGUROWANE\","
+  },
+  {
+   "filename": "internal/i18n/locales/pt-BR.json",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -491,6 +491,8 @@\n   \"plugin_configured\": \" ✓\",\n   \"plugin_enable_bool_question\": \"Ativar %v %v (true/false)\",\n   \"plugin_enter_value\": \"Informe seu %v %v\",\n+  \"plugin_insecure_base_url\": \"O Fabric não envia credenciais e prompts para %s em texto simples. Use uma URL https://. http:// é permitido apenas para localhost.\",\n+  \"plugin_invalid_base_url\": \"A URL base não é válida.\",\n   \"plugin_invalid_bool\": \"bool inválido: %q\",\n   \"plugin_invalid_boolean_value\": \"valor booleano inválido: %v\",\n   \"plugin_not_configured\": \" ⚠️  NÃO CONFIGURADO\","
+  },
+  {
+   "filename": "internal/i18n/locales/pt-PT.json",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -491,6 +491,8 @@\n   \"plugin_configured\": \" ✓\",\n   \"plugin_enable_bool_question\": \"Ativar %v %v (true/false)\",\n   \"plugin_enter_value\": \"Indique o seu %v %v\",\n+  \"plugin_insecure_base_url\": \"O Fabric não envia credenciais e prompts para %s em texto simples. Utilize um URL https://. http:// só é permitido para localhost.\",\n+  \"plugin_invalid_base_url\": \"O URL base não é válido.\",\n   \"plugin_invalid_bool\": \"bool inválido: %q\",\n   \"plugin_invalid_boolean_value\": \"valor booleano inválido: %v\",\n   \"plugin_not_configured\": \" ⚠️  NÃO CONFIGURADO\","
+  },
+  {
+   "filename": "internal/i18n/locales/tr.json",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -491,6 +491,8 @@\n   \"plugin_configured\": \" ✓\",\n   \"plugin_enable_bool_question\": \"%v %v etkinleştirilsin mi (true/false)\",\n   \"plugin_enter_value\": \"%v %v değerinizi girin\",\n+  \"plugin_insecure_base_url\": \"Fabric kimlik bilgilerini ve istemleri %s adresine düz metin olarak göndermez. Bir https:// URL'si kullanın. http:// yalnızca localhost için kullanılabilir.\",\n+  \"plugin_invalid_base_url\": \"Temel URL geçerli değil.\",\n   \"plugin_invalid_bool\": \"geçersiz boolean: %q\",\n   \"plugin_invalid_boolean_value\": \"geçersiz boolean değeri: %v\",\n   \"plugin_not_configured\": \" ⚠️  YAPILANDIRILMADI\","
+  },
+  {
+   "filename": "internal/i18n/locales/zh.json",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -491,6 +491,8 @@\n   \"plugin_configured\": \" ✓\",\n   \"plugin_enable_bool_question\": \"启用 %v %v（true/false）\",\n   \"plugin_enter_value\": \"请输入您的 %v %v\",\n+  \"plugin_insecure_base_url\": \"Fabric 不会以明文方式向 %s 发送凭据和提示词。请使用 https:// URL。http:// 仅允许用于 localhost。\",\n+  \"plugin_invalid_base_url\": \"基础 URL 无效。\",\n   \"plugin_invalid_bool\": \"无效的 bool：%q\",\n   \"plugin_invalid_boolean_value\": \"无效的布尔值：%v\",\n   \"plugin_not_configured\": \" ⚠️  未配置\","
+  },
+  {
+   "filename": "internal/plugins/ai/codex/codex.go",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -104,6 +104,10 @@ func (c *Client) Setup() error {\n \tif err := c.AuthBaseURL.Ask(vendorName); err != nil {\n \t\treturn err\n \t}\n+\t// Check the origins before the OAuth flow sends the code and the verifier.\n+\tif err := c.requireSecureOrigins(); err != nil {\n+\t\treturn err\n+\t}\n \n \tif strings.TrimSpace(c.RefreshToken.Value) != \"\" {\n \t\tif err := c.configure(); err == nil {\n@@ -149,6 +153,9 @@ func (c *Client) configure() error {\n \tif strings.TrimSpace(c.RefreshToken.Value) == \"\" {\n \t\treturn errors.New(i18n.T(\"codex_refresh_token_required\"))\n \t}\n+\tif err := c.requireSecureOrigins(); err != nil {\n+\t\treturn err\n+\t}\n \n \tif _, _, err := c.ensureAccessToken(context.Background(), false); err != nil {\n \t\treturn err\n@@ -170,6 +177,19 @@ func (c *Client) configure() error {\n \treturn nil\n }\n \n+// requireSecureOrigins refuses plaintext http to a remote auth or API origin.\n+// The refresh token goes to the auth origin, the access token to the API origin.\n+// The transport reads these settings for each request, so call this check\n+// again when they change.\n+func (c *Client) requireSecureOrigins() error {\n+\tfor _, baseURL := range []string{c.AuthBaseURL.Value, c.ApiBaseURL.Value} {\n+\t\tif err := plugins.RequireSecureBaseURL(baseURL); err != nil {\n+\t\t\treturn err\n+\t\t}\n+\t}\n+\treturn nil\n+}\n+\n // LoadEnvSettings copies non-empty Codex token values from env.\n func (c *Client) LoadEnvSettings(env map[string]string) {\n \tapply := func(setting *plugins.Setting) {"
+  },
+  {
+   "filename": "internal/plugins/ai/codex/codex_test.go",
+   "status": "modified",
+   "additions": 60,
+   "deletions": 0,
+   "patch": "@@ -11,6 +11,7 @@ import (\n \t\"net/http\"\n \t\"net/http/httptest\"\n \t\"net/url\"\n+\t\"os\"\n \t\"strings\"\n \t\"sync\"\n \t\"sync/atomic\"\n@@ -25,6 +26,14 @@ import (\n \t\"github.com/openai/openai-go/v3/shared/constant\"\n )\n \n+func TestMain(m *testing.M) {\n+\tif _, err := i18n.Init(\"en\"); err != nil {\n+\t\tfmt.Fprintf(os.Stderr, \"failed to init i18n: %v\\n\", err)\n+\t\tos.Exit(1)\n+\t}\n+\tos.Exit(m.Run())\n+}\n+\n func TestBuildAuthorizeURLIncludesPKCE(t *testing.T) {\n \tpkce := pkceCodes{\n \t\tCodeVerifier:  \"verifier\",\n@@ -899,3 +908,54 @@ func TestRunOAuthFlowIgnoresCallbackWithWrongState(t *testing.T) {\n \t\tt.Fatalf(\"wrong-state callback status = %d, want %d\", got, http.StatusBadRequest)\n \t}\n }\n+\n+func TestConfigureRejectsPlaintextRemoteOrigins(t *testing.T) {\n+\t// The auth server fails the test if a token request gets to it.\n+\tauthServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tt.Errorf(\"unexpected auth request to %s\", r.URL.Path)\n+\t}))\n+\tdefer authServer.Close()\n+\n+\tfor _, tc := range []struct{ name, api, auth, origin string }{\n+\t\t{\"auth origin\", defaultBaseURL, \"http://auth.example.com\", \"http://auth.example.com\"},\n+\t\t{\"api origin\", \"http://api.example.com/codex\", authServer.URL, \"http://api.example.com\"},\n+\t} {\n+\t\tt.Run(tc.name, func(t *testing.T) {\n+\t\t\tclient := NewClient()\n+\t\t\tclient.ApiBaseURL.Value = tc.api\n+\t\t\tclient.AuthBaseURL.Value = tc.auth\n+\t\t\tclient.RefreshToken.Value = \"synthetic-refresh-token\"\n+\n+\t\t\t// The check runs before any token request, so nothing is sent.\n+\t\t\terr := client.configure()\n+\t\t\tif err == nil || !strings.Contains(err.Error(), tc.origin) {\n+\t\t\t\tt.Fatalf(\"configure() error = %v, want a refusal of %s\", err, tc.origin)\n+\t\t\t}\n+\t\t\tif strings.Contains(err.Error(), \"synthetic-refresh-token\") {\n+\t\t\t\tt.Fatalf(\"error leaks the refresh token: %v\", err)\n+\t\t\t}\n+\t\t})\n+\t}\n+}\n+\n+func TestSetupRejectsPlaintextRemoteAuthOrigin(t *testing.T) {\n+\t// Empty answers keep the current values.\n+\tstdin, w, err := os.Pipe()\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\t_ = w.Close()\n+\toldStdin := os.Stdin\n+\tos.Stdin = stdin\n+\tt.Cleanup(func() { os.Stdin = oldStdin; _ = stdin.Close() })\n+\n+\tclient := NewClient()\n+\tclient.AuthBaseURL.Value = \"http://auth.example.com\"\n+\tt.Setenv(client.AuthBaseURL.EnvVariable, \"\")\n+\tt.Setenv(client.ApiBaseURL.EnvVariable, \"\")\n+\n+\t// The check runs before the OAuth flow opens a browser.\n+\tif err := client.Setup(); err == nil || !strings.Contains(err.Error(), \"http://auth.example.com\") {\n+\t\tt.Fatalf(\"Setup() error = %v, want a refusal of http://auth.example.com\", err)\n+\t}\n+}"
+  },
+  {
+   "filename": "internal/plugins/ai/exolab/exolab.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -32,6 +32,9 @@ type Client struct {\n }\n \n func (oi *Client) configure() (err error) {\n+\tif err = plugins.RequireSecureBaseURL(oi.ApiBaseURL.Value); err != nil {\n+\t\treturn\n+\t}\n \toi.apiModels = strings.Split(oi.ApiModels.Value, \",\")\n \n \topts := []option.RequestOption{option.WithAPIKey(oi.ApiKey.Value)}"
+  },
+  {
+   "filename": "internal/plugins/ai/exolab/exolab_test.go",
+   "status": "added",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,30 @@\n+package exolab\n+\n+import (\n+\t\"fmt\"\n+\t\"os\"\n+\t\"testing\"\n+\n+\t\"github.com/danielmiessler/fabric/internal/i18n\"\n+)\n+\n+func TestMain(m *testing.M) {\n+\tif _, err := i18n.Init(\"en\"); err != nil {\n+\t\tfmt.Fprintf(os.Stderr, \"failed to init i18n: %v\\n\", err)\n+\t\tos.Exit(1)\n+\t}\n+\tos.Exit(m.Run())\n+}\n+\n+func TestConfigureRequiresHTTPSForRemoteBaseURL(t *testing.T) {\n+\tfor baseURL, wantErr := range map[string]bool{\n+\t\t\"http://localhost:52415/v1\": false,\n+\t\t\"http://api.example.com/v1\": true,\n+\t} {\n+\t\tclient := NewClient()\n+\t\tclient.ApiBaseURL.Value = baseURL\n+\t\tif err := client.configure(); (err != nil) != wantErr {\n+\t\t\tt.Errorf(\"configure() with %s: error = %v, want error %t\", baseURL, err, wantErr)\n+\t\t}\n+\t}\n+}"
+  },
+  {
+   "filename": "internal/plugins/ai/openai/openai.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -1,6 +1,7 @@\n package openai\n \n import (\n+\t\"cmp\"\n \t\"context\"\n \t\"encoding/json\"\n \t\"errors\"\n@@ -141,6 +142,10 @@ func checkImageGenerationCompatibility(model string) {\n }\n \n func (o *Client) configure() (ret error) {\n+\t// With no base URL, the SDK reads OPENAI_BASE_URL from the environment.\n+\tif ret = plugins.RequireSecureBaseURL(cmp.Or(o.ApiBaseURL.Value, os.Getenv(\"OPENAI_BASE_URL\"))); ret != nil {\n+\t\treturn\n+\t}\n \topts := []option.RequestOption{option.WithAPIKey(o.ApiKey.Value)}\n \tif o.ApiBaseURL.Value != \"\" {\n \t\topts = append(opts, option.WithBaseURL(o.ApiBaseURL.Value))"
+  },
+  {
+   "filename": "internal/plugins/ai/openai/openai_test.go",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -13,13 +13,22 @@ import (\n \n \t\"github.com/danielmiessler/fabric/internal/chat\"\n \t\"github.com/danielmiessler/fabric/internal/domain\"\n+\t\"github.com/danielmiessler/fabric/internal/i18n\"\n \topenai \"github.com/openai/openai-go/v3\"\n \t\"github.com/openai/openai-go/v3/responses\"\n \t\"github.com/openai/openai-go/v3/shared\"\n \t\"github.com/stretchr/testify/assert\"\n \t\"github.com/stretchr/testify/require\"\n )\n \n+func TestMain(m *testing.M) {\n+\tif _, err := i18n.Init(\"en\"); err != nil {\n+\t\tfmt.Fprintf(os.Stderr, \"failed to init i18n: %v\\n\", err)\n+\t\tos.Exit(1)\n+\t}\n+\tos.Exit(m.Run())\n+}\n+\n func TestNeedsRawModeGPT6(t *testing.T) {\n \tif !NewClient().NeedsRawMode(\"gpt-6-astra\") {\n \t\tt.Fatal(\"gpt-6 models should use raw mode\")\n@@ -411,3 +420,18 @@ func TestExtractTextSearchResultSources(t *testing.T) {\n \n \tassert.Equal(t, \"Answer.[2]\\n\\n## Sources\\n\\n- [1] [T1](https://a.example)\\n- [2] [T2](https://b.example)\", NewClient().extractText(&resp))\n }\n+\n+func TestConfigureRejectsPlaintextRemoteBaseURL(t *testing.T) {\n+\tclient := NewClient()\n+\tclient.ApiKey.Value = \"synthetic-key\"\n+\tclient.ApiBaseURL.Value = \"http://api.example.com/v1\"\n+\tassert.ErrorContains(t, client.configure(), \"http://api.example.com\")\n+}\n+\n+func TestConfigureRejectsPlaintextRemoteEnvBaseURL(t *testing.T) {\n+\tt.Setenv(\"OPENAI_BASE_URL\", \"http://env.example.com/v1\")\n+\tclient := NewClient()\n+\tclient.ApiKey.Value = \"synthetic-key\"\n+\tclient.ApiBaseURL.Value = \"\"\n+\tassert.ErrorContains(t, client.configure(), \"http://env.example.com\")\n+}"
+  },
+  {
+   "filename": "internal/plugins/ai/openai_compatible/providers_config_test.go",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -1,11 +1,22 @@\n package openai_compatible\n \n import (\n+\t\"fmt\"\n+\t\"os\"\n \t\"testing\"\n \n+\t\"github.com/danielmiessler/fabric/internal/i18n\"\n \t\"github.com/stretchr/testify/assert\"\n )\n \n+func TestMain(m *testing.M) {\n+\tif _, err := i18n.Init(\"en\"); err != nil {\n+\t\tfmt.Fprintf(os.Stderr, \"failed to init i18n: %v\\n\", err)\n+\t\tos.Exit(1)\n+\t}\n+\tos.Exit(m.Run())\n+}\n+\n func TestCreateClient(t *testing.T) {\n \ttestCases := []struct {\n \t\tname     string\n@@ -168,3 +179,16 @@ func TestIsConfiguredOptionalKey(t *testing.T) {\n \t\tt.Fatal(\"required-key provider must not be configured without a key\")\n \t}\n }\n+\n+func TestConfigureRequiresHTTPSForRemoteBaseURL(t *testing.T) {\n+\tt.Setenv(\"MISTRAL_API_KEY\", \"synthetic-key\")\n+\tt.Setenv(\"MISTRAL_API_BASE_URL\", \"http://api.example.com/v1\")\n+\tclient, _ := CreateClient(\"Mistral\")\n+\tassert.ErrorContains(t, client.Configure(), \"http://api.example.com\")\n+\n+\t// The LiteLLM default is http://localhost, so it stays accepted.\n+\tt.Setenv(\"LITELLM_API_KEY\", \"synthetic-key\")\n+\tt.Setenv(\"LITELLM_API_BASE_URL\", \"\")\n+\tclient, _ = CreateClient(\"LiteLLM\")\n+\tassert.NoError(t, client.Configure())\n+}"
+  },
+  {
+   "filename": "internal/plugins/endpoint.go",
+   "status": "added",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,35 @@\n+package plugins\n+\n+import (\n+\t\"errors\"\n+\t\"fmt\"\n+\t\"net/url\"\n+\t\"strings\"\n+\n+\t\"github.com/danielmiessler/fabric/internal/i18n\"\n+\t\"github.com/danielmiessler/fabric/internal/util\"\n+)\n+\n+// RequireSecureBaseURL checks the base URL of a vendor that gets an API key\n+// or token. It accepts https, and http only for a loopback host, so that\n+// credentials and prompts do not cross a network in plaintext. An empty URL\n+// is accepted: the vendor then uses its default.\n+func RequireSecureBaseURL(rawURL string) error {\n+\trawURL = strings.TrimSpace(rawURL)\n+\tif rawURL == \"\" {\n+\t\treturn nil\n+\t}\n+\tparsed, err := url.Parse(rawURL)\n+\tif err != nil || parsed.Scheme == \"\" || parsed.Host == \"\" {\n+\t\treturn errors.New(i18n.T(\"plugin_invalid_base_url\"))\n+\t}\n+\tswitch parsed.Scheme {\n+\tcase \"https\":\n+\t\treturn nil\n+\tcase \"http\":\n+\t\tif util.IsLoopbackHost(parsed.Hostname()) {\n+\t\t\treturn nil\n+\t\t}\n+\t}\n+\treturn fmt.Errorf(i18n.T(\"plugin_insecure_base_url\"), parsed.Scheme+\"://\"+parsed.Host)\n+}"
+  },
+  {
+   "filename": "internal/plugins/endpoint_test.go",
+   "status": "added",
+   "additions": 73,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,73 @@\n+package plugins\n+\n+import (\n+\t\"fmt\"\n+\t\"os\"\n+\t\"strings\"\n+\t\"testing\"\n+\n+\t\"github.com/danielmiessler/fabric/internal/i18n\"\n+)\n+\n+func TestMain(m *testing.M) {\n+\tif _, err := i18n.Init(\"en\"); err != nil {\n+\t\tfmt.Fprintf(os.Stderr, \"failed to init i18n: %v\\n\", err)\n+\t\tos.Exit(1)\n+\t}\n+\tos.Exit(m.Run())\n+}\n+\n+func TestRequireSecureBaseURL(t *testing.T) {\n+\tok := []string{\n+\t\t\"\",\n+\t\t\"   \",\n+\t\t\"https://api.example.com/v1\",\n+\t\t\"HTTPS://api.example.com\",\n+\t\t\"http://localhost:1234/v1\",\n+\t\t\"http://127.0.0.1:11434\",\n+\t\t\"http://127.1.2.3\",\n+\t\t\"http://[::1]:8080\",\n+\t\t\"http://app.localhost:3000\",\n+\t\t\"http://localhost.:8080\",\n+\t\t\"HTTP://LOCALHOST:1\",\n+\t\t\"http://[::ffff:127.0.0.1]:1\",\n+\t}\n+\tfor _, raw := range ok {\n+\t\tif err := RequireSecureBaseURL(raw); err != nil {\n+\t\t\tt.Errorf(\"RequireSecureBaseURL(%q) = %v, want nil\", raw, err)\n+\t\t}\n+\t}\n+\n+\tbad := []string{\n+\t\t\"http://api.example.com/v1\",\n+\t\t\"http://192.168.1.10:8000/v1\",\n+\t\t\"http://localhost.evil.example/v1\",\n+\t\t\"ftp://localhost/v1\",\n+\t\t\"api.example.com/v1\",\n+\t\t\"http://\",\n+\t\t\"//api.example.com\",\n+\t\t\"http://0.0.0.0:1\",\n+\t\t\"http://127.0.0.1.nip.io\",\n+\t\t\"http://[::1\",\n+\t}\n+\tfor _, raw := range bad {\n+\t\tif err := RequireSecureBaseURL(raw); err == nil {\n+\t\t\tt.Errorf(\"RequireSecureBaseURL(%q) = nil, want an error\", raw)\n+\t\t}\n+\t}\n+}\n+\n+func TestRequireSecureBaseURLErrorOmitsCredentials(t *testing.T) {\n+\terr := RequireSecureBaseURL(\"http://user:secret@api.example.com/v1?key=abc\")\n+\tif err == nil {\n+\t\tt.Fatal(\"want an error for plaintext http to a remote host\")\n+\t}\n+\tif !strings.Contains(err.Error(), \"http://api.example.com\") {\n+\t\tt.Errorf(\"error %q does not name the refused origin\", err)\n+\t}\n+\tfor _, leak := range []string{\"user:secret\", \"key=abc\"} {\n+\t\tif strings.Contains(err.Error(), leak) {\n+\t\t\tt.Errorf(\"error %q leaks %q\", err, leak)\n+\t\t}\n+\t}\n+}"
+  },
+  {
+   "filename": "internal/server/auth.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -5,6 +5,7 @@ import (\n \t\"crypto/subtle\"\n \t\"fmt\"\n \t\"log/slog\"\n+\t\"net\"\n \t\"net/http\"\n \t\"strings\"\n \n@@ -25,7 +26,11 @@ func requireAPIKeyForBind(address, apiKey string) error {\n \tif apiKey != \"\" && len(apiKey) < minAPIKeyLength {\n \t\tslog.Warn(\"API key is short: use a random key of 16 or more characters\", \"length\", len(apiKey))\n \t}\n-\tif apiKey != \"\" || isLoopbackHost(hostOnly(address)) {\n+\t// Only the exact name \"localhost\" or a loopback IP is accepted. A name\n+\t// such as \"app.localhost\" goes to DNS on some systems, and the server\n+\t// can then listen on a public interface with no key.\n+\thost := hostOnly(address)\n+\tif apiKey != \"\" || host == \"localhost\" || net.ParseIP(host).IsLoopback() {\n \t\treturn nil\n \t}\n \treturn fmt.Errorf(i18n.T(\"server_api_key_required\"), address)"
+  },
+  {
+   "filename": "internal/server/loopback_guard.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 12,
+   "patch": "@@ -8,6 +8,7 @@ import (\n \t\"net/url\"\n \t\"strings\"\n \n+\t\"github.com/danielmiessler/fabric/internal/util\"\n \t\"github.com/gin-gonic/gin\"\n )\n \n@@ -21,17 +22,6 @@ func hostOnly(hostport string) string {\n \treturn strings.Trim(hostport, \"[]\")\n }\n \n-// isLoopbackHost tells if host is \"localhost\" or a loopback IP address.\n-func isLoopbackHost(host string) bool {\n-\tif host == \"localhost\" {\n-\t\treturn true\n-\t}\n-\tif ip := net.ParseIP(host); ip != nil {\n-\t\treturn ip.IsLoopback()\n-\t}\n-\treturn false\n-}\n-\n // originHost gives the host name of an Origin header value, with no port.\n func originHost(origin string) (string, bool) {\n \tu, err := url.Parse(origin)\n@@ -83,7 +73,7 @@ func LoopbackSecurityMiddleware(corsOrigins []string) gin.HandlerFunc {\n \n \t\t// The Host must be a loopback host or the host of a CORS origin.\n \t\thost := hostOnly(c.Request.Host)\n-\t\tif !isLoopbackHost(host) && !allowedHosts[host] {\n+\t\tif !util.IsLoopbackHost(host) && !allowedHosts[host] {\n \t\t\tslog.Warn(\"request blocked: unexpected Host\", \"client\", c.ClientIP(), \"host\", c.Request.Host, \"path\", c.Request.URL.Path)\n \t\t\tc.AbortWithStatusJSON(http.StatusForbidden, gin.H{\"error\": \"Forbidden: unexpected Host header\"})\n \t\t\treturn"
+  },
+  {
+   "filename": "internal/server/path_traversal_test.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -270,6 +270,7 @@ func TestRequireAPIKeyForBind(t *testing.T) {\n \t\t{\"[::]:8080\", \"\", true},\n \t\t{\"192.168.1.50:8080\", \"\", true},\n \t\t{\"example.com:8080\", \"\", true},\n+\t\t{\"app.localhost:8080\", \"\", true}, // may resolve through DNS\n \t\t{\":8080\", \"secret\", false},\n \t\t{\"0.0.0.0:8080\", \"secret\", false},\n \t}"
+  },
+  {
+   "filename": "internal/util/httpclient.go",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -7,6 +7,7 @@ import (\n \t\"net\"\n \t\"net/http\"\n \t\"net/netip\"\n+\t\"strings\"\n \t\"syscall\"\n \t\"time\"\n \n@@ -108,3 +109,14 @@ func NewPublicHTTPClient(timeout time.Duration, control func(network, address st\n \t\t},\n \t}\n }\n+\n+// IsLoopbackHost tells if host is \"localhost\", a subdomain of \"localhost\" or\n+// a loopback IP address. The host has no port and no IPv6 brackets.\n+func IsLoopbackHost(host string) bool {\n+\thost = strings.ToLower(strings.TrimSuffix(host, \".\"))\n+\tif host == \"localhost\" || strings.HasSuffix(host, \".localhost\") {\n+\t\treturn true\n+\t}\n+\tip := net.ParseIP(host)\n+\treturn ip != nil && ip.IsLoopback()\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/i18n/i18n_test.go",
+  "internal/plugins/ai/codex/codex_test.go",
+  "internal/plugins/ai/exolab/exolab_test.go",
+  "internal/plugins/ai/openai/openai_test.go",
+  "internal/plugins/ai/openai_compatible/providers_config_test.go",
+  "internal/plugins/endpoint_test.go",
+  "internal/server/path_traversal_test.go"
+ ]
+}

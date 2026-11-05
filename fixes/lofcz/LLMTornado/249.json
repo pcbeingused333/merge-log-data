@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 249,
+ "url": "https://github.com/lofcz/LLMTornado/pull/249",
+ "title": "Image edit: send b64_json as the multipart response_format",
+ "merged_at": "2026-10-21T08:19:52Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/ImageEditResponseFormatTests.cs",
+   "status": "added",
+   "additions": 92,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,92 @@\n+using System.IO;\n+using System.Net;\n+using System.Net.Sockets;\n+using System.Text;\n+using System.Text.RegularExpressions;\n+using LlmTornado.Code;\n+using LlmTornado.Code.Vendor;\n+using LlmTornado.Images;\n+using LlmTornado.Images.Models;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class ImageEditResponseFormatTests\n+{\n+    private const string Reply = \"\"\"{\"created\":1,\"data\":[{\"b64_json\":\"AAAA\"}]}\"\"\";\n+\n+    [TestCase(TornadoImageResponseFormats.Base64, \"b64_json\")]\n+    [TestCase(TornadoImageResponseFormats.Url, \"url\")]\n+    public async Task MultipartEdit_SendsTheResponseFormatOpenAiAccepts(TornadoImageResponseFormats format, string expected)\n+    {\n+        using FakeServer server = new FakeServer(Reply);\n+        TornadoApi api = new TornadoApi(new OpenAiEndpointProvider(LLmProviders.OpenAi)\n+        {\n+            Auth = new ProviderAuthentication(LLmProviders.OpenAi, \"test-key\"),\n+            UrlResolver = (_, _, _) => $\"http://127.0.0.1:{server.Port}/v1/{{0}}{{1}}\"\n+        });\n+\n+        await api.ImageEdit.EditImage(new ImageEditRequest(new TornadoInputFile(\"iVBORw0KGgo=\", \"image/png\"), \"Add a hat\", responseFormat: format, model: ImageModel.OpenAi.Gpt.V1Mini));\n+\n+        Match match = Regex.Match(server.RequestBodies.Single(), \"name=\\\"?response_format\\\"?\\\\r?\\\\n\\\\r?\\\\n(\\\\w+)\");\n+        Assert.That(match.Success, Is.True);\n+        Assert.That(match.Groups[1].Value, Is.EqualTo(expected));\n+    }\n+\n+    private sealed class FakeServer : IDisposable\n+    {\n+        private readonly HttpListener listener = new HttpListener();\n+        private readonly string response;\n+\n+        public int Port { get; }\n+        public List<string> RequestBodies { get; } = [];\n+\n+        public FakeServer(string response)\n+        {\n+            this.response = response;\n+\n+            TcpListener probe = new TcpListener(IPAddress.Loopback, 0);\n+            probe.Start();\n+            Port = ((IPEndPoint)probe.LocalEndpoint).Port;\n+            probe.Stop();\n+\n+            listener.Prefixes.Add($\"http://127.0.0.1:{Port}/\");\n+            listener.Start();\n+            _ = Serve();\n+        }\n+\n+        private async Task Serve()\n+        {\n+            while (listener.IsListening)\n+            {\n+                HttpListenerContext context;\n+\n+                try\n+                {\n+                    context = await listener.GetContextAsync().ConfigureAwait(false);\n+                }\n+                catch (Exception)\n+                {\n+                    // listener closed\n+                    return;\n+                }\n+\n+                using (StreamReader reader = new StreamReader(context.Request.InputStream))\n+                {\n+                    RequestBodies.Add(await reader.ReadToEndAsync().ConfigureAwait(false));\n+                }\n+\n+                byte[] bytes = Encoding.UTF8.GetBytes(response);\n+                context.Response.StatusCode = 200;\n+                context.Response.ContentType = \"application/json\";\n+                await context.Response.OutputStream.WriteAsync(bytes).ConfigureAwait(false);\n+                context.Response.Close();\n+            }\n+        }\n+\n+        public void Dispose()\n+        {\n+            listener.Close();\n+        }\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Images/ImageEditEndpoint.cs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -165,9 +165,9 @@ internal ImageEditEndpoint(TornadoApi api) : base(api)\n         {\n             string format = request.ResponseFormat.Value switch\n             { \n-                TornadoImageResponseFormats.Base64 => \"base64\",\n+                TornadoImageResponseFormats.Base64 => \"b64_json\",\n                 TornadoImageResponseFormats.Url => \"url\",\n-                _ => \"base64\"\n+                _ => \"b64_json\"\n             };\n             \n             content.Add(new StringContent(format), \"response_format\");   "
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/ImageEditResponseFormatTests.cs"
+ ]
+}

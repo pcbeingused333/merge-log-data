@@ -1,0 +1,33 @@
+{
+ "repo": "patterns-ai-core/langchainrb",
+ "number": 1083,
+ "url": "https://github.com/patterns-ai-core/langchainrb/pull/1083",
+ "title": "Count prompt-cache tokens in AnthropicResponse#prompt_tokens",
+ "merged_at": "2026-10-21T18:48:25Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n - [SECURITY]: A change which fixes a security vulnerability.\n \n ## [Unreleased]\n+- [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1083] `Langchain::LLM::Response::AnthropicResponse#prompt_tokens` (and `#total_tokens`) include the prompt-cache read and creation tokens that Anthropic reports apart from `input_tokens`; they were left out before.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1084] `Langchain::LLM::Response::GoogleGeminiResponse#completion_tokens` includes the thinking tokens (`thoughtsTokenCount`), so prompt plus completion tokens match `total_tokens` for thinking models.\n - [BUGFIX] [https://github.com/patterns-ai-core/langchainrb/pull/1079] `Langchain::DependencyHelper#depends_on` accepts a gem that's in the bundle through another gem's gemspec instead of the `Gemfile`, such as `aws-sdk-bedrockruntime` declared by a gem that depends on langchainrb; it raised `LoadError` before.\n - [FEATURE] [https://github.com/patterns-ai-core/langchainrb/pull/1078] Add `Langchain::Vectorsearch::Milvus#update_texts`; with the default `auto_id` schema Milvus gives each updated text a new id, returned under `\"data\" => \"upsertIds\"`."
+  },
+  {
+   "filename": "lib/langchain/llm/response/anthropic_response.rb",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -46,7 +46,9 @@ def log_id\n     end\n \n     def prompt_tokens\n-      raw_response[:usage][:input_tokens].to_i\n+      usage = raw_response[:usage]\n+      # Anthropic reports tokens read from or written to the prompt cache apart from input_tokens\n+      usage[:input_tokens].to_i + usage[:cache_read_input_tokens].to_i + usage[:cache_creation_input_tokens].to_i\n     end\n \n     def completion_tokens"
+  },
+  {
+   "filename": "spec/lib/langchain/llm/response/anthropic_response_spec.rb",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -12,6 +12,26 @@\n     end\n   end\n \n+  describe \"token counts\" do\n+    it \"counts the cached prompt tokens as prompt tokens\" do\n+      raw = raw_chat_completions_response.merge(\n+        usage: {input_tokens: 10, cache_creation_input_tokens: 200, cache_read_input_tokens: 3000, output_tokens: 25}\n+      )\n+      response = described_class.new(raw)\n+\n+      expect(response.prompt_tokens).to eq(3210)\n+      expect(response.completion_tokens).to eq(25)\n+      expect(response.total_tokens).to eq(3235)\n+    end\n+\n+    it \"keeps counting input_tokens alone when nothing is cached\" do\n+      response = described_class.new(raw_chat_completions_response.merge(usage: {input_tokens: 10, output_tokens: 25}))\n+\n+      expect(response.prompt_tokens).to eq(10)\n+      expect(response.total_tokens).to eq(35)\n+    end\n+  end\n+\n   describe \"#tool_calls\" do\n     let(:raw_response) {\n       JSON.parse File.read(\"spec/fixtures/llm/anthropic/chat_with_tool_calls.json\"), symbolize_names: true"
+  }
+ ],
+ "test_files": [
+  "spec/lib/langchain/llm/response/anthropic_response_spec.rb"
+ ]
+}

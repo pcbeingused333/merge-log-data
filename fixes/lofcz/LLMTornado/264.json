@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 264,
+ "url": "https://github.com/lofcz/LLMTornado/pull/264",
+ "title": "Report Anthropic's pause_turn stop reason as PauseTurn",
+ "merged_at": "2026-10-22T23:46:36Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/FinishReasonMapTests.cs",
+   "status": "modified",
+   "additions": 37,
+   "deletions": 0,
+   "patch": "@@ -15,6 +15,7 @@ public class FinishReasonMapTests\n     [TestCase(\"MALFORMED_FUNCTION_CALL\", ChatMessageFinishReasons.MalformedToolCall)]\n     [TestCase(\"stop\", ChatMessageFinishReasons.EndTurn)]\n     [TestCase(\"tool_use\", ChatMessageFinishReasons.ToolCalls)]\n+    [TestCase(\"pause_turn\", ChatMessageFinishReasons.PauseTurn)]\n     public void Map_ResolvesProviderFinishReasonsRegardlessOfCase(string reason, ChatMessageFinishReasons expected)\n     {\n         Assert.That(ChatMessageFinishReasonsConverter.Map.GetValueOrDefault(reason, ChatMessageFinishReasons.Unknown), Is.EqualTo(expected));\n@@ -49,4 +50,40 @@ public async Task GoogleInboundStream_ReportsTheUppercaseFinishReasonGeminiSends\n         Assert.That(finish, Is.Not.Null);\n         Assert.That(finish!.Choices![0].FinishReason, Is.EqualTo(ChatMessageFinishReasons.Length));\n     }\n+\n+    [Test]\n+    public async Task AnthropicInboundStream_ReportsPauseTurnAsTheFinishReason()\n+    {\n+        const string sse = \"\"\"\n+            event: message_start\n+            data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_pause\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-5-5\",\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":10,\"output_tokens\":1}}}\n+\n+            event: message_delta\n+            data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"pause_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":5}}\n+\n+            event: message_stop\n+            data: {\"type\":\"message_stop\"}\n+\n+            \"\"\";\n+\n+        AnthropicEndpointProvider provider = new AnthropicEndpointProvider();\n+        StreamReader reader = new StreamReader(new MemoryStream(Encoding.UTF8.GetBytes(sse)));\n+        ChatRequest request = new ChatRequest\n+        {\n+            Stream = true,\n+            Messages = [new ChatMessage(ChatMessageRoles.User, \"test\")]\n+        };\n+\n+        ChatResult? finish = null;\n+        await foreach (ChatResult? chunk in provider.InboundStream(reader, request, null))\n+        {\n+            if (chunk?.StreamInternalKind is ChatResultStreamInternalKinds.FinishData)\n+            {\n+                finish = chunk;\n+            }\n+        }\n+\n+        Assert.That(finish, Is.Not.Null);\n+        Assert.That(finish!.Choices![0].FinishReason, Is.EqualTo(ChatMessageFinishReasons.PauseTurn));\n+    }\n }"
+  },
+  {
+   "filename": "src/LlmTornado/Code/PartialModels.cs",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 2,
+   "patch": "@@ -412,7 +412,9 @@ internal class ChatMessageFinishReasonsConverter : JsonConverter<ChatMessageFini\n         \n         { \"refusal\", ChatMessageFinishReasons.Refusal },\n         \n-        { \"compaction\", ChatMessageFinishReasons.Compaction }\n+        { \"compaction\", ChatMessageFinishReasons.Compaction },\n+        \n+        { \"pause_turn\", ChatMessageFinishReasons.PauseTurn }\n     }.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);\n     \n     /// <summary>\n@@ -567,7 +569,12 @@ public enum ChatMessageFinishReasons\n     /// Compaction was triggered and the API paused after generating the compaction summary.\n     /// Only returned when pause_after_compaction is enabled. Anthropic-specific.\n     /// </summary>\n-    Compaction\n+    Compaction,\n+    \n+    /// <summary>\n+    /// The model paused a long-running turn, for example while using a server tool. Send the response back as the last message to let the model continue. Anthropic-specific.\n+    /// </summary>\n+    PauseTurn\n }\n \n /// <summary>"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/FinishReasonMapTests.cs"
+ ]
+}

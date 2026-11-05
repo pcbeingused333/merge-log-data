@@ -1,0 +1,34 @@
+{
+ "repo": "posit-dev/pointblank",
+ "number": 481,
+ "url": "https://github.com/posit-dev/pointblank/pull/481",
+ "title": "fix: let col_vals_regex() check Categorical and Enum columns on Polars",
+ "merged_at": "2026-10-23T18:04:04Z",
+ "files": [
+  {
+   "filename": "pointblank/_interrogation.py",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 3,
+   "patch": "@@ -1257,16 +1257,22 @@ def interrogate_regex(\n \n     nw_tbl = nw.from_native(tbl)\n     assert isinstance(nw_tbl, (nw.DataFrame, nw.LazyFrame))\n+\n+    column_expr = _string_expr(nw_tbl, column)\n+\n     result_tbl = nw_tbl.with_columns(\n         pb_is_good_1=nw.col(column).is_null() & na_pass,\n-        pb_is_good_2=nw.col(column).str.contains(pattern, literal=False).fill_null(False),\n+        pb_is_good_2=column_expr.str.contains(pattern, literal=False).fill_null(False),\n     )\n \n     # Apply inverse logic if needed\n     if inverse:\n-        # Use explicit boolean logic instead of bitwise NOT for pandas compatibility\n+        # Use explicit boolean logic instead of bitwise NOT for pandas compatibility; a missing\n+        # value doesn't pass either way, so it's left to `na_pass=` (through `pb_is_good_1`)\n         result_tbl = result_tbl.with_columns(\n-            pb_is_good_2=nw.when(nw.col(\"pb_is_good_2\")).then(False).otherwise(True)\n+            pb_is_good_2=nw.when(nw.col(\"pb_is_good_2\") | nw.col(column).is_null())\n+            .then(False)\n+            .otherwise(True)\n         )\n \n     result_tbl = result_tbl.with_columns("
+  },
+  {
+   "filename": "tests/test_regex_categorical_columns.py",
+   "status": "added",
+   "additions": 70,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,70 @@\n+import pandas as pd\n+import polars as pl\n+import pyarrow as pa\n+import pytest\n+\n+from pointblank import Validate\n+\n+VALUES = [\"ax\", None, \"b\", \"ax\"]\n+\n+\n+def _table(tbl_type: str):\n+    if tbl_type == \"polars_str\":\n+        return pl.DataFrame({\"a\": VALUES})\n+    if tbl_type == \"polars_categorical\":\n+        return pl.DataFrame({\"a\": VALUES}, schema={\"a\": pl.Categorical})\n+    if tbl_type == \"polars_enum\":\n+        return pl.DataFrame({\"a\": VALUES}, schema={\"a\": pl.Enum([\"ax\", \"b\"])})\n+    if tbl_type == \"polars_lazy_enum\":\n+        return pl.LazyFrame({\"a\": VALUES}, schema={\"a\": pl.Enum([\"ax\", \"b\"])})\n+    if tbl_type == \"pandas_str\":\n+        return pd.DataFrame({\"a\": VALUES})\n+    if tbl_type == \"pandas_category\":\n+        return pd.DataFrame({\"a\": pd.Categorical(VALUES)})\n+    if tbl_type == \"pandas_pyarrow_dictionary\":\n+        return pd.DataFrame({\"a\": pd.Categorical(VALUES)}).astype(\n+            {\"a\": pd.ArrowDtype(pa.dictionary(pa.int32(), pa.string()))}\n+        )\n+    raise ValueError(tbl_type)\n+\n+\n+# `^[a-z]+$` would also match a missing value if it were cast to the string \"nan\" (as Narwhals < 2.27\n+# does for a pandas `category` column), and with `inverse=True` a missing value is left to `na_pass=`\n+@pytest.mark.parametrize(\n+    \"tbl_type\",\n+    [\n+        \"polars_str\",\n+        \"polars_categorical\",\n+        \"polars_enum\",\n+        \"polars_lazy_enum\",\n+        \"pandas_str\",\n+        \"pandas_category\",\n+        \"pandas_pyarrow_dictionary\",\n+    ],\n+)\n+@pytest.mark.parametrize(\n+    \"pattern, inverse, na_pass, expected\",\n+    [\n+        (\"^a\", False, False, (2, 2)),\n+        (\"^a\", False, True, (3, 1)),\n+        (\"^a\", True, False, (1, 3)),\n+        (\"^a\", True, True, (2, 2)),\n+        (\"^[a-z]+$\", False, False, (3, 1)),\n+        (\"^[a-z]+$\", False, True, (4, 0)),\n+        (\"^[a-z]+$\", True, False, (0, 4)),\n+        (\"^[a-z]+$\", True, True, (1, 3)),\n+    ],\n+)\n+def test_col_vals_regex_on_categorical_columns(\n+    tbl_type, pattern, inverse, na_pass, expected\n+) -> None:\n+    validation = (\n+        Validate(_table(tbl_type))\n+        .col_vals_regex(columns=\"a\", pattern=pattern, na_pass=na_pass, inverse=inverse)\n+        .interrogate()\n+    )\n+\n+    assert (\n+        validation.n_passed(i=1, scalar=True),\n+        validation.n_failed(i=1, scalar=True),\n+    ) == expected"
+  },
+  {
+   "filename": "tests/test_validate.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -5422,15 +5422,15 @@ def test_col_vals_regex_inverse(request, tbl_fixture) -> None:\n     # Test inverse=True (should fail where pattern matches)\n     # Data: [None, \"5-egh-163\", \"8-kdg-938\"] (pattern= matches the 2 strings)\n     # Inverse=True means we want values that DON'T match the pattern\n-    # Only None doesn't match the pattern, so with inverse=True, None passes\n     # The 2 strings that match the pattern now fail with inverse=True\n-    # So 1 value passes (None)\n+    # None is missing and na_pass=False, so it fails too\n+    # So no values pass\n     assert (\n         Validate(tbl)\n         .col_vals_regex(columns=\"text\", pattern=r\"[0-9]-[a-z]{3}-[0-9]{3}\", inverse=True)\n         .interrogate()\n         .n_passed(i=1, scalar=True)\n-        == 1\n+        == 0\n     )\n \n     # Test inverse=True with na_pass=True"
+  }
+ ],
+ "test_files": [
+  "tests/test_regex_categorical_columns.py",
+  "tests/test_validate.py"
+ ]
+}

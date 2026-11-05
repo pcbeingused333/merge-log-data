@@ -1,0 +1,26 @@
+{
+ "repo": "Mirascope/mirascope",
+ "number": 2915,
+ "url": "https://github.com/Mirascope/mirascope/pull/2915",
+ "title": "fix(llm): keep Google usage when candidates_token_count is absent",
+ "merged_at": "2026-10-21T15:35:22Z",
+ "files": [
+  {
+   "filename": "python/mirascope/llm/providers/google/_utils/decode.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 7,
+   "patch": "@@ -74,18 +74,16 @@ def _decode_usage(\n     candidate: genai_types.Candidate | None = None,\n ) -> Usage | None:\n     \"\"\"Convert Google UsageMetadata to Mirascope Usage.\"\"\"\n-    if (\n-        usage is None\n-        or usage.prompt_token_count is None\n-        or usage.candidates_token_count is None\n-    ):  # pragma: no cover\n+    if usage is None:  # pragma: no cover\n         return None\n \n+    # Gemini omits `candidates_token_count` when it is zero, e.g. when thinking\n+    # used up the whole `max_tokens` budget, so absent counts are read as zero.\n     reasoning_tokens = usage.thoughts_token_count or 0\n-    output_tokens = usage.candidates_token_count + reasoning_tokens\n+    output_tokens = (usage.candidates_token_count or 0) + reasoning_tokens\n \n     return Usage(\n-        input_tokens=usage.prompt_token_count,\n+        input_tokens=usage.prompt_token_count or 0,\n         output_tokens=output_tokens,\n         cache_read_tokens=usage.cached_content_token_count or 0,\n         cache_write_tokens=0,"
+  },
+  {
+   "filename": "python/tests/llm/providers/google/test_google_provider.py",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -482,3 +482,16 @@ async def async_chunks() -> AsyncIterator[genai_types.GenerateContentResponse]:\n     assert accumulated_usage.output_tokens == 70  # candidates (40) + thoughts (30)\n     assert accumulated_usage.reasoning_tokens == 30\n     assert accumulated_usage.total_tokens == 170\n+\n+\n+def test_decode_usage_without_candidates_token_count() -> None:\n+    \"\"\"Gemini omits candidates_token_count when thinking spent the whole budget.\"\"\"\n+    usage_metadata = genai_types.GenerateContentResponseUsageMetadata(\n+        prompt_token_count=100,\n+        thoughts_token_count=30,\n+    )\n+    usage = _decode_usage(usage_metadata)\n+    assert usage is not None\n+    assert usage.input_tokens == 100\n+    assert usage.output_tokens == 30\n+    assert usage.reasoning_tokens == 30"
+  }
+ ],
+ "test_files": [
+  "python/tests/llm/providers/google/test_google_provider.py"
+ ]
+}

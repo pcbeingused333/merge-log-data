@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 222,
+ "url": "https://github.com/lofcz/LLMTornado/pull/222",
+ "title": "Report the exception a tool threw, not the reflection wrapper",
+ "merged_at": "2026-10-21T05:35:43Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/ToolRunnerTests.cs",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -5,6 +5,7 @@\n using LlmTornado.Code;\n using LlmTornado.Code.Vendor;\n using LlmTornado.Common;\n+using LlmTornado.Infra;\n using Newtonsoft.Json;\n using NUnit.Framework;\n using DescriptionAttribute = System.ComponentModel.DescriptionAttribute;\n@@ -300,6 +301,41 @@ public async Task CallFuncToolAsync_WithEmptyArrayArguments_Succeeds()\n \n     #endregion\n \n+    #region Exceptions Thrown By Tools\n+\n+    [Description(\"Reads a sensor that is offline\")]\n+    public static string ReadOfflineSensor()\n+    {\n+        throw new InvalidOperationException(\"sensor offline\");\n+    }\n+\n+    [Test]\n+    public async Task CallFuncToolAsync_ToolThrows_ReportsTheToolException()\n+    {\n+        TornadoAgent agent = CreateTestAgent(ReadOfflineSensor);\n+        FunctionCall call = CreateFunctionCall(\"ReadOfflineSensor\", null, agent);\n+\n+        FunctionResult result = await ToolRunner.CallFuncToolAsync(agent, call);\n+\n+        Assert.That(result.InvocationSucceeded, Is.False);\n+        Assert.That(result.Content, Does.Contain(\"sensor offline\"));\n+        Assert.That(result.Content, Does.Not.Contain(\"target of an invocation\"));\n+    }\n+\n+    [Test]\n+    public async Task Invoke_ToolThrows_ReturnsTheToolExceptionNotTheReflectionWrapper()\n+    {\n+        TornadoAgent agent = CreateTestAgent(ReadOfflineSensor);\n+        FunctionCall call = CreateFunctionCall(\"ReadOfflineSensor\", null, agent);\n+\n+        MethodInvocationResult invocationResult = await call.Invoke(\"{}\");\n+\n+        Assert.That(invocationResult.InvocationException, Is.TypeOf<InvalidOperationException>());\n+        Assert.That(invocationResult.InvocationException!.Message, Is.EqualTo(\"sensor offline\"));\n+    }\n+\n+    #endregion\n+\n     #region Simulated MCP-Style Tool Invocation\n \n     [Test]"
+  },
+  {
+   "filename": "src/LlmTornado/Infra/Clr.cs",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -403,6 +403,11 @@ public static async ValueTask<MethodInvocationResult> Invoke(Delegate? function,\n \n             return new MethodInvocationResult(result);\n         }\n+        catch (TargetInvocationException ex) when (ex.InnerException is not null)\n+        {\n+            // DynamicInvoke wraps whatever the tool threw, report the tool's own exception\n+            return new MethodInvocationResult(ex.InnerException);\n+        }\n         catch (Exception ex)\n         {\n             return new MethodInvocationResult(ex);"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/ToolRunnerTests.cs"
+ ]
+}

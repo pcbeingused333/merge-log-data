@@ -1,0 +1,55 @@
+{
+ "repo": "danielmiessler/Fabric",
+ "number": 2296,
+ "url": "https://github.com/danielmiessler/Fabric/pull/2296",
+ "title": "fix(gemini): return an error when a response is blocked or stopped by a safety filter",
+ "merged_at": "2026-10-23T06:01:38Z",
+ "files": [
+  {
+   "filename": "cmd/generate_changelog/incoming/2296.txt",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+### PR [#2296](https://github.com/danielmiessler/Fabric/pull/2296) by [pcbeingused333](https://github.com/pcbeingused333) and [ksylvan](https://github.com/ksylvan): fix(gemini): return an error when a response is blocked or stopped by a safety filter\n+\n+- Fixed Gemini streaming responses to return an error when a stream is blocked or stopped by a safety filter.\n+- Fixed non-streaming Gemini responses to return an error when the response is blocked.\n+- Treated image prohibited-content and image recitation stop reasons as blocked responses."
+  },
+  {
+   "filename": "internal/plugins/ai/gemini/gemini.go",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -113,6 +113,10 @@ func (o *Client) Send(ctx context.Context, msgs []*chat.ChatCompletionMessage, o\n \t\treturn \"\", err\n \t}\n \n+\tif err = geminicommon.BlockedError(response); err != nil {\n+\t\treturn \"\", err\n+\t}\n+\n \tret = geminicommon.ExtractTextWithCitations(response)\n \treturn\n }\n@@ -165,6 +169,10 @@ func (o *Client) SendStream(_ context.Context, msgs []*chat.ChatCompletionMessag\n \t\t\t\t},\n \t\t\t}\n \t\t}\n+\n+\t\tif blockedErr := geminicommon.BlockedError(response); blockedErr != nil {\n+\t\t\treturn blockedErr\n+\t\t}\n \t}\n \n \treturn"
+  },
+  {
+   "filename": "internal/plugins/ai/gemini/gemini_stream_test.go",
+   "status": "added",
+   "additions": 98,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,98 @@\n+package gemini\n+\n+import (\n+\t\"context\"\n+\t\"fmt\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"testing\"\n+\n+\t\"github.com/danielmiessler/fabric/internal/chat\"\n+\t\"github.com/danielmiessler/fabric/internal/domain\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+var (\n+\ttestMsgs = []*chat.ChatCompletionMessage{{Role: chat.ChatMessageRoleUser, Content: \"hi\"}}\n+\ttestOpts = &domain.ChatOptions{Model: \"gemini-3.8-flash\"}\n+)\n+\n+// newTestClient returns a client whose requests go to a test server that sends body.\n+func newTestClient(t *testing.T, contentType, body string) *Client {\n+\tt.Helper()\n+\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tw.Header().Set(\"Content-Type\", contentType)\n+\t\t_, _ = fmt.Fprint(w, body)\n+\t}))\n+\tt.Cleanup(server.Close)\n+\tt.Setenv(\"GOOGLE_GEMINI_BASE_URL\", server.URL)\n+\n+\tclient := NewClient()\n+\tclient.ApiKey.Value = \"test-key\"\n+\treturn client\n+}\n+\n+func streamGemini(t *testing.T, dataLines ...string) (updates []domain.StreamUpdate, err error) {\n+\tt.Helper()\n+\n+\tbody := \"\"\n+\tfor _, line := range dataLines {\n+\t\tbody += \"data: \" + line + \"\\n\\n\"\n+\t}\n+\tchannel := make(chan domain.StreamUpdate, 16)\n+\terr = newTestClient(t, \"text/event-stream\", body).SendStream(context.Background(), testMsgs, testOpts, channel)\n+\tfor update := range channel {\n+\t\tupdates = append(updates, update)\n+\t}\n+\treturn updates, err\n+}\n+\n+func TestSendStreamReturnsErrorWhenThePromptIsBlocked(t *testing.T) {\n+\t_, err := streamGemini(t,\n+\t\t`{\"promptFeedback\":{\"blockReason\":\"PROHIBITED_CONTENT\"},\"usageMetadata\":{\"promptTokenCount\":3,\"totalTokenCount\":3}}`,\n+\t)\n+\n+\trequire.Error(t, err)\n+\trequire.Contains(t, err.Error(), \"PROHIBITED_CONTENT\")\n+}\n+\n+func TestSendStreamReturnsErrorWhenTheAnswerIsStoppedBySafety(t *testing.T) {\n+\tupdates, err := streamGemini(t,\n+\t\t`{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"Hel\"}]}}]}`,\n+\t\t`{\"candidates\":[{\"finishReason\":\"SAFETY\"}],\"usageMetadata\":{\"promptTokenCount\":3,\"candidatesTokenCount\":1,\"totalTokenCount\":4}}`,\n+\t)\n+\n+\trequire.Error(t, err)\n+\trequire.Contains(t, err.Error(), \"SAFETY\")\n+\trequire.Equal(t, \"Hel\", updates[0].Content)\n+}\n+\n+func TestSendStreamNormalAndMaxTokensStopsAreNotErrors(t *testing.T) {\n+\tfor _, reason := range []string{\"STOP\", \"MAX_TOKENS\"} {\n+\t\tt.Run(reason, func(t *testing.T) {\n+\t\t\tupdates, err := streamGemini(t,\n+\t\t\t\tfmt.Sprintf(`{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"Hello\"}]},\"finishReason\":%q}]}`, reason),\n+\t\t\t)\n+\n+\t\t\trequire.NoError(t, err)\n+\t\t\trequire.Equal(t, \"Hello\", updates[0].Content)\n+\t\t})\n+\t}\n+}\n+\n+func TestSendReturnsErrorWhenTheAnswerIsStoppedBySafety(t *testing.T) {\n+\t_, err := newTestClient(t, \"application/json\", `{\"candidates\":[{\"finishReason\":\"SAFETY\"}]}`).\n+\t\tSend(context.Background(), testMsgs, testOpts)\n+\n+\trequire.Error(t, err)\n+\trequire.Contains(t, err.Error(), \"SAFETY\")\n+}\n+\n+func TestSendReturnsTheAnswerOfANormalResponse(t *testing.T) {\n+\tanswer, err := newTestClient(t, \"application/json\", `{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"Hello\"}]},\"finishReason\":\"STOP\"}]}`).\n+\t\tSend(context.Background(), testMsgs, testOpts)\n+\n+\trequire.NoError(t, err)\n+\trequire.Equal(t, \"Hello\", answer)\n+}"
+  },
+  {
+   "filename": "internal/plugins/ai/geminicommon/geminicommon.go",
+   "status": "modified",
+   "additions": 32,
+   "deletions": 0,
+   "patch": "@@ -83,6 +83,38 @@ func OutputTokenCount(usage *genai.GenerateContentResponseUsageMetadata) int {\n \treturn int(usage.CandidatesTokenCount) + int(usage.ThoughtsTokenCount)\n }\n \n+// BlockedError returns an error when Gemini refused to answer: the prompt was blocked\n+// (no candidates, and the reason is in the prompt feedback), or the answer stopped\n+// because of a safety or content filter. Without it such a response looks like an empty\n+// answer. It returns nil for an ordinary response, including one cut off by max tokens.\n+func BlockedError(response *genai.GenerateContentResponse) error {\n+\tif response == nil {\n+\t\treturn nil\n+\t}\n+\tif feedback := response.PromptFeedback; feedback != nil && feedback.BlockReason != \"\" {\n+\t\treturn reasonError(\"the prompt was blocked\", string(feedback.BlockReason), feedback.BlockReasonMessage)\n+\t}\n+\tfor _, candidate := range response.Candidates {\n+\t\tif candidate == nil {\n+\t\t\tcontinue\n+\t\t}\n+\t\tswitch candidate.FinishReason {\n+\t\tcase genai.FinishReasonSafety, genai.FinishReasonRecitation, genai.FinishReasonBlocklist,\n+\t\t\tgenai.FinishReasonProhibitedContent, genai.FinishReasonSPII, genai.FinishReasonImageSafety,\n+\t\t\tgenai.FinishReasonImageProhibitedContent, genai.FinishReasonImageRecitation:\n+\t\t\treturn reasonError(\"the response was stopped\", string(candidate.FinishReason), candidate.FinishMessage)\n+\t\t}\n+\t}\n+\treturn nil\n+}\n+\n+func reasonError(prefix, reason, message string) error {\n+\tif message != \"\" {\n+\t\treason += \" (\" + message + \")\"\n+\t}\n+\treturn fmt.Errorf(\"%s: %s\", prefix, reason)\n+}\n+\n // ExtractTextWithCitations extracts text content from the response and appends\n // any web citations in a standardized format.\n func ExtractTextWithCitations(response *genai.GenerateContentResponse) string {"
+  },
+  {
+   "filename": "internal/plugins/ai/geminicommon/geminicommon_test.go",
+   "status": "modified",
+   "additions": 53,
+   "deletions": 0,
+   "patch": "@@ -31,3 +31,56 @@ func TestOutputTokenCountIncludesThoughts(t *testing.T) {\n \n \tassert.Equal(t, 90, OutputTokenCount(usage))\n }\n+\n+func TestBlockedError(t *testing.T) {\n+\ttests := []struct {\n+\t\tname     string\n+\t\tresponse *genai.GenerateContentResponse\n+\t\twantErr  string\n+\t}{\n+\t\t{\"nil response\", nil, \"\"},\n+\t\t{\"ordinary answer\", &genai.GenerateContentResponse{Candidates: []*genai.Candidate{{FinishReason: genai.FinishReasonStop}}}, \"\"},\n+\t\t{\"cut off by max tokens\", &genai.GenerateContentResponse{Candidates: []*genai.Candidate{{FinishReason: genai.FinishReasonMaxTokens}}}, \"\"},\n+\t\t{\n+\t\t\t\"blocked prompt\",\n+\t\t\t&genai.GenerateContentResponse{PromptFeedback: &genai.GenerateContentResponsePromptFeedback{BlockReason: genai.BlockedReasonSafety}},\n+\t\t\t\"the prompt was blocked: SAFETY\",\n+\t\t},\n+\t\t{\n+\t\t\t\"blocked prompt with message\",\n+\t\t\t&genai.GenerateContentResponse{PromptFeedback: &genai.GenerateContentResponsePromptFeedback{BlockReason: genai.BlockedReasonOther, BlockReasonMessage: \"not allowed\"}},\n+\t\t\t\"the prompt was blocked: OTHER (not allowed)\",\n+\t\t},\n+\t\t{\n+\t\t\t\"stopped by safety\",\n+\t\t\t&genai.GenerateContentResponse{Candidates: []*genai.Candidate{{FinishReason: genai.FinishReasonSafety, FinishMessage: \"unsafe\"}}},\n+\t\t\t\"the response was stopped: SAFETY (unsafe)\",\n+\t\t},\n+\t\t{\n+\t\t\t\"stopped by prohibited image content\",\n+\t\t\t&genai.GenerateContentResponse{Candidates: []*genai.Candidate{{FinishReason: genai.FinishReasonImageProhibitedContent}}},\n+\t\t\t\"the response was stopped: IMAGE_PROHIBITED_CONTENT\",\n+\t\t},\n+\t\t{\n+\t\t\t\"stopped by image recitation\",\n+\t\t\t&genai.GenerateContentResponse{Candidates: []*genai.Candidate{{FinishReason: genai.FinishReasonImageRecitation}}},\n+\t\t\t\"the response was stopped: IMAGE_RECITATION\",\n+\t\t},\n+\t\t{\n+\t\t\t\"stopped by a blocklist\",\n+\t\t\t&genai.GenerateContentResponse{Candidates: []*genai.Candidate{nil, {FinishReason: genai.FinishReasonBlocklist}}},\n+\t\t\t\"the response was stopped: BLOCKLIST\",\n+\t\t},\n+\t}\n+\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\terr := BlockedError(tt.response)\n+\t\t\tif tt.wantErr == \"\" {\n+\t\t\t\tassert.NoError(t, err)\n+\t\t\t} else {\n+\t\t\t\tassert.EqualError(t, err, tt.wantErr)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  },
+  {
+   "filename": "internal/plugins/ai/vertexai/vertexai.go",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -353,6 +353,10 @@ func (c *Client) sendStreamGemini(msgs []*chat.ChatCompletionMessage, opts *doma\n \t\t\t\t},\n \t\t\t}\n \t\t}\n+\n+\t\tif blockedErr := geminicommon.BlockedError(response); blockedErr != nil {\n+\t\t\treturn blockedErr\n+\t\t}\n \t}\n \n \treturn nil"
+  }
+ ],
+ "test_files": [
+  "internal/plugins/ai/gemini/gemini_stream_test.go",
+  "internal/plugins/ai/geminicommon/geminicommon_test.go"
+ ]
+}

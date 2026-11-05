@@ -1,0 +1,33 @@
+{
+ "repo": "danielmiessler/Fabric",
+ "number": 2280,
+ "url": "https://github.com/danielmiessler/Fabric/pull/2280",
+ "title": "fix(plugins): mask secret setting values in setup prompts and output",
+ "merged_at": "2026-10-21T16:05:26Z",
+ "files": [
+  {
+   "filename": "cmd/generate_changelog/incoming/2280.txt",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+### PR [#2280](https://github.com/danielmiessler/Fabric/pull/2280) by [pcbeingused333](https://github.com/pcbeingused333): fix(plugins): mask secret setting values in setup prompts and output\n+\n+- Mark settings named like a credential as sensitive and show a mask instead of their value in the setup prompt, `Print` and the invalid-setting error."
+  },
+  {
+   "filename": "internal/plugins/plugin.go",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 3,
+   "patch": "@@ -13,6 +13,9 @@ import (\n const AnswerReset = \"reset\"\n const SettingTypeBool = \"bool\"\n \n+// MaskedValue stands in for a sensitive value in prompts and printed output.\n+const MaskedValue = \"********\"\n+\n type Plugin interface {\n \tGetName() string\n \tGetSetupDescription() string\n@@ -56,6 +59,7 @@ func (o *PluginBase) GetSetupDescription() (ret string) {\n \n func (o *PluginBase) AddSetting(name string, required bool) (ret *Setting) {\n \tret = NewSetting(fmt.Sprintf(\"%v%v\", o.EnvNamePrefix, BuildEnvVariable(name)), required)\n+\tret.Sensitive = isSensitiveName(name)\n \to.Settings = append(o.Settings, ret)\n \treturn\n }\n@@ -151,6 +155,27 @@ type Setting struct {\n \tValue       string\n \tRequired    bool\n \tType        string // \"string\" (default), \"bool\"\n+\tSensitive   bool   // mask the value in prompts and printed output\n+}\n+\n+// isSensitiveName reports whether a setting name holds a credential, such as\n+// \"API Key\", \"access_token\" or \"client secret\".\n+func isSensitiveName(name string) bool {\n+\tfor word := range strings.SplitSeq(BuildEnvVariable(name), \"_\") {\n+\t\tswitch word {\n+\t\tcase \"KEY\", \"TOKEN\", \"SECRET\", \"PASSWORD\":\n+\t\t\treturn true\n+\t\t}\n+\t}\n+\treturn false\n+}\n+\n+// DisplayValue returns the value as it may be shown to the user.\n+func (o *Setting) DisplayValue() string {\n+\tif o.Sensitive && o.Value != \"\" {\n+\t\treturn MaskedValue\n+\t}\n+\treturn o.Value\n }\n \n func (o *Setting) IsValid() bool {\n@@ -166,7 +191,7 @@ func (o *Setting) Print() {\n \t\tv, _ := ParseBool(o.Value)\n \t\tfmt.Printf(\"%v: %v\\n\", o.EnvVariable, v)\n \t} else {\n-\t\tfmt.Printf(\"%v: %v\\n\", o.EnvVariable, o.Value)\n+\t\tfmt.Printf(\"%v: %v\\n\", o.EnvVariable, o.DisplayValue())\n \t}\n }\n \n@@ -219,7 +244,7 @@ func (o *SetupQuestion) Ask(label string) (err error) {\n \t\t}\n \t\tfmt.Printf(i18n.T(\"plugin_question_bool\"), prefix, o.Question, current, AnswerReset)\n \t} else if o.Value != \"\" {\n-\t\tfmt.Printf(i18n.T(\"plugin_question_with_default\"), prefix, o.Question, o.Value, AnswerReset)\n+\t\tfmt.Printf(i18n.T(\"plugin_question_with_default\"), prefix, o.Question, o.DisplayValue(), AnswerReset)\n \t} else {\n \t\tfmt.Printf(i18n.T(\"plugin_question_optional\"), prefix, o.Question)\n \t}\n@@ -267,7 +292,7 @@ func (o *SetupQuestion) OnAnswerWithReset(answer string, isReset bool) (err erro\n \n func (o *Setting) IsValidErr() (err error) {\n \tif !o.IsValid() {\n-\t\terr = fmt.Errorf(i18n.T(\"plugin_setting_not_valid\"), o.EnvVariable, o.Value)\n+\t\terr = fmt.Errorf(i18n.T(\"plugin_setting_not_valid\"), o.EnvVariable, o.DisplayValue())\n \t}\n \treturn\n }"
+  },
+  {
+   "filename": "internal/plugins/plugin_test.go",
+   "status": "modified",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -350,3 +350,36 @@ func TestReadLine_LineEndings(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestSetupQuestion_Ask_MasksSensitiveValue(t *testing.T) {\n+\tsetting := &Setting{\n+\t\tEnvVariable: \"TEST_SENSITIVE_API_KEY\",\n+\t\tValue:       \"sk-synthetic-secret-1234\",\n+\t\tSensitive:   true,\n+\t}\n+\tquestion := &SetupQuestion{Setting: setting, Question: \"Enter key:\"}\n+\trestore := captureInput(\"\\n\")\n+\tdefer restore()\n+\tout := captureOutput(func() {\n+\t\tassert.NoError(t, question.Ask(\"TestConfigurable\"))\n+\t})\n+\tassert.NotContains(t, out, \"sk-synthetic-secret-1234\")\n+\tassert.Contains(t, out, MaskedValue)\n+\tassert.Equal(t, \"sk-synthetic-secret-1234\", setting.Value)\n+}\n+\n+func TestSetting_Print_MasksSensitiveValue(t *testing.T) {\n+\tsetting := &Setting{EnvVariable: \"TEST_API_KEY\", Value: \"sk-synthetic-secret-1234\", Sensitive: true}\n+\tout := captureOutput(func() { setting.Print() })\n+\tassert.NotContains(t, out, \"sk-synthetic-secret-1234\")\n+\tassert.Contains(t, out, \"TEST_API_KEY\")\n+}\n+\n+func TestPluginBase_AddSetting_MarksSecretNamesSensitive(t *testing.T) {\n+\tp := &PluginBase{EnvNamePrefix: \"V_\"}\n+\tassert.True(t, p.AddSetting(\"API Key\", true).Sensitive)\n+\tassert.True(t, p.AddSetting(\"access_token\", false).Sensitive)\n+\tassert.True(t, p.AddSetting(\"client secret\", false).Sensitive)\n+\tassert.False(t, p.AddSetting(\"API Base URL\", false).Sensitive)\n+\tassert.False(t, p.AddSetting(\"keyword\", false).Sensitive)\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/plugins/plugin_test.go"
+ ]
+}

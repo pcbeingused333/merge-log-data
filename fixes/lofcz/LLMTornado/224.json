@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 224,
+ "url": "https://github.com/lofcz/LLMTornado/pull/224",
+ "title": "Anthropic streaming: return the stop_sequence as the stop reason",
+ "merged_at": "2026-10-21T05:37:38Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/AnthropicStreamStopSequenceTests.cs",
+   "status": "added",
+   "additions": 76,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,76 @@\n+using System.IO;\n+using System.Text;\n+using LlmTornado.Chat;\n+using LlmTornado.Code;\n+using LlmTornado.Code.Vendor;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class AnthropicStreamStopSequenceTests\n+{\n+    [Test]\n+    public async Task InboundStream_MessageDeltaStopSequenceIsReturnedAsTheStopReasonOfTheFinishChunk()\n+    {\n+        const string sse = \"\"\"\n+            event: message_start\n+            data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_stop\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-5-5\",\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":10,\"output_tokens\":1}}}\n+\n+            event: message_delta\n+            data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"stop_sequence\",\"stop_sequence\":\"END\"},\"usage\":{\"output_tokens\":5}}\n+\n+            event: message_stop\n+            data: {\"type\":\"message_stop\"}\n+\n+            \"\"\";\n+\n+        ChatChoice? choice = await CollectFinishChoice(sse);\n+\n+        Assert.That(choice, Is.Not.Null);\n+        Assert.That(choice!.FinishReason, Is.EqualTo(ChatMessageFinishReasons.StopSequence));\n+        Assert.That(choice.StopReason, Is.EqualTo(\"END\"));\n+    }\n+\n+    [Test]\n+    public async Task InboundStream_NullStopSequenceLeavesTheStopReasonEmpty()\n+    {\n+        const string sse = \"\"\"\n+            event: message_start\n+            data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_stop\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-5-5\",\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":10,\"output_tokens\":1}}}\n+\n+            event: message_delta\n+            data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":5}}\n+\n+            event: message_stop\n+            data: {\"type\":\"message_stop\"}\n+\n+            \"\"\";\n+\n+        ChatChoice? choice = await CollectFinishChoice(sse);\n+\n+        Assert.That(choice, Is.Not.Null);\n+        Assert.That(choice!.StopReason, Is.Null);\n+    }\n+\n+    private static async Task<ChatChoice?> CollectFinishChoice(string sse)\n+    {\n+        AnthropicEndpointProvider provider = new AnthropicEndpointProvider();\n+        StreamReader reader = new StreamReader(new MemoryStream(Encoding.UTF8.GetBytes(sse)));\n+        ChatRequest request = new ChatRequest\n+        {\n+            Stream = true,\n+            Messages = [new ChatMessage(ChatMessageRoles.User, \"test\")]\n+        };\n+\n+        ChatResult? finishChunk = null;\n+        await foreach (ChatResult? chunk in provider.InboundStream(reader, request, null))\n+        {\n+            if (chunk?.StreamInternalKind is ChatResultStreamInternalKinds.FinishData)\n+            {\n+                finishChunk = chunk;\n+            }\n+        }\n+\n+        return finishChunk?.Choices?[0];\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Vendor/Anthropic/AnthropicEndpointProvider.cs",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -447,6 +447,7 @@ public override string ApiUrl(CapabilityEndpoints endpoint, string? url, IModel?\n         List<ChatMessagePart>? pendingReasoningParts = null;\n         ChatMessageFinishReasons finishReason = ChatMessageFinishReasons.Unknown;\n         ChatStopDetails? stopDetails = null;\n+        string? stopSequence = null;\n         ChatMessagePart? currentPart = null;\n         StringBuilder currentPartTextBuilder = new StringBuilder();\n         ChatRequestServiceTiers? serviceTier = null;\n@@ -854,7 +855,10 @@ await eventHandler.FunctionCallDeltaHandler.Invoke(new FunctionCallStreamUpdate\n                             stopDetails = res.Delta.StopDetails.ToChatStopDetails();\n                         }\n                         \n-                        // todo: propagate stop_sequence from res.Delta\n+                        if (res.Delta.StopSequence is not null)\n+                        {\n+                            stopSequence = res.Delta.StopSequence;\n+                        }\n                     }\n                     \n                     break;\n@@ -961,6 +965,7 @@ await eventHandler.FunctionCallDeltaHandler.Invoke(new FunctionCallStreamUpdate\n                 new ChatChoice\n                 {\n                     FinishReason = finishReason,\n+                    StopReason = stopSequence,\n                     StopDetails = stopDetails\n                 }\n             ],"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/AnthropicStreamStopSequenceTests.cs"
+ ]
+}

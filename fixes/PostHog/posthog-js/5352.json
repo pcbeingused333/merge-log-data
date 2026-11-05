@@ -1,0 +1,33 @@
+{
+ "repo": "PostHog/posthog-js",
+ "number": 5352,
+ "url": "https://github.com/PostHog/posthog-js/pull/5352",
+ "title": "fix(ai): use cumulative input and cache tokens from Anthropic message_delta when streaming",
+ "merged_at": "2026-10-21T15:19:55Z",
+ "files": [
+  {
+   "filename": ".changeset/anthropic-stream-cumulative-usage.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@posthog/ai': patch\n+---\n+\n+fix: Use the cumulative input and cache token counts from Anthropic's final `message_delta` when streaming with server tools."
+  },
+  {
+   "filename": "packages/ai/src/anthropic/index.ts",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -222,6 +222,17 @@ export class WrappedMessages extends AnthropicOriginal.Messages {\n                     ...Object.fromEntries(Object.entries(chunk.usage).filter(([, value]) => value != null)),\n                   }\n                   usage.outputTokens = chunk.usage.output_tokens ?? 0\n+                  // With server tools the final delta reports cumulative input and cache tokens that\n+                  // exceed message_start's, so keep the larger value.\n+                  usage.inputTokens = Math.max(usage.inputTokens ?? 0, chunk.usage.input_tokens ?? 0)\n+                  usage.cacheCreationInputTokens = Math.max(\n+                    usage.cacheCreationInputTokens ?? 0,\n+                    chunk.usage.cache_creation_input_tokens ?? 0\n+                  )\n+                  usage.cacheReadInputTokens = Math.max(\n+                    usage.cacheReadInputTokens ?? 0,\n+                    chunk.usage.cache_read_input_tokens ?? 0\n+                  )\n                   // Update web search count if present in delta\n                   if (chunk.usage.server_tool_use?.web_search_requests !== undefined) {\n                     usage.webSearchCount = chunk.usage.server_tool_use.web_search_requests"
+  },
+  {
+   "filename": "packages/ai/tests/anthropic.test.ts",
+   "status": "modified",
+   "additions": 71,
+   "deletions": 0,
+   "patch": "@@ -1463,3 +1463,74 @@ describe('PostHogAnthropic - streaming error safety', () => {\n     expect(unhandledRejections).toEqual([])\n   })\n })\n+\n+describe('PostHogAnthropic - streaming usage', () => {\n+  let usageMockPostHogClient: PostHog\n+  let usageClient: PostHogAnthropic\n+\n+  beforeEach(() => {\n+    vi.clearAllMocks()\n+    usageMockPostHogClient = new (PostHog as any)()\n+    usageClient = new PostHogAnthropic({\n+      apiKey: 'test-api-key',\n+      posthog: usageMockPostHogClient as any,\n+    })\n+  })\n+\n+  const captureStreamUsage = async (deltaUsage: Record<string, number>): Promise<Record<string, unknown>> => {\n+    const events = [\n+      {\n+        type: 'message_start',\n+        message: {\n+          usage: { input_tokens: 50, cache_creation_input_tokens: 10, cache_read_input_tokens: 20, output_tokens: 1 },\n+        },\n+      },\n+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: deltaUsage },\n+      { type: 'message_stop' },\n+    ]\n+    const MessagesMock = AnthropicOriginal.Messages as vi.MockedClass<typeof AnthropicOriginal.Messages>\n+    ;(MessagesMock.prototype.create as unknown as vi.Mock) = vi.fn().mockResolvedValue({\n+      async *[Symbol.asyncIterator]() {\n+        yield* events\n+      },\n+    })\n+\n+    const stream = await usageClient.messages.create({\n+      model: 'claude-3-5-sonnet-20240620',\n+      max_tokens: 100,\n+      messages: [{ role: 'user', content: 'hi' }],\n+      stream: true,\n+      posthogDistinctId: 'anthropic-usage-user',\n+    } as any)\n+    for await (const _chunk of stream as unknown as AsyncIterable<unknown>) {\n+      // consume\n+    }\n+    await new Promise(process.nextTick)\n+\n+    expect(usageMockPostHogClient.capture).toHaveBeenCalledTimes(1)\n+    return (usageMockPostHogClient.capture as vi.Mock).mock.calls[0][0].properties\n+  }\n+\n+  test('uses the cumulative input and cache tokens from message_delta when they grow (server tools)', async () => {\n+    const properties = await captureStreamUsage({\n+      input_tokens: 120,\n+      cache_creation_input_tokens: 30,\n+      cache_read_input_tokens: 70,\n+      output_tokens: 25,\n+    })\n+\n+    expect(properties['$ai_input_tokens']).toBe(120)\n+    expect(properties['$ai_cache_creation_input_tokens']).toBe(30)\n+    expect(properties['$ai_cache_read_input_tokens']).toBe(70)\n+    expect(properties['$ai_output_tokens']).toBe(25)\n+  })\n+\n+  test('keeps the message_start input and cache tokens when message_delta omits them or reports less', async () => {\n+    const properties = await captureStreamUsage({ input_tokens: 5, output_tokens: 25 })\n+\n+    expect(properties['$ai_input_tokens']).toBe(50)\n+    expect(properties['$ai_cache_creation_input_tokens']).toBe(10)\n+    expect(properties['$ai_cache_read_input_tokens']).toBe(20)\n+    expect(properties['$ai_output_tokens']).toBe(25)\n+  })\n+})"
+  }
+ ],
+ "test_files": [
+  "packages/ai/tests/anthropic.test.ts"
+ ]
+}

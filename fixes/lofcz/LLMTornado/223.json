@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 223,
+ "url": "https://github.com/lofcz/LLMTornado/pull/223",
+ "title": "Route a model of unknown provider to the authenticated provider",
+ "merged_at": "2026-10-21T05:37:02Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/UnknownModelProviderTests.cs",
+   "status": "added",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,29 @@\n+using LlmTornado.Chat.Models;\n+using LlmTornado.Code;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class UnknownModelProviderTests\n+{\n+    [Test]\n+    public void GetProvider_ModelOfUnknownProvider_UsesTheAuthenticatedProvider()\n+    {\n+        // A mistyped model name resolves to no provider. With a Google key only, the request must\n+        // go to Google, not to an OpenAI endpoint that rejects the key as \"incorrect\".\n+        TornadoApi api = new TornadoApi(LLmProviders.Google, \"test-key\");\n+        ChatModel model = \"gemini-3-image-pro-preview-typo\";\n+\n+        Assert.That(model.Provider, Is.EqualTo(LLmProviders.Unknown));\n+        Assert.That(api.GetProvider(model).Provider, Is.EqualTo(LLmProviders.Google));\n+    }\n+\n+    [Test]\n+    public void GetProvider_ModelOfUnknownProvider_FallsBackToOpenAiWithoutAnyKey()\n+    {\n+        TornadoApi api = new TornadoApi();\n+        ChatModel model = \"no-such-model\";\n+\n+        Assert.That(api.GetProvider(model).Provider, Is.EqualTo(LLmProviders.OpenAi));\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/TornadoApi.cs",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -365,7 +365,9 @@ public IEndpointProvider GetProvider(LLmProviders provider)\n             LLmProviders firstAuthProvider = GetFirstAuthenticatedProvider();\n             if (Authentications.TryGetValue(firstAuthProvider, out ProviderAuthentication? auth))\n             {\n-                IEndpointProvider newDefaultProvider = EndpointProviderConverter.CreateProvider(provider, this);\n+                // A model we could not map to any provider goes to the provider we hold a key for;\n+                // an OpenAI endpoint would reject that key with a misleading \"incorrect API key\".\n+                IEndpointProvider newDefaultProvider = EndpointProviderConverter.CreateProvider(provider is LLmProviders.Unknown ? firstAuthProvider : provider, this);\n                 newDefaultProvider.Auth = auth;\n                 EndpointProviders.TryAdd(provider, newDefaultProvider);\n                 cachedFirstEndpointProvider = newDefaultProvider;"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/UnknownModelProviderTests.cs"
+ ]
+}

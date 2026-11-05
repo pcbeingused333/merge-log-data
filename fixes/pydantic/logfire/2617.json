@@ -1,0 +1,26 @@
+{
+ "repo": "pydantic/logfire",
+ "number": 2617,
+ "url": "https://github.com/pydantic/logfire/pull/2617",
+ "title": "Record cached prompt tokens on OpenAI spans",
+ "merged_at": "2026-10-21T10:22:26Z",
+ "files": [
+  {
+   "filename": "logfire-sdk/logfire/_internal/integrations/llm_providers/openai.py",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 1,
+   "patch": "@@ -21,6 +21,7 @@\n \n from ...utils import handle_internal_errors, log_internal_error\n from .semconv import (\n+    CACHE_READ_INPUT_TOKENS,\n     INPUT_MESSAGES,\n     OPERATION_NAME,\n     OUTPUT_MESSAGES,\n@@ -629,9 +630,16 @@ def get_openai_usage_attributes(response: Any, base_url: str | None = None) -> d\n         api_flavor = 'embeddings'\n     else:\n         api_flavor = 'chat'\n-    return get_usage_attributes(\n+    # Chat completions report cached prompt tokens under `prompt_tokens_details`, the Responses API\n+    # under `input_tokens_details`.\n+    details = getattr(usage, 'prompt_tokens_details', None) or getattr(usage, 'input_tokens_details', None)\n+    result = get_usage_attributes(\n         response, usage, input_tokens, output_tokens, provider_id='openai', api_flavor=api_flavor, provider_url=base_url\n     )\n+    cached = getattr(details, 'cached_tokens', None)\n+    if isinstance(cached, int) and cached:\n+        result[CACHE_READ_INPUT_TOKENS] = cached\n+    return result\n \n \n @handle_internal_errors"
+  },
+  {
+   "filename": "tests/otel_integrations/test_openai.py",
+   "status": "modified",
+   "additions": 82,
+   "deletions": 0,
+   "patch": "@@ -5244,3 +5244,85 @@ async def test_internal_exception_in_on_response_keeps_the_response(\n     assert response.id == 'chatcmpl-1'\n     assert 'Caught an internal error in Logfire' in caplog.text\n     assert len(exporter.exported_spans_as_dict()) == 1\n+\n+\n+def test_cached_prompt_tokens_recorded(exporter: TestExporter) -> None:\n+    chat_body = {\n+        'id': 'chatcmpl-1',\n+        'object': 'chat.completion',\n+        'created': 0,\n+        'model': 'gpt-4o-mini',\n+        'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': 'Nine'}, 'finish_reason': 'stop'}],\n+        'usage': {\n+            'prompt_tokens': 100,\n+            'completion_tokens': 3,\n+            'total_tokens': 103,\n+            'prompt_tokens_details': {'cached_tokens': 80},\n+        },\n+    }\n+    responses_body: dict[str, Any] = {\n+        'id': 'resp_1',\n+        'object': 'response',\n+        'created_at': 0,\n+        'model': 'gpt-4o-mini',\n+        'status': 'completed',\n+        'parallel_tool_calls': True,\n+        'tool_choice': 'auto',\n+        'tools': [],\n+        'output': [\n+            {\n+                'id': 'msg_1',\n+                'type': 'message',\n+                'role': 'assistant',\n+                'status': 'completed',\n+                'content': [{'type': 'output_text', 'text': 'Nine', 'annotations': []}],\n+            }\n+        ],\n+        'usage': {\n+            'input_tokens': 100,\n+            'output_tokens': 3,\n+            'total_tokens': 103,\n+            'input_tokens_details': {'cached_tokens': 60},\n+            'output_tokens_details': {'reasoning_tokens': 0},\n+        },\n+    }\n+\n+    def handler(request: httpx.Request) -> httpx.Response:\n+        return httpx.Response(200, json=responses_body if request.url.path.endswith('/responses') else chat_body)\n+\n+    client = openai.Client(api_key='fake_api_key', http_client=httpx.Client(transport=MockTransport(handler)))\n+    with logfire.instrument_openai(client):\n+        client.chat.completions.create(model='gpt-4o-mini', messages=[{'role': 'user', 'content': 'hi'}])\n+        client.responses.create(model='gpt-4o-mini', input='hi')\n+\n+    chat_span, responses_span = exporter.exported_spans_as_dict()\n+    assert chat_span['attributes']['gen_ai.usage.input_tokens'] == 100\n+    assert chat_span['attributes']['gen_ai.usage.cache_read.input_tokens'] == 80\n+    assert responses_span['attributes']['gen_ai.usage.input_tokens'] == 100\n+    assert responses_span['attributes']['gen_ai.usage.cache_read.input_tokens'] == 60\n+    assert 'gen_ai.usage.cache_creation.input_tokens' not in chat_span['attributes']\n+\n+\n+def test_uncached_prompt_tokens_omit_cache_attribute(exporter: TestExporter) -> None:\n+    body = {\n+        'id': 'chatcmpl-1',\n+        'object': 'chat.completion',\n+        'created': 0,\n+        'model': 'gpt-4o-mini',\n+        'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': 'Nine'}, 'finish_reason': 'stop'}],\n+        'usage': {\n+            'prompt_tokens': 10,\n+            'completion_tokens': 3,\n+            'total_tokens': 13,\n+            'prompt_tokens_details': {'cached_tokens': 0},\n+        },\n+    }\n+    client = openai.Client(\n+        api_key='fake_api_key',\n+        http_client=httpx.Client(transport=MockTransport(lambda _: httpx.Response(200, json=body))),\n+    )\n+    with logfire.instrument_openai(client):\n+        client.chat.completions.create(model='gpt-4o-mini', messages=[{'role': 'user', 'content': 'hi'}])\n+\n+    attributes = exporter.exported_spans_as_dict()[0]['attributes']\n+    assert 'gen_ai.usage.cache_read.input_tokens' not in attributes"
+  }
+ ],
+ "test_files": [
+  "tests/otel_integrations/test_openai.py"
+ ]
+}

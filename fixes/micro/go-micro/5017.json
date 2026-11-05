@@ -1,0 +1,26 @@
+{
+ "repo": "micro/go-micro",
+ "number": 5017,
+ "url": "https://github.com/micro/go-micro/pull/5017",
+ "title": "Return follow-up errors and sum usage in the Ollama Cloud tool round",
+ "merged_at": "2026-10-20T16:13:13Z",
+ "files": [
+  {
+   "filename": "model/ollama/ollama.go",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -200,7 +200,13 @@ func (p *Provider) generateOpenAI(ctx context.Context, req *model.Request) (*mod\n \n \t\tfollowUpResp, followUpRaw, err := p.callOpenAI(ctx, followUpReq)\n \t\tif err != nil {\n-\t\t\tbreak\n+\t\t\treturn nil, err\n+\t\t}\n+\t\t// Every request of the tool round is billed, not only the first one.\n+\t\tresp.Usage = model.Usage{\n+\t\t\tInputTokens:  resp.Usage.InputTokens + followUpResp.Usage.InputTokens,\n+\t\t\tOutputTokens: resp.Usage.OutputTokens + followUpResp.Usage.OutputTokens,\n+\t\t\tTotalTokens:  resp.Usage.TotalTokens + followUpResp.Usage.TotalTokens,\n \t\t}\n \n \t\tif len(followUpResp.ToolCalls) > 0 {"
+  },
+  {
+   "filename": "model/ollama/ollama_test.go",
+   "status": "modified",
+   "additions": 78,
+   "deletions": 0,
+   "patch": "@@ -362,3 +362,81 @@ func TestProvider_APIError(t *testing.T) {\n \t\tt.Errorf(\"Expected 'API error' in message, got '%s'\", err.Error())\n \t}\n }\n+\n+// A failed follow-up request after a tool round must reach the caller instead of\n+// being swallowed.\n+func TestCloud_GenerateToolRoundFollowUpError(t *testing.T) {\n+\tcallCount := 0\n+\tsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tcallCount++\n+\t\tif callCount == 1 {\n+\t\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t\tw.Write([]byte(`{\n+\t\t\t\t\"usage\": {\"prompt_tokens\": 10, \"completion_tokens\": 5, \"total_tokens\": 15},\n+\t\t\t\t\"choices\": [{\"message\": {\"role\": \"assistant\", \"content\": \"\",\n+\t\t\t\t\t\"tool_calls\": [{\"id\": \"call_1\", \"function\": {\"name\": \"search\", \"arguments\": \"{}\"}}]}}]\n+\t\t\t}`))\n+\t\t\treturn\n+\t\t}\n+\t\thttp.Error(w, \"upstream down\", http.StatusBadGateway)\n+\t}))\n+\tdefer srv.Close()\n+\n+\tp := NewProvider(\n+\t\tmodel.WithBaseURL(srv.URL),\n+\t\tmodel.WithModel(\"gemma4:31b-cloud\"),\n+\t\tmodel.WithToolHandler(func(ctx context.Context, call model.ToolCall) model.ToolResult {\n+\t\t\treturn model.ToolResult{ID: call.ID, Content: \"ok\"}\n+\t\t}),\n+\t)\n+\tp.cloudOverride = true\n+\t_, err := p.Generate(context.Background(), &model.Request{\n+\t\tPrompt: \"Search\",\n+\t\tTools:  []model.Tool{{Name: \"search\", Description: \"Search\"}},\n+\t})\n+\tif err == nil {\n+\t\tt.Fatal(\"expected the follow-up request error, got nil\")\n+\t}\n+}\n+\n+// Every request of a tool round is billed, so the response has to report the usage of all of them.\n+func TestCloud_GenerateSumsUsageAcrossToolRounds(t *testing.T) {\n+\tcallCount := 0\n+\tsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tcallCount++\n+\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\tif callCount == 1 {\n+\t\t\tw.Write([]byte(`{\n+\t\t\t\t\"usage\": {\"prompt_tokens\": 10, \"completion_tokens\": 5, \"total_tokens\": 15},\n+\t\t\t\t\"choices\": [{\"message\": {\"role\": \"assistant\", \"content\": \"\",\n+\t\t\t\t\t\"tool_calls\": [{\"id\": \"call_1\", \"function\": {\"name\": \"search\", \"arguments\": \"{}\"}}]}}]\n+\t\t\t}`))\n+\t\t\treturn\n+\t\t}\n+\t\tw.Write([]byte(`{\n+\t\t\t\"usage\": {\"prompt_tokens\": 20, \"completion_tokens\": 7, \"total_tokens\": 27},\n+\t\t\t\"choices\": [{\"message\": {\"role\": \"assistant\", \"content\": \"done\"}}]\n+\t\t}`))\n+\t}))\n+\tdefer srv.Close()\n+\n+\tp := NewProvider(\n+\t\tmodel.WithBaseURL(srv.URL),\n+\t\tmodel.WithModel(\"gemma4:31b-cloud\"),\n+\t\tmodel.WithToolHandler(func(ctx context.Context, call model.ToolCall) model.ToolResult {\n+\t\t\treturn model.ToolResult{ID: call.ID, Content: \"ok\"}\n+\t\t}),\n+\t)\n+\tp.cloudOverride = true\n+\tresp, err := p.Generate(context.Background(), &model.Request{\n+\t\tPrompt: \"Search\",\n+\t\tTools:  []model.Tool{{Name: \"search\", Description: \"Search\"}},\n+\t})\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\twant := model.Usage{InputTokens: 30, OutputTokens: 12, TotalTokens: 42}\n+\tif resp.Usage != want {\n+\t\tt.Fatalf(\"usage=%+v want %+v\", resp.Usage, want)\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "model/ollama/ollama_test.go"
+ ]
+}

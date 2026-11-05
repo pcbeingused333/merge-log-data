@@ -1,0 +1,53 @@
+{
+ "repo": "langchain-ai/langchain-azure",
+ "number": 1221,
+ "url": "https://github.com/langchain-ai/langchain-azure/pull/1221",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-22T01:31:04Z",
+   "body": "<!-- ccr-overview-v2 -->\n\n### 🟡 Changes recommended\n\nFallback indices restart for each delta, causing distinct complete calls from separate deltas to merge incorrectly during aggregation.\n\n<details open>\n<summary><strong>1 open issue</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Assign distinct fallback indices to separate tool calls](https://github.com/langchain-ai/langchain-azure/pull/1221#discussion_r4343688925) · New\n</details>\n\n<details>\n<summary><strong>What changed in this PR</strong></summary>\n\nThis PR updates Azure AI inference streaming to retain tool calls when a delta omits their indices.\n\n**Changes:**\n- Uses each call’s position within the delta as a fallback index, preserving explicit indices.\n- Adds a regression test for two complete, indexless tool calls in one delta.\n\n| File | Description |\r\n| ---- | ----------- |\r\n| `libs/​azure-ai/​tests/​unit_tests/​test_chat_models.py` | Tests preservation of indexless tool-call chunks. |\r\n| `libs/​azure-ai/​langchain_azure_ai/​chat_models/​inference.py` | Adds positional fallback indices during delta conversion. |\n</details>\n\n<sub>Review effort: Balanced</sub>"
+  },
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-22T01:40:53Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-23T01:26:57Z",
+   "body": "<!-- ccr-overview-v2 -->\n\n### 🟢 Approval recommended\n\nThe focused fix addresses dropped calls and the prior merge collision with regression coverage and no unresolved findings.\n\n**No open issues** 🎉\n\n<details>\n<summary><strong>1 resolved since last review</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Assign distinct fallback indices to separate tool calls](https://github.com/langchain-ai/langchain-azure/pull/1221#discussion_r4343688925)\n</details>\n\n<sub>Review effort: Balanced</sub>"
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-23T01:27:06Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "libs/azure-ai/langchain_azure_ai/chat_models/inference.py",
+   "created_at": "2026-10-22T01:31:04Z",
+   "body": "**[Medium] Keep fallback indices distinct across the response**\n\nIf two deltas each contain one complete, indexless tool call with different IDs, `enumerate` assigns index 0 to both. LangChain merges `ToolCallChunk`s with equal non-`None` indices, so aggregating these chunks combines independent calls and concatenates their arguments (for example, `{}` and `{}` become `{}{}`). This affects whole-call deltas, not just the fragmented-argument case noted in the PR description. Use response-scoped call identity tracking in both streaming paths so distinct calls do not share a fallback index, while preserving explicit-index behavior. Add a regression test that aggregates complete calls from separate deltas and verifies that both remain intact."
+  },
+  {
+   "role": "collaborator",
+   "path": "libs/azure-ai/langchain_azure_ai/chat_models/inference.py",
+   "created_at": "2026-10-22T01:40:53Z",
+   "body": "Building on Copilot's finding, we suggest the simpler `index=rtc.get(\"index\")`: missing indices stay `None`, keeping complete calls separate without response-scoped tracking. Please add a test aggregating two complete, indexless calls from separate deltas."
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-10-22T22:36:03Z",
+   "body": "Done in 4f2bc273f01e1231a986d2dda70692f071146ca5. The fallback index is gone: a delta without an index now leaves `index` as `None`, as suggested, so complete calls are not given a shared position-based index. The test for a delta without indices now expects `None`, and a new test aggregates two deltas that each carry one complete, indexless call (different ids) and checks that both calls stay intact in `tool_call_chunks` and `tool_calls`.\n\nOne note: with the locked `langchain-core` (1.5.6) that aggregation test also passes with the previous positional index, because chunks with the same index but different ids are not merged there, so it works as a guard rather than a fail-to-pass test. Argument fragments that arrive without an index or an id are not joined into one call with this change.\n"
+  }
+ ]
+}

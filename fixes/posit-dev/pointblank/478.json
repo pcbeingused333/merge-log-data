@@ -1,0 +1,26 @@
+{
+ "repo": "posit-dev/pointblank",
+ "number": 478,
+ "url": "https://github.com/posit-dev/pointblank/pull/478",
+ "title": "fix(ai): infer the batch schema from every unique row",
+ "merged_at": "2026-10-21T22:47:33Z",
+ "files": [
+  {
+   "filename": "pointblank/_utils_ai.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -450,7 +450,9 @@ def _build_unique_rows_table(self) -> Tuple[Any, Dict[str, List[int]]]:\n             if hasattr(native_data, \"with_columns\"):  # Polars\n                 import polars as pl\n \n-                unique_df = pl.DataFrame(unique_rows)\n+                # Scan every row for the schema: a column that is null in the first rows\n+                # would otherwise be typed as null and reject a later value\n+                unique_df = pl.DataFrame(unique_rows, infer_schema_length=None)\n             elif hasattr(native_data, \"assign\"):  # Pandas\n                 import pandas as pd\n "
+  },
+  {
+   "filename": "tests/test__utils_ai.py",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -229,6 +229,22 @@ def test_data_batcher_invalid_columns(sample_pd_data):\n         _DataBatcher(sample_pd_data, columns=[\"nonexistent\"])\n \n \n+def test_create_batches_polars_column_null_in_first_unique_rows():\n+    \"\"\"A column that is null in the first 100 unique rows must still be batched.\"\"\"\n+    df = pl.DataFrame(\n+        {\n+            \"id\": list(range(150)) + [150],\n+            \"note\": [None] * 150 + [\"late text\"],\n+        }\n+    )\n+\n+    batches, _ = _DataBatcher(df).create_batches()\n+\n+    notes = [row[\"note\"] for batch in batches for row in batch[\"data\"][\"rows\"]]\n+    assert len(notes) == 151\n+    assert notes[-1] == \"late text\"\n+\n+\n def test_create_row_signature(sample_pd_data):\n     \"\"\"Test row signature creation.\"\"\"\n     batcher = _DataBatcher(sample_pd_data)"
+  }
+ ],
+ "test_files": [
+  "tests/test__utils_ai.py"
+ ]
+}

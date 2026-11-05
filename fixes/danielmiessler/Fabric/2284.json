@@ -1,0 +1,47 @@
+{
+ "repo": "danielmiessler/Fabric",
+ "number": 2284,
+ "url": "https://github.com/danielmiessler/Fabric/pull/2284",
+ "title": "fix(gemini): keep thought summaries out of the output and count thinking tokens",
+ "merged_at": "2026-10-21T19:05:05Z",
+ "files": [
+  {
+   "filename": "cmd/generate_changelog/incoming/2284.txt",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+### PR [#2284](https://github.com/danielmiessler/Fabric/pull/2284) by [pcbeingused333](https://github.com/pcbeingused333) and [ksylvan](https://github.com/ksylvan): fix(gemini): keep thought summaries out of the output and count thinking tokens\n+\n+- Leave Gemini and Vertex AI thought summaries out of the response text and report thinking tokens as output tokens."
+  },
+  {
+   "filename": "internal/plugins/ai/gemini/gemini.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -160,7 +160,7 @@ func (o *Client) SendStream(_ context.Context, msgs []*chat.ChatCompletionMessag\n \t\t\t\tType: domain.StreamTypeUsage,\n \t\t\t\tUsage: &domain.UsageMetadata{\n \t\t\t\t\tInputTokens:  int(response.UsageMetadata.PromptTokenCount),\n-\t\t\t\t\tOutputTokens: int(response.UsageMetadata.CandidatesTokenCount),\n+\t\t\t\t\tOutputTokens: geminicommon.OutputTokenCount(response.UsageMetadata),\n \t\t\t\t\tTotalTokens:  int(response.UsageMetadata.TotalTokenCount),\n \t\t\t\t},\n \t\t\t}"
+  },
+  {
+   "filename": "internal/plugins/ai/geminicommon/geminicommon.go",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 2,
+   "patch": "@@ -54,7 +54,9 @@ func ConvertMessages(msgs []*chat.ChatCompletionMessage) []*genai.Content {\n \treturn contents\n }\n \n-// ExtractText extracts just the text parts from a Gemini response.\n+// ExtractText extracts just the text parts from a Gemini response. Thought\n+// summaries (parts with Thought set, returned when --thinking asks for them)\n+// are model reasoning, not answer text, so they are left out.\n func ExtractText(response *genai.GenerateContentResponse) string {\n \tif response == nil {\n \t\treturn \"\"\n@@ -66,14 +68,21 @@ func ExtractText(response *genai.GenerateContentResponse) string {\n \t\t\tcontinue\n \t\t}\n \t\tfor _, part := range candidate.Content.Parts {\n-\t\t\tif part != nil && part.Text != \"\" {\n+\t\t\tif part != nil && !part.Thought && part.Text != \"\" {\n \t\t\t\tbuilder.WriteString(part.Text)\n \t\t\t}\n \t\t}\n \t}\n \treturn builder.String()\n }\n \n+// OutputTokenCount returns the tokens the model generated: the visible answer\n+// plus the thinking tokens, which Gemini reports separately but bills as output\n+// and counts in TotalTokenCount.\n+func OutputTokenCount(usage *genai.GenerateContentResponseUsageMetadata) int {\n+\treturn int(usage.CandidatesTokenCount) + int(usage.ThoughtsTokenCount)\n+}\n+\n // ExtractTextWithCitations extracts text content from the response and appends\n // any web citations in a standardized format.\n func ExtractTextWithCitations(response *genai.GenerateContentResponse) string {"
+  },
+  {
+   "filename": "internal/plugins/ai/geminicommon/geminicommon_test.go",
+   "status": "added",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,33 @@\n+package geminicommon\n+\n+import (\n+\t\"testing\"\n+\n+\t\"github.com/stretchr/testify/assert\"\n+\t\"google.golang.org/genai\"\n+)\n+\n+func TestExtractTextSkipsThoughtParts(t *testing.T) {\n+\tresponse := &genai.GenerateContentResponse{\n+\t\tCandidates: []*genai.Candidate{{\n+\t\t\tContent: &genai.Content{Parts: []*genai.Part{\n+\t\t\t\t{Text: \"**Planning the answer**\", Thought: true},\n+\t\t\t\t{Text: \"The answer is 2.\"},\n+\t\t\t}},\n+\t\t}},\n+\t}\n+\n+\tassert.Equal(t, \"The answer is 2.\", ExtractText(response))\n+\tassert.Equal(t, \"The answer is 2.\", ExtractTextWithCitations(response))\n+}\n+\n+func TestOutputTokenCountIncludesThoughts(t *testing.T) {\n+\tusage := &genai.GenerateContentResponseUsageMetadata{\n+\t\tPromptTokenCount:     10,\n+\t\tCandidatesTokenCount: 20,\n+\t\tThoughtsTokenCount:   70,\n+\t\tTotalTokenCount:      100,\n+\t}\n+\n+\tassert.Equal(t, 90, OutputTokenCount(usage))\n+}"
+  },
+  {
+   "filename": "internal/plugins/ai/vertexai/vertexai.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -357,7 +357,7 @@ func (c *Client) sendStreamGemini(msgs []*chat.ChatCompletionMessage, opts *doma\n \t\t\t\tType: domain.StreamTypeUsage,\n \t\t\t\tUsage: &domain.UsageMetadata{\n \t\t\t\t\tInputTokens:  int(response.UsageMetadata.PromptTokenCount),\n-\t\t\t\t\tOutputTokens: int(response.UsageMetadata.CandidatesTokenCount),\n+\t\t\t\t\tOutputTokens: geminicommon.OutputTokenCount(response.UsageMetadata),\n \t\t\t\t\tTotalTokens:  int(response.UsageMetadata.TotalTokenCount),\n \t\t\t\t},\n \t\t\t}"
+  }
+ ],
+ "test_files": [
+  "internal/plugins/ai/geminicommon/geminicommon_test.go"
+ ]
+}

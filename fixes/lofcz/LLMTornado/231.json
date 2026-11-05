@@ -1,0 +1,33 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 231,
+ "url": "https://github.com/lofcz/LLMTornado/pull/231",
+ "title": "Mistral speech: decode the audio_data of the JSON response",
+ "merged_at": "2026-10-22T03:21:18Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/MistralSpeechResultTests.cs",
+   "status": "added",
+   "additions": 89,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,89 @@\n+using LlmTornado.Audio.Models;\n+using System;\n+using System.Net;\n+using System.Net.Http;\n+using System.Threading;\n+using System.Threading.Tasks;\n+using LlmTornado.Audio;\n+using LlmTornado.Code;\n+using System.IO;\n+using System.Text;\n+using LlmTornado.Audio.Vendors.Mistral;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class MistralSpeechResultTests\n+{\n+    [Test]\n+    public async Task ToAudioStream_DecodesTheAudioDataOfTheJsonEnvelope()\n+    {\n+        byte[] audio = [0x49, 0x44, 0x33, 0x04, 0x00, 0xFF];\n+        string json = $\"{{\\\"audio_data\\\":\\\"{System.Convert.ToBase64String(audio)}\\\"}}\";\n+\n+        Stream result = await VendorMistralSpeechResult.ToAudioStream(new MemoryStream(Encoding.UTF8.GetBytes(json)));\n+\n+        Assert.That(ReadAll(result), Is.EqualTo(audio));\n+    }\n+\n+    [Test]\n+    public async Task ToAudioStream_LeavesRawAudioUntouched()\n+    {\n+        byte[] audio = [0x49, 0x44, 0x33, 0x04, 0x00, 0xFF];\n+\n+        Stream result = await VendorMistralSpeechResult.ToAudioStream(new MemoryStream(audio));\n+\n+        Assert.That(ReadAll(result), Is.EqualTo(audio));\n+    }\n+\n+    private static byte[] ReadAll(Stream stream)\n+    {\n+        MemoryStream copy = new MemoryStream();\n+        stream.CopyTo(copy);\n+        return copy.ToArray();\n+    }\n+}\n+\n+[TestFixture]\n+[NonParallelizable]\n+public class MistralSpeechEndpointTests\n+{\n+    private sealed class StubHandler : HttpMessageHandler\n+    {\n+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)\n+        {\n+            byte[] audio = [0x49, 0x44, 0x33, 0x04, 0x00, 0xFF];\n+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)\n+            {\n+                Content = new StringContent($\"{{\\\"audio_data\\\":\\\"{System.Convert.ToBase64String(audio)}\\\"}}\", Encoding.UTF8, \"application/json\")\n+            });\n+        }\n+    }\n+\n+    [Test]\n+    public async Task CreateSpeech_ReturnsTheDecodedAudioOfAMistralResponse()\n+    {\n+        Func<LLmProviders, HttpClient?>? previous = EndpointBase.OnHttpClientRequested;\n+        EndpointBase.OnHttpClientRequested = provider => provider is LLmProviders.Mistral ? new HttpClient(new StubHandler()) : null;\n+\n+        try\n+        {\n+            TornadoApi api = new TornadoApi(new Uri(\"http://mistral.test/v1\"), \"key\", LLmProviders.Mistral);\n+            SpeechTtsResult? result = await api.Audio.CreateSpeech(new SpeechRequest\n+            {\n+                Model = AudioModel.Mistral.Free.VoxtralMiniTts2603,\n+                Input = \"hello\",\n+                VoiceId = \"voice\"\n+            });\n+\n+            Assert.That(result, Is.Not.Null);\n+            MemoryStream copy = new MemoryStream();\n+            await result!.AudioStream.CopyToAsync(copy);\n+            Assert.That(copy.ToArray(), Is.EqualTo(new byte[] { 0x49, 0x44, 0x33, 0x04, 0x00, 0xFF }));\n+        }\n+        finally\n+        {\n+            EndpointBase.OnHttpClientRequested = previous;\n+        }\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Audio/AudioEndpoint.cs",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -189,6 +189,12 @@ public async IAsyncEnumerable<SpeechStreamEvent> StreamSpeechEvents(SpeechReques\n         object postData = provider.Provider is LLmProviders.Mistral ? new VendorMistralSpeechRequest(request) : request;\n         \n         StreamResponse? x = await HttpPostStream(provider, Endpoint, url, postData, ct: request.CancellationToken);\n+\n+        if (x is not null && provider.Provider is LLmProviders.Mistral)\n+        {\n+            x.Stream = await VendorMistralSpeechResult.ToAudioStream(x.Stream).ConfigureAwait(false);\n+        }\n+\n         return x is null ? null : new SpeechTtsResult(x);\n     }\n "
+  },
+  {
+   "filename": "src/LlmTornado/Audio/Vendors/Mistral/VendorMistralSpeechResult.cs",
+   "status": "added",
+   "additions": 44,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,44 @@\n+using System;\n+using System.IO;\n+using System.Threading.Tasks;\n+using Newtonsoft.Json.Linq;\n+\n+namespace LlmTornado.Audio.Vendors.Mistral;\n+\n+/// <summary>\n+/// Mistral answers a non-streaming speech request with a JSON object whose <c>audio_data</c> holds the audio base64 encoded.\n+/// </summary>\n+internal static class VendorMistralSpeechResult\n+{\n+    /// <summary>\n+    /// Replaces the JSON envelope of a Mistral speech response with the decoded audio. A body that is not that envelope is returned unchanged.\n+    /// </summary>\n+    public static async Task<Stream> ToAudioStream(Stream body)\n+    {\n+        using (body)\n+        {\n+            MemoryStream buffer = new MemoryStream();\n+            await body.CopyToAsync(buffer).ConfigureAwait(false);\n+            byte[] bytes = buffer.ToArray();\n+\n+            if (bytes.Length > 0 && bytes[0] is (byte)'{')\n+            {\n+                try\n+                {\n+                    string? audioData = JObject.Parse(System.Text.Encoding.UTF8.GetString(bytes))[\"audio_data\"]?.Value<string>();\n+\n+                    if (audioData is not null)\n+                    {\n+                        return new MemoryStream(Convert.FromBase64String(audioData));\n+                    }\n+                }\n+                catch (Exception e) when (e is FormatException or Newtonsoft.Json.JsonException)\n+                {\n+                    // not the envelope, hand the bytes back as they are\n+                }\n+            }\n+\n+            return new MemoryStream(bytes);\n+        }\n+    }\n+}"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/MistralSpeechResultTests.cs"
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "lich0821/ccNexus",
+ "number": 148,
+ "url": "https://github.com/lich0821/ccNexus/pull/148",
+ "title": "fix: report truncation between Gemini MAX_TOKENS and Claude/OpenAI",
+ "merged_at": "2026-10-23T06:42:41Z",
+ "files": [
+  {
+   "filename": "internal/transformer/convert/claude_gemini.go",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 1,
+   "patch": "@@ -222,8 +222,11 @@ func ClaudeRespToGemini(claudeResp []byte) ([]byte, error) {\n \t}\n \n \tfinishReason := \"STOP\"\n-\tif resp.StopReason == \"tool_use\" {\n+\tswitch resp.StopReason {\n+\tcase \"tool_use\":\n \t\tfinishReason = \"TOOL_CODE\"\n+\tcase \"max_tokens\":\n+\t\tfinishReason = \"MAX_TOKENS\"\n \t}\n \n \tgeminiResp := map[string]interface{}{\n@@ -279,6 +282,9 @@ func GeminiRespToClaude(geminiResp []byte) ([]byte, error) {\n \t\t\t\tstopReason = \"tool_use\"\n \t\t\t}\n \t\t}\n+\t\tif candidate.FinishReason == \"MAX_TOKENS\" {\n+\t\t\tstopReason = \"max_tokens\"\n+\t\t}\n \t}\n \n \tvar inputTokens, outputTokens int\n@@ -435,6 +441,9 @@ func GeminiStreamToClaude(event []byte, ctx *transformer.StreamContext) ([]byte,\n \t\tif hasFunctionCall || candidate.FinishReason == \"TOOL_CODE\" {\n \t\t\tstopReason = \"tool_use\"\n \t\t}\n+\t\tif candidate.FinishReason == \"MAX_TOKENS\" {\n+\t\t\tstopReason = \"max_tokens\"\n+\t\t}\n \t\tresult = append(result, buildClaudeEvent(\"message_delta\", map[string]interface{}{\n \t\t\t\"delta\": map[string]interface{}{\"stop_reason\": stopReason, \"stop_sequence\": nil},\n \t\t\t\"usage\": currentClaudeUsage(ctx),"
+  },
+  {
+   "filename": "internal/transformer/convert/gemini_truncation_test.go",
+   "status": "added",
+   "additions": 63,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,63 @@\n+package convert\n+\n+import (\n+\t\"testing\"\n+\n+\t\"github.com/lich0821/ccNexus/internal/transformer\"\n+)\n+\n+const geminiTruncatedResp = `{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"Once upon a\"}]},\"finishReason\":\"MAX_TOKENS\"}],\"usageMetadata\":{\"promptTokenCount\":5,\"candidatesTokenCount\":3,\"totalTokenCount\":8}}`\n+\n+const geminiTruncatedChunk = \"data: \" + geminiTruncatedResp + \"\\n\\n\"\n+\n+func TestGeminiRespToClaudeMaxTokensReportsMaxTokens(t *testing.T) {\n+\tout, err := GeminiRespToClaude([]byte(geminiTruncatedResp))\n+\tif err != nil {\n+\t\tt.Fatalf(\"GeminiRespToClaude failed: %v\", err)\n+\t}\n+\n+\tassertContains(t, string(out), `\"stop_reason\":\"max_tokens\"`, \"Expected stop_reason max_tokens for a Gemini MAX_TOKENS finish\")\n+}\n+\n+func TestGeminiStreamToClaudeMaxTokensReportsMaxTokens(t *testing.T) {\n+\tctx := transformer.NewStreamContext()\n+\tctx.ModelName = \"gemini-3.8-flash\"\n+\n+\tout, err := GeminiStreamToClaude([]byte(geminiTruncatedChunk), ctx)\n+\tif err != nil {\n+\t\tt.Fatalf(\"GeminiStreamToClaude failed: %v\", err)\n+\t}\n+\n+\tassertContains(t, string(out), `\"stop_reason\":\"max_tokens\"`, \"Expected stop_reason max_tokens for a Gemini MAX_TOKENS finish\")\n+}\n+\n+func TestGeminiRespToOpenAIMaxTokensReportsLength(t *testing.T) {\n+\tout, err := GeminiRespToOpenAI([]byte(geminiTruncatedResp), \"gemini-3.8-flash\")\n+\tif err != nil {\n+\t\tt.Fatalf(\"GeminiRespToOpenAI failed: %v\", err)\n+\t}\n+\n+\tassertContains(t, string(out), `\"finish_reason\":\"length\"`, \"Expected finish_reason length for a Gemini MAX_TOKENS finish\")\n+}\n+\n+func TestGeminiStreamToOpenAIMaxTokensReportsLength(t *testing.T) {\n+\tctx := transformer.NewStreamContext()\n+\n+\tout, err := GeminiStreamToOpenAI([]byte(geminiTruncatedChunk), ctx, \"gemini-3.8-flash\")\n+\tif err != nil {\n+\t\tt.Fatalf(\"GeminiStreamToOpenAI failed: %v\", err)\n+\t}\n+\n+\tassertContains(t, string(out), `\"finish_reason\":\"length\"`, \"Expected finish_reason length for a Gemini MAX_TOKENS finish\")\n+}\n+\n+func TestClaudeRespToGeminiMaxTokensReportsMaxTokens(t *testing.T) {\n+\tclaudeResp := `{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-5\",\"content\":[{\"type\":\"text\",\"text\":\"Once upon a\"}],\"stop_reason\":\"max_tokens\",\"usage\":{\"input_tokens\":5,\"output_tokens\":3}}`\n+\n+\tout, err := ClaudeRespToGemini([]byte(claudeResp))\n+\tif err != nil {\n+\t\tt.Fatalf(\"ClaudeRespToGemini failed: %v\", err)\n+\t}\n+\n+\tassertContains(t, string(out), `\"finishReason\":\"MAX_TOKENS\"`, \"Expected finishReason MAX_TOKENS for a Claude max_tokens stop\")\n+}"
+  },
+  {
+   "filename": "internal/transformer/convert/openai_gemini.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -150,6 +150,9 @@ func GeminiRespToOpenAI(geminiResp []byte, model string) ([]byte, error) {\n \t\t\t\tfinishReason = \"tool_calls\"\n \t\t\t}\n \t\t}\n+\t\tif candidate.FinishReason == \"MAX_TOKENS\" {\n+\t\t\tfinishReason = \"length\"\n+\t\t}\n \t}\n \n \tmessage := map[string]interface{}{\"role\": \"assistant\", \"content\": textContent}\n@@ -236,6 +239,9 @@ func GeminiStreamToOpenAI(event []byte, ctx *transformer.StreamContext, model st\n \t\tif hasToolCall || candidate.FinishReason == \"TOOL_CODE\" {\n \t\t\tfinishReason = \"tool_calls\"\n \t\t}\n+\t\tif candidate.FinishReason == \"MAX_TOKENS\" {\n+\t\t\tfinishReason = \"length\"\n+\t\t}\n \t\tusage := currentOpenAIUsage(ctx)\n \t\tchunk, _ := buildOpenAIChunkWithUsage(\"gemini-chunk\", model, \"\", nil, finishReason, usage)\n \t\tresult.Write(chunk)"
+  }
+ ],
+ "test_files": [
+  "internal/transformer/convert/gemini_truncation_test.go"
+ ]
+}

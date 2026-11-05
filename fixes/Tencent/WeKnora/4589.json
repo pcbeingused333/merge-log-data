@@ -1,0 +1,41 @@
+{
+ "repo": "Tencent/WeKnora",
+ "number": 4589,
+ "url": "https://github.com/Tencent/WeKnora/pull/4589",
+ "title": "fix(agent): treat model_context_window_exceeded as a length finish reason",
+ "merged_at": "2026-10-23T03:26:56Z",
+ "files": [
+  {
+   "filename": "internal/agent/observe.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -358,7 +358,7 @@ func isNaturalStopFinishReason(reason string) bool {\n // validation (missing path, unexpected end of JSON, etc.).\n func isLengthFinishReason(reason string) bool {\n \tswitch strings.ToLower(strings.TrimSpace(reason)) {\n-\tcase \"length\", \"max_tokens\", \"max_output_tokens\":\n+\tcase \"length\", \"max_tokens\", \"max_output_tokens\", \"model_context_window_exceeded\":\n \t\treturn true\n \tdefault:\n \t\treturn false"
+  },
+  {
+   "filename": "internal/agent/observe_test.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -505,6 +505,7 @@ func TestIsLengthFinishReason(t *testing.T) {\n \tassert.True(t, isLengthFinishReason(\"length\"))\n \tassert.True(t, isLengthFinishReason(\"max_tokens\"))\n \tassert.True(t, isLengthFinishReason(\"MAX_OUTPUT_TOKENS\"))\n+\tassert.True(t, isLengthFinishReason(\"model_context_window_exceeded\"))\n \tassert.False(t, isLengthFinishReason(\"stop\"))\n \tassert.False(t, isLengthFinishReason(\"tool_calls\"))\n }"
+  },
+  {
+   "filename": "internal/models/api/anthropicmessages/anthropicmessages_test.go",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -661,3 +661,28 @@ func TestRedactedThinkingSurvivesAnUnsignedNeighbour(t *testing.T) {\n \trequire.Equal(t, []string{\"redacted_thinking\", \"tool_use\"}, blockTypes(blocks))\n \tassert.Equal(t, \"opaque-1\", blocks[0].(map[string]any)[\"data\"])\n }\n+\n+func TestMapStopReason(t *testing.T) {\n+\ttests := []struct {\n+\t\tname       string\n+\t\treason     string\n+\t\ttoolCalls  int\n+\t\tincomplete bool\n+\t\twant       string\n+\t}{\n+\t\t{\"max tokens is length\", \"max_tokens\", 0, false, \"length\"},\n+\t\t{\"context window exceeded is length\", \"model_context_window_exceeded\", 0, false, \"length\"},\n+\t\t{\"context window exceeded with tool calls is length\", \"model_context_window_exceeded\", 2, false, \"length\"},\n+\t\t{\"tool use\", \"tool_use\", 1, false, \"tool_calls\"},\n+\t\t{\"end turn with tool calls\", \"end_turn\", 1, false, \"tool_calls\"},\n+\t\t{\"end turn\", \"end_turn\", 0, false, \"end_turn\"},\n+\t\t{\"refusal\", \"refusal\", 0, false, \"content_filter\"},\n+\t\t{\"incomplete stream\", \"max_tokens\", 0, true, types.FinishReasonIncomplete},\n+\t\t{\"empty reason\", \"\", 0, false, types.FinishReasonIncomplete},\n+\t}\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tassert.Equal(t, tt.want, mapStopReason(tt.reason, tt.toolCalls, tt.incomplete))\n+\t\t})\n+\t}\n+}"
+  },
+  {
+   "filename": "internal/models/api/anthropicmessages/request.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -527,7 +527,7 @@ func mapStopReason(reason string, toolCalls int, incomplete bool) string {\n \tswitch {\n \tcase incomplete, reason == \"\":\n \t\treturn types.FinishReasonIncomplete\n-\tcase reason == \"max_tokens\":\n+\tcase reason == \"max_tokens\", reason == \"model_context_window_exceeded\":\n \t\treturn \"length\"\n \tcase reason == \"tool_use\" || (toolCalls > 0 && reason == \"end_turn\"):\n \t\treturn \"tool_calls\""
+  }
+ ],
+ "test_files": [
+  "internal/agent/observe_test.go",
+  "internal/models/api/anthropicmessages/anthropicmessages_test.go"
+ ]
+}

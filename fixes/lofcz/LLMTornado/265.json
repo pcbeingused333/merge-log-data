@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 265,
+ "url": "https://github.com/lofcz/LLMTornado/pull/265",
+ "title": "fix(deepseek): read the context cache hit and miss tokens of the usage",
+ "merged_at": "2026-10-22T23:47:15Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/DeepSeekCacheUsageTests.cs",
+   "status": "added",
+   "additions": 44,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,44 @@\n+using LlmTornado.Chat;\n+using Newtonsoft.Json;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class DeepSeekCacheUsageTests\n+{\n+    [Test]\n+    public void Usage_MapsPromptCacheHitTokensToCacheReadTokens()\n+    {\n+        const string json = \"\"\"\n+            {\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120,\"prompt_cache_hit_tokens\":64,\"prompt_cache_miss_tokens\":36}\n+            \"\"\";\n+\n+        ChatUsage? usage = JsonConvert.DeserializeObject<ChatUsage>(json);\n+\n+        Assert.That(usage, Is.Not.Null);\n+        Assert.That(usage!.CacheReadTokens, Is.EqualTo(64));\n+    }\n+\n+    [Test]\n+    public void Usage_KeepsThePromptTokenDetailsWhenTheyReportCachedTokens()\n+    {\n+        const string json = \"\"\"\n+            {\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120,\"prompt_tokens_details\":{\"cached_tokens\":50},\"prompt_cache_hit_tokens\":64}\n+            \"\"\";\n+\n+        ChatUsage? usage = JsonConvert.DeserializeObject<ChatUsage>(json);\n+\n+        Assert.That(usage, Is.Not.Null);\n+        Assert.That(usage!.PromptTokenDetails?.CachedTokens, Is.EqualTo(50));\n+        Assert.That(usage.CacheReadTokens, Is.Null);\n+    }\n+\n+    [Test]\n+    public void Usage_WithoutCacheFieldsHasNoCacheReadTokens()\n+    {\n+        ChatUsage? usage = JsonConvert.DeserializeObject<ChatUsage>(\"\"\"{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120}\"\"\");\n+\n+        Assert.That(usage, Is.Not.Null);\n+        Assert.That(usage!.CacheReadTokens, Is.Null);\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/ChatResult.cs",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -1,5 +1,6 @@\n using System.Collections.Generic;\n using System.Linq;\n+using System.Runtime.Serialization;\n using System.Text;\n using LlmTornado.Code;\n using LlmTornado.Vendor.Anthropic;\n@@ -458,6 +459,27 @@ public class ChatUsage : Usage\n \t[JsonIgnore]\n \tpublic int? CacheReadTokens { get; set; }\n \t\n+\t/// <summary>\n+\t///\t\tNumber of input tokens that hit the context cache. Returned by DeepSeek.\n+\t/// </summary>\n+\t[JsonProperty(\"prompt_cache_hit_tokens\")]\n+\tpublic int? PromptCacheHitTokens { get; set; }\n+\t\n+\t/// <summary>\n+\t///\t\tNumber of input tokens that did not hit the context cache. Returned by DeepSeek.\n+\t/// </summary>\n+\t[JsonProperty(\"prompt_cache_miss_tokens\")]\n+\tpublic int? PromptCacheMissTokens { get; set; }\n+\t\n+\t[OnDeserialized]\n+\tprivate void ReadCacheHitTokens(StreamingContext context)\n+\t{\n+\t\tif (CacheReadTokens is null && PromptTokenDetails?.CachedTokens is null)\n+\t\t{\n+\t\t\tCacheReadTokens = PromptCacheHitTokens;\n+\t\t}\n+\t}\n+\t\n \t/// <summary>\n \t/// Native usage object returned by the vendor. Provided for Anthropic, Cohere, Google, and Perplexity.\n \t/// Use this to read details about the billed units for vendor-specific features."
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/DeepSeekCacheUsageTests.cs"
+ ]
+}

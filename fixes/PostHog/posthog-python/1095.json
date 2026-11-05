@@ -1,0 +1,33 @@
+{
+ "repo": "PostHog/posthog-python",
+ "number": 1095,
+ "url": "https://github.com/PostHog/posthog-python/pull/1095",
+ "title": "fix(ai): keep the refusal of a non-streamed OpenAI chat completion in the captured output",
+ "merged_at": "2026-10-22T10:17:29Z",
+ "files": [
+  {
+   "filename": ".sampo/changesets/openai-chat-refusal-output.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+pypi/posthog: patch\n+---\n+\n+A non-streamed OpenAI chat completion that the model refused is no longer captured with an empty `$ai_output_choices`: the refusal text is recorded as a `refusal` content block, as it already is for streamed responses."
+  },
+  {
+   "filename": "posthog/ai/openai/openai_converter.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -151,6 +151,11 @@ def format_openai_response(response: Any) -> List[FormattedMessage]:\n                         }\n                     )\n \n+                # A refused request carries its text in `refusal` and leaves `content` empty\n+                refusal = getattr(choice.message, \"refusal\", None)\n+                if refusal:\n+                    content.append({\"type\": \"refusal\", \"refusal\": refusal})\n+\n                 if hasattr(choice.message, \"tool_calls\") and choice.message.tool_calls:\n                     for tool_call in choice.message.tool_calls:\n                         content.append("
+  },
+  {
+   "filename": "posthog/test/ai/openai/test_openai_converter.py",
+   "status": "modified",
+   "additions": 31,
+   "deletions": 0,
+   "patch": "@@ -82,6 +82,37 @@ def test_message_object_does_not_crash():\n     assert out[1][\"content\"] == \"hello\"\n \n \n+def test_chat_response_keeps_refusal():\n+    \"\"\"A refused chat completion has no content, only message.refusal, and used to be captured as [].\"\"\"\n+    from openai.types.chat import ChatCompletion\n+    from openai.types.chat.chat_completion import Choice\n+\n+    from posthog.ai.openai.openai_converter import format_openai_response\n+\n+    response = ChatCompletion(\n+        id=\"chatcmpl-1\",\n+        object=\"chat.completion\",\n+        created=0,\n+        model=\"gpt-4o\",\n+        choices=[\n+            Choice(\n+                index=0,\n+                finish_reason=\"stop\",\n+                message=ChatCompletionMessage(\n+                    role=\"assistant\", content=None, refusal=\"I can't help with that\"\n+                ),\n+            )\n+        ],\n+    )\n+\n+    assert format_openai_response(response) == [\n+        {\n+            \"role\": \"assistant\",\n+            \"content\": [{\"type\": \"refusal\", \"refusal\": \"I can't help with that\"}],\n+        }\n+    ]\n+\n+\n def test_responses_output_keeps_all_items():\n     from posthog.ai.openai.openai_converter import format_openai_response\n "
+  }
+ ],
+ "test_files": [
+  "posthog/test/ai/openai/test_openai_converter.py"
+ ]
+}

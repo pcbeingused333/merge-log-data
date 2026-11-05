@@ -1,0 +1,33 @@
+{
+ "repo": "tidyverse/ellmer",
+ "number": 1195,
+ "url": "https://github.com/tidyverse/ellmer/pull/1195",
+ "title": "fix(anthropic): keep redacted_thinking blocks instead of erroring",
+ "merged_at": "2026-11-03T12:12:17Z",
+ "files": [
+  {
+   "filename": "NEWS.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -3,6 +3,7 @@\n * `chat_anthropic()` and the other Claude providers now default `max_tokens` to 32,000, rather than 4096 (#1150).\n * New `vignette(\"otel\")` describes how to turn on OpenTelemetry tracing and metrics, what ellmer records, and how ellmer's spans join your own traces (@schloerke, #1187).\n * `chat_anthropic()` and `chat_aws_bedrock()` now report the correct input and cache token counts when a streamed response uses server tools such as web search, so `$get_tokens()` and `$get_cost()` match the same request without streaming (@pcbeingused333, #1194).\n+* `chat_anthropic()` no longer errors when Claude returns a `redacted_thinking` block (@pcbeingused333, #1195).\n * `chat_google_vertex()` and `chat_openai()` now report `finish_reason = \"tool_use\"` rather than `\"success\"` for turns that call a tool, matching the other providers. `chat_google_vertex()` also reports the `LANGUAGE`, `IMAGE_SAFETY`, `IMAGE_PROHIBITED_CONTENT`, and `IMAGE_RECITATION` finish reasons as `\"content_filter\"` (@pcbeingused333, #1199).\n * Default models have been updated for a number of providers (@thisisnic, #1176):\n   * `chat_anthropic()` now uses `claude-sonnet-5-5`."
+  },
+  {
+   "filename": "R/provider-claude.R",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -517,6 +517,9 @@ method(value_turn_with_turns, ProviderAnthropic) <- function(\n         content$thinking,\n         extra = list(signature = content$signature)\n       ))\n+    } else if (content$type == \"redacted_thinking\") {\n+      # https://platform.claude.com/docs/en/build-with-claude/thinking#redacted-thinking-blocks\n+      list(ContentThinking(\"\", extra = list(redacted_data = content$data)))\n     } else if (content$type == \"fallback\") {\n       # https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback\n       NULL\n@@ -955,6 +958,10 @@ method(as_json, list(ProviderAnthropic, ContentThinking)) <- function(\n   x,\n   ...\n ) {\n+  if (!is.null(x@extra$redacted_data)) {\n+    return(list(type = \"redacted_thinking\", data = x@extra$redacted_data))\n+  }\n+\n   if (identical(x@thinking, \"\")) {\n     return()\n   }"
+  },
+  {
+   "filename": "tests/testthat/test-provider-claude.R",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -514,6 +514,26 @@ test_that(\"stream_merge_chunks() takes cumulative usage from message_delta\", {\n   )\n })\n \n+test_that(\"redacted thinking blocks are kept and replayed\", {\n+  provider <- chat_anthropic_test()$get_provider()\n+  result <- list(\n+    content = list(\n+      list(type = \"thinking\", thinking = \"Hmm\", signature = \"sig\"),\n+      list(type = \"redacted_thinking\", data = \"encrypted\"),\n+      list(type = \"text\", text = \"Hello\")\n+    ),\n+    usage = list(input_tokens = 1, output_tokens = 1)\n+  )\n+\n+  turn <- value_turn(provider, test_model(), result)\n+\n+  expect_s7_class(turn@contents[[2]], ContentThinking)\n+  expect_equal(\n+    as_json(provider, turn@contents[[2]]),\n+    list(type = \"redacted_thinking\", data = \"encrypted\")\n+  )\n+})\n+\n test_that(\"stream_content() emits Anthropic citations after completed text\", {\n   provider <- chat_anthropic_test()$get_provider()\n   chunks <- list("
+  }
+ ],
+ "test_files": [
+  "tests/testthat/test-provider-claude.R"
+ ]
+}

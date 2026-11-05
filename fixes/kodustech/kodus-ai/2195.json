@@ -1,0 +1,26 @@
+{
+ "repo": "kodustech/kodus-ai",
+ "number": 2195,
+ "url": "https://github.com/kodustech/kodus-ai/pull/2195",
+ "title": "fix(mcp): return Kody rule timestamps as ISO strings from the rule listing tools",
+ "merged_at": "2026-10-25T12:38:36Z",
+ "files": [
+  {
+   "filename": "libs/mcp-server/tools/kodyRules.tools.spec.ts",
+   "status": "modified",
+   "additions": 41,
+   "deletions": 0,
+   "patch": "@@ -349,4 +349,45 @@ describe('KodyRulesTools rule listings', () => {\n             });\n         },\n     );\n+\n+    it.each([\n+        ['KODUS_GET_KODY_RULES', () => tools.getKodyRules(), {}],\n+        [\n+            'KODUS_GET_KODY_RULES_REPOSITORY',\n+            () => tools.getKodyRulesRepository(),\n+            { repositoryId: 'repo-1' },\n+        ],\n+    ])(\n+        '%s returns stored Date timestamps as ISO strings the output schema accepts',\n+        async (_name, tool, args) => {\n+            const createdAt = new Date('2026-10-01T10:00:00.000Z');\n+            const updatedAt = new Date('2026-10-02T11:30:00.000Z');\n+            findByOrganizationId.mockResolvedValue({\n+                rules: [\n+                    {\n+                        uuid: 'rule-1',\n+                        title: 'Avoid console.log',\n+                        status: KodyRulesStatus.ACTIVE,\n+                        repositoryId: 'repo-1',\n+                        createdAt,\n+                        updatedAt,\n+                    },\n+                ],\n+            });\n+            const definition = tool();\n+\n+            const result: any = await definition.execute(\n+                { organizationId: 'org-1', ...args } as any,\n+                undefined,\n+            );\n+\n+            expect(result.structuredContent.data[0]).toMatchObject({\n+                createdAt: '2026-10-01T10:00:00.000Z',\n+                updatedAt: '2026-10-02T11:30:00.000Z',\n+            });\n+            expect(() =>\n+                definition.outputSchema.parse(result.structuredContent),\n+            ).not.toThrow();\n+        },\n+    );\n });"
+  },
+  {
+   "filename": "libs/mcp-server/tools/kodyRules.tools.ts",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 3,
+   "patch": "@@ -88,8 +88,30 @@ type KodyRuleMemoryInput = Required<\n     >\n >;\n \n+type SerializedKodyRule = Omit<\n+    Partial<IKodyRule>,\n+    'createdAt' | 'updatedAt'\n+> & {\n+    createdAt?: string;\n+    updatedAt?: string;\n+};\n+\n interface KodyRulesResponse extends BaseResponse {\n-    data: Partial<IKodyRule>[];\n+    data: SerializedKodyRule[];\n+}\n+\n+// Stored rules carry Date timestamps, but the output schema of the list tools\n+// requires ISO strings, so the SDK rejected every response that had one.\n+function serializeKodyRule(rule: Partial<IKodyRule>): SerializedKodyRule {\n+    const { createdAt, updatedAt, ...rest } = rule;\n+    const toIso = (value?: Date | string) =>\n+        value instanceof Date ? value.toISOString() : value;\n+\n+    return {\n+        ...rest,\n+        ...(createdAt !== undefined && { createdAt: toIso(createdAt) }),\n+        ...(updatedAt !== undefined && { updatedAt: toIso(updatedAt) }),\n+    };\n }\n \n interface CreateKodyRuleResponse extends BaseResponse {\n@@ -207,7 +229,7 @@ export class KodyRulesTools {\n                     return {\n                         success: true,\n                         count: rules.length,\n-                        data: rules,\n+                        data: rules.map(serializeKodyRule),\n                     };\n                 },\n             ),\n@@ -296,7 +318,7 @@ export class KodyRulesTools {\n                     return {\n                         success: true,\n                         count: repositoryRules?.length,\n-                        data: repositoryRules,\n+                        data: repositoryRules.map(serializeKodyRule),\n                     };\n                 },\n             ),"
+  }
+ ],
+ "test_files": [
+  "libs/mcp-server/tools/kodyRules.tools.spec.ts"
+ ]
+}

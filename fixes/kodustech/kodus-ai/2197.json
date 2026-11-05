@@ -1,0 +1,26 @@
+{
+ "repo": "kodustech/kodus-ai",
+ "number": 2197,
+ "url": "https://github.com/kodustech/kodus-ai/pull/2197",
+ "title": "fix(llm): read a Google per-minute token quota on a 429 as a rate limit",
+ "merged_at": "2026-10-25T12:51:04Z",
+ "files": [
+  {
+   "filename": "libs/llm/error-classifier.spec.ts",
+   "status": "modified",
+   "additions": 26,
+   "deletions": 0,
+   "patch": "@@ -112,6 +112,32 @@ describe('classifyLLMError', () => {\n             );\n         });\n \n+        // Google AI Studio words a per-minute token limit like a spent quota:\n+        // \"You exceeded your current quota\". Only the quota id says which.\n+        const googleQuota = (quotaId: string) =>\n+            'You exceeded your current quota, please check your plan and billing details. ' +\n+            `Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_paid_tier_input_token_count, limit: 2000000, model: gemini-3.8-flash quotaId: ${quotaId} Please retry in 41s.`;\n+\n+        it('reads a Google per-minute token quota on a 429 as RATE_LIMIT', () => {\n+            const err = errorWithStatus(\n+                googleQuota('GenerateContentPaidTierInputTokensPerModelPerMinute'),\n+                429,\n+            );\n+            expect(classifyLLMError(err).category).toBe(\n+                LlmErrorCategory.RATE_LIMIT,\n+            );\n+        });\n+\n+        it('keeps a Google daily quota on a 429 as QUOTA_EXCEEDED', () => {\n+            const err = errorWithStatus(\n+                googleQuota('GenerateRequestsPerDayPerProjectPerModel-FreeTier'),\n+                429,\n+            );\n+            expect(classifyLLMError(err).category).toBe(\n+                LlmErrorCategory.QUOTA_EXCEEDED,\n+            );\n+        });\n+\n         it.each([500, 502, 503, 504])('maps %i → TRANSIENT', (status) => {\n             const err = errorWithStatus('upstream error', status);\n             expect(classifyLLMError(err).category).toBe("
+  },
+  {
+   "filename": "libs/llm/error-classifier.ts",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 1,
+   "patch": "@@ -319,6 +319,13 @@ function matchByHttpStatus(\n  * One list, both callers.\n  */\n function looksLikeQuota(lower: string): boolean {\n+    // A per-minute quota is a rate limit that clears on its own, not a spent\n+    // balance. Google words both as \"You exceeded your current quota\"; only the\n+    // quota id in the error body (\"...InputTokensPerModelPerMinute...\") tells a\n+    // per-minute token limit from a daily or billing one.\n+    if (looksLikePerMinuteLimit(lower)) {\n+        return false;\n+    }\n     return (\n         lower.includes('quota') ||\n         lower.includes('credit') ||\n@@ -338,6 +345,15 @@ function looksLikeQuota(lower: string): boolean {\n     );\n }\n \n+/**\n+ * True for a quota the provider resets every minute (Google's\n+ * \"...PerModelPerMinute...\" quota ids, \"per minute\" prose). A daily quota in\n+ * the same text is not a per-minute limit.\n+ */\n+function looksLikePerMinuteLimit(lower: string): boolean {\n+    return /per[\\s_-]?minute/.test(lower) && !/per[\\s_-]?day/.test(lower);\n+}\n+\n /**\n  * Detects the \"model exists but you're not entitled to it\" shape. Vertex is\n  * the main source: \"Publisher Model `...` was not found or your project does\n@@ -371,7 +387,8 @@ function matchByMessage(lower: string): LlmErrorCategory {\n     if (\n         lower.includes('rate_limit') ||\n         lower.includes('rate limit') ||\n-        lower.includes('too many requests')\n+        lower.includes('too many requests') ||\n+        looksLikePerMinuteLimit(lower)\n     ) {\n         return LlmErrorCategory.RATE_LIMIT;\n     }"
+  }
+ ],
+ "test_files": [
+  "libs/llm/error-classifier.spec.ts"
+ ]
+}

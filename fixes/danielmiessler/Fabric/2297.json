@@ -1,0 +1,55 @@
+{
+ "repo": "danielmiessler/Fabric",
+ "number": 2297,
+ "url": "https://github.com/danielmiessler/Fabric/pull/2297",
+ "title": "fix(claude): omit temperature and top_p for Claude models that reject them on Bedrock gateway and Vertex AI",
+ "merged_at": "2026-10-23T04:52:41Z",
+ "files": [
+  {
+   "filename": "cmd/generate_changelog/incoming/2297.txt",
+   "status": "added",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,7 @@\n+### PR [#2297](https://github.com/danielmiessler/Fabric/pull/2297) by [pcbeingused333](https://github.com/pcbeingused333) and [ksylvan](https://github.com/ksylvan): fix(claude): omit temperature and top_p for Claude models that reject them on Bedrock gateway and Vertex AI\n+\n+- Fixed Claude requests by omitting `temperature` and `top_p` for models that reject them on the Bedrock gateway and Vertex AI.\n+- Centralized Claude sampling parameter logic so it is shared across the Anthropic and Vertex AI integrations.\n+- Preserved per-model restrictions and the mutually exclusive handling of sampling parameters.\n+- Moved sampling tests into the shared Anthropic package for consistent coverage.\n+- Added the corresponding changelog entry for this change."
+  },
+  {
+   "filename": "internal/plugins/ai/anthropic/anthropic.go",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 13,
+   "patch": "@@ -26,7 +26,7 @@ const sourcesHeader = \"## Sources\"\n \n // These models reject non-default sampling parameters.\n // Requests to them do not include temperature or top_p.\n-var samplingParamsDisallowedPrefixes = []string{\n+var samplingParamsDisallowedModels = []string{\n \t\"claude-opus-4-7\",\n \t\"claude-opus-4-8\",\n \t\"claude-opus-5\",\n@@ -36,12 +36,31 @@ var samplingParamsDisallowedPrefixes = []string{\n \t\"claude-mythos\",\n }\n \n-func modelDisallowsSamplingParams(model string) bool {\n-\treturn slices.ContainsFunc(samplingParamsDisallowedPrefixes, func(prefix string) bool {\n-\t\treturn strings.HasPrefix(model, prefix)\n+// ModelDisallowsSamplingParams reports whether a Claude model rejects temperature and top_p.\n+// It matches anywhere in the ID, so Bedrock (`us.anthropic.claude-opus-5-5-v1:0`),\n+// Vertex AI (`claude-opus-4-7@20260101`) and gateway (`anthropic/claude-opus-5`) IDs\n+// resolve like the plain ones. Other plugins that call Claude use it too.\n+func ModelDisallowsSamplingParams(model string) bool {\n+\treturn slices.ContainsFunc(samplingParamsDisallowedModels, func(name string) bool {\n+\t\treturn strings.Contains(model, name)\n \t})\n }\n \n+// SetSamplingParams sets TopP or Temperature on a Claude request, as the model allows.\n+// Some models reject both, and the others reject a request that sets both.\n+func SetSamplingParams(params *anthropic.MessageNewParams, opts *domain.ChatOptions) {\n+\tif ModelDisallowsSamplingParams(opts.Model) {\n+\t\treturn\n+\t}\n+\tif opts.TopP != domain.DefaultTopP {\n+\t\tparams.TopP = anthropic.Opt(opts.TopP)\n+\t} else {\n+\t\t// Send temperature also at its default value. The Fabric default is 0.7,\n+\t\t// and the API default is 1.0.\n+\t\tparams.Temperature = anthropic.Opt(opts.Temperature)\n+\t}\n+}\n+\n // These models reject the legacy `thinking.type=enabled` and `budget_tokens`\n // shape. Requests to them use `thinking.type=adaptive` with\n // `output_config.effort`. For the legacy shape, the API returns this error:\n@@ -300,15 +319,7 @@ func (an *Client) buildMessageParams(msgs []anthropic.MessageParam, opts *domain\n \t\tMessages:  msgs,\n \t}\n \n-\tif modelDisallowsSamplingParams(opts.Model) {\n-\t\t// Send no sampling parameters to these models.\n-\t} else if opts.TopP != domain.DefaultTopP {\n-\t\tparams.TopP = anthropic.Opt(opts.TopP)\n-\t} else {\n-\t\t// Send temperature also at its default value. The Fabric default is 0.7,\n-\t\t// and the API default is 1.0.\n-\t\tparams.Temperature = anthropic.Opt(opts.Temperature)\n-\t}\n+\tSetSamplingParams(&params, opts)\n \n \tif opts.Search {\n \t\twebTool := anthropic.WebSearchTool20250305Param{"
+  },
+  {
+   "filename": "internal/plugins/ai/anthropic/anthropic_sampling_test.go",
+   "status": "added",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,36 @@\n+package anthropic\n+\n+import (\n+\t\"testing\"\n+\n+\t\"github.com/anthropics/anthropic-sdk-go\"\n+\t\"github.com/danielmiessler/fabric/internal/domain\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+// The anthropic and vertexai plugins set the sampling parameters through SetSamplingParams.\n+func TestSetSamplingParamsOmitsThemForModelsThatRejectThem(t *testing.T) {\n+\tfor _, model := range []string{\"claude-opus-4-7@20260101\", \"claude-opus-5-5\", \"claude-sonnet-5-5@20260601\"} {\n+\t\tt.Run(model, func(t *testing.T) {\n+\t\t\tfor _, topP := range []float64{domain.DefaultTopP, 0.5} {\n+\t\t\t\tvar params anthropic.MessageNewParams\n+\t\t\t\tSetSamplingParams(&params, &domain.ChatOptions{Model: model, Temperature: domain.DefaultTemperature, TopP: topP})\n+\n+\t\t\t\trequire.False(t, params.Temperature.Valid())\n+\t\t\t\trequire.False(t, params.TopP.Valid())\n+\t\t\t}\n+\t\t})\n+\t}\n+}\n+\n+func TestSetSamplingParamsSetsOneOfThemForOtherModels(t *testing.T) {\n+\tvar params anthropic.MessageNewParams\n+\tSetSamplingParams(&params, &domain.ChatOptions{Model: \"claude-sonnet-4-6\", Temperature: 0.3, TopP: domain.DefaultTopP})\n+\trequire.True(t, params.Temperature.Valid())\n+\trequire.False(t, params.TopP.Valid())\n+\n+\tparams = anthropic.MessageNewParams{}\n+\tSetSamplingParams(&params, &domain.ChatOptions{Model: \"claude-sonnet-4-6\", Temperature: 0.3, TopP: 0.5})\n+\trequire.True(t, params.TopP.Valid())\n+\trequire.False(t, params.Temperature.Valid())\n+}"
+  },
+  {
+   "filename": "internal/plugins/ai/azureaigateway/backend_bedrock.go",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 6,
+   "patch": "@@ -13,6 +13,7 @@ import (\n \t\"github.com/danielmiessler/fabric/internal/domain\"\n \t\"github.com/danielmiessler/fabric/internal/i18n\"\n \tdebuglog \"github.com/danielmiessler/fabric/internal/log\"\n+\tanthropicplugin \"github.com/danielmiessler/fabric/internal/plugins/ai/anthropic\"\n )\n \n const bedrockAnthropicVersion = \"bedrock-2023-05-31\"\n@@ -95,12 +96,15 @@ func (b *BedrockBackend) PrepareRequest(msgs []*chat.ChatCompletionMessage, opts\n \tif len(systemParts) > 0 {\n \t\tbody[\"system\"] = strings.Join(systemParts, \"\\n\\n\")\n \t}\n-\t// The Anthropic API accepts temperature or top_p, not both.\n-\t// Send top_p when it is not the default. Otherwise send temperature.\n-\tif opts.TopP != domain.DefaultTopP {\n-\t\tbody[\"top_p\"] = opts.TopP\n-\t} else {\n-\t\tbody[\"temperature\"] = opts.Temperature\n+\t// Some Claude models reject temperature and top_p. The Anthropic API accepts\n+\t// temperature or top_p, not both: send top_p when it is not the default,\n+\t// otherwise temperature.\n+\tif !anthropicplugin.ModelDisallowsSamplingParams(opts.Model) {\n+\t\tif opts.TopP != domain.DefaultTopP {\n+\t\t\tbody[\"top_p\"] = opts.TopP\n+\t\t} else {\n+\t\t\tbody[\"temperature\"] = opts.Temperature\n+\t\t}\n \t}\n \n \treturn json.Marshal(body)"
+  },
+  {
+   "filename": "internal/plugins/ai/azureaigateway/backend_bedrock_sampling_test.go",
+   "status": "added",
+   "additions": 50,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,50 @@\n+package azureaigateway\n+\n+import (\n+\t\"encoding/json\"\n+\t\"testing\"\n+\n+\t\"github.com/danielmiessler/fabric/internal/chat\"\n+\t\"github.com/danielmiessler/fabric/internal/domain\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+func prepareBedrockBody(t *testing.T, model string, topP float64) map[string]any {\n+\tt.Helper()\n+\n+\topts := &domain.ChatOptions{Model: model, Temperature: domain.DefaultTemperature, TopP: topP}\n+\traw, err := NewBedrockBackend(\"key\").PrepareRequest(\n+\t\t[]*chat.ChatCompletionMessage{{Role: chat.ChatMessageRoleUser, Content: \"hi\"}}, opts)\n+\trequire.NoError(t, err)\n+\n+\tvar body map[string]any\n+\trequire.NoError(t, json.Unmarshal(raw, &body))\n+\treturn body\n+}\n+\n+// Claude Opus 4.7 and later, and the Claude 5 models, reject temperature and top_p with a 400.\n+func TestBedrockPrepareRequestOmitsSamplingForModelsThatRejectIt(t *testing.T) {\n+\tfor _, model := range []string{\n+\t\t\"us.anthropic.claude-opus-5-5-v1:0\",\n+\t\t\"global.anthropic.claude-sonnet-5-5\",\n+\t\t\"anthropic.claude-opus-4-7-v1:0\",\n+\t} {\n+\t\tt.Run(model, func(t *testing.T) {\n+\t\t\tfor _, topP := range []float64{domain.DefaultTopP, 0.5} {\n+\t\t\t\tbody := prepareBedrockBody(t, model, topP)\n+\t\t\t\trequire.NotContains(t, body, \"temperature\")\n+\t\t\t\trequire.NotContains(t, body, \"top_p\")\n+\t\t\t}\n+\t\t})\n+\t}\n+}\n+\n+func TestBedrockPrepareRequestKeepsSamplingForOtherModels(t *testing.T) {\n+\tbody := prepareBedrockBody(t, \"us.anthropic.claude-sonnet-4-5-20250929-v1:0\", domain.DefaultTopP)\n+\trequire.Contains(t, body, \"temperature\")\n+\trequire.NotContains(t, body, \"top_p\")\n+\n+\tbody = prepareBedrockBody(t, \"us.anthropic.claude-sonnet-4-5-20250929-v1:0\", 0.5)\n+\trequire.Contains(t, body, \"top_p\")\n+\trequire.NotContains(t, body, \"temperature\")\n+}"
+  },
+  {
+   "filename": "internal/plugins/ai/vertexai/vertexai.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 12,
+   "patch": "@@ -13,6 +13,7 @@ import (\n \t\"github.com/danielmiessler/fabric/internal/i18n\"\n \tdebuglog \"github.com/danielmiessler/fabric/internal/log\"\n \t\"github.com/danielmiessler/fabric/internal/plugins\"\n+\tanthropicplugin \"github.com/danielmiessler/fabric/internal/plugins/ai/anthropic\"\n \t\"github.com/danielmiessler/fabric/internal/plugins/ai/geminicommon\"\n \t\"golang.org/x/oauth2\"\n \t\"golang.org/x/oauth2/google\"\n@@ -142,12 +143,7 @@ func (c *Client) sendClaude(ctx context.Context, msgs []*chat.ChatCompletionMess\n \t\tMessages:  anthropicMessages,\n \t}\n \n-\t// Some Claude models reject a request that sets both Temperature and TopP.\n-\tif opts.TopP != domain.DefaultTopP {\n-\t\tparams.TopP = anthropic.Opt(opts.TopP)\n-\t} else {\n-\t\tparams.Temperature = anthropic.Opt(opts.Temperature)\n-\t}\n+\tanthropicplugin.SetSamplingParams(&params, opts)\n \n \tresponse, err := c.client.Messages.New(ctx, params)\n \tif err != nil {\n@@ -195,12 +191,7 @@ func (c *Client) sendStreamClaude(msgs []*chat.ChatCompletionMessage, opts *doma\n \t\tMessages:  anthropicMessages,\n \t}\n \n-\t// Some Claude models reject a request that sets both Temperature and TopP.\n-\tif opts.TopP != domain.DefaultTopP {\n-\t\tparams.TopP = anthropic.Opt(opts.TopP)\n-\t} else {\n-\t\tparams.Temperature = anthropic.Opt(opts.Temperature)\n-\t}\n+\tanthropicplugin.SetSamplingParams(&params, opts)\n \n \tstream := c.client.Messages.NewStreaming(ctx, params)\n "
+  }
+ ],
+ "test_files": [
+  "internal/plugins/ai/anthropic/anthropic_sampling_test.go",
+  "internal/plugins/ai/azureaigateway/backend_bedrock_sampling_test.go"
+ ]
+}

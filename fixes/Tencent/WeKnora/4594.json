@@ -1,0 +1,26 @@
+{
+ "repo": "Tencent/WeKnora",
+ "number": 4594,
+ "url": "https://github.com/Tencent/WeKnora/pull/4594",
+ "title": "fix(googlegenai): count tool-use prompt tokens as input tokens",
+ "merged_at": "2026-10-26T16:19:44Z",
+ "files": [
+  {
+   "filename": "internal/models/api/googlegenai/client.go",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 2,
+   "patch": "@@ -192,6 +192,7 @@ type rawUsage struct {\n \tPromptTokenCount        int  `json:\"promptTokenCount\"`\n \tCandidatesTokenCount    int  `json:\"candidatesTokenCount\"`\n \tThoughtsTokenCount      int  `json:\"thoughtsTokenCount\"`\n+\tToolUsePromptTokenCount int  `json:\"toolUsePromptTokenCount\"`\n \tTotalTokenCount         int  `json:\"totalTokenCount\"`\n \tCachedContentTokenCount *int `json:\"cachedContentTokenCount\"`\n }\n@@ -210,8 +211,12 @@ type rawResponse struct {\n }\n \n func (c *Client) usage(u rawUsage) types.TokenUsage {\n+\t// Tokens read by Gemini's built-in tools (URL context, search, code\n+\t// execution) are billed as input but reported apart from promptTokenCount;\n+\t// totalTokenCount counts them as \"tool-use prompt\".\n+\tpromptTokens := u.PromptTokenCount + u.ToolUsePromptTokenCount\n \tout := types.TokenUsage{\n-\t\tPromptTokens:     u.PromptTokenCount,\n+\t\tPromptTokens:     promptTokens,\n \t\tCompletionTokens: u.CandidatesTokenCount + u.ThoughtsTokenCount,\n \t\tTotalTokens:      u.TotalTokenCount,\n \t}\n@@ -221,7 +226,7 @@ func (c *Client) usage(u rawUsage) types.TokenUsage {\n \tswitch {\n \tcase u.CachedContentTokenCount != nil:\n \t\tcached := *u.CachedContentTokenCount\n-\t\tout.SetPromptCacheUsage(cached, 0, max(0, u.PromptTokenCount-cached), true)\n+\t\tout.SetPromptCacheUsage(cached, 0, max(0, promptTokens-cached), true)\n \tcase c.cfg.Settings.PromptCacheAcct:\n \t\tout.SetPromptCacheUsage(0, 0, 0, false)\n \tdefault:"
+  },
+  {
+   "filename": "internal/models/api/googlegenai/googlegenai_test.go",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -730,6 +730,42 @@ func TestChatStreamEOFWithoutFinishReasonIsIncomplete(t *testing.T) {\n \t}\n }\n \n+// Tokens read by Gemini's built-in tools (URL context, search, code execution)\n+// are reported in toolUsePromptTokenCount, apart from promptTokenCount, and\n+// totalTokenCount includes them.\n+func TestUsageCountsToolUsePromptTokens(t *testing.T) {\n+\tclient := newTestClient(t, \"http://example.invalid\", nil)\n+\tcached := 4\n+\tgot := client.usage(rawUsage{\n+\t\tPromptTokenCount:        10,\n+\t\tToolUsePromptTokenCount: 6,\n+\t\tCandidatesTokenCount:    5,\n+\t\tThoughtsTokenCount:      3,\n+\t\tTotalTokenCount:         24,\n+\t\tCachedContentTokenCount: &cached,\n+\t})\n+\tif got.PromptTokens != 16 {\n+\t\tt.Errorf(\"PromptTokens = %d, want 16\", got.PromptTokens)\n+\t}\n+\tif got.CompletionTokens != 8 {\n+\t\tt.Errorf(\"CompletionTokens = %d, want 8\", got.CompletionTokens)\n+\t}\n+\tif got.TotalTokens != 24 {\n+\t\tt.Errorf(\"TotalTokens = %d, want 24\", got.TotalTokens)\n+\t}\n+\tif got.CacheReadTokens != 4 || got.CacheMissTokens != 12 {\n+\t\tt.Errorf(\"cache read/miss = %d/%d, want 4/12\", got.CacheReadTokens, got.CacheMissTokens)\n+\t}\n+}\n+\n+func TestUsageWithoutTotalSumsToolUsePromptTokens(t *testing.T) {\n+\tclient := newTestClient(t, \"http://example.invalid\", nil)\n+\tgot := client.usage(rawUsage{PromptTokenCount: 10, ToolUsePromptTokenCount: 6, CandidatesTokenCount: 5})\n+\tif got.PromptTokens != 16 || got.TotalTokens != 21 {\n+\t\tt.Errorf(\"PromptTokens/TotalTokens = %d/%d, want 16/21\", got.PromptTokens, got.TotalTokens)\n+\t}\n+}\n+\n func TestMapFinishReason(t *testing.T) {\n \ttests := []struct {\n \t\treason       string"
+  }
+ ],
+ "test_files": [
+  "internal/models/api/googlegenai/googlegenai_test.go"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 226,
+ "url": "https://github.com/lofcz/LLMTornado/pull/226",
+ "title": "Report the OpenAI request id and API version separately",
+ "merged_at": "2026-10-21T05:39:04Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/OpenAiResponseHeaderTests.cs",
+   "status": "added",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,49 @@\n+using System.Net.Http;\n+using LlmTornado.Chat;\n+using LlmTornado.Code;\n+using LlmTornado.Code.Vendor;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class OpenAiResponseHeaderTests\n+{\n+    private static ChatResult Parse(Action<HttpResponseMessage> headers)\n+    {\n+        using HttpResponseMessage response = new HttpResponseMessage();\n+        headers(response);\n+        ChatResult result = new ChatResult();\n+        new OpenAiEndpointProvider(LLmProviders.OpenAi).ParseInboundHeaders(result, response);\n+        return result;\n+    }\n+\n+    [Test]\n+    public void ParseInboundHeaders_RequestIdAndVersionAreSeparate()\n+    {\n+        ChatResult result = Parse(r =>\n+        {\n+            r.Headers.TryAddWithoutValidation(\"x-request-id\", \"req_abc123\");\n+            r.Headers.TryAddWithoutValidation(\"Openai-Version\", \"2020-10-01\");\n+        });\n+\n+        Assert.That(result.RequestId, Is.EqualTo(\"req_abc123\"));\n+        Assert.That(result.Version, Is.EqualTo(\"2020-10-01\"));\n+    }\n+\n+    [Test]\n+    public void ParseInboundHeaders_VersionAloneDoesNotBecomeRequestId()\n+    {\n+        ChatResult result = Parse(r => r.Headers.TryAddWithoutValidation(\"Openai-Version\", \"2020-10-01\"));\n+\n+        Assert.That(result.RequestId, Is.Null);\n+        Assert.That(result.Version, Is.EqualTo(\"2020-10-01\"));\n+    }\n+\n+    [Test]\n+    public void ParseInboundHeaders_LegacyRequestIdHeaderStillWorks()\n+    {\n+        ChatResult result = Parse(r => r.Headers.TryAddWithoutValidation(\"X-RequestSettings-ID\", \"legacy-1\"));\n+\n+        Assert.That(result.RequestId, Is.EqualTo(\"legacy-1\"));\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Vendor/OpenAi/OpenAiEndpointProvider.cs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -195,7 +195,7 @@ public override void ParseInboundHeaders<T>(T res, HttpResponseMessage response)\n             res.Organization = orgH.FirstOrDefault();\n         }\n \n-        if (response.Headers.TryGetValues(\"X-RequestSettings-ID\", out IEnumerable<string>? reqId))\n+        if (response.Headers.TryGetValues(\"x-request-id\", out IEnumerable<string>? reqId) || response.Headers.TryGetValues(\"X-RequestSettings-ID\", out reqId))\n         {\n             res.RequestId = reqId.FirstOrDefault();\n         }\n@@ -212,7 +212,7 @@ public override void ParseInboundHeaders<T>(T res, HttpResponseMessage response)\n \n         if (response.Headers.TryGetValues(\"Openai-Version\", out IEnumerable<string>? oav))\n         {\n-            res.RequestId = oav.FirstOrDefault();\n+            res.Version = oav.FirstOrDefault();\n         }\n     }\n     "
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/OpenAiResponseHeaderTests.cs"
+ ]
+}

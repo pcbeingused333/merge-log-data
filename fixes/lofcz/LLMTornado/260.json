@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 260,
+ "url": "https://github.com/lofcz/LLMTornado/pull/260",
+ "title": "Pass the configured port to the Qdrant client",
+ "merged_at": "2026-10-22T03:25:14Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/QdrantPortTests.cs",
+   "status": "added",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,38 @@\n+using System.Net;\n+using System.Net.Sockets;\n+using LlmTornado.VectorDatabases.Qdrant;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class QdrantPortTests\n+{\n+    [Test]\n+    public async Task Constructor_ConnectsToTheGivenPort()\n+    {\n+        using TcpListener listener = new TcpListener(IPAddress.Loopback, 0);\n+        listener.Start();\n+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;\n+\n+        QdrantVectorDatabase database = new QdrantVectorDatabase(\"127.0.0.1\", port);\n+\n+        Task<TcpClient> accepted = listener.AcceptTcpClientAsync();\n+        _ = Task.Run(async () =>\n+        {\n+            try\n+            {\n+                await database.GetCollectionList();\n+            }\n+            catch\n+            {\n+                // The listener is not a Qdrant server, only the connection attempt matters.\n+            }\n+        });\n+\n+        Task winner = await Task.WhenAny(accepted, Task.Delay(TimeSpan.FromSeconds(10)));\n+\n+        Assert.That(winner, Is.SameAs(accepted), \"no connection reached the requested port\");\n+\n+        (await accepted).Dispose();\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado.VectorDatabases.Qdrant/QdrantVectorDatabase.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -32,7 +32,7 @@ public QdrantVectorDatabase(\n     {\n         this.vectorDimension = vectorDimension;\n \n-        client = new QdrantClient(host, https: https, apiKey: apiKey);\n+        client = new QdrantClient(host, port, https: https, apiKey: apiKey);\n     }\n \n     /// <summary>"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/QdrantPortTests.cs"
+ ]
+}

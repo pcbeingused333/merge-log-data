@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 259,
+ "url": "https://github.com/lofcz/LLMTornado/pull/259",
+ "title": "Return every text block of an MCP tool result to the model",
+ "merged_at": "2026-10-22T03:24:52Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Agents/ToolRunner.cs",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 1,
+   "patch": "@@ -137,13 +137,20 @@ public static async Task<FunctionResult> CallMcpToolAsync(TornadoAgent agent, Fu\n         // extract tool result and pass it back to the model\n         if (call.Result?.RemoteContent is McpContent mcpContent)\n         {\n+            List<string> texts = [];\n+            \n             foreach (IMcpContentBlock block in mcpContent.McpContentBlocks)\n             {\n                 if (block is McpContentBlockText textBlock)\n                 {\n-                    call.Result.Content = textBlock.Text;\n+                    texts.Add(textBlock.Text);\n                 }\n             }\n+\n+            if (texts.Count > 0)\n+            {\n+                call.Result.Content = string.Join(\"\\n\", texts);\n+            }\n         }\n         \n         FunctionResult result = await ProcessToolResult(agent, call, call.Result);"
+  },
+  {
+   "filename": "src/LlmTornado.Tests/McpToolRunnerTests.cs",
+   "status": "added",
+   "additions": 67,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,67 @@\n+using LlmTornado.Agents;\n+using LlmTornado.Chat;\n+using LlmTornado.Chat.Models;\n+using LlmTornado.ChatFunctions;\n+using LlmTornado.Code;\n+using LlmTornado.Common;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class McpToolRunnerTests\n+{\n+    [Test]\n+    public async Task CallMcpToolAsync_KeepsEveryTextBlockOfTheResult()\n+    {\n+        FunctionResult result = await Call(\n+            new McpContentBlockText { Text = \"first\" },\n+            new McpContentBlockText { Text = \"second\" });\n+\n+        Assert.That(result.Content, Is.EqualTo(\"first\\nsecond\"));\n+    }\n+\n+    [Test]\n+    public async Task CallMcpToolAsync_WithOneTextBlock_ReturnsItsText()\n+    {\n+        FunctionResult result = await Call(new McpContentBlockText { Text = \"only\" });\n+\n+        Assert.That(result.Content, Is.EqualTo(\"only\"));\n+    }\n+\n+    [Test]\n+    public async Task CallMcpToolAsync_WithoutTextBlocks_KeepsTheContentTheToolFilled()\n+    {\n+        FunctionResult result = await Call(new McpContentBlockImage { Data = \"aW1n\", MimeType = \"image/png\" });\n+\n+        Assert.That(result.Content, Is.EqualTo(\"filled\"));\n+    }\n+\n+    private static async Task<FunctionResult> Call(params IMcpContentBlock[] blocks)\n+    {\n+        Tool tool = new Tool(new ToolFunction(\"lookup\", \"Look something up\"))\n+        {\n+            RemoteTool = new McpTool\n+            {\n+                CallAsync = (_, _, _, _, _) => ValueTask.FromResult(new FunctionResult\n+                {\n+                    Name = \"lookup\",\n+                    Content = \"filled\",\n+                    InvocationSucceeded = true,\n+                    RemoteContent = new McpContent { McpContentBlocks = blocks.ToList() }\n+                })\n+            }\n+        };\n+\n+        TornadoAgent agent = new TornadoAgent(new TornadoApi(LLmProviders.OpenAi, \"key\"), ChatModel.OpenAi.Gpt4.O);\n+        agent.McpTools.Add(\"lookup\", tool);\n+\n+        FunctionCall call = new FunctionCall\n+        {\n+            Name = \"lookup\",\n+            Arguments = \"{}\",\n+            Tool = tool\n+        };\n+\n+        return await ToolRunner.CallMcpToolAsync(agent, call);\n+    }\n+}"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/McpToolRunnerTests.cs"
+ ]
+}

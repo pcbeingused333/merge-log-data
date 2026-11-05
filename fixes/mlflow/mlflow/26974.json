@@ -1,0 +1,33 @@
+{
+ "repo": "mlflow/mlflow",
+ "number": 26974,
+ "url": "https://github.com/mlflow/mlflow/pull/26974",
+ "title": "Keep traces for tools declared without parameter properties",
+ "merged_at": "2026-10-22T15:33:56Z",
+ "files": [
+  {
+   "filename": "mlflow/openai/utils/chat_schema.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -2,6 +2,8 @@\n from collections.abc import Iterable\n from typing import Any\n \n+from pydantic import ValidationError\n+\n from mlflow.entities.span import LiveSpan\n from mlflow.exceptions import MlflowException\n from mlflow.tracing import set_span_chat_tools\n@@ -29,7 +31,7 @@ def set_span_chat_attributes(span: LiveSpan, inputs: dict[str, Any], output: Any\n     try:\n         if tools := _parse_tools(inputs):\n             set_span_chat_tools(span, tools)\n-    except MlflowException:\n+    except (MlflowException, ValidationError):\n         _logger.debug(\"Failed to set chat tools on span\", exc_info=True)\n \n     # Set model name if available"
+  },
+  {
+   "filename": "mlflow/types/chat.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -169,7 +169,7 @@ class ParamProperty(ParamType):\n \n \n class FunctionParams(BaseModel):\n-    properties: dict[str, ParamProperty]\n+    properties: dict[str, ParamProperty] = Field(default_factory=dict)\n     type: Literal[\"object\"] = \"object\"\n     required: list[str] | None = None\n     additionalProperties: bool | None = None"
+  },
+  {
+   "filename": "tests/openai/test_openai_autolog.py",
+   "status": "modified",
+   "additions": 54,
+   "deletions": 1,
+   "patch": "@@ -19,7 +19,11 @@\n from mlflow.entities.span import SpanType\n from mlflow.exceptions import MlflowException\n from mlflow.openai.autolog import _get_span_type\n-from mlflow.openai.utils.chat_schema import _parse_tools, _parse_usage\n+from mlflow.openai.utils.chat_schema import (\n+    _parse_tools,\n+    _parse_usage,\n+    set_span_chat_attributes,\n+)\n from mlflow.tracing.constant import (\n     STREAM_CHUNK_EVENT_VALUE_KEY,\n     CostKey,\n@@ -1291,6 +1295,55 @@ def test_parse_tools_handles_openai_not_given_sentinel(sentinel):\n     assert _parse_tools({\"tools\": sentinel}) == []\n \n \n+@pytest.mark.asyncio\n+async def test_autolog_tool_without_properties(client):\n+    mlflow.openai.autolog()\n+    tools = [\n+        {\n+            \"type\": \"function\",\n+            \"function\": {\n+                \"name\": \"get_time\",\n+                \"description\": \"Get the current time\",\n+                \"parameters\": {\"type\": \"object\"},\n+            },\n+        }\n+    ]\n+\n+    response = client.chat.completions.create(\n+        messages=[{\"role\": \"user\", \"content\": \"test\"}],\n+        model=\"gpt-4o-mini\",\n+        tools=tools,\n+    )\n+    if client._is_async:\n+        await response\n+\n+    trace = mlflow.get_trace(mlflow.get_last_active_trace_id())\n+    assert trace is not None\n+    assert trace.info.status == \"OK\"\n+    span = trace.data.spans[0]\n+    assert span.attributes[SpanAttributeKey.CHAT_TOOLS] == tools\n+\n+\n+def test_set_span_chat_attributes_ignores_invalid_tool_schema():\n+    tools = [\n+        {\n+            \"type\": \"function\",\n+            \"function\": {\n+                \"name\": \"broken\",\n+                \"parameters\": {\"type\": \"object\", \"properties\": \"not a dict\"},\n+            },\n+        }\n+    ]\n+\n+    with mlflow.start_span(name=\"chat\", span_type=SpanType.CHAT_MODEL) as span:\n+        set_span_chat_attributes(span, {\"tools\": tools, \"model\": \"gpt-4o-mini\"}, None)\n+\n+    trace = mlflow.get_trace(span.trace_id)\n+    chat_span = trace.data.spans[0]\n+    assert SpanAttributeKey.CHAT_TOOLS not in chat_span.attributes\n+    assert chat_span.model_name == \"gpt-4o-mini\"\n+\n+\n @skip_when_testing_trace_sdk\n @pytest.mark.asyncio\n async def test_model_loading_set_active_model_id_without_fetching_logged_model("
+  }
+ ],
+ "test_files": [
+  "tests/openai/test_openai_autolog.py"
+ ]
+}

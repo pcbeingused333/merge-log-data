@@ -1,0 +1,40 @@
+{
+ "repo": "danielmiessler/Fabric",
+ "number": 2287,
+ "url": "https://github.com/danielmiessler/Fabric/pull/2287",
+ "title": "fix(fsdb): make existing session and context folders and files private",
+ "merged_at": "2026-10-23T05:04:06Z",
+ "files": [
+  {
+   "filename": "cmd/generate_changelog/incoming/2287.txt",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+### PR [#2287](https://github.com/danielmiessler/Fabric/pull/2287) by [pcbeingused333](https://github.com/pcbeingused333): fix(fsdb): make existing session and context folders and files private\n+\n+- Fixed session and context storage permissions so that configuration now strips group and other permission bits from the sessions and contexts folders, as well as the files within them.\n+- Addressed a privacy issue in which histories saved by earlier versions with 0755 and 0644 modes remained readable by other users, since Save preserves the mode of an existing file.\n+- Ensured permissions are never widened and that symlinks are left untouched during the update."
+  },
+  {
+   "filename": "internal/plugins/db/fsdb/db.go",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -78,6 +78,15 @@ func (o *Db) Configure() (err error) {\n \t\treturn\n \t}\n \n+\t// Sessions and contexts hold private text, also those that earlier\n+\t// versions saved with 0644.\n+\tif err = o.Sessions.MakePrivate(); err != nil {\n+\t\treturn\n+\t}\n+\tif err = o.Contexts.MakePrivate(); err != nil {\n+\t\treturn\n+\t}\n+\n \treturn\n }\n "
+  },
+  {
+   "filename": "internal/plugins/db/fsdb/db_test.go",
+   "status": "modified",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -225,3 +225,52 @@ func TestWriteFileAtomic_Errors(t *testing.T) {\n \t\tt.Errorf(\"temporary files stay: %v\", tmps)\n \t}\n }\n+\n+// TestDb_ConfigureMakesExistingSessionsAndContextsPrivate checks that\n+// Configure removes the group and other bits that earlier versions left on\n+// session and context folders and files, and never widens a mode.\n+func TestDb_ConfigureMakesExistingSessionsAndContextsPrivate(t *testing.T) {\n+\tif runtime.GOOS == \"windows\" {\n+\t\tt.Skip(\"Windows has no Unix file modes\")\n+\t}\n+\tdir := t.TempDir()\n+\tdb := NewDb(dir)\n+\tif err := os.WriteFile(db.EnvFilePath, []byte(\"KEY=VALUE\\n\"), 0600); err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tfor _, name := range []string{\"sessions\", \"contexts\"} {\n+\t\tfolder := filepath.Join(dir, name)\n+\t\tif err := os.Mkdir(folder, 0755); err != nil {\n+\t\t\tt.Fatal(err)\n+\t\t}\n+\t\tif err := os.Chmod(folder, 0755); err != nil {\n+\t\t\tt.Fatal(err)\n+\t\t}\n+\t\tif err := os.WriteFile(filepath.Join(folder, \"old.json\"), []byte(\"[]\"), 0644); err != nil {\n+\t\t\tt.Fatal(err)\n+\t\t}\n+\t\tif err := os.Chmod(filepath.Join(folder, \"old.json\"), 0644); err != nil {\n+\t\t\tt.Fatal(err)\n+\t\t}\n+\t\tif err := os.WriteFile(filepath.Join(folder, \"own.json\"), []byte(\"[]\"), 0400); err != nil {\n+\t\t\tt.Fatal(err)\n+\t\t}\n+\t}\n+\n+\tif err := db.Configure(); err != nil {\n+\t\tt.Fatalf(\"Configure() error = %v\", err)\n+\t}\n+\n+\tfor _, name := range []string{\"sessions\", \"contexts\"} {\n+\t\tfolder := filepath.Join(dir, name)\n+\t\tif got := filePerm(t, folder); got != 0o700 {\n+\t\t\tt.Errorf(\"%s folder mode: got %v, want 0700\", name, got)\n+\t\t}\n+\t\tif got := filePerm(t, filepath.Join(folder, \"old.json\")); got != 0o600 {\n+\t\t\tt.Errorf(\"%s/old.json mode: got %v, want 0600\", name, got)\n+\t\t}\n+\t\tif got := filePerm(t, filepath.Join(folder, \"own.json\")); got != 0o400 {\n+\t\t\tt.Errorf(\"%s/own.json mode: got %v, want 0400 (never widened)\", name, got)\n+\t\t}\n+\t}\n+}"
+  },
+  {
+   "filename": "internal/plugins/db/fsdb/storage.go",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -31,6 +31,41 @@ func (o *StorageEntity) Configure() (err error) {\n \treturn\n }\n \n+// MakePrivate removes the group and other permission bits from the storage\n+// folder and from the files in it. Folders and files that earlier versions\n+// made with 0755 and 0644 would otherwise stay readable to other users, and\n+// Save keeps the mode of an existing file. A symlink is left alone: its\n+// target may be outside the folder. It does not widen any mode.\n+func (o *StorageEntity) MakePrivate() (err error) {\n+\tif err = tightenMode(o.Dir); err != nil {\n+\t\treturn\n+\t}\n+\tvar entries []os.DirEntry\n+\tif entries, err = os.ReadDir(o.Dir); err != nil {\n+\t\treturn\n+\t}\n+\tfor _, entry := range entries {\n+\t\tif entry.Type()&os.ModeSymlink != 0 {\n+\t\t\tcontinue\n+\t\t}\n+\t\tif err = tightenMode(filepath.Join(o.Dir, entry.Name())); err != nil {\n+\t\t\treturn\n+\t\t}\n+\t}\n+\treturn\n+}\n+\n+func tightenMode(path string) error {\n+\tinfo, err := os.Stat(path)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\tif perm := info.Mode().Perm(); perm&0077 != 0 {\n+\t\treturn os.Chmod(path, perm&^0077)\n+\t}\n+\treturn nil\n+}\n+\n // GetNames finds all patterns in the patterns directory and enters the id, name, and pattern into a slice of Entry structs. it returns these entries or an error\n func (o *StorageEntity) GetNames() (ret []string, err error) {\n \tabsDir, err := util.GetAbsolutePath(o.Dir)"
+  }
+ ],
+ "test_files": [
+  "internal/plugins/db/fsdb/db_test.go"
+ ]
+}

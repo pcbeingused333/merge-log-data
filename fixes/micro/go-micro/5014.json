@@ -1,0 +1,26 @@
+{
+ "repo": "micro/go-micro",
+ "number": 5014,
+ "url": "https://github.com/micro/go-micro/pull/5014",
+ "title": "Report token usage from the native Ollama stream",
+ "merged_at": "2026-10-20T13:00:56Z",
+ "files": [
+  {
+   "filename": "model/ollama/ollama.go",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 1,
+   "patch": "@@ -684,9 +684,13 @@ type ndjsonStream struct {\n \tbody    io.ReadCloser\n \tscanner *bufio.Scanner\n \tclosed  bool\n+\tdone    bool\n }\n \n func (s *ndjsonStream) Recv() (*model.Response, error) {\n+\tif s.done {\n+\t\treturn nil, io.EOF\n+\t}\n \tfor s.scanner.Scan() {\n \t\tline := strings.TrimSpace(s.scanner.Text())\n \t\tif line == \"\" {\n@@ -696,12 +700,22 @@ func (s *ndjsonStream) Recv() (*model.Response, error) {\n \t\t\tMessage struct {\n \t\t\t\tContent string `json:\"content\"`\n \t\t\t} `json:\"message\"`\n-\t\t\tDone bool `json:\"done\"`\n+\t\t\tDone            bool `json:\"done\"`\n+\t\t\tPromptEvalCount int  `json:\"prompt_eval_count\"`\n+\t\t\tEvalCount       int  `json:\"eval_count\"`\n \t\t}\n \t\tif err := json.Unmarshal([]byte(line), &chunk); err != nil {\n \t\t\treturn nil, fmt.Errorf(\"failed to parse stream chunk: %w\", err)\n \t\t}\n \t\tif chunk.Done {\n+\t\t\ts.done = true\n+\t\t\tif chunk.PromptEvalCount > 0 || chunk.EvalCount > 0 {\n+\t\t\t\treturn &model.Response{Usage: model.Usage{\n+\t\t\t\t\tInputTokens:  chunk.PromptEvalCount,\n+\t\t\t\t\tOutputTokens: chunk.EvalCount,\n+\t\t\t\t\tTotalTokens:  chunk.PromptEvalCount + chunk.EvalCount,\n+\t\t\t\t}}, nil\n+\t\t\t}\n \t\t\treturn nil, io.EOF\n \t\t}\n \t\tif chunk.Message.Content != \"\" {"
+  },
+  {
+   "filename": "model/ollama/ollama_test.go",
+   "status": "modified",
+   "additions": 31,
+   "deletions": 0,
+   "patch": "@@ -189,6 +189,37 @@ func TestNative_Stream(t *testing.T) {\n \t}\n }\n \n+func TestNative_StreamReportsUsage(t *testing.T) {\n+\tsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\tw.Write([]byte(`{\"message\":{\"role\":\"assistant\",\"content\":\"Hello\"},\"done\":false}` + \"\\n\"))\n+\t\tw.Write([]byte(`{\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"prompt_eval_count\":11,\"eval_count\":4}` + \"\\n\"))\n+\t}))\n+\tdefer srv.Close()\n+\n+\tp := NewProvider(model.WithBaseURL(srv.URL), model.WithModel(\"llama3.2\"))\n+\tstream, err := p.Stream(context.Background(), &model.Request{Prompt: \"Hi\"})\n+\tif err != nil {\n+\t\tt.Fatalf(\"Stream failed: %v\", err)\n+\t}\n+\tdefer stream.Close()\n+\n+\tvar usage model.Usage\n+\tfor {\n+\t\tresp, err := stream.Recv()\n+\t\tif err != nil {\n+\t\t\tbreak\n+\t\t}\n+\t\tif resp.Usage.TotalTokens > 0 {\n+\t\t\tusage = resp.Usage\n+\t\t}\n+\t}\n+\twant := model.Usage{InputTokens: 11, OutputTokens: 4, TotalTokens: 15}\n+\tif usage != want {\n+\t\tt.Errorf(\"Expected usage %+v, got %+v\", want, usage)\n+\t}\n+}\n+\n // ---------------------------------------------------------------------------\n // Cloud mode (Ollama Cloud: /v1/chat/completions)\n // ---------------------------------------------------------------------------"
+  }
+ ],
+ "test_files": [
+  "model/ollama/ollama_test.go"
+ ]
+}

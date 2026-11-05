@@ -1,0 +1,26 @@
+{
+ "repo": "KusionStack/karpor",
+ "number": 865,
+ "url": "https://github.com/KusionStack/karpor/pull/865",
+ "title": "fix(ai): don't panic on an empty or short Hugging Face response",
+ "merged_at": "2026-10-21T09:38:50Z",
+ "files": [
+  {
+   "filename": "pkg/infra/ai/huggingface.go",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 1,
+   "patch": "@@ -16,7 +16,9 @@ package ai\n \n import (\n \t\"context\"\n+\t\"errors\"\n \t\"net/http\"\n+\t\"strings\"\n \n \t\"github.com/hupe1980/go-huggingface\"\n )\n@@ -58,7 +60,12 @@ func (c *HuggingfaceClient) Generate(ctx context.Context, prompt string) (string\n \t\treturn \"\", err\n \t}\n \n-\treturn resp[0].GeneratedText[len(prompt):], nil\n+\tif len(resp) == 0 {\n+\t\treturn \"\", errors.New(\"huggingface returned no generated text\")\n+\t}\n+\n+\t// Text-generation models usually echo the prompt at the start of generated_text; drop it only when it is there.\n+\treturn strings.TrimPrefix(resp[0].GeneratedText, prompt), nil\n }\n \n func (c *HuggingfaceClient) GenerateStream(ctx context.Context, prompt string) (<-chan string, error) {"
+  },
+  {
+   "filename": "pkg/infra/ai/huggingface_test.go",
+   "status": "added",
+   "additions": 77,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,77 @@\n+// Copyright The Karpor Authors.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+// http://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+\n+package ai\n+\n+import (\n+\t\"context\"\n+\t\"io\"\n+\t\"net/http\"\n+\t\"strings\"\n+\t\"testing\"\n+\n+\t\"github.com/hupe1980/go-huggingface\"\n+\t\"github.com/stretchr/testify/assert\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+type roundTripFunc func(*http.Request) (*http.Response, error)\n+\n+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }\n+\n+// newHuggingfaceClientWithBody returns a client whose Inference API answers every request with body.\n+func newHuggingfaceClientWithBody(body string) *HuggingfaceClient {\n+\thttpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {\n+\t\treturn &http.Response{\n+\t\t\tStatusCode: http.StatusOK,\n+\t\t\tHeader:     http.Header{\"Content-Type\": []string{\"application/json\"}},\n+\t\t\tBody:       io.NopCloser(strings.NewReader(body)),\n+\t\t}, nil\n+\t})}\n+\treturn &HuggingfaceClient{\n+\t\tclient: huggingface.NewInferenceClient(\"test-token\", func(o *huggingface.InferenceClientOptions) {\n+\t\t\to.HTTPClient = httpClient\n+\t\t}),\n+\t\tmodel: \"test-model\",\n+\t}\n+}\n+\n+func TestHuggingfaceClient_Generate(t *testing.T) {\n+\ttests := []struct {\n+\t\tname    string\n+\t\tbody    string\n+\t\twant    string\n+\t\twantErr bool\n+\t}{\n+\t\t{name: \"response echoes the prompt\", body: `[{\"generated_text\":\"Say hi. Hi there\"}]`, want: \" Hi there\"},\n+\t\t{name: \"response without the prompt is kept whole\", body: `[{\"generated_text\":\"Hi\"}]`, want: \"Hi\"},\n+\t\t{name: \"empty result list is an error\", body: `[]`, wantErr: true},\n+\t}\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tc := newHuggingfaceClientWithBody(tt.body)\n+\n+\t\t\tvar got string\n+\t\t\tvar err error\n+\t\t\trequire.NotPanics(t, func() { got, err = c.Generate(context.Background(), \"Say hi.\") })\n+\n+\t\t\tif tt.wantErr {\n+\t\t\t\tassert.Error(t, err)\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t\trequire.NoError(t, err)\n+\t\t\tassert.Equal(t, tt.want, got)\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "pkg/infra/ai/huggingface_test.go"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "truera/trulens",
+ "number": 2975,
+ "url": "https://github.com/truera/trulens/pull/2975",
+ "title": "fix(providers/google): default to gemini-3.8-flash",
+ "merged_at": "2026-10-26T15:23:45Z",
+ "files": [
+  {
+   "filename": "src/providers/google/trulens/providers/google/provider.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -60,7 +60,7 @@ class Google(llm_provider.LLMProvider):\n         ```\n \n     Args:\n-        model_engine: Model engine to use. Defaults to `\"gemini-2.5-flash\"`.\n+        model_engine: Model engine to use. Defaults to `\"gemini-3.8-flash\"`.\n         api_key: API key for authenticating with the Gemini Developer API. If not provided,\n             the key will be read from the environment variable `GOOGLE_API_KEY` or `GEMINI_API_KEY`, if available.\n         vertexai: Whether to use Vertex AI endpoints. Set to `True` to use Vertex AI instead of the Gemini Developer API. Defaults to `False`.\n@@ -69,7 +69,7 @@ class Google(llm_provider.LLMProvider):\n         location: Region to send Vertex AI API requests to (e.g., `\"us-central1\"`). Can also be set via environment variables.\n     \"\"\"\n \n-    DEFAULT_MODEL_ENGINE: ClassVar[str] = \"gemini-2.5-flash\"\n+    DEFAULT_MODEL_ENGINE: ClassVar[str] = \"gemini-3.8-flash\"\n \n     @property\n     def reports_costs(self) -> bool:"
+  },
+  {
+   "filename": "tests/unit/providers/test_google_capabilities.py",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -346,3 +346,22 @@ def test_cost_calculation_unknown_model(monkeypatch):\n     assert callback.cost.cost == 0.0\n     assert callback.cost.n_prompt_tokens == 100\n     assert callback.cost.n_completion_tokens == 200\n+\n+\n+@pytest.mark.optional\n+def test_default_model_engine(monkeypatch):\n+    \"\"\"Without `model_engine`, requests go to a model that both the Gemini\n+    Developer API and Vertex AI still serve, and that has a price.\"\"\"\n+    from litellm import model_cost\n+\n+    provider = _make_provider(monkeypatch, model_engine=None)\n+\n+    provider._create_chat_completion(\n+        messages=[{\"role\": \"user\", \"content\": \"hi\"}],\n+    )\n+\n+    sent = provider.endpoint.client.models.generate_calls[0][\"model\"]\n+    # Vertex AI retires gemini-2.5-pro, gemini-2.5-flash and\n+    # gemini-2.5-flash-lite on 2026-10-20.\n+    assert sent == \"gemini-3.8-flash\"\n+    assert \"input_cost_per_token\" in model_cost[sent]"
+  }
+ ],
+ "test_files": [
+  "tests/unit/providers/test_google_capabilities.py"
+ ]
+}

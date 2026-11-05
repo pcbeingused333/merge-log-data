@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 246,
+ "url": "https://github.com/lofcz/LLMTornado/pull/246",
+ "title": "Send EmbeddingRequest.Dimensions to Google when vendor extensions are set",
+ "merged_at": "2026-10-21T08:18:50Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/GoogleEmbeddingDimensionsTests.cs",
+   "status": "added",
+   "additions": 50,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,50 @@\n+using LlmTornado.Code;\n+using LlmTornado.Embedding;\n+using LlmTornado.Embedding.Models;\n+using LlmTornado.Embedding.Vendors.Google;\n+using Newtonsoft.Json.Linq;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class GoogleEmbeddingDimensionsTests\n+{\n+    private static JObject Serialize(EmbeddingRequest request)\n+    {\n+        TornadoRequestContent serialized = request.Serialize(new TornadoApi(\"test-key\").GetProvider(LLmProviders.Google));\n+        return JObject.Parse(serialized.Body.ToString()!);\n+    }\n+\n+    [Test]\n+    public void Dimensions_AreSent_WhenNoGoogleExtensionsAreSet()\n+    {\n+        EmbeddingRequest request = new EmbeddingRequest(EmbeddingModel.Google.Gemini.GeminiEmbedding2, \"hello\", 256);\n+\n+        Assert.That(Serialize(request)[\"outputDimensionality\"]?.Value<int>(), Is.EqualTo(256));\n+    }\n+\n+    [Test]\n+    public void Dimensions_AreSent_WhenGoogleExtensionsOnlySetATaskType()\n+    {\n+        EmbeddingRequest request = new EmbeddingRequest(EmbeddingModel.Google.Gemini.GeminiEmbedding001, \"hello\", 768, new EmbeddingRequestVendorExtensions(new EmbeddingRequestVendorGoogleExtensions\n+        {\n+            TaskType = EmbeddingRequestVendorGoogleExtensionsTaskTypes.RetrievalQuery\n+        }));\n+\n+        JObject body = Serialize(request);\n+\n+        Assert.That(body[\"taskType\"]?.Value<string>(), Is.EqualTo(\"RETRIEVAL_QUERY\"));\n+        Assert.That(body[\"outputDimensionality\"]?.Value<int>(), Is.EqualTo(768));\n+    }\n+\n+    [Test]\n+    public void ExtensionOutputDimensionality_WinsOverRequestDimensions()\n+    {\n+        EmbeddingRequest request = new EmbeddingRequest(EmbeddingModel.Google.Gemini.GeminiEmbedding001, \"hello\", 768, new EmbeddingRequestVendorExtensions(new EmbeddingRequestVendorGoogleExtensions\n+        {\n+            OutputDimensionality = 1536\n+        }));\n+\n+        Assert.That(Serialize(request)[\"outputDimensionality\"]?.Value<int>(), Is.EqualTo(1536));\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Embedding/Vendors/Google/VendorGoogleEmbeddingRequest.cs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -85,7 +85,8 @@ static void ApplyExtensions(EmbeddingRequest request, VendorGoogleEmbeddingReque\n                 dest.TaskType = taskTypeSerialized;\n             }\n         }\n-        else if (request.Dimensions is > 0)\n+\n+        if (dest.OutputDimensionality is null && request.Dimensions is > 0)\n         {\n             dest.OutputDimensionality = request.Dimensions;\n         }"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/GoogleEmbeddingDimensionsTests.cs"
+ ]
+}

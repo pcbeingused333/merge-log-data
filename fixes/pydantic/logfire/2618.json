@@ -1,0 +1,26 @@
+{
+ "repo": "pydantic/logfire",
+ "number": 2618,
+ "url": "https://github.com/pydantic/logfire/pull/2618",
+ "title": "Record Responses API refusals as text in gen_ai.output.messages",
+ "merged_at": "2026-10-21T12:41:21Z",
+ "files": [
+  {
+   "filename": "logfire-sdk/logfire/_internal/integrations/llm_providers/openai.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -289,6 +289,8 @@ def _convert_content_part(part: object) -> MessagePart:\n     part_type = part.get('type', 'unknown')\n     if part_type in ('text', 'output_text', 'input_text'):\n         return TextPart(type='text', content=part.get('text', ''))\n+    elif part_type == 'refusal':\n+        return TextPart(type='text', content=part.get('refusal', ''))\n     elif part_type in ('image_url', 'input_image'):\n         if uri := _media_part_uri(part, 'image_url'):\n             return UriPart(type='uri', uri=uri, modality='image')"
+  },
+  {
+   "filename": "tests/otel_integrations/test_openai.py",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 1,
+   "patch": "@@ -4704,7 +4704,7 @@ def test_convert_responses_outputs_non_text_content() -> None:\n     response.output = [out]\n \n     assert convert_responses_outputs_to_semconv(response) == snapshot(\n-        [{'role': 'assistant', 'parts': [{'type': 'refusal', 'refusal': 'I cannot help with that'}]}]\n+        [{'role': 'assistant', 'parts': [{'type': 'text', 'content': 'I cannot help with that'}]}]\n     )\n \n \n@@ -5385,3 +5385,37 @@ def test_responses_finish_reasons(fields: dict[str, Any], expected: list[str] |\n \n     attributes = exporter.exported_spans_as_dict(parse_json_attributes=True)[0]['attributes']\n     assert attributes.get('gen_ai.response.finish_reasons') == expected\n+\n+\n+def test_responses_refusal_recorded_as_text(exporter: TestExporter) -> None:\n+    \"\"\"A Responses API refusal is recorded as text, like a chat completions refusal.\"\"\"\n+    body = {\n+        'id': 'resp_1',\n+        'object': 'response',\n+        'created_at': 0,\n+        'model': 'gpt-4o-mini',\n+        'status': 'completed',\n+        'parallel_tool_calls': True,\n+        'tool_choice': 'auto',\n+        'tools': [],\n+        'output': [\n+            {\n+                'id': 'msg_1',\n+                'type': 'message',\n+                'role': 'assistant',\n+                'status': 'completed',\n+                'content': [{'type': 'refusal', 'refusal': \"I can't help with that.\"}],\n+            }\n+        ],\n+    }\n+    client = openai.Client(\n+        api_key='fake_api_key',\n+        http_client=httpx.Client(transport=MockTransport(lambda _: httpx.Response(200, json=body))),\n+    )\n+    with logfire.instrument_openai(client):\n+        client.responses.create(model='gpt-4o-mini', input='hi')\n+\n+    attributes = exporter.exported_spans_as_dict(parse_json_attributes=True)[0]['attributes']\n+    assert attributes['gen_ai.output.messages'] == snapshot(\n+        [{'role': 'assistant', 'parts': [{'type': 'text', 'content': \"I can't help with that.\"}]}]\n+    )"
+  }
+ ],
+ "test_files": [
+  "tests/otel_integrations/test_openai.py"
+ ]
+}

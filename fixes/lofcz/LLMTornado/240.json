@@ -1,0 +1,47 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 240,
+ "url": "https://github.com/lofcz/LLMTornado/pull/240",
+ "title": "Send ChatOptions.TopK to Anthropic and Google",
+ "merged_at": "2026-10-21T08:16:18Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Microsoft.Extensions.AI/TypeConverters.cs",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -293,6 +293,11 @@ public static void ApplyToRequest(this ChatOptions? options, ChatRequest request\n             request.TopP = options.TopP.Value;\n         }\n \n+        if (options.TopK.HasValue)\n+        {\n+            request.TopK = options.TopK.Value;\n+        }\n+\n         if (options.MaxOutputTokens.HasValue)\n         {\n             request.MaxTokens = options.MaxOutputTokens.Value;"
+  },
+  {
+   "filename": "src/LlmTornado.Tests/MeaiTopKTests.cs",
+   "status": "added",
+   "additions": 153,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,153 @@\n+using System.IO;\n+using System.Net;\n+using System.Net.Sockets;\n+using System.Text;\n+using LlmTornado.Chat;\n+using LlmTornado.Chat.Models;\n+using LlmTornado.Code;\n+using LlmTornado.Code.Vendor;\n+using LlmTornado.Microsoft.Extensions.AI;\n+using Microsoft.Extensions.AI;\n+using Newtonsoft.Json.Linq;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class MeaiTopKTests\n+{\n+    private static JObject Serialize(ChatRequest request, LLmProviders provider)\n+    {\n+        IEndpointProvider endpoint = new TornadoApi(provider, \"test-key\").GetProvider(provider);\n+        return JObject.Parse(request.Serialize(endpoint).Body.ToString()!);\n+    }\n+\n+    private static ChatRequest Request(ChatModel model, int? topK)\n+    {\n+        return new ChatRequest\n+        {\n+            Model = model,\n+            TopK = topK,\n+            Messages = [new LlmTornado.Chat.ChatMessage(ChatMessageRoles.User, \"Hello\")]\n+        };\n+    }\n+\n+    private const string AnthropicReply = \"\"\"\n+        {\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-5-20250929\",\n+         \"content\":[{\"type\":\"text\",\"text\":\"hi\"}],\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}\n+        \"\"\";\n+\n+    [Test]\n+    public async Task ChatClient_TopK_IsSent()\n+    {\n+        using FakeServer server = new FakeServer(AnthropicReply);\n+        TornadoApi api = new TornadoApi(new AnthropicEndpointProvider\n+        {\n+            Auth = new ProviderAuthentication(LLmProviders.Anthropic, \"test-key\"),\n+            UrlResolver = (_, _, _) => $\"http://127.0.0.1:{server.Port}/v1/{{0}}{{1}}\"\n+        });\n+        IChatClient client = api.AsChatClient(ChatModel.Anthropic.Claude45.Sonnet250929);\n+\n+        await client.GetResponseAsync(\n+            [new global::Microsoft.Extensions.AI.ChatMessage(ChatRole.User, \"Hello\")],\n+            new ChatOptions { TopK = 40 });\n+\n+        Assert.That(JObject.Parse(server.RequestBodies.Single())[\"top_k\"]?.Value<int>(), Is.EqualTo(40));\n+    }\n+\n+    [Test]\n+    public void Anthropic_TopK_IsSent()\n+    {\n+        JObject body = Serialize(Request(ChatModel.Anthropic.Claude45.Sonnet250929, 40), LLmProviders.Anthropic);\n+\n+        Assert.That(body[\"top_k\"]?.Value<int>(), Is.EqualTo(40));\n+    }\n+\n+    [Test]\n+    public void Anthropic_TopKUnset_IsOmitted()\n+    {\n+        JObject body = Serialize(Request(ChatModel.Anthropic.Claude45.Sonnet250929, null), LLmProviders.Anthropic);\n+\n+        Assert.That(body.ContainsKey(\"top_k\"), Is.False);\n+    }\n+\n+    [Test]\n+    public void Anthropic_ModelThatRejectsSamplingParams_OmitsTopK()\n+    {\n+        JObject body = Serialize(Request(ChatModel.Anthropic.Claude5.Opus, 40), LLmProviders.Anthropic);\n+\n+        Assert.That(body.ContainsKey(\"top_k\"), Is.False);\n+    }\n+\n+    [Test]\n+    public void Google_TopK_IsSentInGenerationConfig()\n+    {\n+        JObject body = Serialize(Request(ChatModel.Google.Gemini.Gemini37Flash, 25), LLmProviders.Google);\n+\n+        Assert.That(body[\"generationConfig\"]?[\"topK\"]?.Value<int>(), Is.EqualTo(25));\n+    }\n+\n+    [Test]\n+    public void OpenAi_TopK_IsNotSent()\n+    {\n+        JObject body = Serialize(Request(ChatModel.OpenAi.Gpt4.O, 40), LLmProviders.OpenAi);\n+\n+        Assert.That(body.ContainsKey(\"top_k\"), Is.False);\n+    }\n+\n+    private sealed class FakeServer : IDisposable\n+    {\n+        private readonly HttpListener listener = new HttpListener();\n+        private readonly string response;\n+\n+        public int Port { get; }\n+        public List<string> RequestBodies { get; } = [];\n+\n+        public FakeServer(string response)\n+        {\n+            this.response = response;\n+\n+            TcpListener probe = new TcpListener(IPAddress.Loopback, 0);\n+            probe.Start();\n+            Port = ((IPEndPoint)probe.LocalEndpoint).Port;\n+            probe.Stop();\n+\n+            listener.Prefixes.Add($\"http://127.0.0.1:{Port}/\");\n+            listener.Start();\n+            _ = Serve();\n+        }\n+\n+        private async Task Serve()\n+        {\n+            while (listener.IsListening)\n+            {\n+                HttpListenerContext context;\n+\n+                try\n+                {\n+                    context = await listener.GetContextAsync().ConfigureAwait(false);\n+                }\n+                catch (Exception)\n+                {\n+                    // listener closed\n+                    return;\n+                }\n+\n+                using (StreamReader reader = new StreamReader(context.Request.InputStream))\n+                {\n+                    RequestBodies.Add(await reader.ReadToEndAsync().ConfigureAwait(false));\n+                }\n+\n+                byte[] bytes = Encoding.UTF8.GetBytes(response);\n+                context.Response.StatusCode = 200;\n+                context.Response.ContentType = \"application/json\";\n+                await context.Response.OutputStream.WriteAsync(bytes).ConfigureAwait(false);\n+                context.Response.Close();\n+            }\n+        }\n+\n+        public void Dispose()\n+        {\n+            listener.Close();\n+        }\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/ChatRequest.cs",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -80,6 +80,7 @@ private void CopyData(ChatRequest basedOn)\n \t\tMessages = basedOn.Messages;\n \t\tTemperature = basedOn.Temperature;\n \t\tTopP = basedOn.TopP;\n+\t\tTopK = basedOn.TopK;\n \t\tNumChoicesPerMessage = basedOn.NumChoicesPerMessage;\n \t\tStopSequence = basedOn.StopSequence;\n \t\tMultipleStopSequences = basedOn.MultipleStopSequences;\n@@ -207,6 +208,13 @@ private void CopyData(ChatRequest basedOn)\n \t[JsonProperty(\"top_p\")]\n     public double? TopP { get; set; }\n \n+\t/// <summary>\n+\t///     Limits sampling to the K most likely tokens. Sent by providers that support it (Anthropic, Google); ignored by the others.\n+\t///     Anthropic models that reject non-default sampling parameters never receive it.\n+\t/// </summary>\n+\t[JsonIgnore]\n+\tpublic int? TopK { get; set; }\n+\n \t/// <summary>\n \t///     How many different choices to request for each message. Defaults to 1.\n \t/// </summary>"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/Vendors/Anthropic/VendorAnthropicChatRequest.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -732,7 +732,7 @@ public VendorAnthropicChatRequest(ChatRequest request, IEndpointProvider provide\n         Stream = request.Stream;\n         Temperature = ChatModelAnthropicHelper.RejectsNonDefaultSamplingParams(Model) ? null : request.Temperature;\n         TopP = ChatModelAnthropicHelper.RejectsNonDefaultSamplingParams(Model) ? null : request.TopP;\n-        TopK = null;\n+        TopK = ChatModelAnthropicHelper.RejectsNonDefaultSamplingParams(Model) ? null : request.TopK;\n         Messages = [];\n         System = null;\n         "
+  },
+  {
+   "filename": "src/LlmTornado/Chat/Vendors/Google/VendorGoogleChatRequest.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -1628,6 +1628,7 @@ public VendorGoogleChatRequest(ChatRequest request, IEndpointProvider provider)\n         {\n             Temperature = temperature,\n             TopP = request.TopP,\n+            TopK = request.TopK,\n             MaxOutputTokens = request.MaxTokens,\n             StopSequences = request.MultipleStopSequences is not null ? request.MultipleStopSequences.Take(5).ToList() : request.StopSequence is not null ? [ request.StopSequence ] : null,\n             ResponseLogprobs = request.Logprobs,"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/MeaiTopKTests.cs"
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "PostHog/posthog-python",
+ "number": 1096,
+ "url": "https://github.com/PostHog/posthog-python/pull/1096",
+ "title": "fix(ai): record an integer $ai_http_status in the LangChain callback handler",
+ "merged_at": "2026-10-22T10:18:09Z",
+ "files": [
+  {
+   "filename": ".sampo/changesets/langchain-http-status-int.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+pypi/posthog: patch\n+---\n+\n+The LangChain callback handler now records `$ai_http_status` as an integer for failed generations. An error that carries a string `code` and no status code (such as OpenAI's `rate_limit_exceeded`) gave a string status; it now gives `0`, as an error without a status already did."
+  },
+  {
+   "filename": "posthog/ai/langchain/callbacks.py",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 2,
+   "patch": "@@ -1036,8 +1036,12 @@ def _get_http_status(error: BaseException) -> int:\n     # OpenAI: https://github.com/openai/openai-python/blob/main/src/openai/_exceptions.py\n     # Anthropic: https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/_exceptions.py\n     # Google: https://github.com/googleapis/python-api-core/blob/main/google/api_core/exceptions.py\n-    status_code = getattr(error, \"status_code\", getattr(error, \"code\", 0))\n-    return status_code\n+    # `code` is a string on some errors (OpenAI's \"rate_limit_exceeded\"), so only ints count\n+    for attribute in (\"status_code\", \"code\"):\n+        value = getattr(error, attribute, None)\n+        if isinstance(value, int) and not isinstance(value, bool):\n+            return value\n+    return 0\n \n \n def _get_langchain_run_name("
+  },
+  {
+   "filename": "posthog/test/ai/langchain/test_callbacks.py",
+   "status": "modified",
+   "additions": 61,
+   "deletions": 0,
+   "patch": "@@ -2953,3 +2953,64 @@ def test_stop_reason_resolution(\n \n     props = mock_client.capture.call_args.kwargs[\"properties\"]\n     assert props.get(\"$ai_stop_reason\") == expected\n+\n+\n+class TestGetHttpStatus:\n+    def test_uses_the_status_code_of_an_http_error(self):\n+        from posthog.ai.langchain.callbacks import _get_http_status\n+\n+        error = Exception(\"rate limited\")\n+        error.status_code = 429  # type: ignore[attr-defined]\n+\n+        assert _get_http_status(error) == 429\n+\n+    def test_uses_an_integer_code_when_there_is_no_status_code(self):\n+        from posthog.ai.langchain.callbacks import _get_http_status\n+\n+        error = Exception(\"quota\")\n+        error.code = 503  # type: ignore[attr-defined]\n+\n+        assert _get_http_status(error) == 503\n+\n+    def test_ignores_a_string_code(self):\n+        \"\"\"OpenAI's APIError carries code=\"rate_limit_exceeded\" and no status code.\"\"\"\n+        from posthog.ai.langchain.callbacks import _get_http_status\n+\n+        error = Exception(\"Rate limit reached\")\n+        error.code = \"rate_limit_exceeded\"  # type: ignore[attr-defined]\n+\n+        assert _get_http_status(error) == 0\n+\n+    def test_falls_back_to_zero_without_a_status(self):\n+        from posthog.ai.langchain.callbacks import _get_http_status\n+\n+        assert _get_http_status(Exception(\"boom\")) == 0\n+\n+    def test_an_error_event_records_an_integer_status(self):\n+        import httpx\n+        import openai\n+        from unittest.mock import MagicMock\n+        from uuid import uuid4\n+\n+        from posthog.ai.langchain import CallbackHandler\n+\n+        client = MagicMock()\n+        client.privacy_mode = False\n+        callback = CallbackHandler(client)\n+        run_id = uuid4()\n+        callback._set_llm_metadata(\n+            serialized={},\n+            run_id=run_id,\n+            messages=[{\"role\": \"user\", \"content\": \"test\"}],\n+            metadata={\"ls_provider\": \"openai\", \"ls_model_name\": \"gpt-5.6-sol\"},\n+        )\n+        error = openai.APIError(\n+            \"Rate limit reached\",\n+            request=httpx.Request(\"POST\", \"https://api.openai.com/v1/chat/completions\"),\n+            body={\"code\": \"rate_limit_exceeded\", \"message\": \"Rate limit reached\"},\n+        )\n+\n+        callback._pop_run_and_capture_generation(run_id, None, error)\n+\n+        properties = client.capture.call_args_list[0][1][\"properties\"]\n+        assert properties[\"$ai_http_status\"] == 0"
+  }
+ ],
+ "test_files": [
+  "posthog/test/ai/langchain/test_callbacks.py"
+ ]
+}

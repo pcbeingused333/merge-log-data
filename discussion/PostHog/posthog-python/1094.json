@@ -1,0 +1,46 @@
+{
+ "repo": "PostHog/posthog-python",
+ "number": 1094,
+ "url": "https://github.com/PostHog/posthog-python/pull/1094",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-21T21:35:26Z",
+   "body": "The streaming error-handling fix is supported by base/head regressions and native-SDK SSE probes. I found four new errors under the locked mypy check and a stale generated API snapshot; details inline. The source-typing errors need correction before approval.\n\nAI-assisted review."
+  },
+  {
+   "role": "member",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-22T10:04:44Z",
+   "body": "The code looks good; no qualifying findings. Verdict: correct."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "posthog/ai/openai/_streaming.py",
+   "created_at": "2026-10-21T21:35:27Z",
+   "body": "### F1 — [P2] Keep the event constructors compatible with the locked type checker\n\n**MINOR · REQUIRED · Introduced static-check regression**  \n**Location:** `posthog/ai/openai/_streaming.py:125`, RIGHT. Same issue at `posthog/ai/gemini/_shared.py:226`, `posthog/ai/anthropic/anthropic.py:261` and `posthog/ai/anthropic/anthropic_async.py:261`.\n\nThe repository’s locked type check now reports four new `typeddict-item` errors, one for each conditional unpack added inside `StreamingEventData(...)`:\n\n```python\n**({\"error\": error} if error is not None else {}),\n```\n\nWith mypy **1.16.1**, matching `uv.lock:2267–2268`, these conditional dictionaries are checked against the full `StreamingEventData` context. Each produces a diagnostic that the required event keys are missing, although those keys are present in the outer constructor.\n\nEquivalent base/head verification produced:\n\n| Check | Base `bf873523…` | Head `ec98ed67…` |\n| --- | --- | --- |\n| Raw mypy | Exit 0; no issues in 303 files | Exit 1; four errors in 304 files |\n| Actual `mypy-baseline filter` | Exit 0 | Exit 4; four **new** errors |\n\nThe baseline is empty, so it does not absorb these errors. The configured CI step runs the same check at `.github/workflows/ci.yml:61–78`:\n\n```bash\nmypy --no-site-packages --config-file mypy.ini . | mypy-baseline filter\n```\n\nThis affects the shared OpenAI builder and the Gemini/Anthropic builders used by their sync/async wrappers. It is a source-type-check regression, **not** evidence that runtime events lack required fields or that provider streams fail.\n\nConsider passing `error=error` directly—the field already accepts `None`—or conditionally assigning `event_data[\"error\"]` after constructing the typed event, in all four places. Then rerun the CI-aligned check rather than adding the diagnostics to the baseline.\n\n**Verification:** `CONTRIBUTING.md` prescribes this check. Inspected all four constructions and executed the checker and actual baseline filter under equivalent sandboxed environments, with isolated caches. This deterministic static failure needs no behavioral regression sketch. No corrected implementation was applied or tested."
+  },
+  {
+   "role": "contributor",
+   "path": "posthog/ai/types.py",
+   "created_at": "2026-10-21T21:35:27Z",
+   "body": "### F2 — [P2] Refresh the generated public API snapshot\n\n**MINOR · OPTIONAL acceptance feedback; outstanding mechanical merge prerequisite · Introduced reference drift**  \n**Location:** `posthog/ai/types.py:146`, RIGHT.\n\nAdding the optional `StreamingEventData.error` member changes the generated API surface, but `references/public_api_snapshot.txt` still describes the base type.\n\nThe snapshot checker passes on base `bf873523c700d9940c8ec86b677d2bd4904dfa55` and exits 1 on head `ec98ed6794f2a866b0ae40522b05dfff8b878024`. Its only generated difference is:\n\n```diff\n+attribute posthog.ai.types.StreamingEventData.error: NotRequired[Optional[BaseException]]\n```\n\n`CONTRIBUTING.md:33–43` requires regenerating the reference for API-surface changes, and `.github/workflows/ci.yml:80–95` runs the snapshot check.\n\nThis is a generated-reference/check failure, not a demonstrated runtime compatibility break: the member is optional and existing constructions remain valid. Consider regenerating and including the reference update, then checking it before merge:\n\n```bash\nuv run --no-sync make public_api_snapshot\nuv run --no-sync make public_api_check\n```\n\n**Verification:** Executed `.github/scripts/check_public_api.py` without `--write` on both revisions under equivalent Python 3.11.13/griffe 2.0.2 environments. The optional member is the sole difference. This is deterministic artifact validation, not a behavioral test. No regeneration was performed."
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-10-21T21:47:58Z",
+   "body": "Thanks, fixed in 1a6ef61. The four call sites now pass `error=error` directly (the field accepts `None`), which clears the `typeddict-item` errors, and `references/public_api_snapshot.txt` is regenerated for the new `StreamingEventData.error` field. With this commit, `mypy --no-site-packages --config-file mypy.ini . | mypy-baseline filter` reports no issues and `check_public_api.py` reports the snapshot as up to date."
+  },
+  {
+   "role": "member",
+   "created_at": "2026-10-22T10:08:33Z",
+   "body": "> Commits must have verified signatures\r\n\r\nsign your commits for next PRs @pcbeingused333 "
+  }
+ ]
+}

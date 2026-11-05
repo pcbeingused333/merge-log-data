@@ -1,0 +1,26 @@
+{
+ "repo": "securego/gosec",
+ "number": 1794,
+ "url": "https://github.com/securego/gosec/pull/1794",
+ "title": "fix(autofix): read the first text block of a Claude response",
+ "merged_at": "2026-10-21T13:02:58Z",
+ "files": [
+  {
+   "filename": "autofix/claude.go",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 3,
+   "patch": "@@ -56,11 +56,15 @@ func (c *claudeWrapper) GenerateSolution(ctx context.Context, prompt string) (st\n \t\treturn \"\", errors.New(\"no autofix returned by claude\")\n \t}\n \n-\tif len(resp.Content[0].Text) == 0 {\n-\t\treturn \"\", errors.New(\"nothing found in the first autofix returned by claude\")\n+\t// The answer is the first text block: a thinking block can come before it\n+\t// and has no text of its own.\n+\tfor _, block := range resp.Content {\n+\t\tif block.Type == \"text\" && block.Text != \"\" {\n+\t\t\treturn block.Text, nil\n+\t\t}\n \t}\n \n-\treturn resp.Content[0].Text, nil\n+\treturn \"\", errors.New(\"nothing found in the first autofix returned by claude\")\n }\n \n func parseAnthropicModel(model string) anthropic.Model {"
+  },
+  {
+   "filename": "autofix/claude_test.go",
+   "status": "modified",
+   "additions": 52,
+   "deletions": 0,
+   "patch": "@@ -1,6 +1,10 @@\n package autofix\n \n import (\n+\t\"context\"\n+\t\"fmt\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n \t\"testing\"\n \n \t\"github.com/anthropics/anthropic-sdk-go\"\n@@ -227,3 +231,51 @@ func TestNewClaudeClient_AllSupportedModels(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestClaudeGenerateSolution_SkipsLeadingNonTextBlocks(t *testing.T) {\n+\ttests := []struct {\n+\t\tname    string\n+\t\tcontent string\n+\t\twant    string\n+\t\twantErr string\n+\t}{\n+\t\t{\n+\t\t\tname:    \"text only\",\n+\t\t\tcontent: `[{\"type\":\"text\",\"text\":\"Use parameterized queries.\"}]`,\n+\t\t\twant:    \"Use parameterized queries.\",\n+\t\t},\n+\t\t{\n+\t\t\tname:    \"thinking before text\",\n+\t\t\tcontent: `[{\"type\":\"thinking\",\"thinking\":\"let me think\",\"signature\":\"sig\"},{\"type\":\"text\",\"text\":\"Use parameterized queries.\"}]`,\n+\t\t\twant:    \"Use parameterized queries.\",\n+\t\t},\n+\t\t{\n+\t\t\tname:    \"no text block\",\n+\t\t\tcontent: `[{\"type\":\"thinking\",\"thinking\":\"let me think\",\"signature\":\"sig\"}]`,\n+\t\t\twantErr: \"nothing found in the first autofix returned by claude\",\n+\t\t},\n+\t}\n+\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {\n+\t\t\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t\t\t_, _ = fmt.Fprintf(w, `{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":%s,\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}`, tt.content)\n+\t\t\t}))\n+\t\t\tdefer server.Close()\n+\t\t\tt.Setenv(\"ANTHROPIC_BASE_URL\", server.URL)\n+\n+\t\t\tclient, err := NewClaudeClient(\"claude-sonnet-4-6\", \"test-key\")\n+\t\t\trequire.NoError(t, err)\n+\n+\t\t\tgot, err := client.GenerateSolution(context.Background(), \"prompt\")\n+\n+\t\t\tif tt.wantErr != \"\" {\n+\t\t\t\trequire.EqualError(t, err, tt.wantErr)\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t\trequire.NoError(t, err)\n+\t\t\tassert.Equal(t, tt.want, got)\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "autofix/claude_test.go"
+ ]
+}

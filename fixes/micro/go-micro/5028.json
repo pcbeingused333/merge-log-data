@@ -1,0 +1,78 @@
+{
+ "repo": "micro/go-micro",
+ "number": 5028,
+ "url": "https://github.com/micro/go-micro/pull/5028",
+ "title": "Report usage, finish reason and output limit from Mistral, Together, MiniMax and Groq responses",
+ "merged_at": "2026-10-23T09:06:30Z",
+ "files": [
+  {
+   "filename": "model/groq/generate_response_test.go",
+   "status": "added",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,45 @@\n+package groq\n+\n+import (\n+\t\"context\"\n+\t\"errors\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"testing\"\n+\n+\t\"go-micro.dev/v6/model\"\n+)\n+\n+func TestGenerateReportsUsageAndStopReason(t *testing.T) {\n+\tts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t_, _ = w.Write([]byte(`{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":\"partial\"}}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"total_tokens\":10}}`))\n+\t}))\n+\tdefer ts.Close()\n+\n+\tp := NewProvider(model.WithAPIKey(\"test-key\"), model.WithBaseURL(ts.URL))\n+\tresp, err := p.Generate(context.Background(), &model.Request{Prompt: \"Hello\"})\n+\tif err != nil {\n+\t\tt.Fatalf(\"Generate failed: %v\", err)\n+\t}\n+\tif want := (model.Usage{InputTokens: 7, OutputTokens: 3, TotalTokens: 10}); resp.Usage != want {\n+\t\tt.Fatalf(\"usage = %+v, want %+v\", resp.Usage, want)\n+\t}\n+\tif resp.StopReason != \"length\" {\n+\t\tt.Fatalf(\"stop reason = %q, want length\", resp.StopReason)\n+\t}\n+}\n+\n+func TestGenerateReturnsErrOutputLimitWithoutVisibleContent(t *testing.T) {\n+\tts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t_, _ = w.Write([]byte(`{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":\"\"}}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":50,\"total_tokens\":57}}`))\n+\t}))\n+\tdefer ts.Close()\n+\n+\tp := NewProvider(model.WithAPIKey(\"test-key\"), model.WithBaseURL(ts.URL))\n+\t_, err := p.Generate(context.Background(), &model.Request{Prompt: \"Hello\"})\n+\tif !errors.Is(err, model.ErrOutputLimit) {\n+\t\tt.Fatalf(\"err = %v, want model.ErrOutputLimit\", err)\n+\t}\n+}"
+  },
+  {
+   "filename": "model/groq/groq.go",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 3,
+   "patch": "@@ -93,6 +93,7 @@ func (p *Provider) callAPI(ctx context.Context, req map[string]any) (*model.Resp\n \t}\n \n \tvar chatResp struct {\n+\t\tUsage   openaiapi.ChatUsage `json:\"usage\"`\n \t\tChoices []struct {\n \t\t\tFinishReason string `json:\"finish_reason\"`\n \t\t\tMessage      struct {\n@@ -117,10 +118,10 @@ func (p *Provider) callAPI(ctx context.Context, req map[string]any) (*model.Resp\n \t}\n \n \tchoice := chatResp.Choices[0]\n-\tif choice.FinishReason == \"length\" && strings.TrimSpace(choice.Message.Content) == \"\" && len(choice.Message.ToolCalls) == 0 {\n-\t\treturn nil, nil, model.ErrOutputLimit\n+\tif err := openaiapi.CheckOutputLimit(choice.FinishReason, choice.Message.Content, len(choice.Message.ToolCalls)); err != nil {\n+\t\treturn nil, nil, err\n \t}\n-\tresponse := &model.Response{Reply: choice.Message.Content}\n+\tresponse := &model.Response{Reply: choice.Message.Content, Usage: chatResp.Usage.Usage()}\n \n \tresponse.StopReason = choice.FinishReason\n "
+  },
+  {
+   "filename": "model/internal/openaiapi/response.go",
+   "status": "added",
+   "additions": 28,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,28 @@\n+package openaiapi\n+\n+import (\n+\t\"strings\"\n+\n+\t\"go-micro.dev/v6/model\"\n+)\n+\n+// ChatUsage is the usage object of an OpenAI-compatible chat completion.\n+type ChatUsage struct {\n+\tPromptTokens     int `json:\"prompt_tokens\"`\n+\tCompletionTokens int `json:\"completion_tokens\"`\n+\tTotalTokens      int `json:\"total_tokens\"`\n+}\n+\n+// Usage converts the response usage to model.Usage.\n+func (u ChatUsage) Usage() model.Usage {\n+\treturn model.Usage{InputTokens: u.PromptTokens, OutputTokens: u.CompletionTokens, TotalTokens: u.TotalTokens}\n+}\n+\n+// CheckOutputLimit returns model.ErrOutputLimit when a response stopped at the\n+// token limit without any visible content or tool call.\n+func CheckOutputLimit(finishReason, content string, toolCalls int) error {\n+\tif finishReason == \"length\" && strings.TrimSpace(content) == \"\" && toolCalls == 0 {\n+\t\treturn model.ErrOutputLimit\n+\t}\n+\treturn nil\n+}"
+  },
+  {
+   "filename": "model/minimax/generate_response_test.go",
+   "status": "added",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,45 @@\n+package minimax\n+\n+import (\n+\t\"context\"\n+\t\"errors\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"testing\"\n+\n+\t\"go-micro.dev/v6/model\"\n+)\n+\n+func TestGenerateReportsUsageAndStopReason(t *testing.T) {\n+\tts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t_, _ = w.Write([]byte(`{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":\"partial\"}}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"total_tokens\":10}}`))\n+\t}))\n+\tdefer ts.Close()\n+\n+\tp := NewProvider(model.WithAPIKey(\"test-key\"), model.WithBaseURL(ts.URL))\n+\tresp, err := p.Generate(context.Background(), &model.Request{Prompt: \"Hello\"})\n+\tif err != nil {\n+\t\tt.Fatalf(\"Generate failed: %v\", err)\n+\t}\n+\tif want := (model.Usage{InputTokens: 7, OutputTokens: 3, TotalTokens: 10}); resp.Usage != want {\n+\t\tt.Fatalf(\"usage = %+v, want %+v\", resp.Usage, want)\n+\t}\n+\tif resp.StopReason != \"length\" {\n+\t\tt.Fatalf(\"stop reason = %q, want length\", resp.StopReason)\n+\t}\n+}\n+\n+func TestGenerateReturnsErrOutputLimitWithoutVisibleContent(t *testing.T) {\n+\tts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t_, _ = w.Write([]byte(`{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":\"\"}}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":50,\"total_tokens\":57}}`))\n+\t}))\n+\tdefer ts.Close()\n+\n+\tp := NewProvider(model.WithAPIKey(\"test-key\"), model.WithBaseURL(ts.URL))\n+\t_, err := p.Generate(context.Background(), &model.Request{Prompt: \"Hello\"})\n+\tif !errors.Is(err, model.ErrOutputLimit) {\n+\t\tt.Fatalf(\"err = %v, want model.ErrOutputLimit\", err)\n+\t}\n+}"
+  },
+  {
+   "filename": "model/minimax/minimax.go",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 2,
+   "patch": "@@ -126,8 +126,10 @@ func (p *Provider) callAPI(ctx context.Context, req map[string]any) (*model.Resp\n \t}\n \n \tvar chatResp struct {\n+\t\tUsage   openaiapi.ChatUsage `json:\"usage\"`\n \t\tChoices []struct {\n-\t\t\tMessage struct {\n+\t\t\tFinishReason string `json:\"finish_reason\"`\n+\t\t\tMessage      struct {\n \t\t\t\tReasoningContent string `json:\"reasoning_content\"`\n \t\t\t\tContent          string `json:\"content\"`\n \t\t\t\tToolCalls        []struct {\n@@ -150,7 +152,10 @@ func (p *Provider) callAPI(ctx context.Context, req map[string]any) (*model.Resp\n \t}\n \n \tchoice := chatResp.Choices[0]\n-\tresponse := &model.Response{Reply: choice.Message.Content}\n+\tif err := openaiapi.CheckOutputLimit(choice.FinishReason, choice.Message.Content, len(choice.Message.ToolCalls)); err != nil {\n+\t\treturn nil, nil, err\n+\t}\n+\tresponse := &model.Response{Reply: choice.Message.Content, StopReason: choice.FinishReason, Usage: chatResp.Usage.Usage()}\n \n \tfor _, tc := range choice.Message.ToolCalls {\n \t\tvar input map[string]any"
+  },
+  {
+   "filename": "model/mistral/generate_response_test.go",
+   "status": "added",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,45 @@\n+package mistral\n+\n+import (\n+\t\"context\"\n+\t\"errors\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"testing\"\n+\n+\t\"go-micro.dev/v6/model\"\n+)\n+\n+func TestGenerateReportsUsageAndStopReason(t *testing.T) {\n+\tts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t_, _ = w.Write([]byte(`{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":\"partial\"}}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"total_tokens\":10}}`))\n+\t}))\n+\tdefer ts.Close()\n+\n+\tp := NewProvider(model.WithAPIKey(\"test-key\"), model.WithBaseURL(ts.URL))\n+\tresp, err := p.Generate(context.Background(), &model.Request{Prompt: \"Hello\"})\n+\tif err != nil {\n+\t\tt.Fatalf(\"Generate failed: %v\", err)\n+\t}\n+\tif want := (model.Usage{InputTokens: 7, OutputTokens: 3, TotalTokens: 10}); resp.Usage != want {\n+\t\tt.Fatalf(\"usage = %+v, want %+v\", resp.Usage, want)\n+\t}\n+\tif resp.StopReason != \"length\" {\n+\t\tt.Fatalf(\"stop reason = %q, want length\", resp.StopReason)\n+\t}\n+}\n+\n+func TestGenerateReturnsErrOutputLimitWithoutVisibleContent(t *testing.T) {\n+\tts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t_, _ = w.Write([]byte(`{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":\"\"}}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":50,\"total_tokens\":57}}`))\n+\t}))\n+\tdefer ts.Close()\n+\n+\tp := NewProvider(model.WithAPIKey(\"test-key\"), model.WithBaseURL(ts.URL))\n+\t_, err := p.Generate(context.Background(), &model.Request{Prompt: \"Hello\"})\n+\tif !errors.Is(err, model.ErrOutputLimit) {\n+\t\tt.Fatalf(\"err = %v, want model.ErrOutputLimit\", err)\n+\t}\n+}"
+  },
+  {
+   "filename": "model/mistral/mistral.go",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 2,
+   "patch": "@@ -93,8 +93,10 @@ func (p *Provider) callAPI(ctx context.Context, req map[string]any) (*model.Resp\n \t}\n \n \tvar chatResp struct {\n+\t\tUsage   openaiapi.ChatUsage `json:\"usage\"`\n \t\tChoices []struct {\n-\t\t\tMessage struct {\n+\t\t\tFinishReason string `json:\"finish_reason\"`\n+\t\t\tMessage      struct {\n \t\t\t\tContent   string `json:\"content\"`\n \t\t\t\tToolCalls []struct {\n \t\t\t\t\tID       string `json:\"id\"`\n@@ -116,7 +118,10 @@ func (p *Provider) callAPI(ctx context.Context, req map[string]any) (*model.Resp\n \t}\n \n \tchoice := chatResp.Choices[0]\n-\tresponse := &model.Response{Reply: choice.Message.Content}\n+\tif err := openaiapi.CheckOutputLimit(choice.FinishReason, choice.Message.Content, len(choice.Message.ToolCalls)); err != nil {\n+\t\treturn nil, nil, err\n+\t}\n+\tresponse := &model.Response{Reply: choice.Message.Content, StopReason: choice.FinishReason, Usage: chatResp.Usage.Usage()}\n \n \tfor _, tc := range choice.Message.ToolCalls {\n \t\tvar input map[string]any"
+  },
+  {
+   "filename": "model/together/generate_response_test.go",
+   "status": "added",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,45 @@\n+package together\n+\n+import (\n+\t\"context\"\n+\t\"errors\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"testing\"\n+\n+\t\"go-micro.dev/v6/model\"\n+)\n+\n+func TestGenerateReportsUsageAndStopReason(t *testing.T) {\n+\tts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t_, _ = w.Write([]byte(`{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":\"partial\"}}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"total_tokens\":10}}`))\n+\t}))\n+\tdefer ts.Close()\n+\n+\tp := NewProvider(model.WithAPIKey(\"test-key\"), model.WithBaseURL(ts.URL))\n+\tresp, err := p.Generate(context.Background(), &model.Request{Prompt: \"Hello\"})\n+\tif err != nil {\n+\t\tt.Fatalf(\"Generate failed: %v\", err)\n+\t}\n+\tif want := (model.Usage{InputTokens: 7, OutputTokens: 3, TotalTokens: 10}); resp.Usage != want {\n+\t\tt.Fatalf(\"usage = %+v, want %+v\", resp.Usage, want)\n+\t}\n+\tif resp.StopReason != \"length\" {\n+\t\tt.Fatalf(\"stop reason = %q, want length\", resp.StopReason)\n+\t}\n+}\n+\n+func TestGenerateReturnsErrOutputLimitWithoutVisibleContent(t *testing.T) {\n+\tts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t_, _ = w.Write([]byte(`{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":\"\"}}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":50,\"total_tokens\":57}}`))\n+\t}))\n+\tdefer ts.Close()\n+\n+\tp := NewProvider(model.WithAPIKey(\"test-key\"), model.WithBaseURL(ts.URL))\n+\t_, err := p.Generate(context.Background(), &model.Request{Prompt: \"Hello\"})\n+\tif !errors.Is(err, model.ErrOutputLimit) {\n+\t\tt.Fatalf(\"err = %v, want model.ErrOutputLimit\", err)\n+\t}\n+}"
+  },
+  {
+   "filename": "model/together/together.go",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 2,
+   "patch": "@@ -93,8 +93,10 @@ func (p *Provider) callAPI(ctx context.Context, req map[string]any) (*model.Resp\n \t}\n \n \tvar chatResp struct {\n+\t\tUsage   openaiapi.ChatUsage `json:\"usage\"`\n \t\tChoices []struct {\n-\t\t\tMessage struct {\n+\t\t\tFinishReason string `json:\"finish_reason\"`\n+\t\t\tMessage      struct {\n \t\t\t\tContent   string `json:\"content\"`\n \t\t\t\tToolCalls []struct {\n \t\t\t\t\tID       string `json:\"id\"`\n@@ -116,7 +118,10 @@ func (p *Provider) callAPI(ctx context.Context, req map[string]any) (*model.Resp\n \t}\n \n \tchoice := chatResp.Choices[0]\n-\tresponse := &model.Response{Reply: choice.Message.Content}\n+\tif err := openaiapi.CheckOutputLimit(choice.FinishReason, choice.Message.Content, len(choice.Message.ToolCalls)); err != nil {\n+\t\treturn nil, nil, err\n+\t}\n+\tresponse := &model.Response{Reply: choice.Message.Content, StopReason: choice.FinishReason, Usage: chatResp.Usage.Usage()}\n \n \tfor _, tc := range choice.Message.ToolCalls {\n \t\tvar input map[string]any"
+  }
+ ],
+ "test_files": [
+  "model/groq/generate_response_test.go",
+  "model/minimax/generate_response_test.go",
+  "model/mistral/generate_response_test.go",
+  "model/together/generate_response_test.go"
+ ]
+}

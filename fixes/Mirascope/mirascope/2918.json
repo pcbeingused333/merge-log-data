@@ -1,0 +1,26 @@
+{
+ "repo": "Mirascope/mirascope",
+ "number": 2918,
+ "url": "https://github.com/Mirascope/mirascope/pull/2918",
+ "title": "fix(anthropic): stop leaking the tool cache breakpoint into later requests",
+ "merged_at": "2026-10-21T15:35:00Z",
+ "files": [
+  {
+   "filename": "python/mirascope/llm/providers/anthropic/_utils/encode.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -2,6 +2,7 @@\n \n from __future__ import annotations\n \n+import copy\n import json\n import re\n from collections.abc import Sequence\n@@ -527,10 +528,13 @@ def encode_request(\n \n     if anthropic_tools:\n         # Add cache control to the last tool for prompt caching\n-        last_tool = anthropic_tools[-1]\n+        # (copied: `convert_tool_to_tool_param` is cached, and marking the shared\n+        # param would leak the cache breakpoint into later requests)\n+        last_tool = copy.copy(anthropic_tools[-1])\n         last_tool[\"cache_control\"] = anthropic_types.CacheControlEphemeralParam(\n             type=\"ephemeral\"\n         )\n+        anthropic_tools[-1] = last_tool\n         kwargs[\"tools\"] = anthropic_tools\n \n     system_message_content, remaining_messages = _base_utils.extract_system_message("
+  },
+  {
+   "filename": "python/tests/llm/providers/anthropic/test_anthropic_encoding.py",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -1,5 +1,7 @@\n \"\"\"Tests for Anthropic document encoding.\"\"\"\n \n+from typing import Any, cast\n+\n import pytest\n from inline_snapshot import snapshot\n \n@@ -488,3 +490,30 @@ def test_thinking_level_keeps_budget_tokens_on_models_that_accept_it(\n     )\n     assert kwargs.get(\"thinking\") == {\"type\": \"enabled\", \"budget_tokens\": 6400}\n     assert \"output_config\" not in kwargs\n+\n+\n+def test_cache_control_only_marks_the_last_tool_of_each_request() -> None:\n+    \"\"\"A tool that was last in an earlier request must not keep its cache breakpoint.\"\"\"\n+\n+    @llm.tool\n+    def first_tool(x: int) -> int:\n+        \"\"\"First tool for the cache control test.\"\"\"\n+        return x\n+\n+    @llm.tool\n+    def second_tool(x: int) -> int:\n+        \"\"\"Second tool for the cache control test.\"\"\"\n+        return x\n+\n+    messages = [llm.messages.user(\"Hello\")]\n+    for tools in ([first_tool], [first_tool, second_tool]):\n+        _, _, kwargs = encode_request(\n+            model_id=\"anthropic/claude-sonnet-4-6\",\n+            messages=messages,\n+            format=None,\n+            tools=Toolkit(tools),\n+            params={},\n+        )\n+        encoded_tools = cast(list[dict[str, Any]], kwargs.get(\"tools\"))\n+        marked = [tool[\"name\"] for tool in encoded_tools if \"cache_control\" in tool]\n+        assert marked == [tools[-1].name]"
+  }
+ ],
+ "test_files": [
+  "python/tests/llm/providers/anthropic/test_anthropic_encoding.py"
+ ]
+}

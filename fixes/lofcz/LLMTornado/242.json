@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 242,
+ "url": "https://github.com/lofcz/LLMTornado/pull/242",
+ "title": "Keep stream usage when the trailing chunk carries none",
+ "merged_at": "2026-10-21T08:17:00Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/OpenAiStreamUsageTests.cs",
+   "status": "added",
+   "additions": 70,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,70 @@\n+using System.IO;\n+using System.Text;\n+using LlmTornado.Chat;\n+using LlmTornado.Code;\n+using LlmTornado.Code.Vendor;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class OpenAiStreamUsageTests\n+{\n+    [Test]\n+    public async Task InboundStream_TrailingEmptyChoicesChunkWithoutUsage_KeepsUsageFromFinishChunk()\n+    {\n+        List<ChatResult> chunks = await Stream(\"\"\"\n+            data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-x\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hi\"}}]}\n+\n+            data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-x\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}\n+\n+            data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-x\",\"choices\":[],\"usage\":null}\n+\n+            data: [DONE]\n+\n+\n+            \"\"\");\n+\n+        Assert.That(chunks.Last().Usage?.TotalTokens, Is.EqualTo(5));\n+    }\n+\n+    [Test]\n+    public async Task InboundStream_TrailingUsageChunk_IsReported()\n+    {\n+        List<ChatResult> chunks = await Stream(\"\"\"\n+            data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-x\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hi\"}}]}\n+\n+            data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-x\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n+\n+            data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-x\",\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}\n+\n+            data: [DONE]\n+\n+\n+            \"\"\");\n+\n+        Assert.That(chunks.Last().Usage?.TotalTokens, Is.EqualTo(5));\n+    }\n+\n+    private static async Task<List<ChatResult>> Stream(string sse)\n+    {\n+        OpenAiEndpointProvider provider = new OpenAiEndpointProvider(LLmProviders.OpenAi);\n+        StreamReader reader = new StreamReader(new MemoryStream(Encoding.UTF8.GetBytes(sse)));\n+        ChatRequest request = new ChatRequest\n+        {\n+            Stream = true,\n+            StreamOptions = ChatStreamOptions.KnownOptionsIncludeUsage,\n+            Messages = [new ChatMessage(ChatMessageRoles.User, \"hi\")]\n+        };\n+\n+        List<ChatResult> chunks = [];\n+        await foreach (ChatResult? chunk in provider.InboundStream(reader, request, null))\n+        {\n+            if (chunk is not null)\n+            {\n+                chunks.Add(chunk);\n+            }\n+        }\n+\n+        return chunks;\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Vendor/OpenAi/OpenAiEndpointProvider.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -460,7 +460,7 @@ private static string ResolveToolCallKey(Dictionary<string, ToolCallInboundAccum\n             {\n                 if (usage is null && res.Choices is null || res.Choices?.Count is 0)\n                 {\n-                    usage = res.Usage;\n+                    usage = res.Usage ?? usage;\n                     continue;\n                 }\n             }"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/OpenAiStreamUsageTests.cs"
+ ]
+}

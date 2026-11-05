@@ -1,0 +1,40 @@
+{
+ "repo": "danielmiessler/Fabric",
+ "number": 2283,
+ "url": "https://github.com/danielmiessler/Fabric/pull/2283",
+ "title": "fix(server): set nosniff and no-store on every API response",
+ "merged_at": "2026-10-22T06:35:32Z",
+ "files": [
+  {
+   "filename": "cmd/generate_changelog/incoming/2283.txt",
+   "status": "added",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,6 @@\n+### PR [#2283](https://github.com/danielmiessler/Fabric/pull/2283) by [pcbeingused333](https://github.com/pcbeingused333) and [ksylvan](https://github.com/ksylvan): fix(server): set nosniff and no-store on every API response\n+\n+- Added a middleware, installed first in `newSecuredEngine`, that sets `X-Content-Type-Options: nosniff` and `Cache-Control: no-store` on every API response, including 401, 403, and 413 replies from later checks.\n+- Preserved handler-specific `Cache-Control` overrides, so responses such as the chat stream keep their own caching behavior.\n+- Applied the default no-store caching policy to all routes, including the Swagger UI pages.\n+- Removed obsolete Swagger caching assertions and unused imports."
+  },
+  {
+   "filename": "internal/server/headers.go",
+   "status": "added",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,20 @@\n+package restapi\n+\n+import (\n+\t\"github.com/gin-gonic/gin\"\n+)\n+\n+// SecurityHeadersMiddleware sets the response headers that each route\n+// shares. X-Content-Type-Options stops a browser from guessing a content\n+// type for a response. Cache-Control no-store keeps API responses, which can\n+// hold chats, sessions and configuration, out of browser and proxy caches.\n+// A handler that sets its own Cache-Control, as the chat stream does, keeps\n+// it.\n+func SecurityHeadersMiddleware() gin.HandlerFunc {\n+\treturn func(c *gin.Context) {\n+\t\th := c.Writer.Header()\n+\t\th.Set(\"X-Content-Type-Options\", \"nosniff\")\n+\t\th.Set(\"Cache-Control\", \"no-store\")\n+\t\tc.Next()\n+\t}\n+}"
+  },
+  {
+   "filename": "internal/server/headers_test.go",
+   "status": "added",
+   "additions": 72,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,72 @@\n+package restapi\n+\n+import (\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"os\"\n+\t\"path/filepath\"\n+\t\"testing\"\n+\n+\t\"github.com/danielmiessler/fabric/internal/core\"\n+\t\"github.com/danielmiessler/fabric/internal/plugins/db/fsdb\"\n+\t\"github.com/gin-gonic/gin\"\n+)\n+\n+// Each response, including the ones that the API key or loopback checks\n+// reject, tells the browser not to sniff the content type and not to store\n+// the response. A handler that sets its own Cache-Control keeps it.\n+func TestServeEngineSecurityHeaders(t *testing.T) {\n+\tgin.SetMode(gin.TestMode)\n+\tt.Setenv(\"OPENAI_API_KEY\", \"\")\n+\tdir := t.TempDir()\n+\tif err := os.MkdirAll(filepath.Join(dir, \"contexts\"), 0o700); err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tregistry := &core.PluginRegistry{Db: fsdb.NewDb(dir)}\n+\n+\tcases := []struct {\n+\t\tname   string\n+\t\tr      *gin.Engine\n+\t\thost   string\n+\t\tpath   string\n+\t\tstatus int\n+\t}{\n+\t\t{\"unauthorized\", newServeEngine(registry, \"secret\", nil), \"localhost\", \"/patterns/names\", http.StatusUnauthorized},\n+\t\t{\"foreign host\", newServeEngine(registry, \"\", nil), \"evil.example\", \"/patterns/names\", http.StatusForbidden},\n+\t\t{\"authorized\", newServeEngine(registry, \"\", nil), \"localhost\", \"/contexts/names\", http.StatusOK},\n+\t}\n+\tfor _, tc := range cases {\n+\t\tt.Run(tc.name, func(t *testing.T) {\n+\t\t\treq := httptest.NewRequest(http.MethodGet, tc.path, nil)\n+\t\t\treq.Host = tc.host\n+\t\t\trec := httptest.NewRecorder()\n+\t\t\ttc.r.ServeHTTP(rec, req)\n+\n+\t\t\tif rec.Code != tc.status {\n+\t\t\t\tt.Fatalf(\"status = %d, want %d\", rec.Code, tc.status)\n+\t\t\t}\n+\t\t\tif got := rec.Header().Get(\"X-Content-Type-Options\"); got != \"nosniff\" {\n+\t\t\t\tt.Errorf(\"X-Content-Type-Options = %q, want nosniff\", got)\n+\t\t\t}\n+\t\t\tif got := rec.Header().Get(\"Cache-Control\"); got != \"no-store\" {\n+\t\t\t\tt.Errorf(\"Cache-Control = %q, want no-store\", got)\n+\t\t\t}\n+\t\t})\n+\t}\n+}\n+\n+func TestSecurityHeadersMiddleware_HandlerCacheControlWins(t *testing.T) {\n+\tgin.SetMode(gin.TestMode)\n+\tr := gin.New()\n+\tr.Use(SecurityHeadersMiddleware())\n+\tr.GET(\"/stream\", func(c *gin.Context) {\n+\t\tc.Writer.Header().Set(\"Cache-Control\", \"no-cache\")\n+\t\tc.String(http.StatusOK, \"ok\")\n+\t})\n+\n+\trec := httptest.NewRecorder()\n+\tr.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, \"/stream\", nil))\n+\tif got := rec.Header().Get(\"Cache-Control\"); got != \"no-cache\" {\n+\t\tt.Errorf(\"Cache-Control = %q, want the handler's no-cache\", got)\n+\t}\n+}"
+  },
+  {
+   "filename": "internal/server/serve.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -52,6 +52,8 @@ func newSecuredEngine(registry *core.PluginRegistry, apiKey string, corsOrigins\n \t\tgin.SetMode(gin.ReleaseMode)\n \t}\n \tr := gin.New()\n+\t// First, so that the 401, 403 and 413 answers of the checks below get the headers too.\n+\tr.Use(SecurityHeadersMiddleware())\n \t// The server is not behind a known proxy. Thus c.ClientIP() in the logs\n \t// must not come from the X-Forwarded-For header, which a client can set.\n \t_ = r.SetTrustedProxies(nil) // A nil list gives no error."
+  }
+ ],
+ "test_files": [
+  "internal/server/headers_test.go"
+ ]
+}

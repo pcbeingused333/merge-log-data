@@ -1,0 +1,26 @@
+{
+ "repo": "securego/gosec",
+ "number": 1793,
+ "url": "https://github.com/securego/gosec/pull/1793",
+ "title": "fix(autofix): give every AI request its own timeout",
+ "merged_at": "2026-10-21T12:58:16Z",
+ "files": [
+  {
+   "filename": "autofix/ai.go",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 4,
+   "patch": "@@ -72,9 +72,6 @@ func GenerateSolution(model, aiAPIKey, baseURL string, skipSSL bool, issues []*i\n }\n \n func generateSolution(client GenAIClient, issues []*issue.Issue) error {\n-\tctx, cancel := context.WithTimeout(context.Background(), timeout)\n-\tdefer cancel()\n-\n \tcachedAutofix := make(map[string]string)\n \tfor _, issue := range issues {\n \t\tif val, ok := cachedAutofix[issue.What]; ok {\n@@ -83,7 +80,7 @@ func generateSolution(client GenAIClient, issues []*issue.Issue) error {\n \t\t}\n \n \t\tprompt := fmt.Sprintf(AIPrompt, issue.What)\n-\t\tresp, err := client.GenerateSolution(ctx, prompt)\n+\t\tresp, err := generateWithTimeout(client, prompt)\n \t\tif err != nil {\n \t\t\treturn fmt.Errorf(\"generating autofix with AI provider: %w\", err)\n \t\t}\n@@ -97,3 +94,13 @@ func generateSolution(client GenAIClient, issues []*issue.Issue) error {\n \t}\n \treturn nil\n }\n+\n+// generateWithTimeout gives every request its own timeout. A single deadline for\n+// the whole loop would expire after the first few issues and leave the rest\n+// without an autofix.\n+func generateWithTimeout(client GenAIClient, prompt string) (string, error) {\n+\tctx, cancel := context.WithTimeout(context.Background(), timeout)\n+\tdefer cancel()\n+\n+\treturn client.GenerateSolution(ctx, prompt)\n+}"
+  },
+  {
+   "filename": "autofix/ai_test.go",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -4,6 +4,7 @@ import (\n \t\"context\"\n \t\"errors\"\n \t\"testing\"\n+\t\"time\"\n \n \t\"github.com/stretchr/testify/assert\"\n \t\"github.com/stretchr/testify/mock\"\n@@ -190,3 +191,31 @@ func TestGenerateSolution_OpenAIProvider(t *testing.T) {\n \t// Without a real API key, we expect an error from the API\n \trequire.Error(t, err)\n }\n+\n+func TestGenerateSolution_EachIssueGetsItsOwnTimeout(t *testing.T) {\n+\t// Arrange\n+\tissues := []*issue.Issue{\n+\t\t{What: \"Issue 1\"},\n+\t\t{What: \"Issue 2\"},\n+\t}\n+\n+\tvar deadlines []time.Time\n+\tmockClient := new(MockGenAIClient)\n+\tmockClient.On(\"GenerateSolution\", mock.Anything, mock.Anything).\n+\t\tRun(func(args mock.Arguments) {\n+\t\t\tdeadline, ok := args.Get(0).(context.Context).Deadline()\n+\t\t\trequire.True(t, ok)\n+\t\t\tdeadlines = append(deadlines, deadline)\n+\t\t\ttime.Sleep(20 * time.Millisecond)\n+\t\t}).\n+\t\tReturn(\"Fix\", nil).Twice()\n+\n+\t// Act\n+\terr := generateSolution(mockClient, issues)\n+\n+\t// Assert: the second request's deadline is measured from its own start, so it\n+\t// is later than the first one's instead of the same shared deadline.\n+\trequire.NoError(t, err)\n+\trequire.Len(t, deadlines, 2)\n+\tassert.True(t, deadlines[1].After(deadlines[0]), \"second deadline %v should be after the first %v\", deadlines[1], deadlines[0])\n+}"
+  }
+ ],
+ "test_files": [
+  "autofix/ai_test.go"
+ ]
+}

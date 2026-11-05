@@ -1,0 +1,41 @@
+{
+ "repo": "OpenCSGs/csghub-server",
+ "number": 1606,
+ "url": "https://github.com/OpenCSGs/csghub-server/pull/1606",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-23T04:04:48Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-23T07:50:31Z",
+   "body": ""
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-23T08:17:06Z",
+   "body": "LTGM"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "collaborator",
+   "path": "aigateway/handler/responses_adapter_stream_writer.go",
+   "created_at": "2026-10-23T04:04:48Z",
+   "body": "A repeated function.name overrides a matching id and splits one call into two. startsNewCall is an OR:\n\nstartsNewCall := (call.ID != \"\" && latest.UpstreamID != \"\" && call.ID != latest.UpstreamID) ||\n    (call.Function.Name != \"\" && latest.Name != \"\")\n\nIf an upstream repeats both id and function.name on every fragment (no index), the id term says \"same call\" but the name term starts a new one. I reproduced it with a probe: two response.output_item.added events, both with call_id: \"call_1\", and the argument JSON split across them ({\"q\" / :\"x\"}). The same happens when only the name is repeated (id sent once).\n\n- It contradicts the adjacent ensureToolCallItem, which ignores a repeated name (if name != \"\" && state.Name == \"\"), and contradicts #1603's rule that a repeated id continues.\n- Suggested fix: when call.ID != \"\" && latest.UpstreamID != \"\", let the id decide; use the name rule only when ids can't be compared (and optionally treat call.ID == \"\" with a known latest.UpstreamID as a continuation, as #1603 does).\n- Add a ContinuesRepeatedNameFragments test.\n- Severity: non-blocking — Gemini is unaffected; impact is limited to id-bearing streams that repeat the function name.\n\nHere is the concrete example, run against the patched code.\n\nInput — an upstream that repeats id + function.name on every fragment (no index)\n```\ndata: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"lookup\",\"arguments\":\"{\\\"q\\\"\"}}]}}]}\ndata: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"lookup\",\"arguments\":\":\\\"x\\\"}\"}}]}}]}\ndata: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\ndata: [DONE]\n```\nWhat the Responses client actually receives today (captured from the patched code)\n\n### upstream repeats id+name on every fragment (no index)\n```\noutput_item.added      output_index=0 item_id=call_1 call_id=call_1 name=lookup\narguments.delta        item_id=call_1 output_index=0 delta=\"{\\\"q\\\"\"\noutput_item.added      output_index=1 item_id=call_1 call_id=call_1 name=lookup   ← duplicate call_id\narguments.delta        item_id=call_1 output_index=1 delta=\":\\\"x\\\"}\"\noutput_item.done       output_index=0 call_id=call_1 arguments=\"{\\\"q\\\"\"            ← broken JSON\noutput_item.done       output_index=1 call_id=call_1 arguments=\":\\\"x\\\"}\"           ← broken JSON\n```\n\nTwo function_call items, both with call_id: \"call_1\", each holding half of the JSON ({\"q\" and :\"x\"}). A Responses client that keys tool results by call_id cannot match both; a client that executes them calls lookup twice with invalid arguments. call_id is supposed to be unique per call.\n\nWhat it should be — the same call with the name sent once (captured, correct path)\n\noutput_item.added      output_index=0 item_id=call_1 call_id=call_1 name=lookup\narguments.delta        item_id=call_1 output_index=0 delta=\"{\\\"q\\\"\"\narguments.delta        item_id=call_1 output_index=0 delta=\":\\\"x\\\"}\"\noutput_item.done       output_index=0 call_id=call_1 arguments=\"{\\\"q\\\":\\\"x\\\"}\""
+  },
+  {
+   "role": "author",
+   "path": "aigateway/handler/responses_adapter_stream_writer.go",
+   "created_at": "2026-10-23T07:50:31Z",
+   "body": "Good catch, thanks for the probe. Fixed in the new commit: when the latest call has an id, the id now decides whether a fragment without an index starts a new call (a different id starts one; the same id, or no id, continues it, even if the function name is repeated). The name rule is only used when the latest call has no id, which keeps the Gemini case (whole calls, no ids to compare) working. That is consistent with `ensureToolCallItem`, which ignores a repeated name, and with #1603. `TestResponsesAdapterStreamWriterContinuesRepeatedNameFragments` covers both your cases (id and name repeated on every fragment, and name repeated with the id sent once); it fails before the change with two `function_call` items and passes now, and the `aigateway/handler` package tests and lint pass.\n"
+  }
+ ],
+ "comments": []
+}

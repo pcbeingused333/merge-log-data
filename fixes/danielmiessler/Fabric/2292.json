@@ -1,0 +1,33 @@
+{
+ "repo": "danielmiessler/Fabric",
+ "number": 2292,
+ "url": "https://github.com/danielmiessler/Fabric/pull/2292",
+ "title": "fix(openai): return the error of a failed Responses API stream",
+ "merged_at": "2026-10-23T06:41:03Z",
+ "files": [
+  {
+   "filename": "cmd/generate_changelog/incoming/2292.txt",
+   "status": "added",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,7 @@\n+### PR [#2292](https://github.com/danielmiessler/Fabric/pull/2292) by [pcbeingused333](https://github.com/pcbeingused333) and [ksylvan](https://github.com/ksylvan): fix(openai): return the error of a failed Responses API stream\n+\n+- Fixed the OpenAI integration so that errors from a failed Responses API stream are properly returned instead of being silently ignored.\n+- Simplified error handling in the OpenAI response stream by returning stream errors before processing response failure events.\n+- Formatted response failures inline with the associated message and error code for clearer diagnostics.\n+- Removed the standalone helper used to format response failure errors, reducing redundant code.\n+- Ensured trailing content is emitted only after the stream is confirmed successful."
+  },
+  {
+   "filename": "internal/plugins/ai/openai/openai.go",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 10,
+   "patch": "@@ -193,12 +193,17 @@ func (o *Client) sendStreamResponses(\n \treq := o.buildResponseParams(msgs, opts)\n \tstream := o.ApiClient.Responses.NewStreaming(ctx, req, o.requestOptions(opts.SessionID)...)\n \tvar sources []string\n+\tvar failure error\n \tfor stream.Next() {\n \t\tevent := stream.Current()\n \t\tswitch event.Type {\n \t\tcase string(constant.ResponseCompleted(\"\").Default()):\n \t\t\tcompleted := event.AsResponseCompleted()\n \t\t\tsources = searchResultSources(&completed.Response)\n+\t\tcase string(constant.ResponseFailed(\"\").Default()):\n+\t\t\t// A failed response ends the stream without an SDK error.\n+\t\t\te := event.AsResponseFailed().Response.Error\n+\t\t\tfailure = fmt.Errorf(\"response failed: %s (%s)\", e.Message, e.Code)\n \t\tcase string(constant.ResponseOutputTextDelta(\"\").Default()):\n \t\t\tchannel <- domain.StreamUpdate{\n \t\t\t\tType:    domain.StreamTypeContent,\n@@ -209,17 +214,21 @@ func (o *Client) sendStreamResponses(\n \t\t\tcontinue\n \t\t}\n \t}\n-\tif stream.Err() == nil {\n-\t\tcontent := \"\\n\"\n-\t\tif len(sources) > 0 {\n-\t\t\tcontent = sourcesHeader + strings.Join(sources, \"\\n\") + \"\\n\"\n-\t\t}\n-\t\tchannel <- domain.StreamUpdate{\n-\t\t\tType:    domain.StreamTypeContent,\n-\t\t\tContent: content,\n-\t\t}\n+\tif err := stream.Err(); err != nil {\n+\t\treturn err\n+\t}\n+\tif failure != nil {\n+\t\treturn failure\n+\t}\n+\tcontent := \"\\n\"\n+\tif len(sources) > 0 {\n+\t\tcontent = sourcesHeader + strings.Join(sources, \"\\n\") + \"\\n\"\n+\t}\n+\tchannel <- domain.StreamUpdate{\n+\t\tType:    domain.StreamTypeContent,\n+\t\tContent: content,\n \t}\n-\treturn stream.Err()\n+\treturn nil\n }\n \n func (o *Client) Send(ctx context.Context, msgs []*chat.ChatCompletionMessage, opts *domain.ChatOptions) (ret string, err error) {"
+  },
+  {
+   "filename": "internal/plugins/ai/openai/responses_stream_test.go",
+   "status": "added",
+   "additions": 71,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,71 @@\n+package openai\n+\n+import (\n+\t\"context\"\n+\t\"fmt\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"testing\"\n+\n+\t\"github.com/danielmiessler/fabric/internal/chat\"\n+\t\"github.com/danielmiessler/fabric/internal/domain\"\n+\t\"github.com/openai/openai-go/v3\"\n+\t\"github.com/openai/openai-go/v3/option\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+// responsesSSE answers a Responses API request with the given server-sent events.\n+func responsesSSE(events ...string) http.HandlerFunc {\n+\treturn func(w http.ResponseWriter, r *http.Request) {\n+\t\tw.Header().Set(\"Content-Type\", \"text/event-stream\")\n+\t\tfor _, event := range events {\n+\t\t\t_, _ = fmt.Fprint(w, event)\n+\t\t}\n+\t}\n+}\n+\n+func sseEvent(name, data string) string {\n+\treturn fmt.Sprintf(\"event: %s\\ndata: %s\\n\\n\", name, data)\n+}\n+\n+func streamResponses(t *testing.T, handler http.HandlerFunc) (updates []domain.StreamUpdate, err error) {\n+\tt.Helper()\n+\n+\tserver := httptest.NewServer(handler)\n+\tdefer server.Close()\n+\n+\tsdk := openai.NewClient(option.WithAPIKey(\"test-key\"), option.WithBaseURL(server.URL))\n+\tclient := &Client{ApiClient: &sdk, ImplementsResponses: true}\n+\n+\tchannel := make(chan domain.StreamUpdate, 16)\n+\terr = client.SendStream(\n+\t\tcontext.Background(),\n+\t\t[]*chat.ChatCompletionMessage{{Role: chat.ChatMessageRoleUser, Content: \"hi\"}},\n+\t\t&domain.ChatOptions{Model: \"gpt-5.6-terra\"},\n+\t\tchannel,\n+\t)\n+\tfor update := range channel {\n+\t\tupdates = append(updates, update)\n+\t}\n+\treturn updates, err\n+}\n+\n+func TestSendStreamResponsesReturnsErrorWhenResponseFails(t *testing.T) {\n+\t_, err := streamResponses(t, responsesSSE(\n+\t\tsseEvent(\"response.output_text.delta\", `{\"type\":\"response.output_text.delta\",\"sequence_number\":1,\"item_id\":\"i\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hel\",\"logprobs\":[]}`),\n+\t\tsseEvent(\"response.failed\", `{\"type\":\"response.failed\",\"sequence_number\":2,\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"created_at\":0,\"status\":\"failed\",\"model\":\"gpt-5.6-terra\",\"output\":[],\"error\":{\"code\":\"server_error\",\"message\":\"The model failed to generate a response.\"},\"parallel_tool_calls\":false,\"tool_choice\":\"auto\",\"tools\":[]}}`),\n+\t))\n+\n+\trequire.Error(t, err)\n+\trequire.Contains(t, err.Error(), \"The model failed to generate a response.\")\n+}\n+\n+func TestSendStreamResponsesCompletedStreamHasNoError(t *testing.T) {\n+\tupdates, err := streamResponses(t, responsesSSE(\n+\t\tsseEvent(\"response.output_text.delta\", `{\"type\":\"response.output_text.delta\",\"sequence_number\":1,\"item_id\":\"i\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hello\",\"logprobs\":[]}`),\n+\t\tsseEvent(\"response.completed\", `{\"type\":\"response.completed\",\"sequence_number\":2,\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"created_at\":0,\"status\":\"completed\",\"model\":\"gpt-5.6-terra\",\"output\":[],\"parallel_tool_calls\":false,\"tool_choice\":\"auto\",\"tools\":[]}}`),\n+\t))\n+\n+\trequire.NoError(t, err)\n+\trequire.Equal(t, \"Hello\", updates[0].Content)\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/plugins/ai/openai/responses_stream_test.go"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "Mirascope/mirascope",
+ "number": 2922,
+ "url": "https://github.com/Mirascope/mirascope/pull/2922",
+ "title": "fix(llm): decode Google tool calls that carry no args",
+ "merged_at": "2026-10-21T15:42:58Z",
+ "files": [
+  {
+   "filename": "python/mirascope/llm/providers/google/_utils/decode.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -113,11 +113,14 @@ def _decode_content_part(part: genai_types.Part) -> AssistantContentPart | None:\n         id = function_call.id\n         name = function_call.name\n         args = function_call.args\n-        if not name or args is None:\n+        if not name:\n             raise ValueError(\n                 \"Google function_call does not match spec\"\n             )  # pragma: no cover\n-        return ToolCall(id=id or UNKNOWN_TOOL_ID, name=name, args=json.dumps(args))\n+        # Gemini omits `args` for a tool that takes no arguments\n+        return ToolCall(\n+            id=id or UNKNOWN_TOOL_ID, name=name, args=json.dumps(args or {})\n+        )\n     elif part.function_response:  # pragma: no cover\n         raise NotImplementedError(\n             \"function_response part does not decode to AssistantContent.\""
+  },
+  {
+   "filename": "python/tests/llm/providers/google/test_google_provider.py",
+   "status": "modified",
+   "additions": 26,
+   "deletions": 0,
+   "patch": "@@ -17,6 +17,7 @@\n from mirascope.llm.providers.google._utils.decode import (\n     _decode_usage,  # pyright: ignore[reportPrivateUsage]\n     decode_async_stream,\n+    decode_response,\n     decode_stream,\n )\n from mirascope.llm.providers.google._utils.encode import google_thinking_config\n@@ -484,6 +485,31 @@ async def async_chunks() -> AsyncIterator[genai_types.GenerateContentResponse]:\n     assert accumulated_usage.total_tokens == 170\n \n \n+def test_decode_response_tool_call_without_args() -> None:\n+    \"\"\"A tool call without `args`, as Gemini sends for a no-argument tool, decodes.\"\"\"\n+    response = genai_types.GenerateContentResponse(\n+        candidates=[\n+            genai_types.Candidate(\n+                content=genai_types.Content(\n+                    role=\"model\",\n+                    parts=[\n+                        genai_types.Part(\n+                            function_call=genai_types.FunctionCall(name=\"get_time\")\n+                        )\n+                    ],\n+                ),\n+                finish_reason=genai_types.FinishReason.STOP,\n+            )\n+        ]\n+    )\n+    message, _, _ = decode_response(\n+        response, \"google/gemini-3.8-flash\", include_thoughts=False\n+    )\n+    assert message.content == [\n+        llm.ToolCall(id=\"google_unknown_tool_id\", name=\"get_time\", args=\"{}\")\n+    ]\n+\n+\n def test_decode_usage_without_candidates_token_count() -> None:\n     \"\"\"Gemini omits candidates_token_count when thinking spent the whole budget.\"\"\"\n     usage_metadata = genai_types.GenerateContentResponseUsageMetadata("
+  }
+ ],
+ "test_files": [
+  "python/tests/llm/providers/google/test_google_provider.py"
+ ]
+}

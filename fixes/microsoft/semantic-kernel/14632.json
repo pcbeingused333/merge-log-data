@@ -1,0 +1,26 @@
+{
+ "repo": "microsoft/semantic-kernel",
+ "number": 14632,
+ "url": "https://github.com/microsoft/semantic-kernel/pull/14632",
+ "title": "Python: fix(google_ai): report more Gemini finish reasons as content_filter",
+ "merged_at": "2026-10-26T14:59:10Z",
+ "files": [
+  {
+   "filename": "python/semantic_kernel/connectors/ai/google/google_ai/services/utils.py",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 1,
+   "patch": "@@ -31,6 +31,18 @@\n logger: logging.Logger = logging.getLogger(__name__)\n \n \n+# Finish reasons where Gemini stopped the response for the content, not for length or a natural end.\n+_GOOGLE_AI_CONTENT_FILTER_REASONS = frozenset({\n+    FinishReason.SAFETY,\n+    FinishReason.RECITATION,\n+    FinishReason.BLOCKLIST,\n+    FinishReason.PROHIBITED_CONTENT,\n+    FinishReason.SPII,\n+    FinishReason.IMAGE_SAFETY,\n+    FinishReason.IMAGE_PROHIBITED_CONTENT,\n+})\n+\n+\n def finish_reason_from_google_ai_to_semantic_kernel(\n     finish_reason: FinishReason | None,\n ) -> SemanticKernelFinishReason | None:\n@@ -47,7 +59,7 @@ def finish_reason_from_google_ai_to_semantic_kernel(\n     if finish_reason == FinishReason.MAX_TOKENS:\n         return SemanticKernelFinishReason.LENGTH\n \n-    if finish_reason == FinishReason.SAFETY:\n+    if finish_reason in _GOOGLE_AI_CONTENT_FILTER_REASONS:\n         return SemanticKernelFinishReason.CONTENT_FILTER\n \n     return None"
+  },
+  {
+   "filename": "python/tests/unit/connectors/ai/google/google_ai/services/test_google_ai_utils.py",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -33,6 +33,22 @@ def test_finish_reason_from_google_ai_to_semantic_kernel():\n     assert finish_reason_from_google_ai_to_semantic_kernel(None) is None\n \n \n+@pytest.mark.parametrize(\n+    \"reason\",\n+    [\n+        FinishReason.RECITATION,\n+        FinishReason.BLOCKLIST,\n+        FinishReason.PROHIBITED_CONTENT,\n+        FinishReason.SPII,\n+        FinishReason.IMAGE_SAFETY,\n+        FinishReason.IMAGE_PROHIBITED_CONTENT,\n+    ],\n+)\n+def test_content_filter_finish_reasons_from_google_ai(reason):\n+    \"\"\"Responses Gemini stopped for their content are reported as content filtered.\"\"\"\n+    assert finish_reason_from_google_ai_to_semantic_kernel(reason) == SemanticKernelFinishReason.CONTENT_FILTER\n+\n+\n def test_format_user_message():\n     \"\"\"Test format_user_message.\"\"\"\n     user_message = ChatMessageContent(role=AuthorRole.USER, content=\"User message\")"
+  }
+ ],
+ "test_files": [
+  "python/tests/unit/connectors/ai/google/google_ai/services/test_google_ai_utils.py"
+ ]
+}

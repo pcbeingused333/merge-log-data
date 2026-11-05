@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 220,
+ "url": "https://github.com/lofcz/LLMTornado/pull/220",
+ "title": "Report the billed input tokens as the prompt tokens for Cohere",
+ "merged_at": "2026-10-20T23:21:50Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/CohereUsageTests.cs",
+   "status": "added",
+   "additions": 46,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,46 @@\n+using System.IO;\n+using System.Text;\n+using LlmTornado.Chat;\n+using LlmTornado.Code;\n+using LlmTornado.Code.Vendor;\n+using Newtonsoft.Json;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class CohereUsageTests\n+{\n+    [Test]\n+    public async Task InboundStream_MessageEndReportsInputAndOutputTokensSeparately()\n+    {\n+        const string sse = \"\"\"\n+            data: {\"type\":\"content-delta\",\"index\":0,\"delta\":{\"message\":{\"content\":{\"text\":\"Hi\"}}}}\n+\n+            data: {\"type\":\"message-end\",\"delta\":{\"finish_reason\":\"COMPLETE\",\"usage\":{\"billed_units\":{\"input_tokens\":120,\"output_tokens\":30},\"tokens\":{\"input_tokens\":150,\"output_tokens\":30}}}}\n+\n+\n+            \"\"\";\n+\n+        CohereEndpointProvider provider = new CohereEndpointProvider();\n+        StreamReader reader = new StreamReader(new MemoryStream(Encoding.UTF8.GetBytes(sse)));\n+        ChatRequest request = new ChatRequest\n+        {\n+            Stream = true,\n+            Messages = [new ChatMessage(ChatMessageRoles.User, \"test\")]\n+        };\n+\n+        ChatUsage? usage = null;\n+        await foreach (ChatResult? chunk in provider.InboundStream(reader, request, null))\n+        {\n+            if (chunk?.Usage is not null)\n+            {\n+                usage = chunk.Usage;\n+            }\n+        }\n+\n+        Assert.That(usage, Is.Not.Null);\n+        Assert.That(usage!.PromptTokens, Is.EqualTo(120));\n+        Assert.That(usage.CompletionTokens, Is.EqualTo(30));\n+        Assert.That(usage.TotalTokens, Is.EqualTo(150));\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/ChatResult.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -509,7 +509,7 @@ internal ChatUsage(VendorPerplexityUsage usage)\n \tinternal ChatUsage(VendorCohereUsage usage)\n \t{\n \t\tCompletionTokens = usage.BilledUnits?.OutputTokens ?? 0;\n-\t\tPromptTokens = usage.BilledUnits?.OutputTokens ?? 0;\n+\t\tPromptTokens = usage.BilledUnits?.InputTokens ?? 0;\n \t\tTotalTokens = CompletionTokens + PromptTokens;\n \t\tVendorUsageObject = usage;\n \t\tProvider = LLmProviders.Cohere;"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/CohereUsageTests.cs"
+ ]
+}

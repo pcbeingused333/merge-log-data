@@ -1,0 +1,85 @@
+{
+ "repo": "mnfst/llm-gateway",
+ "number": 3093,
+ "url": "https://github.com/mnfst/llm-gateway/pull/3093",
+ "title": "fix: keep streamed tool calls apart when the provider omits their index",
+ "merged_at": "2026-10-29T10:03:02Z",
+ "files": [
+  {
+   "filename": ".changeset/keep-unindexed-tool-calls-apart.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'manifest': patch\n+---\n+\n+Keep parallel tool calls apart when a provider streams them without an index, in recorded conversations and in the /v1/messages and /v1/responses translations. A delta without an index starts the next call when it brings a new id."
+  },
+  {
+   "filename": "packages/backend/src/routing/proxy/__tests__/anthropic-messages-adapter.spec.ts",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -889,6 +889,35 @@ describe('Anthropic Messages adapter', () => {\n       return out + tail;\n     }\n \n+    it('opens one tool_use block per call when the provider omits tool call indexes', () => {\n+      const t = createMessagesStreamTransformer('claude-sonnet-4');\n+      const sse = flushChunks(t, [\n+        'data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\\\"city\\\\\":\"}}]}}]}\\n\\n',\n+        'data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"\\\\\"Paris\\\\\"}\"}}]}}]}\\n\\n',\n+        'data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_b\",\"type\":\"function\",\"function\":{\"name\":\"get_time\",\"arguments\":\"{\\\\\"tz\\\\\":\\\\\"CET\\\\\"}\"}}]}}]}\\n\\n',\n+        'data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\\n\\n',\n+      ]);\n+\n+      const events = sse\n+        .split('\\n\\n')\n+        .filter(Boolean)\n+        .map((block) => JSON.parse(block.split('\\n')[1]!.replace('data: ', '')));\n+      const starts = events.filter((e) => e.type === 'content_block_start');\n+      const partials = events\n+        .filter((e) => e.type === 'content_block_delta')\n+        .map((e) => [e.index, e.delta.partial_json]);\n+\n+      expect(starts.map((e) => [e.index, e.content_block.name])).toEqual([\n+        [0, 'get_weather'],\n+        [1, 'get_time'],\n+      ]);\n+      expect(partials).toEqual([\n+        [0, '{\"city\":'],\n+        [0, '\"Paris\"}'],\n+        [1, '{\"tz\":\"CET\"}'],\n+      ]);\n+    });\n+\n     it('emits message_start, content_block events, message_delta, and message_stop for plain text', () => {\n       const t = createMessagesStreamTransformer('claude-sonnet-4');\n       const chunks = ["
+  },
+  {
+   "filename": "packages/backend/src/routing/proxy/__tests__/responses-adapter.spec.ts",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -1312,6 +1312,30 @@ describe('Responses adapter', () => {\n       expect(delta.delta).toBe('Hello');\n     });\n \n+    it('keeps parallel tool calls apart when the provider omits tool call indexes', () => {\n+      const t = createResponsesStreamTransformer('gemini-3.8-flash');\n+      const out = [\n+        '{\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"lookup\",\"arguments\":\"{\\\\\"id\\\\\":1}\"}}]}}]}',\n+        '{\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_b\",\"type\":\"function\",\"function\":{\"name\":\"weather\",\"arguments\":\"{\\\\\"city\\\\\":\\\\\"Paris\\\\\"}\"}}]}}]}',\n+        '{\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}',\n+      ]\n+        .map((chunk) => t.transform(chunk) ?? '')\n+        .join('');\n+      const end = out + (t.finalize() ?? '');\n+\n+      const completed = firstEventData(end, 'response.completed')!;\n+      expect(\n+        completed.response.output.map((item: Record<string, unknown>) => [\n+          item.call_id,\n+          item.name,\n+          item.arguments,\n+        ]),\n+      ).toEqual([\n+        ['call_a', 'lookup', '{\"id\":1}'],\n+        ['call_b', 'weather', '{\"city\":\"Paris\"}'],\n+      ]);\n+    });\n+\n     it('opens the item exactly once across multiple deltas', () => {\n       const t = createResponsesStreamTransformer('gpt-4o');\n       t.transform('{\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}');"
+  },
+  {
+   "filename": "packages/backend/src/routing/proxy/anthropic-messages-adapter.ts",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 6,
+   "patch": "@@ -5,6 +5,7 @@\n  * for the OpenAI Responses API.\n  */\n import { randomUUID } from 'crypto';\n+import { resolveToolCallIndex } from 'manifest-shared';\n \n import { OpenAIMessage } from './proxy-types';\n \n@@ -444,7 +445,12 @@ interface StreamState {\n   thinkingOpened: boolean;\n   textIndex: number | null;\n   textOpened: boolean;\n-  toolCalls: Map<number, { id: string; index: number; argBuffer: string; opened: boolean }>;\n+  toolCalls: Map<\n+    number,\n+    { id: string; upstreamId?: string; index: number; argBuffer: string; opened: boolean }\n+  >;\n+  // Upstream index of the latest tool call delta, used to place deltas that carry no index.\n+  latestToolCallIndex?: number;\n   // Monotonic counter — block indices must keep increasing across the whole\n   // stream, including across reopens of the same kind.\n   nextBlockIndexCounter: number;\n@@ -582,14 +588,23 @@ function transformStreamChunk(chunk: string, state: StreamState): string | null\n       closeTextBlock(state, events);\n       for (const call of delta.tool_calls) {\n         if (!isRecord(call)) continue;\n-        const callIndex = typeof call.index === 'number' ? call.index : 0;\n+        const upstreamId = typeof call.id === 'string' && call.id !== '' ? call.id : undefined;\n+        const latest =\n+          state.latestToolCallIndex === undefined\n+            ? undefined\n+            : {\n+                index: state.latestToolCallIndex,\n+                id: state.toolCalls.get(state.latestToolCallIndex)?.upstreamId,\n+              };\n+        const callIndex = resolveToolCallIndex(call, latest);\n+        state.latestToolCallIndex = callIndex;\n         let entry = state.toolCalls.get(callIndex);\n         if (!entry) {\n           entry = {\n-            id:\n-              typeof call.id === 'string' && call.id !== ''\n-                ? sanitizeToolUseId(call.id)\n-                : `toolu_${randomUUID().replace(/-/g, '')}`,\n+            id: upstreamId\n+              ? sanitizeToolUseId(upstreamId)\n+              : `toolu_${randomUUID().replace(/-/g, '')}`,\n+            upstreamId,\n             index: nextBlockIndex(state),\n             argBuffer: '',\n             opened: false,"
+  },
+  {
+   "filename": "packages/backend/src/routing/proxy/responses-adapter.ts",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 1,
+   "patch": "@@ -1,4 +1,5 @@\n import { randomUUID } from 'crypto';\n+import { resolveToolCallIndex } from 'manifest-shared';\n \n import { DEFAULT_INSTRUCTIONS } from './chatgpt-helpers';\n import { OpenAIMessage } from './proxy-types';\n@@ -653,6 +654,8 @@ interface StreamFunctionCall {\n interface ResponsesStreamState {\n   toolNames?: ResponsesToolNames;\n   toolCalls: Map<number, StreamFunctionCall>;\n+  // Upstream index of the latest tool call delta, used to place deltas that carry no index.\n+  latestToolCallIndex?: number;\n   nextOutputIndex: number;\n   messageOutputIndex: number;\n \n@@ -855,7 +858,15 @@ function toolCallDeltas(toolCalls: unknown, state: ResponsesStreamState): string\n   const events: string[] = [];\n   for (const delta of toolCalls) {\n     if (!isRecord(delta) || !isRecord(delta.function)) continue;\n-    const index = typeof delta.index === 'number' ? delta.index : 0;\n+    const latest =\n+      state.latestToolCallIndex === undefined\n+        ? undefined\n+        : {\n+            index: state.latestToolCallIndex,\n+            id: state.toolCalls.get(state.latestToolCallIndex)?.callId,\n+          };\n+    const index = resolveToolCallIndex(delta, latest);\n+    state.latestToolCallIndex = index;\n     let call = state.toolCalls.get(index);\n     if (!call) {\n       call = { id: `fc_${randomUUID().replace(/-/g, '')}`, callId: '', name: '', arguments: '' };"
+  },
+  {
+   "filename": "packages/shared/__tests__/chat-message.spec.ts",
+   "status": "modified",
+   "additions": 46,
+   "deletions": 0,
+   "patch": "@@ -365,6 +365,52 @@ describe('recorded chat message helpers', () => {\n     ]);\n   });\n \n+  it('keeps streamed tool calls apart when the provider omits their index', () => {\n+    const messages = extractRecordedConversationMessages(\n+      { messages: [{ role: 'user', content: 'Weather and time?' }] },\n+      {\n+        type: 'stream',\n+        raw_sse: [\n+          'data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\\\"city\\\\\":\"}}]}}]}',\n+          'data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"\\\\\"Paris\\\\\"}\"}}]}}]}',\n+          'data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_b\",\"type\":\"function\",\"function\":{\"name\":\"get_time\",\"arguments\":\"{\\\\\"tz\\\\\":\\\\\"CET\\\\\"}\"}}]}}]}',\n+          'data: [DONE]',\n+        ].join('\\n\\n'),\n+      },\n+    );\n+\n+    expect(messages[1]!.tool_calls).toEqual([\n+      {\n+        id: 'call_a',\n+        type: 'function',\n+        function: { name: 'get_weather', arguments: '{\"city\":\"Paris\"}' },\n+      },\n+      {\n+        id: 'call_b',\n+        type: 'function',\n+        function: { name: 'get_time', arguments: '{\"tz\":\"CET\"}' },\n+      },\n+    ]);\n+  });\n+\n+  it('keeps an index-less tool call name split over several deltas whole', () => {\n+    const messages = extractRecordedConversationMessages(\n+      { messages: [{ role: 'user', content: 'Weather?' }] },\n+      {\n+        type: 'stream',\n+        raw_sse: [\n+          'data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"get_\",\"arguments\":\"\"}}]}}]}',\n+          'data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"name\":\"weather\",\"arguments\":\"{}\"}}]}}]}',\n+          'data: [DONE]',\n+        ].join('\\n\\n'),\n+      },\n+    );\n+\n+    expect(messages[1]!.tool_calls).toEqual([\n+      { id: 'call_a', type: 'function', function: { name: 'get_weather', arguments: '{}' } },\n+    ]);\n+  });\n+\n   it('reconstructs Gemini streaming text from candidate parts', () => {\n     expect(\n       extractResponseMessages({"
+  },
+  {
+   "filename": "packages/shared/__tests__/tool-call-index.spec.ts",
+   "status": "added",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,30 @@\n+import { resolveToolCallIndex } from '../src/tool-call-index';\n+\n+describe('resolveToolCallIndex', () => {\n+  it('uses the index the provider sent', () => {\n+    expect(resolveToolCallIndex({ index: 2, id: 'call_c' }, { index: 0, id: 'call_a' })).toBe(2);\n+  });\n+\n+  it('places the first call without an index at 0', () => {\n+    expect(resolveToolCallIndex({ id: 'call_a' }, undefined)).toBe(0);\n+  });\n+\n+  it('starts the next call when an index-less delta brings a new id', () => {\n+    expect(resolveToolCallIndex({ id: 'call_b' }, { index: 0, id: 'call_a' })).toBe(1);\n+  });\n+\n+  it('continues the latest call when an index-less delta has no id or the same id', () => {\n+    expect(resolveToolCallIndex({}, { index: 1, id: 'call_b' })).toBe(1);\n+    expect(resolveToolCallIndex({ id: '' }, { index: 1, id: 'call_b' })).toBe(1);\n+    expect(resolveToolCallIndex({ id: 'call_b' }, { index: 1, id: 'call_b' })).toBe(1);\n+  });\n+\n+  it('continues the latest call when that call has no id yet', () => {\n+    expect(resolveToolCallIndex({ id: 'call_a' }, { index: 0 })).toBe(0);\n+  });\n+\n+  it('continues the latest call when an index-less delta brings a name fragment without an id', () => {\n+    const delta: { id?: string; function: unknown } = { function: { name: 'weather' } };\n+    expect(resolveToolCallIndex(delta, { index: 0, id: 'call_a' })).toBe(0);\n+  });\n+});"
+  },
+  {
+   "filename": "packages/shared/src/chat-message.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -1,3 +1,5 @@\n+import { resolveToolCallIndex } from './tool-call-index';\n+\n export type Role = 'system' | 'user' | 'assistant' | 'tool' | 'unknown';\n \n export interface ToolCall {\n@@ -346,6 +348,7 @@ function extractStreamResponse(rawSse: string): ChatMessage[] {\n     function: { name?: string; arguments?: unknown };\n   };\n   const callsByKey = new Map<string, MutableToolCall>();\n+  let latestChatCall: { index: number; id?: string } | undefined;\n \n   const callFor = (key: string): MutableToolCall => {\n     const existing = callsByKey.get(key);\n@@ -379,7 +382,7 @@ function extractStreamResponse(rawSse: string): ChatMessage[] {\n     if (Array.isArray(delta?.tool_calls)) {\n       for (const rawCall of delta.tool_calls) {\n         if (!isRecord(rawCall)) continue;\n-        const index = typeof rawCall.index === 'number' ? rawCall.index : 0;\n+        const index = resolveToolCallIndex(rawCall, latestChatCall);\n         const call = callFor(`chat:${index}`);\n         if (typeof rawCall.id === 'string') call.id = rawCall.id;\n         if (typeof rawCall.type === 'string') call.type = rawCall.type;\n@@ -391,6 +394,7 @@ function extractStreamResponse(rawSse: string): ChatMessage[] {\n             appendArguments(call, rawCall.function.arguments);\n           }\n         }\n+        latestChatCall = { index, id: call.id };\n       }\n     }\n     if (payload.type === 'response.output_text.delta' && typeof payload.delta === 'string') {"
+  },
+  {
+   "filename": "packages/shared/src/index.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -198,6 +198,7 @@ export {\n   normalizeRole,\n } from './chat-message';\n export type { ChatMessage, ChatTool, RecordedResponseBody, Role, ToolCall } from './chat-message';\n+export { resolveToolCallIndex } from './tool-call-index';\n export {\n   CUSTOM_PROVIDER_ALIAS_MAX_LENGTH,\n   CUSTOM_PROVIDER_ALIAS_MESSAGE,"
+  },
+  {
+   "filename": "packages/shared/src/tool-call-index.ts",
+   "status": "added",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,19 @@\n+/**\n+ * Position of a streamed Chat Completions tool call delta among the calls of a response.\n+ *\n+ * Providers stream `delta.tool_calls[].index`, but some OpenAI-compatible ones (Gemini's\n+ * endpoint, for example) leave it out and send each call whole in its own chunk, each with its\n+ * own id. Without an index, a delta starts the next call when it brings an id that differs from\n+ * the latest call's id (a latest call with no id yet takes it instead); anything else continues\n+ * the latest call, so argument and name fragments still merge.\n+ */\n+export function resolveToolCallIndex(\n+  delta: { index?: unknown; id?: unknown },\n+  latest: { index: number; id?: string } | undefined,\n+): number {\n+  if (typeof delta.index === 'number') return delta.index;\n+  if (!latest) return 0;\n+  const startsNewCall =\n+    typeof delta.id === 'string' && delta.id !== '' && !!latest.id && delta.id !== latest.id;\n+  return startsNewCall ? latest.index + 1 : latest.index;\n+}"
+  }
+ ],
+ "test_files": [
+  "packages/backend/src/routing/proxy/__tests__/anthropic-messages-adapter.spec.ts",
+  "packages/backend/src/routing/proxy/__tests__/responses-adapter.spec.ts",
+  "packages/shared/__tests__/chat-message.spec.ts",
+  "packages/shared/__tests__/tool-call-index.spec.ts"
+ ]
+}

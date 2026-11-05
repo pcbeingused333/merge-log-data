@@ -1,0 +1,40 @@
+{
+ "repo": "danielmiessler/Fabric",
+ "number": 2286,
+ "url": "https://github.com/danielmiessler/Fabric/pull/2286",
+ "title": "fix(server): log request values quoted and upstream error bodies cut",
+ "merged_at": "2026-10-22T18:31:05Z",
+ "files": [
+  {
+   "filename": "cmd/generate_changelog/incoming/2286.txt",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+### PR [#2286](https://github.com/danielmiessler/Fabric/pull/2286) by [pcbeingused333](https://github.com/pcbeingused333) and [ksyvan](https://github.com/ksyvan): fix(server): log request values quoted and upstream error bodies cut\n+\n+- Fixed log injection in the chat handler by logging the request language with `%q` instead of `%s`, preventing clients from forging log entries with line breaks.\n+- Quoted and truncated upstream error response bodies in the Ollama chat handler to 512 bytes, so echoed prompts no longer land in the log in full (part of #2256, S05).\n+- Refactored server log tests to use split iterators instead of slice-based string splitting, while preserving the checks that guard against forged log lines."
+  },
+  {
+   "filename": "internal/server/chat.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -90,7 +90,7 @@ func (h *ChatHandler) HandleChat(c *gin.Context) {\n \t\t}\n \t}\n \n-\tlog.Printf(\"Received chat request - Language: '%s', Prompts: %d\", request.Language, len(request.Prompts))\n+\tlog.Printf(\"Received chat request - Language: %q, Prompts: %d\", request.Language, len(request.Prompts))\n \n \t// Set headers for SSE\n \tc.Writer.Header().Set(\"Content-Type\", \"text/event-stream\")"
+  },
+  {
+   "filename": "internal/server/log_values_test.go",
+   "status": "added",
+   "additions": 101,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,101 @@\n+package restapi\n+\n+import (\n+\t\"bytes\"\n+\t\"log\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"os\"\n+\t\"strings\"\n+\t\"testing\"\n+\n+\t\"github.com/danielmiessler/fabric/internal/core\"\n+\t\"github.com/danielmiessler/fabric/internal/plugins\"\n+\t\"github.com/danielmiessler/fabric/internal/plugins/ai\"\n+\t\"github.com/danielmiessler/fabric/internal/plugins/db/fsdb\"\n+\t\"github.com/danielmiessler/fabric/internal/tools\"\n+\t\"github.com/gin-gonic/gin\"\n+)\n+\n+// captureLog returns what the standard logger writes until the test ends.\n+func captureLog(t *testing.T) *bytes.Buffer {\n+\tt.Helper()\n+\tvar buf bytes.Buffer\n+\tlog.SetOutput(&buf)\n+\tt.Cleanup(func() { log.SetOutput(os.Stderr) })\n+\treturn &buf\n+}\n+\n+// A client picks the language string. A line break in it must not start a\n+// line of its own in the server log.\n+func TestHandleChat_LogsLanguageWithoutLineBreaks(t *testing.T) {\n+\tt.Setenv(\"HOME\", t.TempDir())\n+\tgin.SetMode(gin.TestMode)\n+\n+\tdb := fsdb.NewDb(t.TempDir())\n+\tvm := ai.NewVendorsManager()\n+\tvm.AddVendors(&serverTestVendor{name: \"TestVendor\", models: []string{\"test-model\"}})\n+\tregistry := &core.PluginRegistry{\n+\t\tDb:            db,\n+\t\tVendorManager: vm,\n+\t\tDefaults: &tools.Defaults{\n+\t\t\tPluginBase:         &plugins.PluginBase{},\n+\t\t\tVendor:             &plugins.Setting{Value: \"TestVendor\"},\n+\t\t\tModel:              &plugins.SetupQuestion{Setting: &plugins.Setting{Value: \"test-model\"}},\n+\t\t\tModelContextLength: &plugins.SetupQuestion{Setting: &plugins.Setting{Value: \"0\"}},\n+\t\t},\n+\t}\n+\trouter := gin.New()\n+\tNewChatHandler(router, registry, db)\n+\n+\tlogged := captureLog(t)\n+\n+\tbody := `{\"language\":\"en\\n2026/01/01 00:00:00 FORGED admin login\",\"prompts\":[]}`\n+\treq := httptest.NewRequest(http.MethodPost, \"/chat\", strings.NewReader(body))\n+\treq.Header.Set(\"Content-Type\", \"application/json\")\n+\tresp := &closeNotifierRecorder{\n+\t\tResponseRecorder: httptest.NewRecorder(),\n+\t\tcloseCh:          make(chan bool, 1),\n+\t}\n+\trouter.ServeHTTP(resp, req)\n+\n+\tfor line := range strings.SplitSeq(strings.TrimRight(logged.String(), \"\\n\"), \"\\n\") {\n+\t\tif strings.Contains(line, \"FORGED\") && !strings.Contains(line, \"Received chat request\") {\n+\t\t\tt.Fatalf(\"the language started a log line of its own: %q\", line)\n+\t\t}\n+\t}\n+\tif !strings.Contains(logged.String(), \"Received chat request\") {\n+\t\tt.Fatalf(\"expected the request line in the log, got %q\", logged.String())\n+\t}\n+}\n+\n+// The body of an upstream error can hold line breaks and a lot of text. The\n+// log keeps it on one line and cuts it.\n+func TestOllamaChat_LogsUpstreamErrorBodyOnOneLine(t *testing.T) {\n+\tgin.SetMode(gin.TestMode)\n+\n+\tlongTail := strings.Repeat(\"x\", 4*maxLoggedBodyBytes)\n+\tupstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tw.WriteHeader(http.StatusInternalServerError)\n+\t\t_, _ = w.Write([]byte(\"first\\n2026/01/01 00:00:00 FORGED admin login\\n\" + longTail))\n+\t}))\n+\tdefer upstream.Close()\n+\n+\tlogged := captureLog(t)\n+\n+\tr := gin.New()\n+\tconv := APIConvert{addr: &upstream.URL}\n+\tr.POST(\"/api/chat\", conv.ollamaChat)\n+\treq := httptest.NewRequest(http.MethodPost, \"/api/chat\", strings.NewReader(`{\"model\":\"test:latest\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}`))\n+\treq.Header.Set(\"Content-Type\", \"application/json\")\n+\tr.ServeHTTP(httptest.NewRecorder(), req)\n+\n+\tfor line := range strings.SplitSeq(strings.TrimRight(logged.String(), \"\\n\"), \"\\n\") {\n+\t\tif strings.Contains(line, \"FORGED\") && !strings.Contains(line, \"first\") {\n+\t\t\tt.Fatalf(\"the upstream body started a log line of its own: %q\", line)\n+\t\t}\n+\t\tif len(line) > 2*maxLoggedBodyBytes {\n+\t\t\tt.Fatalf(\"the upstream body was not cut: log line has %d bytes\", len(line))\n+\t\t}\n+\t}\n+}"
+  },
+  {
+   "filename": "internal/server/ollama.go",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 1,
+   "patch": "@@ -384,7 +384,7 @@ func (f APIConvert) ollamaChat(c *gin.Context) {\n \t\tif readErr != nil {\n \t\t\tlog.Printf(i18n.T(\"ollama_upstream_non_2xx_body_unreadable\"), fabricRes.StatusCode, readErr)\n \t\t} else {\n-\t\t\tlog.Printf(i18n.T(\"ollama_upstream_non_2xx\"), fabricRes.StatusCode, string(bodyBytes))\n+\t\t\tlog.Printf(i18n.T(\"ollama_upstream_non_2xx\"), fabricRes.StatusCode, quoteForLog(bodyBytes))\n \t\t}\n \n \t\treplyOllamaError(c, prompt, fabricRes.StatusCode, fmt.Sprintf(i18n.T(\"ollama_upstream_returned_status\"), fabricRes.StatusCode))\n@@ -564,3 +564,15 @@ func writeOllamaResponseStruct(c *gin.Context, response OllamaResponse) error {\n \t}\n \treturn nil\n }\n+\n+// maxLoggedBodyBytes is how much of an upstream error body goes to the log.\n+const maxLoggedBodyBytes = 512\n+\n+// quoteForLog quotes body and cuts it at maxLoggedBodyBytes, so a body with\n+// line breaks cannot add log lines of its own.\n+func quoteForLog(body []byte) string {\n+\tif len(body) > maxLoggedBodyBytes {\n+\t\treturn strconv.Quote(string(body[:maxLoggedBodyBytes])) + \"...\"\n+\t}\n+\treturn strconv.Quote(string(body))\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/server/log_values_test.go"
+ ]
+}

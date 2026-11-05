@@ -1,0 +1,43 @@
+{
+ "repo": "pipecat-ai/pipecat",
+ "number": 6283,
+ "url": "https://github.com/pipecat-ai/pipecat/pull/6283",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-10-21T15:01:04Z",
+   "body": "Thanks for picking this up! The issue is real: `KeyError: '[REDACTED]'` hides exactly the detail you need, and nothing in the output says it was masked.\n\nThe last-word rule is broader than exception names, though. It also exempts snake_case and kebab-case keys, quoted dict keys, `=` pairs, and a credential that follows an auth scheme. These are all masked on `main` and come through unmasked with this PR:\n\n| Input | `main` | This PR |\n|---|---|---|\n| `AuthError: Bearer abc123` | `Bearer [REDACTED]` | `Bearer abc123` |\n| `TokenError: Basic dXNlcjpwYXNz` | `Basic [REDACTED]` | unmasked |\n| `credentials_error: hunter2` | `[REDACTED]` | unmasked |\n| `secret_warning: hunter2` | `[REDACTED]` | unmasked |\n| `X-Auth-Error: xyz789` | `[REDACTED]` | unmasked |\n| `{'api_key_error': 'abc'}` | `'[REDACTED]'` | unmasked |\n| `'TokenError': 'abc'` / `\"TokenError\": \"abc\"` | `'[REDACTED]'` | unmasked |\n| `TokenError=abc` | `[REDACTED]` | unmasked |\n\nCould you narrow the exemption to a pair that looks like an exception at the head of an error message? That means a CamelCase class name, optionally module-qualified, that isn't quoted, is followed by `:`, and has no auth scheme after it. Something like this:\n\n```python\n# An exception or warning class name, optionally module-qualified (`KeyError`,\n# `jwt.exceptions.InvalidTokenError`). It names what went wrong, so the text\n# after it is the explanation, not a credential.\n_EXCEPTION_NAME = re.compile(r\"(?:[a-z_][a-z0-9_]*\\.)*[A-Z][A-Za-z0-9]*(?:Error|Exception|Warning)\")\n\n\ndef _is_exception_name(match: re.Match) -> bool:\n    return (\n        not match[\"nq\"]\n        and not match[\"scheme\"]\n        and match[\"sep\"].strip() == \":\"\n        and _EXCEPTION_NAME.fullmatch(match[\"name\"]) is not None\n    )\n```\n\nand in `_redact_pair`:\n\n```python\n    if _is_credential_name(match[\"name\"]) and not _is_exception_name(match):\n```\n\nThat leaves `_is_credential_name` unchanged. I ran this against about 130 messages, including real exceptions from PyJWT, `cryptography`, httpx, aiohttp, websockets, openai, anthropic, botocore and google-genai, each formatted the ways services build error text. It keeps every detail this PR keeps (including `jwt.exceptions.ExpiredSignatureError: Signature has expired` and `NoCredentialsError: Unable to locate credentials`), and every row in the table above stays masked. The existing tests in `tests/test_redaction.py` pass unchanged.\n\nA few more things:\n\n- **Tests:** please add the rows above as \"still masks\" cases. The current test only covers a credential in a separate pair after the exception's value, so the suite passes while these leak. A module-qualified name (`jwt.exceptions.InvalidTokenError: bad`) is worth adding to the \"keeps\" cases too.\n- **Comments:** the comment on `_EXCEPTION_WORDS` and the one inside `_is_credential_name` say the same thing. One comment, on the regex, is enough.\n- **Docstring:** the module docstring lists what gets masked, so its first bullet should mention that an exception class name (`KeyError: ...`) isn't treated as a credential name.\n- **Changelog:** with the narrower rule, something like: \"Fixed `redact_secrets()` (and so `ErrorFrame`) masking the detail after an exception class name that contains a credential word, such as `KeyError: 'audio_content'` or `InvalidTokenError: signature has expired`.\"\n\nTwo cases stay as they are, and that's intended:\n- **An exception whose message is itself an opaque secret is kept**, for example `KeyError: 'opaque-token'`. From the name alone it can't be told apart from `KeyError: 'audio_content'`. Secrets in a recognizable format (`sk-…`, JWTs, AWS keys, PEM blocks) are still masked anywhere in the text.\n- **Exception classes that don't end in `Error`, `Exception` or `Warning`** (`cryptography`'s `InvalidToken`, `InvalidSignature`) still lose their detail. Exempting CamelCase names in general would unmask AWS's `SecretAccessKey`/`SessionToken` dict keys.\n\nSeparately, `ValueError: Authorization: Bearer abc123` leaks on `main` today: the first pair's value takes in `Authorization:`, so the token after it is never checked. That's outside this PR's scope, and we'll track it in its own issue.\n"
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-21T15:32:45Z",
+   "body": "LGTM! Thanks for the improvement and quick comment resolution 🙇 "
+  }
+ ],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-10-21T04:37:39Z",
+   "body": "## [Codecov](https://app.codecov.io/gh/pipecat-ai/pipecat/pull/6283?dropdown=coverage&src=pr&el=h1&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=pipecat-ai) Report\n:white_check_mark: All modified and coverable lines are covered by tests.\n\n| [Files with missing lines](https://app.codecov.io/gh/pipecat-ai/pipecat/pull/6283?dropdown=coverage&src=pr&el=tree&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=pipecat-ai) | Coverage Δ | |\n|---|---|---|\n| [src/pipecat/utils/security/redaction.py](https://app.codecov.io/gh/pipecat-ai/pipecat/pull/6283?src=pr&el=tree&filepath=src%2Fpipecat%2Futils%2Fsecurity%2Fredaction.py&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=pipecat-ai#diff-c3JjL3BpcGVjYXQvdXRpbHMvc2VjdXJpdHkvcmVkYWN0aW9uLnB5) | `100.00% <100.00%> (ø)` | |\n<details><summary> :rocket: New features to boost your workflow: </summary>\n\n- :snowflake: [Test Analytics](https://docs.codecov.com/docs/test-analytics): Detect flaky tests, report on failures, and find test suite problems.\n</details>"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-21T15:16:19Z",
+   "body": "Thanks, that's much tighter. Pushed a commit that takes your `_EXCEPTION_NAME` and `_is_exception_name` as written and drops the last-word rule from `_is_credential_name` (and the separate word list). `_redact_pair` now reads `if _is_credential_name(match[\"name\"]) and not _is_exception_name(match):`.\n\nTests: the \"still masks\" cases from your table (`AuthError: Bearer abc123`, `TokenError: Basic ...`, `credentials_error`, `secret_warning`, `X-Auth-Error`, the quoted dict and JSON forms, `TokenError=abc`) and the module-qualified `jwt.exceptions.InvalidTokenError: bad` that stays readable, next to the existing keep cases. `tests/test_redaction.py` passes. The module docstring mentions the exception-name case in its first bullet, there is one comment (on the regex), and the changelog uses your wording.\n\nThe cases you listed as out of scope (`ValueError: Authorization: Bearer abc123`, `KeyError: 'opaque-token'`, `InvalidToken`/`InvalidSignature` losing detail) are untouched.\n"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-10-21T15:18:15Z",
+   "body": "@pcbeingused333 this looks good. Thanks for the quick fix.\r\n\r\nCan you rebase to resolve the conflicts with `main`? Once that's done, this is ready to go."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-21T15:29:28Z",
+   "body": "Rebased on main. The conflicts were with the pair-depth limit: `_redact_pair` keeps its `depth` argument with the exception-name check added, and both sets of tests are kept. `tests/test_redaction.py` passes and ruff is clean."
+  }
+ ]
+}

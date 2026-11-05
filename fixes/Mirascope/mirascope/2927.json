@@ -1,0 +1,41 @@
+{
+ "repo": "Mirascope/mirascope",
+ "number": 2927,
+ "url": "https://github.com/Mirascope/mirascope/pull/2927",
+ "title": "fix(llm): map Anthropic refusal and context window stop reasons to finish reasons",
+ "merged_at": "2026-10-21T15:47:49Z",
+ "files": [
+  {
+   "filename": "typescript/src/llm/providers/anthropic/_utils.test.ts",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -19,6 +19,7 @@ import {\n   TOOL_MODE_INSTRUCTIONS,\n } from \"@/llm/formatting\";\n import { user } from \"@/llm/messages\";\n+import { FinishReason } from \"@/llm/responses/finish-reason\";\n import { defineTool } from \"@/llm/tools\";\n \n import {\n@@ -1092,3 +1093,32 @@ describe(\"automatic cache control\", () => {\n     });\n   });\n });\n+\n+describe(\"decodeResponse finish reasons\", () => {\n+  const responseWithStopReason = (stopReason: string | null) =>\n+    ({\n+      id: \"msg_123\",\n+      type: \"message\",\n+      role: \"assistant\",\n+      model: \"claude-haiku-4-5\",\n+      content: [{ type: \"text\", text: \"Hello!\", citations: null }],\n+      stop_reason: stopReason,\n+      stop_sequence: null,\n+      usage: { input_tokens: 10, output_tokens: 5 },\n+    }) as unknown as AnthropicMessage;\n+\n+  it.each([\n+    [\"max_tokens\", FinishReason.MAX_TOKENS],\n+    [\"refusal\", FinishReason.REFUSAL],\n+    [\"model_context_window_exceeded\", FinishReason.CONTEXT_LENGTH_EXCEEDED],\n+    [\"end_turn\", null],\n+    [\"pause_turn\", null],\n+  ])(\"maps stop_reason %s\", (stopReason, expected) => {\n+    const { finishReason } = decodeResponse(\n+      responseWithStopReason(stopReason),\n+      \"anthropic/claude-haiku-4-5\",\n+    );\n+\n+    expect(finishReason).toBe(expected);\n+  });\n+});"
+  },
+  {
+   "filename": "typescript/src/llm/providers/anthropic/_utils.ts",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -843,14 +843,19 @@ function decodeContent(\n }\n \n function decodeStopReason(\n-  stopReason: AnthropicMessage[\"stop_reason\"],\n+  stopReason: AnthropicMessage[\"stop_reason\"] | \"model_context_window_exceeded\",\n ): FinishReason | null {\n   switch (stopReason) {\n     case \"max_tokens\":\n       return FinishReason.MAX_TOKENS;\n+    case \"model_context_window_exceeded\":\n+      return FinishReason.CONTEXT_LENGTH_EXCEEDED;\n+    case \"refusal\":\n+      return FinishReason.REFUSAL;\n     case \"end_turn\":\n     case \"stop_sequence\":\n     case \"tool_use\":\n+    case \"pause_turn\":\n       return null; // Normal completion\n     /* v8 ignore next 2 - defensive default case */\n     default:"
+  },
+  {
+   "filename": "typescript/src/llm/providers/anthropic/decode-stream.test.ts",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -12,6 +12,8 @@ import { describe, it, expect } from \"vitest\";\n \n import type { StreamResponseChunk } from \"@/llm/responses/chunks\";\n \n+import { FinishReason } from \"@/llm/responses/finish-reason\";\n+\n import {\n   createBetaDecodeState,\n   decodeBetaStreamEvent,\n@@ -184,3 +186,26 @@ describe.each(decoders)(\"$name stream usage decoding\", ({ decode }) => {\n     });\n   });\n });\n+\n+describe.each(decoders)(\"$name stream stop reason decoding\", ({ decode }) => {\n+  const finishReasons = (stopReason: string) =>\n+    decode([\n+      messageStart({ input_tokens: 10, output_tokens: 1 }),\n+      {\n+        type: \"message_delta\",\n+        delta: { stop_reason: stopReason, stop_sequence: null },\n+        usage: { output_tokens: 5 },\n+      },\n+    ])\n+      .filter((chunk) => chunk.type === \"finish_reason_chunk\")\n+      .map((chunk) => chunk.finishReason);\n+\n+  it.each([\n+    [\"max_tokens\", [FinishReason.MAX_TOKENS]],\n+    [\"refusal\", [FinishReason.REFUSAL]],\n+    [\"model_context_window_exceeded\", [FinishReason.CONTEXT_LENGTH_EXCEEDED]],\n+    [\"end_turn\", []],\n+  ])(\"maps stop_reason %s\", (stopReason, expected) => {\n+    expect(finishReasons(stopReason)).toEqual(expected);\n+  });\n+});"
+  },
+  {
+   "filename": "typescript/src/llm/providers/anthropic/decode-stream.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -320,12 +320,14 @@ function decodeStopReason(\n     | \"tool_use\"\n     | \"refusal\"\n     | \"pause_turn\"\n+    | \"model_context_window_exceeded\"\n     | null,\n ): FinishReason | null {\n   switch (stopReason) {\n     case \"max_tokens\":\n       return FinishReason.MAX_TOKENS;\n-    /* v8 ignore next 2 - refusal is rare and hard to trigger reliably */\n+    case \"model_context_window_exceeded\":\n+      return FinishReason.CONTEXT_LENGTH_EXCEEDED;\n     case \"refusal\":\n       return FinishReason.REFUSAL;\n     case \"end_turn\":"
+  }
+ ],
+ "test_files": [
+  "typescript/src/llm/providers/anthropic/_utils.test.ts",
+  "typescript/src/llm/providers/anthropic/decode-stream.test.ts"
+ ]
+}

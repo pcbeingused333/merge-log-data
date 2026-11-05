@@ -1,0 +1,40 @@
+{
+ "repo": "tidyverse/ellmer",
+ "number": 1199,
+ "url": "https://github.com/tidyverse/ellmer/pull/1199",
+ "title": "fix(google, openai): standardise finish reasons",
+ "merged_at": "2026-11-03T10:32:10Z",
+ "files": [
+  {
+   "filename": "NEWS.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -2,6 +2,7 @@\n \n * `chat_anthropic()` and the other Claude providers now default `max_tokens` to 32,000, rather than 4096 (#1150).\n * New `vignette(\"otel\")` describes how to turn on OpenTelemetry tracing and metrics, what ellmer records, and how ellmer's spans join your own traces (@schloerke, #1187).\n+* `chat_google_vertex()` and `chat_openai()` now report `finish_reason = \"tool_use\"` rather than `\"success\"` for turns that call a tool, matching the other providers. `chat_google_vertex()` also reports the `LANGUAGE`, `IMAGE_SAFETY`, `IMAGE_PROHIBITED_CONTENT`, and `IMAGE_RECITATION` finish reasons as `\"content_filter\"` (@pcbeingused333, #1199).\n * Default models have been updated for a number of providers (@thisisnic, #1176):\n   * `chat_anthropic()` now uses `claude-sonnet-5-5`.\n   * `chat_aws_bedrock()` now uses `us.anthropic.claude-sonnet-5-5`."
+  },
+  {
+   "filename": "R/provider-google.R",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 3,
+   "patch": "@@ -406,19 +406,31 @@ method(value_finish_reason, ProviderGoogleGenerateContent) <- function(\n   provider,\n   result\n ) {\n-  reason <- result$candidates[[1]]$finishReason\n+  candidate <- result$candidates[[1]]\n+  reason <- candidate$finishReason\n   if (is.null(reason)) {\n     return(NA_character_)\n   }\n   switch(\n     reason,\n-    STOP = \"success\",\n+    # The GenerateContent API finishes with STOP when it calls a tool\n+    STOP = if (\n+      any(map_lgl(candidate$content$parts, has_name, \"functionCall\"))\n+    ) {\n+      \"tool_use\"\n+    } else {\n+      \"success\"\n+    },\n     MAX_TOKENS = \"max_tokens\",\n     SAFETY = ,\n     RECITATION = ,\n+    LANGUAGE = ,\n     BLOCKLIST = ,\n     PROHIBITED_CONTENT = ,\n-    SPII = \"content_filter\",\n+    SPII = ,\n+    IMAGE_SAFETY = ,\n+    IMAGE_PROHIBITED_CONTENT = ,\n+    IMAGE_RECITATION = \"content_filter\",\n     I(reason)\n   )\n }"
+  },
+  {
+   "filename": "R/provider-openai.R",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -314,7 +314,11 @@ method(value_finish_reason, ProviderOpenAI) <- function(provider, result) {\n     return(NA_character_)\n   }\n   if (identical(status, \"completed\")) {\n-    return(\"success\")\n+    # The Responses API reports \"completed\" when the model calls a tool\n+    has_tool_call <- any(map_lgl(result$output, function(output) {\n+      identical(output$type, \"function_call\")\n+    }))\n+    return(if (has_tool_call) \"tool_use\" else \"success\")\n   }\n   if (!identical(status, \"incomplete\")) {\n     return(I(status))"
+  },
+  {
+   "filename": "tests/testthat/test-provider-openai.R",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 10,
+   "patch": "@@ -84,7 +84,7 @@ test_that(\"file lifecycle works\", {\n })\n \n test_that(\"file_upload() validates expires_in_h\", {\n-  provider <- chat_openai_test()$get_provider()\n+  provider <- chat_openai(credentials = \\() \"key\")$get_provider()\n   path <- test_path(\"apples.pdf\")\n   expect_snapshot(error = TRUE, {\n     file_upload(provider, path, expires_in_h = 0.5)\n@@ -100,7 +100,7 @@ test_that(\"can use documents\", {\n })\n \n test_that(\"documents and pdfs with a url are passed through as file_url\", {\n-  provider <- chat_openai_test()$get_provider()\n+  provider <- chat_openai(credentials = \\() \"key\")$get_provider()\n \n   # filename must be omitted because the API rejects file_url + filename\n   # together\n@@ -142,7 +142,7 @@ test_that(\"documents and pdfs with a url are passed through as file_url\", {\n })\n \n test_that(\"as_json() marks message items with type = 'message' (#1153)\", {\n-  provider <- chat_openai_test()$get_provider()\n+  provider <- chat_openai(credentials = \\() \"key\")$get_provider()\n \n   expect_equal(\n     as_json(provider, ContentText(\"Hi\"), role = \"user\")$type,\n@@ -159,7 +159,7 @@ test_that(\"as_json() marks message items with type = 'message' (#1153)\", {\n })\n \n test_that(\"can match prices for some common models\", {\n-  provider <- chat_openai_test()$get_provider()\n+  provider <- chat_openai(credentials = \\() \"key\")$get_provider()\n \n   expect_true(has_cost(provider@name, \"gpt-4.1\"))\n   expect_true(has_cost(provider@name, \"gpt-4.1-2025-04-14\"))\n@@ -235,7 +235,7 @@ test_that(\"can extract dummy response from malformed JSON\", {\n })\n \n test_that(\"value_turn handles NULL service_tier gracefully\", {\n-  provider <- chat_openai_test()$get_provider()\n+  provider <- chat_openai(credentials = \\() \"key\")$get_provider()\n \n   result <- list(\n     output = list(\n@@ -249,7 +249,7 @@ test_that(\"value_turn handles NULL service_tier gracefully\", {\n })\n \n test_that(\"value_turn() keeps OpenAI citation metadata without grounded_span\", {\n-  provider <- chat_openai_test()$get_provider()\n+  provider <- chat_openai(credentials = \\() \"key\")$get_provider()\n   annotation <- list(\n     type = \"url_citation\",\n     start_index = 4L,\n@@ -284,7 +284,7 @@ test_that(\"value_turn() keeps OpenAI citation metadata without grounded_span\", {\n })\n \n test_that(\"stream_content() emits OpenAI annotations and web activity\", {\n-  provider <- chat_openai_test()$get_provider()\n+  provider <- chat_openai(credentials = \\() \"key\")$get_provider()\n   annotation <- list(\n     type = \"url_citation\",\n     start_index = 0L,\n@@ -322,7 +322,7 @@ test_that(\"stream_content() emits OpenAI annotations and web activity\", {\n })\n \n test_that(\"stream_text() excludes OpenAI annotations\", {\n-  provider <- chat_openai_test()$get_provider()\n+  provider <- chat_openai(credentials = \\() \"key\")$get_provider()\n   annotation <- list(\n     type = \"url_citation\",\n     url = \"https://example.com\",\n@@ -348,7 +348,7 @@ test_that(\"stream_text() excludes OpenAI annotations\", {\n })\n \n test_that(\"value_turn() handles web_search_call action types\", {\n-  provider <- chat_openai_test()$get_provider()\n+  provider <- chat_openai(credentials = \\() \"key\")$get_provider()\n \n   make_result <- function(action) {\n     list(\n@@ -467,7 +467,7 @@ test_that(\"tools and structured output include `strict` only when strict\", {\n })\n \n test_that(\"as_json() serializes uploaded file references\", {\n-  provider <- chat_openai_test()$get_provider()\n+  provider <- chat_openai(credentials = \\() \"key\")$get_provider()\n   expect_equal(\n     as_json(provider, ContentUploaded(\"file-1\", \"application/pdf\")),\n     list("
+  }
+ ],
+ "test_files": [
+  "tests/testthat/test-provider-openai.R"
+ ]
+}

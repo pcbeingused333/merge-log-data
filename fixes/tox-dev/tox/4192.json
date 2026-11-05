@@ -1,0 +1,33 @@
+{
+ "repo": "tox-dev/tox",
+ "number": 4192,
+ "url": "https://github.com/tox-dev/tox/pull/4192",
+ "title": "🐛 fix(config): let TOML env refs take path, set and env list values",
+ "merged_at": "2026-10-28T01:25:33Z",
+ "files": [
+  {
+   "filename": "docs/changelog/4192.bugfix.rst",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+A TOML ``{ replace = \"ref\", env = ..., key = ... }`` now takes a path (``change_dir``, ``env_dir``), set (``extras``,\n+``labels``, ``dependency_groups``) or environment list (``depends``) value from another environment, instead of failing\n+validation of the referencing key."
+  },
+  {
+   "filename": "src/tox/config/loader/toml/_replace.py",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 9,
+   "patch": "@@ -20,7 +20,7 @@\n )\n from tox.config.loader.stringify import stringify\n from tox.config.set_env import SetEnvReference\n-from tox.config.types import Command\n+from tox.config.types import Command, EnvList\n from tox.tox_env.python.pip.req_file import PythonConstraints, PythonDeps\n from tox.util.typing_compat import override\n \n@@ -139,14 +139,7 @@ def _replace_if(self, value: dict[str, TomlTypes], depth: int, *, skip_str: bool\n     def _replace_ref(self, value: dict[str, TomlTypes], depth: int, *, skip_str: bool = False) -> TomlTypes:\n         if self.conf is not None and (env := value.get(\"env\")) and (key := value.get(\"key\")):\n             # the referenced value arrives converted for its own key, return it in the raw shape a TOML key parses\n-            result = self.conf.get_env(cast(\"str\", env))[cast(\"str\", key)]\n-            if isinstance(result, (PythonDeps, PythonConstraints)):\n-                return cast(\"TomlTypes\", result.lines())\n-            if isinstance(result, Command):\n-                return cast(\"TomlTypes\", result.raw_args)\n-            if isinstance(result, list) and all(isinstance(entry, Command) for entry in result):\n-                return cast(\"TomlTypes\", [entry.raw_args for entry in result])\n-            return cast(\"TomlTypes\", result)\n+            return self._to_raw(self.conf.get_env(cast(\"str\", env))[cast(\"str\", key)])\n         if of := value.get(\"of\"):\n             validated_of = validate(of, list[str])\n             if (path := self.loader.section.SEP.join(validated_of)) in self._refs:\n@@ -171,6 +164,22 @@ def _replace_ref(self, value: dict[str, TomlTypes], depth: int, *, skip_str: boo\n                 self._refs.pop()\n         return value\n \n+    @staticmethod\n+    def _to_raw(value: object) -> TomlTypes:\n+        if isinstance(value, (PythonDeps, PythonConstraints)):\n+            value = value.lines()\n+        elif isinstance(value, Command):\n+            value = value.raw_args\n+        elif isinstance(value, list) and all(isinstance(entry, Command) for entry in value):\n+            value = [entry.raw_args for entry in value]\n+        elif isinstance(value, Path):\n+            value = str(value)\n+        elif isinstance(value, EnvList):\n+            value = list(value.envs)\n+        elif isinstance(value, set):  # sort it like stringify does, so the order is stable\n+            value = sorted(value)\n+        return cast(\"TomlTypes\", value)\n+\n \n def _env_expression(name: str, default: str) -> str:\n     \"\"\"Write an ``env`` table as the ``{env:NAME:DEFAULT}`` string that resolves to the same value.\"\"\""
+  },
+  {
+   "filename": "tests/config/source/test_toml_pyproject.py",
+   "status": "modified",
+   "additions": 51,
+   "deletions": 1,
+   "patch": "@@ -9,7 +9,7 @@\n from python_discovery import normalize_isa\n \n from tox.config.loader.replacer import MatchError\n-from tox.config.types import Command\n+from tox.config.types import Command, EnvList\n \n if TYPE_CHECKING:\n     from pathlib import Path\n@@ -1226,6 +1226,56 @@ def test_config_in_toml_replace_ref_command_prefixes(\n     assert outcome.env_conf(\"b\")[key] == expected\n \n \n+def test_config_in_toml_replace_ref_path(tox_project: ToxProjectCreator) -> None:\n+    project: Final[ToxProject] = tox_project({\n+        \"pyproject.toml\": dedent(\"\"\"\n+        [tool.tox.env.a]\n+        package = \"skip\"\n+        change_dir = \"sub\"\n+\n+        [tool.tox.env.b]\n+        package = \"skip\"\n+        change_dir = { replace = \"ref\", env = \"a\", key = \"change_dir\" }\n+        \"\"\"),\n+    })\n+    outcome: Final[ToxRunOutcome] = project.run(\"c\", \"-e\", \"b\", \"-k\", \"change_dir\")\n+    outcome.assert_success()\n+    assert outcome.env_conf(\"b\")[\"change_dir\"] == project.path / \"sub\"\n+\n+\n+@pytest.mark.parametrize(\n+    (\"key\", \"expected\"),\n+    [\n+        pytest.param(\"extras\", {\"x\", \"y\"}, id=\"extras\"),\n+        pytest.param(\"labels\", {\"lint\"}, id=\"labels\"),\n+        pytest.param(\"depends\", EnvList([\"c\"]), id=\"depends\"),\n+        pytest.param(\"description\", \"demo\", id=\"description\"),\n+    ],\n+)\n+def test_config_in_toml_replace_ref_value(\n+    tox_project: ToxProjectCreator, key: str, expected: set[str] | EnvList | str\n+) -> None:\n+    outcome: Final[ToxRunOutcome] = tox_project({\n+        \"pyproject.toml\": dedent(f\"\"\"\n+        [tool.tox.env.a]\n+        package = \"skip\"\n+        extras = [\"y\", \"x\"]\n+        labels = [\"lint\"]\n+        depends = [\"c\"]\n+        description = \"demo\"\n+\n+        [tool.tox.env.b]\n+        package = \"skip\"\n+        {key} = {{ replace = \"ref\", env = \"a\", key = \"{key}\" }}\n+\n+        [tool.tox.env.c]\n+        package = \"skip\"\n+        \"\"\"),\n+    }).run(\"c\", \"-e\", \"b\", \"-k\", key)\n+    outcome.assert_success()\n+    assert outcome.env_conf(\"b\")[key] == expected\n+\n+\n def test_config_in_toml_replace_ref_constraints(tox_project: ToxProjectCreator) -> None:\n     project = tox_project({\n         \"pyproject.toml\": dedent(\"\"\""
+  }
+ ],
+ "test_files": [
+  "tests/config/source/test_toml_pyproject.py"
+ ]
+}

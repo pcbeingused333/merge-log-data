@@ -1,0 +1,50 @@
+{
+ "repo": "OpenCSGs/csghub-server",
+ "number": 1607,
+ "url": "https://github.com/OpenCSGs/csghub-server/pull/1607",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-22T04:49:11Z",
+   "body": ""
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-23T02:39:59Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "collaborator",
+   "path": "aigateway/handler/anthropic/to_responses_adapter.go",
+   "created_at": "2026-10-22T04:49:11Z",
+   "body": "`content_filter` loses its meaning on the Messages side.** Both the\n non-stream (`common.go:470`) and stream (`to_responses_adapter.go:548`) Messages ad\napters derive the stop reason from `status` only. `incomplete` (regardless of `incom\nplete_details.reason`) becomes `max_tokens`, so a Responses upstream that stopped fo\nr `content_filter` is reported to the Anthropic client as a token-limit truncation.\nNow that this PR makes the gateway's own Responses output carry the distinction, con\nsider reading `incomplete_details.reason` and mapping `content_filter` to a refusal-\nish stop reason (or explicitly documenting the collapse). Pre-existing mapping, but\nthis PR is the natural place to align the vocabulary.\n\n- ResponseIncompleteDetails.reason enum in the spec is: max_output_tokens, max_messages, content_filter, steered (the v3.8.1 SDK documents only the first and third; steered is the WebSocket steering stop and max_messages a newer limit).\n- Both Messages adapters read only status (anthropic/common.go:470, anthropic/to_responses_adapter.go:548), and responsesStatusToStopReason maps every incomplete → max_tokens."
+  }
+ ],
+ "comments": [
+  {
+   "role": "collaborator",
+   "created_at": "2026-10-22T04:29:41Z",
+   "body": " issue — the one untested change is the Messages adapter. case \"response.completed\", \"response.incomplete\" has no coverage: existing e2e tests send only response.completed (anthropic/e2e_test.go:460,934,1342), and common_test.go:376 covers only non-stream incomplete. Add an e2e case sending event: response.incomplete and assert stop_reason: max_tokens + usage."
+  },
+  {
+   "role": "collaborator",
+   "created_at": "2026-10-22T04:30:34Z",
+   "body": "note — truncated tool-call streams never get item-done events. finishToolCallItems() runs only for finish_reason == \"tool_calls\" (:202), yet completedResponse() still includes the partial item. Pre-existing, more visible now under incomplete."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-22T22:11:23Z",
+   "body": "Thanks for the review. Pushed two commits:\n\n- `test(aigateway): cover response.incomplete in the Messages adapter stream`: an e2e case that sends `response.incomplete` through the Responses to Messages stream adapter and asserts `stop_reason: max_tokens` and the usage. It fails without the `response.incomplete` case in `handleResponsesStreamEvent` (the stream ends with `end_turn` and zero usage).\n- `fix(aigateway): map a content_filter incomplete Responses reply to stop_reason refusal`: both Messages adapters now read `incomplete_details.reason`; `content_filter` becomes `refusal` and the recorder maps it back to the `content_filter` finish reason. Every other incomplete reason stays `max_tokens`. Tests cover the stream and non-stream paths. This is a separate commit, so it is easy to drop if you would rather keep the old collapse.\n\nOn the truncated tool-call streams: I left that as is. Sending `output_item.done` for a cut-off call would mark partially streamed arguments as `completed`, so it seems better decided separately.\n"
+  },
+  {
+   "role": "collaborator",
+   "created_at": "2026-10-23T02:39:46Z",
+   "body": "LGTM"
+  }
+ ]
+}

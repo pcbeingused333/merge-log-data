@@ -1,0 +1,26 @@
+{
+ "repo": "pydantic/logfire",
+ "number": 2646,
+ "url": "https://github.com/pydantic/logfire/pull/2646",
+ "title": "Record max_completion_tokens as the requested max tokens on OpenAI chat spans",
+ "merged_at": "2026-10-26T12:29:34Z",
+ "files": [
+  {
+   "filename": "logfire-sdk/logfire/_internal/integrations/llm_providers/openai.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -73,6 +73,8 @@ def _extract_request_parameters(json_data: dict[str, Any], span_data: dict[str,\n     \"\"\"Extract request parameters from json_data and add to span_data.\"\"\"\n     if (max_tokens := json_data.get('max_tokens')) is not None:\n         span_data[REQUEST_MAX_TOKENS] = max_tokens\n+    elif (max_completion_tokens := json_data.get('max_completion_tokens')) is not None:\n+        span_data[REQUEST_MAX_TOKENS] = max_completion_tokens\n     elif (max_output_tokens := json_data.get('max_output_tokens')) is not None:\n         span_data[REQUEST_MAX_TOKENS] = max_output_tokens\n "
+  },
+  {
+   "filename": "tests/otel_integrations/test_openai.py",
+   "status": "modified",
+   "additions": 37,
+   "deletions": 0,
+   "patch": "@@ -392,6 +392,24 @@ async def instrumented_async_client() -> AsyncIterator[openai.AsyncClient]:\n             yield openai_client\n \n \n+def test_sync_chat_completions_max_completion_tokens(\n+    instrumented_client: openai.Client, exporter: TestExporter\n+) -> None:\n+    \"\"\"Reasoning models take `max_completion_tokens`, which is recorded as the requested max tokens.\"\"\"\n+    response = instrumented_client.chat.completions.create(\n+        model='gpt-4',\n+        messages=[\n+            {'role': 'system', 'content': 'You are a helpful assistant.'},\n+            {'role': 'user', 'content': 'What is four plus five?'},\n+        ],\n+        max_completion_tokens=300,\n+    )\n+    assert response.choices[0].message.content == 'Nine'\n+\n+    [span] = exporter.exported_spans_as_dict(parse_json_attributes=True)\n+    assert span['attributes']['gen_ai.request.max_tokens'] == 300\n+\n+\n def test_sync_chat_completions(instrumented_client: openai.Client, exporter: TestExporter) -> None:\n     response = instrumented_client.chat.completions.create(\n         model='gpt-4',\n@@ -765,6 +783,25 @@ def test_extract_request_parameters_max_output_tokens() -> None:\n     assert span_data['gen_ai.request.max_tokens'] == 200\n \n \n+def test_extract_request_parameters_max_completion_tokens() -> None:\n+    \"\"\"Test that max_completion_tokens is extracted when max_tokens is absent.\n+\n+    Chat completions use max_completion_tokens for reasoning models, which reject max_tokens.\n+    \"\"\"\n+    from logfire._internal.integrations.llm_providers.openai import (\n+        _extract_request_parameters,  # pyright: ignore[reportPrivateUsage]\n+    )\n+\n+    span_data: dict[str, Any] = {}\n+    _extract_request_parameters({'max_completion_tokens': 300}, span_data)\n+    assert span_data['gen_ai.request.max_tokens'] == 300\n+\n+    # max_tokens still wins when both are given.\n+    span_data = {}\n+    _extract_request_parameters({'max_tokens': 100, 'max_completion_tokens': 300}, span_data)\n+    assert span_data['gen_ai.request.max_tokens'] == 100\n+\n+\n def test_normalize_versions_validation() -> None:\n     from logfire._internal.integrations.llm_providers.semconv import normalize_versions\n "
+  }
+ ],
+ "test_files": [
+  "tests/otel_integrations/test_openai.py"
+ ]
+}

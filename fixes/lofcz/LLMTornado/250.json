@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 250,
+ "url": "https://github.com/lofcz/LLMTornado/pull/250",
+ "title": "Batch: report an OpenAI line with an HTTP error status as errored",
+ "merged_at": "2026-10-21T08:20:12Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/BatchResultHttpErrorTests.cs",
+   "status": "added",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,35 @@\n+using LlmTornado.Batch;\n+using LlmTornado.Code;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class BatchResultHttpErrorTests\n+{\n+    [Test]\n+    public void OpenAi_LineWithHttpErrorStatus_IsAnErroredResult()\n+    {\n+        // OpenAI writes a request that reached the model but was rejected to the output file with its HTTP status\n+        const string line = \"\"\"\n+            {\"id\":\"batch_req_1\",\"custom_id\":\"req-1\",\"response\":{\"status_code\":400,\"request_id\":\"r1\",\"body\":{\"error\":{\"message\":\"Invalid value\",\"type\":\"invalid_request_error\",\"code\":\"invalid_value\"}}},\"error\":null}\n+            \"\"\";\n+\n+        BatchResult? result = BatchResult.Deserialize(LLmProviders.OpenAi, line);\n+\n+        Assert.That(result, Is.Not.Null);\n+        Assert.That(result!.StatusCode, Is.EqualTo(400));\n+        Assert.That(result.ResultType, Is.EqualTo(BatchResultType.Errored));\n+    }\n+\n+    [Test]\n+    public void OpenAi_LineWithOkStatus_IsSucceeded()\n+    {\n+        const string line = \"\"\"\n+            {\"id\":\"batch_req_1\",\"custom_id\":\"req-1\",\"response\":{\"status_code\":200,\"request_id\":\"r1\",\"body\":{\"id\":\"chatcmpl-1\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}},\"error\":null}\n+            \"\"\";\n+\n+        BatchResult? result = BatchResult.Deserialize(LLmProviders.OpenAi, line);\n+\n+        Assert.That(result!.ResultType, Is.EqualTo(BatchResultType.Succeeded));\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Batch/BatchResult.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -49,7 +49,7 @@ public class BatchResult\n     [JsonIgnore]\n     public BatchResultType ResultType => ResultInternal?.Type ?? \n         (ResponseInternal?.StatusCode is >= 200 and < 300 ? BatchResultType.Succeeded : \n-         Error is not null ? BatchResultType.Errored : BatchResultType.Unknown);\n+         Error is not null || ResponseInternal?.StatusCode is >= 300 ? BatchResultType.Errored : BatchResultType.Unknown);\n     \n     /// <summary>\n     /// The chat completion result if the request succeeded."
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/BatchResultHttpErrorTests.cs"
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "posit-dev/chatlas",
+ "number": 479,
+ "url": "https://github.com/posit-dev/chatlas/pull/479",
+ "title": "fix(ollama): allow ChatOllama() without a model so list_models() works",
+ "merged_at": "2026-10-21T15:18:35Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0\n \n ### Bug fixes\n \n+* `ChatOllama()` can now be created without a `model`, so `ChatOllama().list_models()` works. Sending a message without a model still raises an error that lists the available models. (#166)\n * `ChatGoogle()` now reports `finish_reason == \"content_filter\"` for Gemini's `IMAGE_SAFETY`, `IMAGE_PROHIBITED_CONTENT`, `IMAGE_RECITATION` and `LANGUAGE` finish reasons, instead of passing the raw Gemini string through, and reports `\"tool_use\"` (rather than `\"success\"`) when a turn ends with a tool request, as `ChatOpenAI()` does. (#473)\n * The error raised for a tool request with invalid JSON arguments from `ChatOpenAI()` and `ChatOpenAICompletions()` (and the providers built on them) now shows the offending arguments, instead of the literal text `{args}`.\n * `content_image_url()` with a `data:` URL no longer silently drops the `detail` argument: the setting is now carried by inline image content and forwarded to OpenAI's Responses and Chat Completions APIs (regular image URLs already forwarded it). Other providers continue to ignore `detail`. (#467)"
+  },
+  {
+   "filename": "chatlas/_provider_ollama.py",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 5,
+   "patch": "@@ -67,8 +67,9 @@ def ChatOllama(\n     Parameters\n     ----------\n     model\n-        The model to use for the chat. If `None`, a list of available\n-        models will be printed.\n+        The model to use for the chat. If `None`, the returned chat can list the\n+        available models (with `.list_models()`), but sending a message raises an\n+        error that names them.\n     system_prompt\n         A system prompt to set the behavior of the assistant.\n     base_url\n@@ -106,9 +107,8 @@ def ChatOllama(\n     model_ids = [m[\"id\"] for m in ollama_model_info(base_url)]\n \n     if model is None:\n-        raise ValueError(\n-            f\"Must specify model. Available models: {', '.join(model_ids)}\"\n-        )\n+        # Allowed so that `ChatOllama().list_models()` works; chatting requires a model.\n+        model = \"\"\n     elif re.sub(\":latest$\", \"\", model) not in model_ids:\n         if is_local:\n             raise ValueError(\n@@ -156,6 +156,12 @@ def __init__(self, *, api_key, model, base_url, seed, name, kwargs):\n     def list_models(self):\n         return ollama_model_info(self.base_url)\n \n+    def _chat_perform_args(self, *args, **kwargs):\n+        if not self.model:\n+            model_ids = \", \".join(m[\"id\"] for m in ollama_model_info(self.base_url))\n+            raise ValueError(f\"Must specify model. Available models: {model_ids}\")\n+        return super()._chat_perform_args(*args, **kwargs)\n+\n \n def ollama_model_info(base_url: str) -> list[ModelInfo]:\n     response = urllib.request.urlopen(url=f\"{base_url}/api/tags\")"
+  },
+  {
+   "filename": "tests/test_provider_ollama.py",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 2,
+   "patch": "@@ -63,16 +63,29 @@ def test_ollama_remote_connection_failure(monkeypatch):\n         ChatOllama(model=\"llama3.2\", base_url=\"http://remote-host.example.com:11434\")\n \n \n-def test_ollama_model_none_lists_available_models(monkeypatch):\n+def test_ollama_model_none_can_list_models(monkeypatch):\n     monkeypatch.setattr(\"chatlas._provider_ollama.has_ollama\", lambda base_url: True)\n     monkeypatch.setattr(\n         \"chatlas._provider_ollama.ollama_model_info\", lambda base_url: _MODELS\n     )\n \n+    chat = ChatOllama(base_url=\"http://localhost:11434\")\n+\n+    assert [m[\"id\"] for m in chat.list_models()] == [\"qwen3:4b\", \"llama3.2\"]\n+\n+\n+def test_ollama_model_none_errors_when_chatting(monkeypatch):\n+    monkeypatch.setattr(\"chatlas._provider_ollama.has_ollama\", lambda base_url: True)\n+    monkeypatch.setattr(\n+        \"chatlas._provider_ollama.ollama_model_info\", lambda base_url: _MODELS\n+    )\n+\n+    chat = ChatOllama(model=None, base_url=\"http://localhost:11434\")\n+\n     with pytest.raises(\n         ValueError, match=\"Must specify model. Available models: qwen3:4b, llama3.2\"\n     ):\n-        ChatOllama(model=None, base_url=\"http://localhost:11434\")\n+        chat.chat(\"Hello\")\n \n \n def test_ollama_unavailable_model_local_guidance(monkeypatch):"
+  }
+ ],
+ "test_files": [
+  "tests/test_provider_ollama.py"
+ ]
+}

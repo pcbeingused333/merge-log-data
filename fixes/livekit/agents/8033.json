@@ -1,0 +1,26 @@
+{
+ "repo": "livekit/agents",
+ "number": 8033,
+ "url": "https://github.com/livekit/agents/pull/8033",
+ "title": "fix(openai): report reasoning tokens for Responses API usage",
+ "merged_at": "2026-10-22T08:42:54Z",
+ "files": [
+  {
+   "filename": "livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/responses/llm.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -726,6 +726,9 @@ def _handle_response_completed(self, event: ResponseCompletedEvent) -> llm.ChatC\n                     cache_creation_tokens=usage.input_tokens_details.cache_write_tokens\n                     if usage.input_tokens_details\n                     else 0,\n+                    reasoning_tokens=usage.output_tokens_details.reasoning_tokens\n+                    if usage.output_tokens_details\n+                    else 0,\n                     total_tokens=usage.total_tokens,\n                     service_tier=getattr(event.response, \"service_tier\", None),\n                 ),"
+  },
+  {
+   "filename": "tests/test_plugin_openai_responses.py",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -614,6 +614,28 @@ async def test_completed_response_reports_cache_write_tokens() -> None:\n     assert usage.total_tokens == 2636\n \n \n+async def test_completed_response_reports_reasoning_tokens() -> None:\n+    \"\"\"`response.usage.output_tokens_details.reasoning_tokens` is the Responses API's\n+    counterpart to `completion_tokens_details.reasoning_tokens`. It is already part of\n+    `output_tokens`, so it must not move `completion_tokens` or `total_tokens`.\"\"\"\n+    usage = await _usage_from_frames(\n+        [\n+            _RESPONSE_CREATED,\n+            _response_completed_with_usage(\n+                input_tokens=100,\n+                output_tokens=340,\n+                total_tokens=440,\n+                input_tokens_details={\"cached_tokens\": 0, \"cache_write_tokens\": 0},\n+                output_tokens_details={\"reasoning_tokens\": 300},\n+            ),\n+        ]\n+    )\n+\n+    assert usage.reasoning_tokens == 300\n+    assert usage.completion_tokens == 340\n+    assert usage.total_tokens == 440\n+\n+\n async def test_completed_response_without_cache_write_reports_zero() -> None:\n     usage = await _usage_from_frames(\n         ["
+  }
+ ],
+ "test_files": [
+  "tests/test_plugin_openai_responses.py"
+ ]
+}

@@ -1,0 +1,87 @@
+{
+ "repo": "PostHog/posthog-python",
+ "number": 1097,
+ "url": "https://github.com/PostHog/posthog-python/pull/1097",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-22T10:18:40Z",
+   "body": "Automated advisory code review."
+  },
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-23T09:00:34Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-10-23T10:22:00Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-28T08:40:15Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "member",
+   "path": "references/public_api_snapshot.txt",
+   "created_at": "2026-10-22T10:18:40Z",
+   "body": "blocking: Regenerate the constructor entry as well as the attribute — The new attribute is recorded here, but the generated `ModelUsage(...)` constructor entry still omits `web_search_count: Optional[int] = None`. Adding this dataclass field changes that signature too, leaving the snapshot stale and failing the public API CI check. Please regenerate the complete snapshot with `make public_api_snapshot`. Reproduction: reproduced — `uv run --no-sync make public_api_check` fails on the reviewed head, passes at the exact merge base, and passes after temporary snapshot-only regeneration in a disposable validation worktree."
+  },
+  {
+   "role": "member",
+   "path": "references/public_api_snapshot.txt",
+   "created_at": "2026-10-23T09:00:34Z",
+   "body": "Fixed in a15061e614e68c04e79be995dca458e352602788. Reproduced with `uv run --no-sync make public_api_check`, which failed on the missing `ModelUsage` constructor parameter before regeneration and passes afterward. Regenerated with `uv run --no-sync make public_api_snapshot`; the only diff adds `web_search_count: Optional[int] = None` to the constructor entry. Snapshot-tool tests (`uv run --no-sync python .github/scripts/test_check_public_api.py`) and `git diff --check` also pass."
+  },
+  {
+   "role": "contributor",
+   "path": "posthog/ai/langchain/callbacks.py",
+   "created_at": "2026-10-23T09:43:23Z",
+   "body": "This emits `$ai_web_search_count` even when it's 0, but the other Python wrappers only emit it when it's > 0 (`posthog/ai/utils.py`), so a LangChain Anthropic event would differ from a direct Anthropic wrapper event for the same call. Can we gate on `> 0` here too?"
+  },
+  {
+   "role": "contributor",
+   "path": "posthog/ai/langchain/callbacks.py",
+   "created_at": "2026-10-23T09:43:23Z",
+   "body": "This never fires on real `ChatAnthropic` output. langchain-anthropic always sets `AIMessage.usage_metadata`, so the generations loop in `_parse_usage` runs after the `llm_output[\"usage\"]` parse and overwrites it with usage that has no `server_tool_use`, resetting `web_search_count` to `None`. Same `llm_output` gives `2` without `usage_metadata` on the message and `None` with it. Could `_parse_usage` read `server_tool_use` from `llm_output[\"usage\"]` separately and merge it into whichever `ModelUsage` wins for the tokens?"
+  },
+  {
+   "role": "contributor",
+   "path": "posthog/test/ai/langchain/test_callbacks.py",
+   "created_at": "2026-10-23T09:43:23Z",
+   "body": "Could this follow the rest of the file? The `mock_client` fixture and the module-level imports already cover `CallbackHandler`, `uuid`, `AIMessage` and `MagicMock`, and the three tests could be one `@pytest.mark.parametrize` test like `test_stop_reason_resolution` just above."
+  },
+  {
+   "role": "contributor",
+   "path": "posthog/test/ai/langchain/test_callbacks.py",
+   "created_at": "2026-10-23T09:43:23Z",
+   "body": "`ChatAnthropic` always sets `usage_metadata` on the message, and this fixture leaves it out, which is why the tests pass while the feature does nothing on real output. With `usage_metadata={\"input_tokens\": 10, \"output_tokens\": 5, \"total_tokens\": 15}` they cover the real path, and should fail until the override above is fixed."
+  }
+ ],
+ "comments": [
+  {
+   "role": "member",
+   "created_at": "2026-10-22T10:20:57Z",
+   "body": "@PostHog/team-ai-observability do we need any backend/frontend change for this?"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-10-23T10:23:06Z",
+   "body": "> @PostHog/team-ai-observability do we need any backend/frontend change for this?\r\n\r\nNo, but there were some issues with the implementation that I surfaced on my review"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-24T00:08:58Z",
+   "body": "Thanks, all four points addressed in the latest commit:\n\n- `$ai_web_search_count` is now emitted only when the count is greater than 0, like `posthog/ai/utils.py`.\n- `server_tool_use` is read from `llm_output[\"usage\"]` separately in `_parse_usage` and merged into whichever `ModelUsage` wins for tokens, so it is no longer lost when `usage_metadata` is set on the message.\n- The three tests are now one parametrized `test_web_search_count` using the module-level imports and the `mock_client` fixture.\n- The fixture sets `usage_metadata={\"input_tokens\": 10, \"output_tokens\": 5, \"total_tokens\": 15}`; with the `callbacks.py` change reverted the two-searches case fails, and with it the test passes.\n"
+  }
+ ]
+}

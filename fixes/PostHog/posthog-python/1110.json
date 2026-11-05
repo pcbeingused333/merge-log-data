@@ -1,0 +1,40 @@
+{
+ "repo": "PostHog/posthog-python",
+ "number": 1110,
+ "url": "https://github.com/PostHog/posthog-python/pull/1110",
+ "title": "fix(ai): record the HTTP status of google-genai errors",
+ "merged_at": "2026-10-23T12:42:35Z",
+ "files": [
+  {
+   "filename": ".sampo/changesets/gemini-error-http-status.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+pypi/posthog: patch\n+---\n+\n+Failed Gemini calls are now captured with the HTTP status of the error as `$ai_http_status` (for example 429 or 503) instead of 0. google-genai errors carry the status as `code` rather than `status_code`, which the OpenAI and Anthropic wrappers already read."
+  },
+  {
+   "filename": "posthog/ai/gemini/_shared.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 3,
+   "patch": "@@ -16,6 +16,7 @@\n     _capture_ai_event,\n     capture_streaming_event,\n     finalize_ai_content,\n+    _get_http_status,\n     merge_system_prompt,\n     with_privacy_mode,\n )\n@@ -250,9 +251,7 @@ def _capture_embedding_outcome(\n                 privacy_mode,\n                 finalize_ai_content(contents, self._ph_client),\n             ),\n-            \"$ai_http_status\": (\n-                getattr(error, \"status_code\", 0) if error is not None else 200\n-            ),\n+            \"$ai_http_status\": (_get_http_status(error) if error is not None else 200),\n             # Omitted when the provider never reported a count: absent means\n             # unknown, 0 is a report of nothing.\n             **({\"$ai_input_tokens\": input_tokens} if input_tokens is not None else {}),"
+  },
+  {
+   "filename": "posthog/ai/utils.py",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 6,
+   "patch": "@@ -453,6 +453,21 @@ def merge_system_prompt(\n     return []\n \n \n+def _get_http_status(exc: BaseException) -> int:\n+    \"\"\"HTTP status of an SDK exception, 0 when it has none.\n+\n+    OpenAI and Anthropic errors carry `status_code`; google-genai's `APIError`\n+    carries the status as `code`.\n+    \"\"\"\n+    status = getattr(exc, \"status_code\", None)\n+    if isinstance(status, int):\n+        return status\n+    code = getattr(exc, \"code\", None)\n+    if isinstance(code, int) and not isinstance(code, bool) and 100 <= code <= 599:\n+        return code\n+    return 0\n+\n+\n def call_llm_and_track_usage(\n     posthog_distinct_id: Optional[str],\n     ph_client: PostHogClient,\n@@ -484,9 +499,7 @@ def call_llm_and_track_usage(\n             response = call_method(**kwargs)\n         except Exception as exc:\n             error = exc\n-            http_status = getattr(\n-                exc, \"status_code\", 0\n-            )  # default to 0 becuase its likely an SDK error\n+            http_status = _get_http_status(exc)  # 0 because its likely an SDK error\n             error_params = {\n                 \"$ai_is_error\": True,\n                 \"$ai_error\": exc.__str__(),\n@@ -658,9 +671,7 @@ async def call_llm_and_track_usage_async(\n             raise\n         except Exception as exc:\n             error = exc\n-            http_status = getattr(\n-                exc, \"status_code\", 0\n-            )  # default to 0 because its likely an SDK error\n+            http_status = _get_http_status(exc)  # 0 because its likely an SDK error\n             error_params = {\n                 \"$ai_is_error\": True,\n                 \"$ai_error\": exc.__str__(),"
+  },
+  {
+   "filename": "posthog/test/ai/test_http_status.py",
+   "status": "added",
+   "additions": 124,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,124 @@\n+\"\"\"Failed provider calls are recorded with the HTTP status of the SDK error.\"\"\"\n+\n+from unittest.mock import patch\n+\n+import pytest\n+\n+from posthog.ai.utils import (\n+    call_llm_and_track_usage,\n+    call_llm_and_track_usage_async,\n+    _get_http_status,\n+)\n+\n+\n+@pytest.fixture\n+def mock_client():\n+    with patch(\"posthog.client.Client\") as mock_client:\n+        mock_client.privacy_mode = False\n+        yield mock_client\n+\n+\n+class _WithStatusCode(Exception):\n+    status_code = 503\n+\n+\n+class _WithCode(Exception):\n+    def __init__(self, code):\n+        super().__init__(\"boom\")\n+        self.code = code\n+\n+\n+def test_get_http_status():\n+    assert _get_http_status(_WithStatusCode()) == 503\n+    assert _get_http_status(_WithCode(429)) == 429\n+    # A `code` that is not an HTTP status is not one\n+    assert _get_http_status(_WithCode(2)) == 0\n+    assert _get_http_status(_WithCode(\"RESOURCE_EXHAUSTED\")) == 0\n+    assert _get_http_status(RuntimeError(\"no status\")) == 0\n+\n+\n+def _genai_errors():\n+    errors = pytest.importorskip(\"google.genai.errors\")\n+    return errors\n+\n+\n+def _gemini_error(errors, cls, code):\n+    return cls(code, {\"error\": {\"code\": code, \"message\": \"nope\", \"status\": \"ERROR\"}})\n+\n+\n+@pytest.mark.parametrize(\n+    (\"cls_name\", \"code\"), [(\"ClientError\", 429), (\"ServerError\", 503)]\n+)\n+def test_gemini_api_error_status_is_recorded(mock_client, cls_name, code):\n+    errors = _genai_errors()\n+    err = _gemini_error(errors, getattr(errors, cls_name), code)\n+\n+    def boom(**kwargs):\n+        raise err\n+\n+    with pytest.raises(getattr(errors, cls_name)):\n+        call_llm_and_track_usage(\n+            \"user\",\n+            mock_client,\n+            \"gemini\",\n+            None,\n+            None,\n+            False,\n+            None,\n+            \"https://generativelanguage.googleapis.com\",\n+            boom,\n+            model=\"gemini-3.8-flash\",\n+            contents=\"hi\",\n+        )\n+\n+    props = mock_client.capture.call_args[1][\"properties\"]\n+    assert props[\"$ai_is_error\"] is True\n+    assert props[\"$ai_http_status\"] == code\n+\n+\n+@pytest.mark.asyncio\n+async def test_gemini_api_error_status_is_recorded_async(mock_client):\n+    errors = _genai_errors()\n+    err = _gemini_error(errors, errors.ClientError, 429)\n+\n+    async def boom(**kwargs):\n+        raise err\n+\n+    with pytest.raises(errors.ClientError):\n+        await call_llm_and_track_usage_async(\n+            \"user\",\n+            mock_client,\n+            \"gemini\",\n+            None,\n+            None,\n+            False,\n+            None,\n+            \"https://generativelanguage.googleapis.com\",\n+            boom,\n+            model=\"gemini-3.8-flash\",\n+            contents=\"hi\",\n+        )\n+\n+    props = mock_client.capture.call_args[1][\"properties\"]\n+    assert props[\"$ai_http_status\"] == 429\n+\n+\n+def test_status_code_errors_keep_their_status(mock_client):\n+    def boom(**kwargs):\n+        raise _WithStatusCode(\"overloaded\")\n+\n+    with pytest.raises(_WithStatusCode):\n+        call_llm_and_track_usage(\n+            \"user\",\n+            mock_client,\n+            \"openai\",\n+            None,\n+            None,\n+            False,\n+            None,\n+            \"https://x\",\n+            boom,\n+            model=\"m\",\n+        )\n+\n+    assert mock_client.capture.call_args[1][\"properties\"][\"$ai_http_status\"] == 503"
+  }
+ ],
+ "test_files": [
+  "posthog/test/ai/test_http_status.py"
+ ]
+}

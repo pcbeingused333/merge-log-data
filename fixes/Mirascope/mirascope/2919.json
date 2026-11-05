@@ -1,0 +1,90 @@
+{
+ "repo": "Mirascope/mirascope",
+ "number": 2919,
+ "url": "https://github.com/Mirascope/mirascope/pull/2919",
+ "title": "fix(llm): ignore empty content strings in the OpenAI-compatible stream decoder",
+ "merged_at": "2026-10-21T15:35:29Z",
+ "files": [
+  {
+   "filename": "typescript/src/llm/providers/openai/completions/decode-stream.test.ts",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -150,3 +150,39 @@ describe(\"OpenAI-compatible streamed tool calls\", () => {\n     ]);\n   });\n });\n+\n+describe(\"OpenAI-compatible streamed empty content\", () => {\n+  function contentChunk(delta: Record<string, unknown>) {\n+    return {\n+      id: \"chatcmpl-test\",\n+      created: 1,\n+      model: \"gpt-test\",\n+      object: \"chat.completion.chunk\",\n+      choices: [{ index: 0, delta, finish_reason: null }],\n+    } as unknown as ChatCompletionChunk;\n+  }\n+\n+  it(\"does not open a text block for an empty content string\", () => {\n+    const state = createDecodeState();\n+    const chunks = [\n+      contentChunk({ role: \"assistant\", content: \"\" }),\n+      contentChunk({ tool_calls: [call(\"call_1\", \"{}\", \"get_weather\", 0)] }),\n+    ].flatMap((event) => decodeStreamEvent(event, state));\n+\n+    expect(chunks.filter((part) => part.type.startsWith(\"text_\"))).toEqual([]);\n+    expect(chunks.map((part) => part.type)).toContain(\"tool_call_start_chunk\");\n+  });\n+\n+  it(\"still streams text that follows an empty content string\", () => {\n+    const state = createDecodeState();\n+    const chunks = [\n+      contentChunk({ content: \"\" }),\n+      contentChunk({ content: \"Hi\" }),\n+    ].flatMap((event) => decodeStreamEvent(event, state));\n+\n+    expect(chunks.filter((part) => part.type.startsWith(\"text_\"))).toEqual([\n+      { type: \"text_start_chunk\", contentType: \"text\" },\n+      { type: \"text_chunk\", contentType: \"text\", delta: \"Hi\" },\n+    ]);\n+  });\n+});"
+  },
+  {
+   "filename": "typescript/src/llm/providers/openai/completions/decode-stream.ts",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 3,
+   "patch": "@@ -94,14 +94,15 @@ export function decodeStreamEvent(\n \n   const delta = choice.delta;\n \n-  // Handle text content (including refusal as text)\n-  const content = delta?.content ?? delta?.refusal;\n+  // Handle text content (including refusal as text). Some servers open the\n+  // stream with an empty content string, which must not start a text block.\n+  const content = delta?.content || delta?.refusal;\n   /* v8 ignore start - refusal is a rare edge case */\n   if (delta?.refusal) {\n     state.refusalEncountered = true;\n   }\n   /* v8 ignore stop */\n-  if (content !== undefined && content !== null) {\n+  if (content) {\n     if (state.currentContentType === null) {\n       chunks.push(textStart());\n       state.currentContentType = \"text\";"
+  },
+  {
+   "filename": "typescript/tests/e2e/output/__snapshots__/context-call.test.ts.snap",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -336,7 +336,7 @@ exports[`context call output > [openai:completions] streams response with contex\n       },\n     ],\n     \"modelId\": \"openai/gpt-5-mini:completions\",\n-    \"nChunks\": 5,\n+    \"nChunks\": 4,\n     \"providerId\": \"openai\",\n     \"providerModelName\": \"gpt-5-mini:completions\",\n     \"tools\": [],"
+  },
+  {
+   "filename": "typescript/tests/e2e/output/__snapshots__/context-prompt.test.ts.snap",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -335,7 +335,7 @@ exports[`context prompt output > [openai:completions] streams model with context\n       },\n     ],\n     \"modelId\": \"openai/gpt-5-mini:completions\",\n-    \"nChunks\": 4,\n+    \"nChunks\": 3,\n     \"providerId\": \"openai\",\n     \"providerModelName\": \"gpt-5-mini:completions\",\n     \"tools\": [],"
+  },
+  {
+   "filename": "typescript/tests/e2e/output/__snapshots__/max-tokens.test.ts.snap",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 7,
+   "patch": "@@ -342,12 +342,7 @@ exports[`max tokens > [openai:completions] returns MAX_TOKENS finish reason for\n         \"role\": \"user\",\n       },\n       {\n-        \"content\": [\n-          {\n-            \"text\": \"\",\n-            \"type\": \"text\",\n-          },\n-        ],\n+        \"content\": [],\n         \"modelId\": \"openai/gpt-5-mini:completions\",\n         \"name\": null,\n         \"providerId\": \"openai\",\n@@ -381,7 +376,7 @@ exports[`max tokens > [openai:completions] returns MAX_TOKENS finish reason for\n       },\n     ],\n     \"modelId\": \"openai/gpt-5-mini:completions\",\n-    \"nChunks\": 3,\n+    \"nChunks\": 0,\n     \"providerId\": \"openai\",\n     \"providerModelName\": \"gpt-5-mini:completions\",\n     \"tools\": [],"
+  },
+  {
+   "filename": "typescript/tests/e2e/output/__snapshots__/prompt.test.ts.snap",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -349,7 +349,7 @@ exports[`prompt output > [openai:completions] streams model with string model id\n       },\n     ],\n     \"modelId\": \"openai/gpt-5-mini:completions\",\n-    \"nChunks\": 5,\n+    \"nChunks\": 4,\n     \"providerId\": \"openai\",\n     \"providerModelName\": \"gpt-5-mini:completions\",\n     \"tools\": [],"
+  },
+  {
+   "filename": "typescript/tests/e2e/output/__snapshots__/refusal.test.ts.snap",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 7,
+   "patch": "@@ -289,12 +289,7 @@ exports[`refusal handling > [openai:completions] handles refusal for stream 1`]\n         \"role\": \"user\",\n       },\n       {\n-        \"content\": [\n-          {\n-            \"text\": \"\",\n-            \"type\": \"text\",\n-          },\n-        ],\n+        \"content\": [],\n         \"modelId\": \"openai/gpt-5-mini:completions\",\n         \"name\": null,\n         \"providerId\": \"openai\",\n@@ -328,7 +323,7 @@ exports[`refusal handling > [openai:completions] handles refusal for stream 1`]\n       },\n     ],\n     \"modelId\": \"openai/gpt-5-mini:completions\",\n-    \"nChunks\": 3,\n+    \"nChunks\": 0,\n     \"providerId\": \"openai\",\n     \"providerModelName\": \"gpt-5-mini:completions\",\n     \"tools\": [],"
+  },
+  {
+   "filename": "typescript/tests/e2e/output/__snapshots__/resume.test.ts.snap",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -646,7 +646,7 @@ exports[`context resume from stream > [openai:completions] resumes context conve\n       },\n     ],\n     \"modelId\": \"openai/gpt-5-mini:completions\",\n-    \"nChunks\": 7,\n+    \"nChunks\": 6,\n     \"providerId\": \"openai\",\n     \"providerModelName\": \"gpt-5-mini:completions\",\n     \"tools\": [],\n@@ -1422,7 +1422,7 @@ exports[`resume from stream > [openai:completions] resumes conversation after st\n       },\n     ],\n     \"modelId\": \"openai/gpt-5-mini:completions\",\n-    \"nChunks\": 7,\n+    \"nChunks\": 6,\n     \"providerId\": \"openai\",\n     \"providerModelName\": \"gpt-5-mini:completions\",\n     \"tools\": [],"
+  },
+  {
+   "filename": "typescript/tests/e2e/output/__snapshots__/stream.test.ts.snap",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 13,
+   "patch": "@@ -747,7 +747,7 @@ exports[`stream output > [openai:completions] accumulates content as stream prog\n       },\n     ],\n     \"modelId\": \"openai/gpt-5-mini:completions\",\n-    \"nChunks\": 4,\n+    \"nChunks\": 3,\n     \"providerId\": \"openai\",\n     \"providerModelName\": \"gpt-5-mini:completions\",\n     \"tools\": [],\n@@ -820,7 +820,7 @@ exports[`stream output > [openai:completions] builds assistant message after str\n       },\n     ],\n     \"modelId\": \"openai/gpt-5-mini:completions\",\n-    \"nChunks\": 4,\n+    \"nChunks\": 3,\n     \"providerId\": \"openai\",\n     \"providerModelName\": \"gpt-5-mini:completions\",\n     \"tools\": [],\n@@ -893,7 +893,7 @@ exports[`stream output > [openai:completions] provides finish reason after strea\n       },\n     ],\n     \"modelId\": \"openai/gpt-5-mini:completions\",\n-    \"nChunks\": 12,\n+    \"nChunks\": 11,\n     \"providerId\": \"openai\",\n     \"providerModelName\": \"gpt-5-mini:completions\",\n     \"tools\": [],\n@@ -966,7 +966,7 @@ exports[`stream output > [openai:completions] provides usage after streaming 1`]\n       },\n     ],\n     \"modelId\": \"openai/gpt-5-mini:completions\",\n-    \"nChunks\": 12,\n+    \"nChunks\": 11,\n     \"providerId\": \"openai\",\n     \"providerModelName\": \"gpt-5-mini:completions\",\n     \"tools\": [],\n@@ -1000,12 +1000,7 @@ exports[`stream output > [openai:completions] returns max_tokens finish reason 1\n         \"role\": \"user\",\n       },\n       {\n-        \"content\": [\n-          {\n-            \"text\": \"\",\n-            \"type\": \"text\",\n-          },\n-        ],\n+        \"content\": [],\n         \"modelId\": \"openai/gpt-5-mini:completions\",\n         \"name\": null,\n         \"providerId\": \"openai\",\n@@ -1039,7 +1034,7 @@ exports[`stream output > [openai:completions] returns max_tokens finish reason 1\n       },\n     ],\n     \"modelId\": \"openai/gpt-5-mini:completions\",\n-    \"nChunks\": 3,\n+    \"nChunks\": 0,\n     \"providerId\": \"openai\",\n     \"providerModelName\": \"gpt-5-mini:completions\",\n     \"tools\": [],\n@@ -1058,7 +1053,7 @@ exports[`stream output > [openai:completions] returns max_tokens finish reason 1\n \n exports[`stream output > [openai:completions] streams text response 1`] = `\n {\n-  \"nChunks\": 3,\n+  \"nChunks\": 2,\n   \"response\": {\n     \"finishReason\": null,\n     \"format\": null,\n@@ -1113,7 +1108,7 @@ exports[`stream output > [openai:completions] streams text response 1`] = `\n       },\n     ],\n     \"modelId\": \"openai/gpt-5-mini:completions\",\n-    \"nChunks\": 5,\n+    \"nChunks\": 4,\n     \"providerId\": \"openai\",\n     \"providerModelName\": \"gpt-5-mini:completions\",\n     \"tools\": [],"
+  },
+  {
+   "filename": "typescript/tests/e2e/output/__snapshots__/tools.test.ts.snap",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -875,7 +875,7 @@ exports[`tool usage with streaming > [openai:completions] streams tool calls and\n       },\n     ],\n     \"modelId\": \"openai/gpt-4o-mini:completions\",\n-    \"nChunks\": 44,\n+    \"nChunks\": 43,\n     \"providerId\": \"openai\",\n     \"providerModelName\": \"gpt-4o-mini:completions\",\n     \"tools\": ["
+  }
+ ],
+ "test_files": [
+  "typescript/src/llm/providers/openai/completions/decode-stream.test.ts",
+  "typescript/tests/e2e/output/__snapshots__/context-call.test.ts.snap",
+  "typescript/tests/e2e/output/__snapshots__/context-prompt.test.ts.snap",
+  "typescript/tests/e2e/output/__snapshots__/max-tokens.test.ts.snap",
+  "typescript/tests/e2e/output/__snapshots__/prompt.test.ts.snap",
+  "typescript/tests/e2e/output/__snapshots__/refusal.test.ts.snap",
+  "typescript/tests/e2e/output/__snapshots__/resume.test.ts.snap",
+  "typescript/tests/e2e/output/__snapshots__/stream.test.ts.snap",
+  "typescript/tests/e2e/output/__snapshots__/tools.test.ts.snap"
+ ]
+}

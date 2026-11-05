@@ -1,0 +1,66 @@
+{
+ "repo": "Mirascope/mirascope",
+ "number": 2920,
+ "url": "https://github.com/Mirascope/mirascope/pull/2920",
+ "title": "fix(llm): count Google streamed usage totals once in the TypeScript decoder",
+ "merged_at": "2026-10-21T15:35:36Z",
+ "files": [
+  {
+   "filename": "typescript/src/llm/providers/google/decode-stream.test.ts",
+   "status": "modified",
+   "additions": 70,
+   "deletions": 0,
+   "patch": "@@ -4,6 +4,8 @@ import {\n } from \"@google/genai\";\n import { describe, expect, it } from \"vitest\";\n \n+import type { UsageDeltaChunk } from \"@/llm/responses/chunks\";\n+\n import {\n   createDecodeState,\n   decodeStreamEvent,\n@@ -57,3 +59,71 @@ describe(\"Google stream metadata without content\", () => {\n     });\n   });\n });\n+\n+describe(\"Google stream cumulative usage\", () => {\n+  const usageChunks = (\n+    usageMetadata: Record<string, number>,\n+    state: ReturnType<typeof createDecodeState>,\n+  ) =>\n+    decodeStreamEvent(\n+      Object.assign(new GenerateContentResponse(), {\n+        candidates: [],\n+        usageMetadata,\n+      }),\n+      state,\n+    ).filter(\n+      (chunk): chunk is UsageDeltaChunk => chunk.type === \"usage_delta_chunk\",\n+    );\n+\n+  it(\"emits only the growth over the previous chunk's totals\", () => {\n+    const state = createDecodeState(true);\n+\n+    expect(\n+      usageChunks({ promptTokenCount: 10, candidatesTokenCount: 5 }, state),\n+    ).toEqual([\n+      {\n+        type: \"usage_delta_chunk\",\n+        inputTokens: 10,\n+        outputTokens: 5,\n+        cacheReadTokens: 0,\n+        cacheWriteTokens: 0,\n+        reasoningTokens: 0,\n+      },\n+    ]);\n+    expect(\n+      usageChunks(\n+        {\n+          promptTokenCount: 10,\n+          candidatesTokenCount: 12,\n+          thoughtsTokenCount: 4,\n+          cachedContentTokenCount: 6,\n+        },\n+        state,\n+      ),\n+    ).toEqual([\n+      {\n+        type: \"usage_delta_chunk\",\n+        inputTokens: 0,\n+        outputTokens: 11,\n+        cacheReadTokens: 6,\n+        cacheWriteTokens: 0,\n+        reasoningTokens: 4,\n+      },\n+    ]);\n+  });\n+\n+  it(\"sums to the final totals over a whole stream\", () => {\n+    const state = createDecodeState(false);\n+    const totals = [\n+      { promptTokenCount: 20, candidatesTokenCount: 3 },\n+      { promptTokenCount: 20, candidatesTokenCount: 9 },\n+      { promptTokenCount: 20, candidatesTokenCount: 15 },\n+    ];\n+    const deltas = totals.flatMap((metadata) => usageChunks(metadata, state));\n+\n+    const sum = (key: \"inputTokens\" | \"outputTokens\") =>\n+      deltas.reduce((total, chunk) => total + chunk[key], 0);\n+    expect(sum(\"inputTokens\")).toBe(20);\n+    expect(sum(\"outputTokens\")).toBe(15);\n+  });\n+});"
+  },
+  {
+   "filename": "typescript/src/llm/providers/google/decode-stream.ts",
+   "status": "modified",
+   "additions": 32,
+   "deletions": 7,
+   "patch": "@@ -52,6 +52,13 @@ interface DecodeState {\n   includeThoughts: boolean;\n   /** Accumulated parts for raw message */\n   accumulatedParts: unknown[];\n+  /** Usage totals already emitted (Google reports running totals per chunk) */\n+  prevUsage: {\n+    inputTokens: number;\n+    outputTokens: number;\n+    cacheReadTokens: number;\n+    reasoningTokens: number;\n+  };\n }\n \n /**\n@@ -63,6 +70,12 @@ export function createDecodeState(includeThoughts: boolean): DecodeState {\n     inThoughtBlock: false,\n     includeThoughts,\n     accumulatedParts: [],\n+    prevUsage: {\n+      inputTokens: 0,\n+      outputTokens: 0,\n+      cacheReadTokens: 0,\n+      reasoningTokens: 0,\n+    },\n   };\n }\n \n@@ -181,17 +194,29 @@ export function decodeStreamEvent(\n \n   const usage = response.usageMetadata;\n   if (usage) {\n+    // Gemini reports running totals in every chunk, while usage delta chunks\n+    // are summed, so emit only the growth since the previous chunk.\n+    const reasoningTokens =\n+      usage.thoughtsTokenCount ?? /* v8 ignore next 1 */ 0;\n+    const current = {\n+      inputTokens: usage.promptTokenCount ?? /* v8 ignore next 1 */ 0,\n+      outputTokens:\n+        (usage.candidatesTokenCount ?? /* v8 ignore next 1 */ 0) +\n+        reasoningTokens,\n+      cacheReadTokens:\n+        usage.cachedContentTokenCount ?? /* v8 ignore next 1 */ 0,\n+      reasoningTokens,\n+    };\n+    const prev = state.prevUsage;\n     chunks.push(\n       usageDeltaChunk({\n-        inputTokens: usage.promptTokenCount ?? /* v8 ignore next 1 */ 0,\n-        outputTokens:\n-          (usage.candidatesTokenCount ?? /* v8 ignore next 1 */ 0) +\n-          (usage.thoughtsTokenCount ?? /* v8 ignore next 1 */ 0),\n-        cacheReadTokens:\n-          usage.cachedContentTokenCount ?? /* v8 ignore next 1 */ 0,\n-        reasoningTokens: usage.thoughtsTokenCount ?? /* v8 ignore next 1 */ 0,\n+        inputTokens: current.inputTokens - prev.inputTokens,\n+        outputTokens: current.outputTokens - prev.outputTokens,\n+        cacheReadTokens: current.cacheReadTokens - prev.cacheReadTokens,\n+        reasoningTokens: current.reasoningTokens - prev.reasoningTokens,\n       }),\n     );\n+    state.prevUsage = current;\n   }\n \n   return chunks;"
+  },
+  {
+   "filename": "typescript/tests/e2e/input/__snapshots__/mirascope-provider.test.ts.snap",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -224,11 +224,11 @@ exports[`mirascope provider > [mirascope:google] streams from underlying provide\n     \"usage\": {\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n-      \"inputTokens\": 56,\n+      \"inputTokens\": 18,\n       \"outputTokens\": 5,\n       \"raw\": \"null\",\n       \"reasoningTokens\": 0,\n-      \"totalTokens\": 61,\n+      \"totalTokens\": 23,\n     },\n   },\n }"
+  },
+  {
+   "filename": "typescript/tests/e2e/input/__snapshots__/web-search-tool.test.ts.snap",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 4,
+   "patch": "@@ -668,11 +668,11 @@ exports[`WebSearchTool > [google] streams with web search tool 1`] = `\n     \"usage\": {\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n-      \"inputTokens\": 207,\n-      \"outputTokens\": 2062,\n+      \"inputTokens\": 69,\n+      \"outputTokens\": 708,\n       \"raw\": \"null\",\n-      \"reasoningTokens\": 1737,\n-      \"totalTokens\": 2269,\n+      \"reasoningTokens\": 579,\n+      \"totalTokens\": 777,\n     },\n   },\n }"
+  },
+  {
+   "filename": "typescript/tests/e2e/output/__snapshots__/context-prompt.test.ts.snap",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 4,
+   "patch": "@@ -217,11 +217,11 @@ exports[`context prompt output > [google] streams model with context 1`] = `\n     \"usage\": {\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n-      \"inputTokens\": 22,\n-      \"outputTokens\": 41,\n+      \"inputTokens\": 11,\n+      \"outputTokens\": 25,\n       \"raw\": \"null\",\n-      \"reasoningTokens\": 28,\n-      \"totalTokens\": 63,\n+      \"reasoningTokens\": 14,\n+      \"totalTokens\": 36,\n     },\n   },\n }"
+  },
+  {
+   "filename": "typescript/tests/e2e/output/__snapshots__/prompt.test.ts.snap",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 4,
+   "patch": "@@ -231,11 +231,11 @@ So, 4200 + 42 = **4242**.\",\n     \"usage\": {\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n-      \"inputTokens\": 26,\n-      \"outputTokens\": 250,\n+      \"inputTokens\": 13,\n+      \"outputTokens\": 135,\n       \"raw\": \"null\",\n-      \"reasoningTokens\": 156,\n-      \"totalTokens\": 276,\n+      \"reasoningTokens\": 78,\n+      \"totalTokens\": 148,\n     },\n   },\n }"
+  },
+  {
+   "filename": "typescript/tests/e2e/output/__snapshots__/stream.test.ts.snap",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 16,
+   "patch": "@@ -453,11 +453,11 @@ exports[`stream output > [google] builds assistant message after streaming 1`] =\n     \"usage\": {\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n-      \"inputTokens\": 10,\n-      \"outputTokens\": 36,\n+      \"inputTokens\": 5,\n+      \"outputTokens\": 18,\n       \"raw\": \"null\",\n-      \"reasoningTokens\": 32,\n-      \"totalTokens\": 46,\n+      \"reasoningTokens\": 16,\n+      \"totalTokens\": 23,\n     },\n   },\n }\n@@ -681,11 +681,11 @@ exports[`stream output > [google] streams text response 1`] = `\n     \"usage\": {\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n-      \"inputTokens\": 12,\n-      \"outputTokens\": 37,\n+      \"inputTokens\": 6,\n+      \"outputTokens\": 19,\n       \"raw\": \"null\",\n-      \"reasoningTokens\": 34,\n-      \"totalTokens\": 49,\n+      \"reasoningTokens\": 17,\n+      \"totalTokens\": 25,\n     },\n   },\n }\n@@ -1774,11 +1774,11 @@ I've identified the core operation: it's a simple addition problem, summing 2 an\n     \"usage\": {\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n-      \"inputTokens\": 27,\n-      \"outputTokens\": 195,\n+      \"inputTokens\": 9,\n+      \"outputTokens\": 67,\n       \"raw\": \"null\",\n-      \"reasoningTokens\": 186,\n-      \"totalTokens\": 222,\n+      \"reasoningTokens\": 62,\n+      \"totalTokens\": 76,\n     },\n   },\n }\n@@ -1906,11 +1906,11 @@ Therefore, 2 + 2 equals **4**.\",\n     \"usage\": {\n       \"cacheReadTokens\": 0,\n       \"cacheWriteTokens\": 0,\n-      \"inputTokens\": 98,\n-      \"outputTokens\": 3021,\n+      \"inputTokens\": 14,\n+      \"outputTokens\": 575,\n       \"raw\": \"null\",\n-      \"reasoningTokens\": 2662,\n-      \"totalTokens\": 3119,\n+      \"reasoningTokens\": 436,\n+      \"totalTokens\": 589,\n     },\n   },\n }"
+  }
+ ],
+ "test_files": [
+  "typescript/src/llm/providers/google/decode-stream.test.ts",
+  "typescript/tests/e2e/input/__snapshots__/mirascope-provider.test.ts.snap",
+  "typescript/tests/e2e/input/__snapshots__/web-search-tool.test.ts.snap",
+  "typescript/tests/e2e/output/__snapshots__/context-prompt.test.ts.snap",
+  "typescript/tests/e2e/output/__snapshots__/prompt.test.ts.snap",
+  "typescript/tests/e2e/output/__snapshots__/stream.test.ts.snap"
+ ]
+}

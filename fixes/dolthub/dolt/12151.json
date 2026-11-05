@@ -1,0 +1,47 @@
+{
+ "repo": "dolthub/dolt",
+ "number": 12151,
+ "url": "https://github.com/dolthub/dolt/pull/12151",
+ "title": "Clear branch upstreams when a remote is removed",
+ "merged_at": "2026-10-21T17:47:37Z",
+ "files": [
+  {
+   "filename": "go/libraries/doltcore/env/environment_test.go",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -283,3 +283,32 @@ func TestBestEffortDelete(t *testing.T) {\n \t\tt.Error(\"Dir should be empty after delete.\")\n \t}\n }\n+\n+func TestRemoveRemoteClearsBranchUpstreams(t *testing.T) {\n+\tdEnv, _ := createTestEnv(false, false)\n+\tctx := context.Background()\n+\trequire.NoError(t, dEnv.InitRepo(ctx, types.Format_DOLT, \"aoeu aoeu\", \"aoeu@aoeu.org\", DefaultInitBranch))\n+\tdefer dEnv.Close()\n+\n+\trequire.NoError(t, dEnv.AddRemote(NewRemote(\"origin\", \"file:///user/bheni/origin\", nil)))\n+\trequire.NoError(t, dEnv.AddRemote(NewRemote(\"other\", \"file:///user/bheni/other\", nil)))\n+\trequire.NoError(t, dEnv.UpdateBranch(\"b1\", BranchConfig{Merge: ref.MarshalableRef{Ref: ref.NewBranchRef(\"main\")}, Remote: \"origin\"}))\n+\trequire.NoError(t, dEnv.UpdateBranch(\"b2\", BranchConfig{Merge: ref.MarshalableRef{Ref: ref.NewBranchRef(\"main\")}, Remote: \"other\"}))\n+\n+\trequire.NoError(t, dEnv.RemoveRemote(ctx, \"origin\"))\n+\n+\t_, ok := dEnv.RepoState.Branches.Get(\"b1\")\n+\tassert.False(t, ok, \"upstream config pointing at the removed remote should be cleared\")\n+\t_, ok = dEnv.RepoState.Branches.Get(\"b2\")\n+\tassert.True(t, ok, \"upstream config for other remotes should be kept\")\n+\n+\treloaded, err := LoadRepoState(dEnv.FS)\n+\trequire.NoError(t, err)\n+\t_, ok = reloaded.Branches.Get(\"b1\")\n+\tassert.False(t, ok, \"cleared upstream should also be gone from repo_state.json\")\n+}\n+\n+func TestClearBranchUpstreamsForRemoteNilBranches(t *testing.T) {\n+\t// A repo_state.json without a \"branches\" key must not panic.\n+\tClearBranchUpstreamsForRemote(nil, \"origin\")\n+}"
+  },
+  {
+   "filename": "go/libraries/doltcore/env/repo_state.go",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -232,6 +232,20 @@ func (rs *RepoState) AddRemote(r Remote) {\n \n func (rs *RepoState) RemoveRemote(r Remote) {\n \trs.Remotes.Delete(r.Name)\n+\tClearBranchUpstreamsForRemote(rs.Branches, r.Name)\n+}\n+\n+// ClearBranchUpstreamsForRemote removes the upstream configuration of every branch that tracks the named remote, so\n+// that removing a remote does not leave behind a merge ref that looks like an upstream on the local repository.\n+func ClearBranchUpstreamsForRemote(branches *concurrentmap.Map[string, BranchConfig], remoteName string) {\n+\tif branches == nil {\n+\t\treturn\n+\t}\n+\tfor name, cfg := range branches.Snapshot() {\n+\t\tif cfg.Remote == remoteName {\n+\t\t\tbranches.Delete(name)\n+\t\t}\n+\t}\n }\n \n func (rs *RepoState) AddBackup(r Remote) {"
+  },
+  {
+   "filename": "go/libraries/doltcore/sqle/dprocedures/dolt_remote.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 27,
+   "patch": "@@ -157,32 +157,6 @@ func removeRemote(ctx *sql.Context, dbd env.DbData[*sql.Context], apr *argparser\n \t\t}\n \t}\n \n-\t// Remove branch configurations that reference the removed remote\n-\tbranches, err := dbd.Rsr.GetBranches()\n-\tif err != nil {\n-\t\treturn fmt.Errorf(\"failed to get branches: %w\", err)\n-\t}\n-\n-\tvar branchesToUpdate []string\n-\tbranches.Iter(func(branchName string, config env.BranchConfig) bool {\n-\t\tif config.Remote == remote.Name {\n-\t\t\tbranchesToUpdate = append(branchesToUpdate, branchName)\n-\t\t}\n-\t\treturn true\n-\t})\n-\n-\t// Clear the remote tracking for these branches by updating their configs\n-\tfor _, branchName := range branchesToUpdate {\n-\t\tcurrentConfig, _ := branches.Get(branchName)\n-\t\tupdatedConfig := env.BranchConfig{\n-\t\t\tMerge:  currentConfig.Merge,\n-\t\t\tRemote: \"\", // Clear the remote reference\n-\t\t}\n-\t\terr = dbd.Rsw.UpdateBranch(branchName, updatedConfig)\n-\t\tif err != nil {\n-\t\t\treturn fmt.Errorf(\"failed to update branch config for %s: %w\", branchName, err)\n-\t\t}\n-\t}\n-\n+\t// Rsw.RemoveRemote also drops the upstream config of every branch tracking this remote.\n \treturn dbd.Rsw.RemoveRemote(ctx, remote.Name)\n }"
+  },
+  {
+   "filename": "go/libraries/doltcore/sqle/dsess/session_state_adapter.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -181,6 +181,7 @@ func (s SessionStateAdapter) RemoveRemote(_ context.Context, name string) error\n \t\treturn env.ErrRemoteNotFound\n \t}\n \ts.remotes.Delete(remote.Name)\n+\tenv.ClearBranchUpstreamsForRemote(s.branches, remote.Name)\n \n \tfs, err := s.session.Provider().FileSystemForDatabase(s.dbName)\n \tif err != nil {\n@@ -198,6 +199,7 @@ func (s SessionStateAdapter) RemoveRemote(_ context.Context, name string) error\n \t\treturn env.ErrRemoteNotFound\n \t}\n \trepoState.Remotes.Delete(name)\n+\tenv.ClearBranchUpstreamsForRemote(repoState.Branches, name)\n \treturn repoState.Save(fs)\n }\n "
+  },
+  {
+   "filename": "integration-tests/bats/remote-cmd.bats",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -69,6 +69,23 @@ teardown() {\n     [[ \"$output\" =~ \"otherhost\" ]] || false\n }\n \n+@test \"remote-cmd: remove clears branch upstream configs for the removed remote\" {\n+    mkdir ../remote\n+    dolt remote add origin file://../remote\n+    dolt sql -q \"create table t (pk int primary key)\"\n+    dolt add .\n+    dolt commit -m \"initial\"\n+    dolt checkout -b b1\n+    dolt push -u origin b1:other\n+    run grep '\"b1\"' .dolt/repo_state.json\n+    [ \"$status\" -eq 0 ]\n+\n+    dolt remote remove origin\n+\n+    run grep '\"b1\"' .dolt/repo_state.json\n+    [ \"$status\" -eq 1 ]\n+}\n+\n @test \"remote-cmd: remove non-existent\" {\n     run dolt remote remove origin\n     [ \"$status\" -eq 1 ]"
+  }
+ ],
+ "test_files": [
+  "go/libraries/doltcore/env/environment_test.go"
+ ]
+}

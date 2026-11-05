@@ -1,0 +1,26 @@
+{
+ "repo": "Tencent/WeKnora",
+ "number": 4592,
+ "url": "https://github.com/Tencent/WeKnora/pull/4592",
+ "title": "fix(googlegenai): map the remaining safety finish reasons to content_filter",
+ "merged_at": "2026-10-23T03:26:47Z",
+ "files": [
+  {
+   "filename": "internal/models/api/googlegenai/client.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -276,7 +276,8 @@ func mapFinishReason(reason string, hasToolCalls bool) string {\n \t\treturn \"stop\"\n \tcase \"MAX_TOKENS\":\n \t\treturn \"length\"\n-\tcase \"SAFETY\", \"RECITATION\", \"BLOCKLIST\", \"PROHIBITED_CONTENT\":\n+\tcase \"SAFETY\", \"RECITATION\", \"LANGUAGE\", \"BLOCKLIST\", \"PROHIBITED_CONTENT\", \"SPII\",\n+\t\t\"IMAGE_SAFETY\", \"IMAGE_PROHIBITED_CONTENT\", \"IMAGE_RECITATION\":\n \t\treturn \"content_filter\"\n \tdefault:\n \t\treturn strings.ToLower(reason)"
+  },
+  {
+   "filename": "internal/models/api/googlegenai/googlegenai_test.go",
+   "status": "modified",
+   "additions": 31,
+   "deletions": 0,
+   "patch": "@@ -729,3 +729,34 @@ func TestChatStreamEOFWithoutFinishReasonIsIncomplete(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestMapFinishReason(t *testing.T) {\n+\ttests := []struct {\n+\t\treason       string\n+\t\thasToolCalls bool\n+\t\twant         string\n+\t}{\n+\t\t{\"\", false, \"\"},\n+\t\t{\"STOP\", false, \"stop\"},\n+\t\t{\"STOP\", true, \"tool_calls\"},\n+\t\t{\"MAX_TOKENS\", false, \"length\"},\n+\t\t{\"SAFETY\", false, \"content_filter\"},\n+\t\t{\"RECITATION\", false, \"content_filter\"},\n+\t\t{\"LANGUAGE\", false, \"content_filter\"},\n+\t\t{\"BLOCKLIST\", false, \"content_filter\"},\n+\t\t{\"PROHIBITED_CONTENT\", false, \"content_filter\"},\n+\t\t{\"SPII\", false, \"content_filter\"},\n+\t\t{\"IMAGE_SAFETY\", false, \"content_filter\"},\n+\t\t{\"IMAGE_PROHIBITED_CONTENT\", false, \"content_filter\"},\n+\t\t{\"IMAGE_RECITATION\", false, \"content_filter\"},\n+\t\t{\"OTHER\", false, \"other\"},\n+\t\t{\"MALFORMED_FUNCTION_CALL\", false, \"malformed_function_call\"},\n+\t}\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.reason, func(t *testing.T) {\n+\t\t\tif got := mapFinishReason(tt.reason, tt.hasToolCalls); got != tt.want {\n+\t\t\t\tt.Fatalf(\"mapFinishReason(%q, %v) = %q, want %q\", tt.reason, tt.hasToolCalls, got, tt.want)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/models/api/googlegenai/googlegenai_test.go"
+ ]
+}

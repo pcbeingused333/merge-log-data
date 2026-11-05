@@ -1,0 +1,40 @@
+{
+ "repo": "KusionStack/karpor",
+ "number": 866,
+ "url": "https://github.com/KusionStack/karpor/pull/866",
+ "title": "fix(ai): stop the stream goroutine when the context is cancelled",
+ "merged_at": "2026-10-21T09:44:38Z",
+ "files": [
+  {
+   "filename": "pkg/infra/ai/azureopenai.go",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 3,
+   "patch": "@@ -102,16 +102,23 @@ func (c *AzureAIClient) GenerateStream(ctx context.Context, prompt string) (<-ch\n \t\t\t\tif errors.Is(err, io.EOF) {\n \t\t\t\t\treturn\n \t\t\t\t}\n-\t\t\t\t// Send error as a special message\n-\t\t\t\tresultChan <- \"ERROR: \" + err.Error()\n+\t\t\t\t// Send error as a special message, unless the consumer has gone away\n+\t\t\t\tselect {\n+\t\t\t\tcase resultChan <- \"ERROR: \" + err.Error():\n+\t\t\t\tcase <-ctx.Done():\n+\t\t\t\t}\n \t\t\t\treturn\n \t\t\t}\n \n \t\t\t// Send non-empty content chunks\n \t\t\tif len(response.Choices) > 0 {\n \t\t\t\tchunk := response.Choices[0].Delta.Content\n \t\t\t\tif chunk != \"\" {\n-\t\t\t\t\tresultChan <- chunk\n+\t\t\t\t\tselect {\n+\t\t\t\t\tcase resultChan <- chunk:\n+\t\t\t\t\tcase <-ctx.Done():\n+\t\t\t\t\t\treturn\n+\t\t\t\t\t}\n \t\t\t\t}\n \t\t\t}\n \t\t}"
+  },
+  {
+   "filename": "pkg/infra/ai/deepseek.go",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 3,
+   "patch": "@@ -113,16 +113,23 @@ func (c *DeepseekClient) GenerateStream(ctx context.Context, prompt string) (<-c\n \t\t\t\tif errors.Is(err, io.EOF) {\n \t\t\t\t\treturn\n \t\t\t\t}\n-\t\t\t\t// Send error as a special message\n-\t\t\t\tresultChan <- \"ERROR: \" + err.Error()\n+\t\t\t\t// Send error as a special message, unless the consumer has gone away\n+\t\t\t\tselect {\n+\t\t\t\tcase resultChan <- \"ERROR: \" + err.Error():\n+\t\t\t\tcase <-ctx.Done():\n+\t\t\t\t}\n \t\t\t\treturn\n \t\t\t}\n \n \t\t\t// Send non-empty content chunks\n \t\t\tif len(response.Choices) > 0 {\n \t\t\t\tchunk := response.Choices[0].Delta.Content\n \t\t\t\tif chunk != \"\" {\n-\t\t\t\t\tresultChan <- chunk\n+\t\t\t\t\tselect {\n+\t\t\t\t\tcase resultChan <- chunk:\n+\t\t\t\t\tcase <-ctx.Done():\n+\t\t\t\t\t\treturn\n+\t\t\t\t\t}\n \t\t\t\t}\n \t\t\t}\n \t\t}"
+  },
+  {
+   "filename": "pkg/infra/ai/openai.go",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 3,
+   "patch": "@@ -105,16 +105,23 @@ func (c *OpenAIClient) GenerateStream(ctx context.Context, prompt string) (<-cha\n \t\t\t\tif errors.Is(err, io.EOF) {\n \t\t\t\t\treturn\n \t\t\t\t}\n-\t\t\t\t// Send error as a special message\n-\t\t\t\tresultChan <- \"ERROR: \" + err.Error()\n+\t\t\t\t// Send error as a special message, unless the consumer has gone away\n+\t\t\t\tselect {\n+\t\t\t\tcase resultChan <- \"ERROR: \" + err.Error():\n+\t\t\t\tcase <-ctx.Done():\n+\t\t\t\t}\n \t\t\t\treturn\n \t\t\t}\n \n \t\t\t// Send non-empty content chunks\n \t\t\tif len(response.Choices) > 0 {\n \t\t\t\tchunk := response.Choices[0].Delta.Content\n \t\t\t\tif chunk != \"\" {\n-\t\t\t\t\tresultChan <- chunk\n+\t\t\t\t\tselect {\n+\t\t\t\t\tcase resultChan <- chunk:\n+\t\t\t\t\tcase <-ctx.Done():\n+\t\t\t\t\t\treturn\n+\t\t\t\t\t}\n \t\t\t\t}\n \t\t\t}\n \t\t}"
+  },
+  {
+   "filename": "pkg/infra/ai/stream_cancel_test.go",
+   "status": "added",
+   "additions": 87,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,87 @@\n+// Copyright The Karpor Authors.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+// http://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+\n+package ai\n+\n+import (\n+\t\"context\"\n+\t\"fmt\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"runtime\"\n+\t\"strings\"\n+\t\"testing\"\n+\t\"time\"\n+\n+\t\"github.com/stretchr/testify/assert\"\n+)\n+\n+// streamGoroutineRunning reports whether a goroutine started by a GenerateStream\n+// method is still alive.\n+func streamGoroutineRunning() bool {\n+\tbuf := make([]byte, 1<<20)\n+\tbuf = buf[:runtime.Stack(buf, true)]\n+\treturn strings.Contains(string(buf), \").GenerateStream.func\")\n+}\n+\n+// When the consumer stops reading and cancels the context, the goroutine that\n+// feeds the channel has to exit instead of blocking on a full channel.\n+func TestGenerateStream_CancelStopsGoroutine(t *testing.T) {\n+\tclients := map[string]struct {\n+\t\tclient AIProvider\n+\t\tcfg    AIConfig\n+\t}{\n+\t\t\"openai\":   {&OpenAIClient{}, AIConfig{AuthToken: \"t\", Model: \"m\"}},\n+\t\t\"azure\":    {&AzureAIClient{}, AIConfig{AuthToken: \"t\", Model: \"m\"}},\n+\t\t\"deepseek\": {&DeepseekClient{}, AIConfig{AuthToken: \"t\", Model: \"m\"}},\n+\t}\n+\tfor name, tc := range clients {\n+\t\tt.Run(name, func(t *testing.T) {\n+\t\t\trelease := make(chan struct{})\n+\t\t\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\t\t\tw.Header().Set(\"Content-Type\", \"text/event-stream\")\n+\t\t\t\tw.WriteHeader(http.StatusOK)\n+\t\t\t\t// More chunks than the channel buffer holds, so a consumer that does\n+\t\t\t\t// not read leaves the producer blocked on send.\n+\t\t\t\tfor i := 0; i < 300; i++ {\n+\t\t\t\t\tfmt.Fprintf(w, \"data: {\\\"choices\\\":[{\\\"delta\\\":{\\\"content\\\":\\\"c%d\\\"}}]}\\n\\n\", i)\n+\t\t\t\t}\n+\t\t\t\tw.(http.Flusher).Flush()\n+\t\t\t\tselect {\n+\t\t\t\tcase <-release:\n+\t\t\t\tcase <-r.Context().Done():\n+\t\t\t\t}\n+\t\t\t}))\n+\t\t\tdefer server.Close()\n+\t\t\tdefer close(release)\n+\n+\t\t\ttc.cfg.BaseURL = server.URL\n+\t\t\tassert.NoError(t, tc.client.Configure(tc.cfg))\n+\n+\t\t\tctx, cancel := context.WithCancel(context.Background())\n+\t\t\t_, err := tc.client.GenerateStream(ctx, \"prompt\")\n+\t\t\tassert.NoError(t, err)\n+\n+\t\t\t// Let the producer fill the channel, then stop consuming.\n+\t\t\ttime.Sleep(200 * time.Millisecond)\n+\t\t\tcancel()\n+\n+\t\t\tdeadline := time.Now().Add(3 * time.Second)\n+\t\t\tfor streamGoroutineRunning() && time.Now().Before(deadline) {\n+\t\t\t\ttime.Sleep(20 * time.Millisecond)\n+\t\t\t}\n+\t\t\tassert.False(t, streamGoroutineRunning(), \"stream goroutine leaked after ctx was cancelled\")\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "pkg/infra/ai/stream_cancel_test.go"
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "posit-dev/chatlas",
+ "number": 468,
+ "url": "https://github.com/posit-dev/chatlas/pull/468",
+ "title": "fix(bedrock): keep redacted reasoning blocks when streaming a Converse model",
+ "merged_at": "2026-10-21T15:34:46Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0\n ### Bug fixes\n \n * `content_image_url()` with a `data:` URL no longer silently drops the `detail` argument: the setting is now carried by inline image content and forwarded to OpenAI's Responses and Chat Completions APIs (regular image URLs already forwarded it). Other providers continue to ignore `detail`. (#467)\n+* `ChatBedrock()` on a Converse model no longer drops redacted reasoning blocks when streaming. They were discarded as they arrived, so a streamed turn lost them, while a non-streamed one kept them. (#468)\n * `ChatBedrockAnthropic()` now uses native structured outputs for `data_model` on Claude 4.5 and later, as `ChatAnthropic()` does. Its Bedrock model IDs (`anthropic.claude-...`, `us.anthropic.claude-...`) weren't recognized, so it fell back to forcing a tool call, which Claude Opus 5.5 and Sonnet 5.5 reject with a 400.\n * A tool written as a generator (see \"Progressive results\" in the tool-calling docs) now reports each yielded value in `.chat_async()` and `.stream_async()`, as it does in `.chat()`. A synchronous generator tool used to send the generator object itself (`<generator object ...>`) as its result. An `async def` generator tool now counts as an async tool, so `.chat()` raises the usual \"Cannot use async tools in a synchronous chat\" error instead of sending `<async_generator object ...>` as the result.\n * MCP tools registered with a `namespace` (in `.register_mcp_tools_http_stream_async()` or `.register_mcp_tools_stdio_async()`) can be called successfully. `Tool.from_mcp()` gains a `name` argument for setting the tool's name independently of the MCP tool's name. (#458)"
+  },
+  {
+   "filename": "chatlas/_provider_bedrock_converse.py",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -614,6 +614,8 @@ def stream_merge_chunks(\n                     )\n                 elif \"signature\" in reasoning:\n                     block[\"reasoningSignature\"] = reasoning[\"signature\"]\n+                elif \"redactedContent\" in reasoning:\n+                    block[\"redactedContent\"] = reasoning[\"redactedContent\"]\n         elif \"contentBlockStop\" in chunk:\n             blocks = merged.get(\"blocks\", {})\n             block = blocks.get(chunk[\"contentBlockStop\"][\"contentBlockIndex\"])\n@@ -664,6 +666,17 @@ def stream_turn(\n                         },\n                     )\n                 )\n+            elif \"redactedContent\" in block:\n+                content_blocks.append(\n+                    cast(\n+                        \"ContentBlockOutputTypeDef\",\n+                        {\n+                            \"reasoningContent\": {\n+                                \"redactedContent\": block[\"redactedContent\"]\n+                            }\n+                        },\n+                    )\n+                )\n             elif \"reasoningText\" in block or \"reasoningSignature\" in block:\n                 content_blocks.append(\n                     cast(\n@@ -1124,6 +1137,7 @@ class ConverseStreamBlock(TypedDict, total=False):\n     arguments: dict[str, Any]\n     reasoningText: str\n     reasoningSignature: str\n+    redactedContent: bytes\n \n \n class ConverseSubmitArgs(TypedDict, total=False):"
+  },
+  {
+   "filename": "tests/test_provider_bedrock_converse.py",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -1066,6 +1066,42 @@ def test_reasoning_content_deltas_are_reassembled(self):\n         assert thinking[0].extra == {\"signature\": \"sig-123\"}\n         assert turn.text == \"The answer is 4.\"\n \n+    def test_redacted_reasoning_deltas_are_kept(self):\n+        events = [\n+            {\"messageStart\": {\"role\": \"assistant\"}},\n+            {\n+                \"contentBlockDelta\": {\n+                    \"contentBlockIndex\": 0,\n+                    \"delta\": {\n+                        \"reasoningContent\": {\"redactedContent\": b\"encrypted-reasoning\"}\n+                    },\n+                }\n+            },\n+            {\"contentBlockStop\": {\"contentBlockIndex\": 0}},\n+            {\n+                \"contentBlockDelta\": {\n+                    \"contentBlockIndex\": 1,\n+                    \"delta\": {\"text\": \"The answer is 4.\"},\n+                }\n+            },\n+            {\"contentBlockStop\": {\"contentBlockIndex\": 1}},\n+            {\"messageStop\": {\"stopReason\": \"end_turn\"}},\n+            {\n+                \"metadata\": {\n+                    \"usage\": {\"inputTokens\": 1, \"outputTokens\": 1, \"totalTokens\": 2}\n+                }\n+            },\n+        ]\n+\n+        turn = self.provider().stream_turn(self.merge(events), has_data_model=False)\n+        thinking = [\n+            content for content in turn.contents if isinstance(content, ContentThinking)\n+        ]\n+\n+        assert len(thinking) == 1\n+        assert thinking[0].extra == {\"redactedContent\": b\"encrypted-reasoning\"}\n+        assert turn.text == \"The answer is 4.\"\n+\n \n class TestConverseDispatch:\n     def test_converse_model_builds_a_converse_provider(self):"
+  }
+ ],
+ "test_files": [
+  "tests/test_provider_bedrock_converse.py"
+ ]
+}

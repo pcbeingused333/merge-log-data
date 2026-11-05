@@ -1,0 +1,33 @@
+{
+ "repo": "lancedb/lancedb",
+ "number": 4613,
+ "url": "https://github.com/lancedb/lancedb/pull/4613",
+ "title": "fix(python): replace the retired gpt-4-turbo-preview default in OpenaiReranker",
+ "merged_at": "2026-10-23T22:25:44Z",
+ "files": [
+  {
+   "filename": "docs/web/integrations/reranking/openai.mdx",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -26,7 +26,7 @@ credentials from environment variables or a secrets manager.\n ## Accepted Arguments {#accepted-arguments}\n | Argument | Type | Default | Description |\n | --- | --- | --- | --- |\n-| `model_name` | `str` | `\"gpt-4-turbo-preview\"` | The name of the reranker model to use.|\n+| `model_name` | `str` | `\"gpt-5.6-sol\"` | The name of the reranker model to use.|\n | `column` | `str` | `\"text\"` | The name of the column to use as input to the cross encoder model. |\n | `return_score` | `str` | `\"relevance\"` | Options are \"relevance\" or \"all\". The type of score to return. If \"relevance\", will return only the `_relevance_score. If \"all\" is supported, will return relevance score along with the vector and/or fts scores depending on query type. |\n | `api_key` | `str` | `None` | The API key to use. If None, will use the OPENAI_API_KEY environment variable."
+  },
+  {
+   "filename": "python/python/lancedb/rerankers/openai.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 3,
+   "patch": "@@ -21,7 +21,7 @@ class OpenaiReranker(Reranker):\n \n     Parameters\n     ----------\n-    model_name : str, default \"gpt-4-turbo-preview\"\n+    model_name : str, default \"gpt-5.6-sol\"\n         The name of the cross encoder model to use.\n     column : str, default \"text\"\n         The name of the column to use as input to the cross encoder model.\n@@ -33,7 +33,7 @@ class OpenaiReranker(Reranker):\n \n     def __init__(\n         self,\n-        model_name: str = \"gpt-4-turbo-preview\",\n+        model_name: str = \"gpt-5.6-sol\",\n         column: str = \"text\",\n         return_score=\"relevance\",\n         api_key: Optional[str] = None,\n@@ -54,7 +54,6 @@ def _rerank(self, result_set: pa.Table, query: str):\n         response = self._client.chat.completions.create(\n             model=self.model_name,\n             response_format={\"type\": \"json_object\"},\n-            temperature=0,\n             messages=[\n                 {\n                     \"role\": \"system\","
+  },
+  {
+   "filename": "python/python/tests/test_rerankers.py",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -2,6 +2,7 @@\n # SPDX-FileCopyrightText: Copyright The LanceDB Authors\n \n import os\n+from unittest.mock import MagicMock\n import random\n \n import lancedb\n@@ -547,6 +548,24 @@ def test_openai_reranker(tmp_path):\n     _run_test_reranker(reranker, table, \"single player experience\", None, schema)\n \n \n+def test_openai_reranker_does_not_send_temperature():\n+    reranker = OpenaiReranker(api_key=\"test-key\")\n+    create = MagicMock()\n+    create.return_value.choices = [\n+        MagicMock(\n+            message=MagicMock(\n+                content='{\"documents\": [{\"content\": \"a\", \"relevance_score\": 0.5}]}'\n+            )\n+        )\n+    ]\n+    reranker.__dict__[\"_client\"] = MagicMock()\n+    reranker.__dict__[\"_client\"].chat.completions.create = create\n+\n+    reranker._rerank(pa.table({\"text\": [\"a\"]}), \"query\")\n+\n+    assert \"temperature\" not in create.call_args.kwargs\n+\n+\n @pytest.mark.skipif(\n     os.environ.get(\"JINA_API_KEY\") is None, reason=\"JINA_API_KEY not set\"\n )"
+  }
+ ],
+ "test_files": [
+  "python/python/tests/test_rerankers.py"
+ ]
+}

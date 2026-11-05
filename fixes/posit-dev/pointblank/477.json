@@ -1,0 +1,26 @@
+{
+ "repo": "posit-dev/pointblank",
+ "number": 477,
+ "url": "https://github.com/posit-dev/pointblank/pull/477",
+ "title": "fix(prompt): attach the row verdicts of a pandas frame by position",
+ "merged_at": "2026-10-21T22:44:31Z",
+ "files": [
+  {
+   "filename": "pointblank/_interrogation.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -2323,7 +2323,10 @@ def interrogate_prompt(  # pragma: no cover\n         elif hasattr(native_tbl, \"assign\"):  # Pandas\n             import pandas as pd\n \n-            result_tbl = native_tbl.assign(pb_is_good_=pd.Series(validation_results, dtype=bool))\n+            # Align by position: the frame's index need not be 0..n-1\n+            result_tbl = native_tbl.assign(\n+                pb_is_good_=pd.Series(validation_results, dtype=bool, index=native_tbl.index)\n+            )\n \n         else:\n             # Generic fallback"
+  },
+  {
+   "filename": "tests/test_prompt_method.py",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -623,3 +623,33 @@ def test_prompt_all_requests_failing_is_eval_error(monkeypatch, sample_data_pl):\n     step = validation.validation_info[0]\n     assert step.eval_error is True\n     assert \"401 invalid x-api-key\" in step.notes[\"eval_error\"][\"text\"]\n+\n+\n+# ============================================================================\n+# Test pandas frames with a non-default index\n+# ============================================================================\n+\n+\n+@pytest.mark.parametrize(\"index\", [[10, 11, 12], [1, 2, 0]])\n+def test_interrogate_prompt_pandas_non_default_index(index):\n+    \"\"\"The row verdicts are attached by position, whatever the frame's index is.\"\"\"\n+    from pointblank._interrogation import interrogate_prompt\n+\n+    tbl = pd.DataFrame({\"text\": [\"a\", \"b\", \"c\"]}, index=index)\n+    verdicts = [True, False, True]\n+    batch_results = [[{\"index\": i, \"result\": v} for i, v in enumerate(verdicts)]]\n+\n+    with (\n+        patch(\"pointblank._utils_ai._AIValidationEngine.__init__\", return_value=None),\n+        patch(\n+            \"pointblank._utils_ai._AIValidationEngine.validate_batches\",\n+            return_value=batch_results,\n+        ),\n+    ):\n+        result = interrogate_prompt(\n+            tbl, None, {\"prompt\": \"Is it text?\", \"llm_provider\": \"openai\", \"llm_model\": \"m\"}\n+        )\n+\n+    assert result[\"pb_is_good_\"].tolist() == verdicts\n+    assert result[\"pb_is_good_\"].dtype == bool\n+    assert list(result.index) == index"
+  }
+ ],
+ "test_files": [
+  "tests/test_prompt_method.py"
+ ]
+}

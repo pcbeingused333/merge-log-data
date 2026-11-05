@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 243,
+ "url": "https://github.com/lofcz/LLMTornado/pull/243",
+ "title": "Skip thought parts when reading Gemini image results",
+ "merged_at": "2026-10-21T08:17:39Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/GoogleImageThoughtPartsTests.cs",
+   "status": "added",
+   "additions": 57,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,57 @@\n+using LlmTornado.Images;\n+using LlmTornado.Images.Vendors.Google;\n+using Newtonsoft.Json;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class GoogleImageThoughtPartsTests\n+{\n+    [Test]\n+    public void ToChatResult_SkipsThoughtImages()\n+    {\n+        VendorGoogleImageResult? result = JsonConvert.DeserializeObject<VendorGoogleImageResult>(\"\"\"\n+            {\n+              \"candidates\": [\n+                {\n+                  \"content\": {\n+                    \"role\": \"model\",\n+                    \"parts\": [\n+                      { \"thought\": true, \"inlineData\": { \"mimeType\": \"image/png\", \"data\": \"dGhvdWdodA==\" } },\n+                      { \"inlineData\": { \"mimeType\": \"image/png\", \"data\": \"ZmluYWw=\" } }\n+                    ]\n+                  }\n+                }\n+              ]\n+            }\n+            \"\"\");\n+\n+        ImageGenerationResult images = result!.ToChatResult(null);\n+\n+        Assert.That(images.Data!.Select(x => x.Base64), Is.EqualTo(new[] { \"ZmluYWw=\" }));\n+    }\n+\n+    [Test]\n+    public void ToChatResult_KeepsAllImagesWithoutThoughts()\n+    {\n+        VendorGoogleImageResult? result = JsonConvert.DeserializeObject<VendorGoogleImageResult>(\"\"\"\n+            {\n+              \"candidates\": [\n+                {\n+                  \"content\": {\n+                    \"role\": \"model\",\n+                    \"parts\": [\n+                      { \"inlineData\": { \"mimeType\": \"image/png\", \"data\": \"YQ==\" } },\n+                      { \"inlineData\": { \"mimeType\": \"image/png\", \"data\": \"Yg==\" } }\n+                    ]\n+                  }\n+                }\n+              ]\n+            }\n+            \"\"\");\n+\n+        ImageGenerationResult images = result!.ToChatResult(null);\n+\n+        Assert.That(images.Data!.Select(x => x.Base64), Is.EqualTo(new[] { \"YQ==\", \"Yg==\" }));\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Images/Vendors/Google/VendorGoogleImageResult.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -30,7 +30,7 @@ public override ImageGenerationResult ToChatResult(string? postData)\n             {\n                 Data = Candidates\n                     .SelectMany(c => c.Content?.Parts ?? [])\n-                    .Where(p => p.InlineData is not null)\n+                    .Where(p => p.InlineData is not null && p.Thought is not true)\n                     .Select(p => new TornadoGeneratedImage\n                     {\n                         Base64 = p.InlineData!.Data,"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/GoogleImageThoughtPartsTests.cs"
+ ]
+}

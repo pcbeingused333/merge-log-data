@@ -1,0 +1,40 @@
+{
+ "repo": "braintrustdata/braintrust-sdk-javascript",
+ "number": 2650,
+ "url": "https://github.com/braintrustdata/braintrust-sdk-javascript/pull/2650",
+ "title": "fix(google-genai): keep the finish reason of a streamed response that has no content",
+ "merged_at": "2026-10-27T11:07:15Z",
+ "files": [
+  {
+   "filename": ".changeset/keep-google-genai-stream-finish-reason.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+\"braintrust\": patch\n+---\n+\n+fix(google-genai): Keep the finish reason of a streamed response that has no content"
+  },
+  {
+   "filename": "js/src/instrumentation/plugins/google-genai-plugin.test.ts",
+   "status": "modified",
+   "additions": 92,
+   "deletions": 0,
+   "patch": "@@ -542,6 +542,98 @@ describe(\"GoogleGenAIPlugin\", () => {\n       expect(JSON.stringify(span.log.mock.calls)).not.toContain(\"aGVsbG8=\");\n       expect(span.end).toHaveBeenCalledTimes(1);\n     });\n+\n+    it(\"keeps the finish reason of a stream that ends without content\", async () => {\n+      plugin.enable();\n+      const handlers = subscribeSpy.mock.calls[1][0];\n+      const event: any = {\n+        arguments: [\n+          { contents: \"something blocked\", model: \"gemini-3.8-flash\" },\n+        ],\n+      };\n+\n+      async function* stream() {\n+        yield {\n+          candidates: [\n+            {\n+              finishReason: \"SAFETY\",\n+              safetyRatings: [\n+                {\n+                  category: \"HARM_CATEGORY_DANGEROUS_CONTENT\",\n+                  probability: \"HIGH\",\n+                },\n+              ],\n+            },\n+          ],\n+        };\n+        yield { usageMetadata: { promptTokenCount: 3, totalTokenCount: 3 } };\n+      }\n+\n+      handlers.begin(event);\n+      event.result = stream();\n+      handlers.resolve(event);\n+      for await (const _chunk of event.result) {\n+        // Consume the provider stream so the instrumentation finalizes it.\n+      }\n+\n+      const span = mockStartSpan.mock.results.at(-1)?.value as {\n+        log: ReturnType<typeof vi.fn>;\n+      };\n+      expect(span.log).toHaveBeenCalledWith(\n+        expect.objectContaining({\n+          output: {\n+            candidates: [\n+              {\n+                finishReason: \"SAFETY\",\n+                safetyRatings: [\n+                  {\n+                    category: \"HARM_CATEGORY_DANGEROUS_CONTENT\",\n+                    probability: \"HIGH\",\n+                  },\n+                ],\n+              },\n+            ],\n+            usageMetadata: { promptTokenCount: 3, totalTokenCount: 3 },\n+          },\n+        }),\n+      );\n+    });\n+\n+    it(\"keeps the prompt feedback of a stream whose prompt was blocked\", async () => {\n+      plugin.enable();\n+      const handlers = subscribeSpy.mock.calls[1][0];\n+      const event: any = {\n+        arguments: [\n+          { contents: \"something blocked\", model: \"gemini-3.8-flash\" },\n+        ],\n+      };\n+\n+      async function* stream() {\n+        yield {\n+          promptFeedback: { blockReason: \"SAFETY\" },\n+          usageMetadata: { promptTokenCount: 3, totalTokenCount: 3 },\n+        };\n+      }\n+\n+      handlers.begin(event);\n+      event.result = stream();\n+      handlers.resolve(event);\n+      for await (const _chunk of event.result) {\n+        // Consume the provider stream so the instrumentation finalizes it.\n+      }\n+\n+      const span = mockStartSpan.mock.results.at(-1)?.value as {\n+        log: ReturnType<typeof vi.fn>;\n+      };\n+      expect(span.log).toHaveBeenCalledWith(\n+        expect.objectContaining({\n+          output: {\n+            promptFeedback: { blockReason: \"SAFETY\" },\n+            usageMetadata: { promptTokenCount: 3, totalTokenCount: 3 },\n+          },\n+        }),\n+      );\n+    });\n   });\n \n   describe(\"generateImages channel interception\", () => {"
+  },
+  {
+   "filename": "js/src/instrumentation/plugins/google-genai-plugin.ts",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 13,
+   "patch": "@@ -2001,19 +2001,22 @@ function aggregateGenerateContentChunks(\n   const otherParts: Record<string, unknown>[] = [];\n   let groundingMetadata: unknown = undefined;\n   let usageMetadata: GoogleGenAIUsageMetadata | null = null;\n-  let lastResponse: GoogleGenAIGenerateContentResponse | null = null;\n+  let promptFeedback: GoogleGenAIGenerateContentResponse[\"promptFeedback\"];\n+  let lastCandidates: GoogleGenAIGenerateContentResponse[\"candidates\"];\n \n   for (const chunk of chunks) {\n-    lastResponse = chunk;\n-\n     if (chunk.usageMetadata) {\n       usageMetadata = chunk.usageMetadata;\n     }\n+    if (chunk.promptFeedback) {\n+      promptFeedback = chunk.promptFeedback;\n+    }\n     if (chunk.groundingMetadata !== undefined) {\n       groundingMetadata = chunk.groundingMetadata;\n     }\n \n     if (chunk.candidates && Array.isArray(chunk.candidates)) {\n+      lastCandidates = chunk.candidates;\n       for (const candidate of chunk.candidates) {\n         if (candidate.content?.parts) {\n           for (const part of candidate.content.parts) {\n@@ -2054,15 +2057,15 @@ function aggregateGenerateContentChunks(\n   }\n   parts.push(...otherParts);\n \n-  if (parts.length > 0 && lastResponse?.candidates) {\n+  if (lastCandidates) {\n     const candidates: Record<string, unknown>[] = [];\n-    for (const candidate of lastResponse.candidates) {\n-      const candidateDict: Record<string, unknown> = {\n-        content: {\n-          parts,\n-          role: \"model\",\n-        },\n-      };\n+    for (const candidate of lastCandidates) {\n+      // A stream can end without content (for example a SAFETY block), but its\n+      // finish reason and ratings still belong in the output.\n+      const candidateDict: Record<string, unknown> = {};\n+      if (parts.length > 0) {\n+        candidateDict.content = { parts, role: \"model\" };\n+      }\n \n       if (candidate.finishReason !== undefined) {\n         candidateDict.finishReason = candidate.finishReason;\n@@ -2077,15 +2080,22 @@ function aggregateGenerateContentChunks(\n         candidateDict.safetyRatings = candidate.safetyRatings;\n       }\n \n-      candidates.push(candidateDict);\n+      if (Object.keys(candidateDict).length > 0) {\n+        candidates.push(candidateDict);\n+      }\n+    }\n+    if (candidates.length > 0) {\n+      aggregated.candidates = candidates;\n     }\n-    aggregated.candidates = candidates;\n   }\n \n   if (usageMetadata) {\n     aggregated.usageMetadata = usageMetadata;\n     populateUsageMetrics(metrics, usageMetadata);\n   }\n+  if (promptFeedback) {\n+    aggregated.promptFeedback = promptFeedback;\n+  }\n   if (groundingMetadata !== undefined) {\n     aggregated.groundingMetadata = groundingMetadata;\n   }"
+  },
+  {
+   "filename": "js/src/vendor-sdk-types/google-genai.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -237,6 +237,7 @@ export interface GoogleGenAIGenerateContentResponse {\n     safetyRatings?: Record<string, unknown>[];\n   }[];\n   groundingMetadata?: GoogleGenAIGroundingMetadata;\n+  promptFeedback?: Record<string, unknown>;\n   usageMetadata?: GoogleGenAIUsageMetadata;\n   text?: string;\n   [key: string]: unknown;"
+  }
+ ],
+ "test_files": [
+  "js/src/instrumentation/plugins/google-genai-plugin.test.ts"
+ ]
+}

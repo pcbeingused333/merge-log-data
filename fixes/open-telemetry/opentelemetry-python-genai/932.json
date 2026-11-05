@@ -1,0 +1,41 @@
+{
+ "repo": "open-telemetry/opentelemetry-python-genai",
+ "number": 932,
+ "url": "https://github.com/open-telemetry/opentelemetry-python-genai/pull/932",
+ "title": "fix(bedrock): do not record an empty reasoning part for redacted Converse content",
+ "merged_at": "2026-10-22T03:45:27Z",
+ "files": [
+  {
+   "filename": "instrumentation/opentelemetry-instrumentation-genai-bedrock/.changelog/932.fixed",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+Stop recording an empty reasoning part for redacted Converse reasoning content."
+  },
+  {
+   "filename": "instrumentation/opentelemetry-instrumentation-genai-bedrock/src/opentelemetry/instrumentation/genai/bedrock/extractors.py",
+   "status": "modified",
+   "additions": 0,
+   "deletions": 2,
+   "patch": "@@ -138,8 +138,6 @@ def extract_content_block(block: dict[str, Any]) -> MessagePart | None:\n         reasoning_text = reasoning.get(\"reasoningText\")\n         if _is_dict(reasoning_text) and \"text\" in reasoning_text:\n             return ReasoningPart(content=reasoning_text[\"text\"])\n-        if \"redactedContent\" in reasoning:\n-            return ReasoningPart(content=\"\")\n     if block_type in (\"thinking\", \"redacted_thinking\"):\n         content = block.get(\"thinking\") or block.get(\"data\") or \"\"\n         return ReasoningPart(content=str(content))"
+  },
+  {
+   "filename": "instrumentation/opentelemetry-instrumentation-genai-bedrock/tests/test_converse.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 3,
+   "patch": "@@ -460,9 +460,7 @@ def test_extract_content_block_reasoning() -> None:\n     part2 = extract_content_block(\n         {\"reasoningContent\": {\"redactedContent\": b\"redacted_bytes\"}}\n     )\n-    assert part2 is not None\n-    assert part2.type == \"reasoning\"\n-    assert getattr(part2, \"content\") == \"\"\n+    assert part2 is None\n \n \n def test_extract_content_block_document() -> None:"
+  },
+  {
+   "filename": "instrumentation/opentelemetry-instrumentation-genai-bedrock/tests/test_converse_stream.py",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -467,3 +467,38 @@ def test_stream_wrapper_with_reasoning(tracer_provider) -> None:\n     assert out_msg.parts[1].type == \"text\"\n     assert getattr(out_msg.parts[1], \"content\") == \"Here is the result.\"\n     assert invocation.finish_reasons == [\"stop\"]\n+\n+\n+def test_stream_wrapper_skips_redacted_reasoning(tracer_provider) -> None:\n+    handler = TelemetryHandler(tracer_provider=tracer_provider)\n+    invocation = handler.inference(provider=\"aws.bedrock\")\n+    wrapper = BedrockConverseStreamWrapper(\n+        stream=mock.MagicMock(),\n+        invocation=invocation,\n+        capture_content=True,\n+    )\n+    wrapper._process_chunk(\n+        {\n+            \"contentBlockStart\": {\"contentBlockIndex\": 0, \"start\": {}},\n+            \"contentBlockDelta\": {\n+                \"contentBlockIndex\": 0,\n+                \"delta\": {\n+                    \"reasoningContent\": {\"redactedContent\": b\"redacted\"}\n+                },\n+            },\n+        }\n+    )\n+    wrapper._process_chunk(\n+        {\n+            \"contentBlockStart\": {\"contentBlockIndex\": 1, \"start\": {}},\n+            \"contentBlockDelta\": {\n+                \"contentBlockIndex\": 1,\n+                \"delta\": {\"text\": \"Here is the result.\"},\n+            },\n+            \"messageStop\": {\"stopReason\": \"end_turn\"},\n+        }\n+    )\n+    wrapper._on_stream_end()\n+    parts = invocation.output_messages[0].parts\n+    assert [part.type for part in parts] == [\"text\"]\n+    assert getattr(parts[0], \"content\") == \"Here is the result.\""
+  }
+ ],
+ "test_files": [
+  "instrumentation/opentelemetry-instrumentation-genai-bedrock/tests/test_converse.py",
+  "instrumentation/opentelemetry-instrumentation-genai-bedrock/tests/test_converse_stream.py"
+ ]
+}
