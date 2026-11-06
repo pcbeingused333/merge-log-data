@@ -1,0 +1,61 @@
+{
+ "repo": "k8sgpt-ai/k8sgpt",
+ "number": 1916,
+ "url": "https://github.com/k8sgpt-ai/k8sgpt/pull/1916",
+ "title": "fix: default max tokens for Bedrock Converse, Cohere, SageMaker, OCI and Google backends",
+ "merged_at": "2026-11-05T22:30:16Z",
+ "files": [
+  {
+   "filename": "pkg/ai/amazonbedrockconverse.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -95,7 +95,7 @@ func (a *AmazonBedrockConverseClient) Configure(config IAIConfig) error {\n \t// Set common configuration parameters\n \ta.temperature = config.GetTemperature()\n \ta.topP = config.GetTopP()\n-\ta.maxTokens = config.GetMaxTokens()\n+\ta.maxTokens = maxTokensOrDefault(config.GetMaxTokens())\n \ta.stopSequences = config.GetStopSequences()\n \n \treturn nil"
+  },
+  {
+   "filename": "pkg/ai/amazonsagemaker.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -74,7 +74,7 @@ func (c *SageMakerAIClient) Configure(config IAIConfig) error {\n \tc.model = config.GetModel()\n \tc.endpoint = config.GetEndpointName()\n \tc.temperature = config.GetTemperature()\n-\tc.maxTokens = config.GetMaxTokens()\n+\tc.maxTokens = maxTokensOrDefault(config.GetMaxTokens())\n \tc.topP = config.GetTopP()\n \tc.topK = config.GetTopK()\n \treturn nil"
+  },
+  {
+   "filename": "pkg/ai/cohere.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -53,7 +53,7 @@ func (c *CohereClient) Configure(config IAIConfig) error {\n \tc.client = client\n \tc.model = config.GetModel()\n \tc.temperature = config.GetTemperature()\n-\tc.maxTokens = config.GetMaxTokens()\n+\tc.maxTokens = maxTokensOrDefault(config.GetMaxTokens())\n \n \treturn nil\n }"
+  },
+  {
+   "filename": "pkg/ai/googlegenai.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -55,7 +55,7 @@ func (c *GoogleGenAIClient) Configure(config IAIConfig) error {\n \tc.temperature = config.GetTemperature()\n \tc.topP = config.GetTopP()\n \tc.topK = config.GetTopK()\n-\tc.maxTokens = config.GetMaxTokens()\n+\tc.maxTokens = maxTokensOrDefault(config.GetMaxTokens())\n \treturn nil\n }\n "
+  },
+  {
+   "filename": "pkg/ai/googlevertexai.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -129,7 +129,7 @@ func (g *GoogleVertexAIClient) Configure(config IAIConfig) error {\n \tg.temperature = config.GetTemperature()\n \tg.topP = config.GetTopP()\n \tg.topK = config.GetTopK()\n-\tg.maxTokens = config.GetMaxTokens()\n+\tg.maxTokens = maxTokensOrDefault(config.GetMaxTokens())\n \n \treturn nil\n }"
+  },
+  {
+   "filename": "pkg/ai/maxtokens_default_test.go",
+   "status": "added",
+   "additions": 73,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,73 @@\n+package ai\n+\n+import (\n+\t\"context\"\n+\t\"encoding/json\"\n+\t\"io\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"testing\"\n+\n+\t\"github.com/aws/aws-sdk-go-v2/service/bedrockruntime\"\n+\t\"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types\"\n+\t\"github.com/stretchr/testify/assert\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+// With no maxtokens in the config (zero value), these backends must fall back to maxToken\n+// like the OpenAI-compatible ones, instead of sending a limit of 0.\n+\n+func TestAmazonBedrockConverse_DefaultMaxTokensWhenUnset(t *testing.T) {\n+\tmock := &mockConverseClient{\n+\t\tconverseFunc: func(ctx context.Context, input *bedrockruntime.ConverseInput) (*bedrockruntime.ConverseOutput, error) {\n+\t\t\treturn &bedrockruntime.ConverseOutput{\n+\t\t\t\tOutput: &types.ConverseOutputMemberMessage{\n+\t\t\t\t\tValue: types.Message{\n+\t\t\t\t\t\tContent: []types.ContentBlock{&types.ContentBlockMemberText{Value: \"ok\"}},\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t}, nil\n+\t\t},\n+\t}\n+\tclient := &AmazonBedrockConverseClient{client: mock}\n+\trequire.NoError(t, client.Configure(&AIProvider{Model: \"test-model\", ProviderRegion: \"us-west-2\"}))\n+\n+\t_, err := client.GetCompletion(context.Background(), \"why is my pod crashing?\")\n+\trequire.NoError(t, err)\n+\n+\trequire.NotNil(t, mock.lastInput.InferenceConfig.MaxTokens)\n+\tassert.EqualValues(t, maxToken, *mock.lastInput.InferenceConfig.MaxTokens)\n+}\n+\n+func TestCohere_DefaultMaxTokensWhenUnset(t *testing.T) {\n+\tvar body map[string]any\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\traw, err := io.ReadAll(r.Body)\n+\t\trequire.NoError(t, err)\n+\t\trequire.NoError(t, json.Unmarshal(raw, &body))\n+\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t_ = json.NewEncoder(w).Encode(map[string]any{\"text\": \"ok\"})\n+\t}))\n+\tt.Cleanup(server.Close)\n+\n+\tclient := &CohereClient{}\n+\trequire.NoError(t, client.Configure(&AIProvider{Model: \"command-r\", Password: \"test-key\", BaseURL: server.URL}))\n+\n+\t_, err := client.GetCompletion(context.Background(), \"why is my pod crashing?\")\n+\trequire.NoError(t, err)\n+\n+\tassert.EqualValues(t, maxToken, body[\"max_tokens\"])\n+}\n+\n+func TestBackendsWithoutHTTPTestHook_DefaultMaxTokensWhenUnset(t *testing.T) {\n+\tt.Run(\"amazonsagemaker\", func(t *testing.T) {\n+\t\tclient := &SageMakerAIClient{}\n+\t\trequire.NoError(t, client.Configure(&AIProvider{Model: \"m\", ProviderRegion: \"us-east-1\"}))\n+\t\tassert.EqualValues(t, maxToken, client.maxTokens)\n+\t})\n+\tt.Run(\"googlegenai\", func(t *testing.T) {\n+\t\tclient := &GoogleGenAIClient{}\n+\t\trequire.NoError(t, client.Configure(&AIProvider{Model: \"gemini-pro\", Password: \"test-key\"}))\n+\t\tassert.EqualValues(t, maxToken, client.maxTokens)\n+\t})\n+}"
+  },
+  {
+   "filename": "pkg/ai/ocigenai.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -55,7 +55,7 @@ func (c *OCIGenAIClient) Configure(config IAIConfig) error {\n \tc.temperature = config.GetTemperature()\n \tc.topP = config.GetTopP()\n \tc.topK = config.GetTopK()\n-\tc.maxTokens = config.GetMaxTokens()\n+\tc.maxTokens = maxTokensOrDefault(config.GetMaxTokens())\n \tc.compartmentId = config.GetCompartmentId()\n \tprovider := common.DefaultConfigProvider()\n \tclient, err := generativeaiinference.NewGenerativeAiInferenceClientWithConfigurationProvider(provider)"
+  }
+ ],
+ "test_files": [
+  "pkg/ai/maxtokens_default_test.go"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "pipeshub-ai/pipeshub-ai",
+ "number": 5137,
+ "url": "https://github.com/pipeshub-ai/pipeshub-ai/pull/5137",
+ "title": "fix(agent-loop): skip empty assistant turn when replaying history to Anthropic",
+ "merged_at": "2026-10-31T14:26:24Z",
+ "files": [
+  {
+   "filename": "backend/python/app/agent_loop_lib/transport/anthropic.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -238,6 +238,11 @@ def _format_messages(self, messages: list[Message]) -> list[dict[str, Any]]:\n         previous_was_tool = False\n         for msg in messages:\n             entry = self._format_message(msg)\n+            if entry[\"role\"] == \"assistant\" and entry[\"content\"] == [{\"type\": \"text\", \"text\": \"\"}]:\n+                # An empty reply (no text, no tool calls) has nothing to replay;\n+                # Anthropic rejects an empty text block with a 400.\n+                logger.debug(\"anthropic: skipped an empty assistant turn\")\n+                continue\n             is_tool = msg.role == MessageRole.TOOL\n             if is_tool and previous_was_tool:\n                 formatted[-1][\"content\"].extend(entry[\"content\"])"
+  },
+  {
+   "filename": "backend/python/tests/unit/agent_loop_lib/transport/test_anthropic_coverage.py",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -703,3 +703,17 @@ async def test_error_during_text_iteration_is_wrapped(self) -> None:\n         with pytest.raises(TransportError):\n             async for _ in transport.stream([UserMessage(content=\"hi\")]):\n                 pass\n+\n+\n+class TestEmptyAssistantTurn:\n+    def test_format_messages_skips_empty_assistant_turn(self) -> None:\n+        transport = _transport()\n+        formatted = transport._format_messages(\n+            [\n+                UserMessage(content=\"hi\"),\n+                AssistantMessage(content=[]),\n+                UserMessage(content=\"Your last reply came through empty\"),\n+            ]\n+        )\n+        assert [m[\"role\"] for m in formatted] == [\"user\", \"user\"]\n+        assert all({\"type\": \"text\", \"text\": \"\"} not in m[\"content\"] for m in formatted if isinstance(m[\"content\"], list))"
+  }
+ ],
+ "test_files": [
+  "backend/python/tests/unit/agent_loop_lib/transport/test_anthropic_coverage.py"
+ ]
+}

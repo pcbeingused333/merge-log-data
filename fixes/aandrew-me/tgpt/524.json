@@ -1,0 +1,41 @@
+{
+ "repo": "aandrew-me/tgpt",
+ "number": 524,
+ "url": "https://github.com/aandrew-me/tgpt/pull/524",
+ "title": "fix(providers): send --temperature and --top_p in obscurifyai and pollinations",
+ "merged_at": "2026-11-04T08:31:15Z",
+ "files": [
+  {
+   "filename": "src/providers/obscurifyai/obscurifyai.go",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 6,
+   "patch": "@@ -24,6 +24,20 @@ type RequestBody struct {\n \tStream   bool   `json:\"stream\"`\n \tMessages []any  `json:\"messages\"`\n \tTools    []any  `json:\"tools,omitempty\"`\n+\n+\tTemperature *float64 `json:\"temperature,omitempty\"`\n+\tTopP        *float64 `json:\"top_p,omitempty\"`\n+}\n+\n+func newRequestBody(messages []any, params structs.Params) RequestBody {\n+\tbody := RequestBody{\n+\t\tModel:    model(params),\n+\t\tStream:   true,\n+\t\tMessages: messages,\n+\t\tTools:    params.Tools,\n+\t}\n+\tbody.Temperature, body.TopP = params.SamplingOptions()\n+\treturn body\n }\n \n func model(params structs.Params) string {\n@@ -80,12 +94,7 @@ func NewRequest(input string, params structs.Params) (*http.Response, error) {\n \t\t})\n \t}\n \n-\trequestInfo := RequestBody{\n-\t\tModel:    model(params),\n-\t\tStream:   true,\n-\t\tMessages: messages,\n-\t\tTools:    params.Tools,\n-\t}\n+\trequestInfo := newRequestBody(messages, params)\n \tjsonRequest, err := json.Marshal(requestInfo)\n \tif err != nil {\n \t\tlog.Fatal(\"Failed to build user request\")"
+  },
+  {
+   "filename": "src/providers/obscurifyai/obscurifyai_test.go",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -56,6 +56,24 @@ func TestRequestBody(t *testing.T) {\n \tassert.Len(t, decoded[\"tools\"], 1)\n }\n \n+func TestRequestBodyIncludesSamplingOptions(t *testing.T) {\n+\tbody := newRequestBody(nil, structs.Params{Temperature: \"0.2\", Top_p: \"0.9\"})\n+\tencoded, err := json.Marshal(body)\n+\tassert.NoError(t, err)\n+\n+\tvar decoded map[string]any\n+\tassert.NoError(t, json.Unmarshal(encoded, &decoded))\n+\tassert.Equal(t, 0.2, decoded[\"temperature\"])\n+\tassert.Equal(t, 0.9, decoded[\"top_p\"])\n+\n+\tencoded, err = json.Marshal(newRequestBody(nil, structs.Params{}))\n+\tassert.NoError(t, err)\n+\tdecoded = map[string]any{}\n+\tassert.NoError(t, json.Unmarshal(encoded, &decoded))\n+\tassert.NotContains(t, decoded, \"temperature\")\n+\tassert.NotContains(t, decoded, \"top_p\")\n+}\n+\n func TestGetMainText(t *testing.T) {\n \ttests := []struct {\n \t\tname string"
+  },
+  {
+   "filename": "src/providers/pollinations/pollinations.go",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 13,
+   "patch": "@@ -19,6 +19,19 @@ type RequestBody struct {\n \tStream   bool   `json:\"stream\"`\n \tMessages []any  `json:\"messages\"`\n \tTools    []any  `json:\"tools,omitempty\"`\n+\n+\tTemperature *float64 `json:\"temperature,omitempty\"`\n+\tTopP        *float64 `json:\"top_p,omitempty\"`\n+}\n+\n+func newRequestBody(params structs.Params) RequestBody {\n+\tbody := RequestBody{\n+\t\tModel:  \"openai\",\n+\t\tStream: true,\n+\t\tTools:  params.Tools,\n+\t}\n+\tbody.Temperature, body.TopP = params.SamplingOptions()\n+\treturn body\n }\n \n func NewRequest(input string, params structs.Params) (*http.Response, error) {\n@@ -28,11 +41,7 @@ func NewRequest(input string, params structs.Params) (*http.Response, error) {\n \t\tos.Exit(1)\n \t}\n \n-\trequestInfo := RequestBody{\n-\t\tModel:  \"openai\",\n-\t\tStream: true,\n-\t\tTools:  params.Tools,\n-\t}\n+\trequestInfo := newRequestBody(params)\n \n \tapiKey := params.ApiKey\n \tif apiKey == \"\" {\n@@ -48,14 +57,6 @@ func NewRequest(input string, params structs.Params) (*http.Response, error) {\n \t\trequestInfo.Model = envModel\n \t}\n \n-\t// if params.Temperature != \"\" {\n-\t// \trequestInfo.Temperature = params.Temperature\n-\t// }\n-\n-\t// if params.Top_p != \"\" {\n-\t// \trequestInfo.Top_p = params.Top_p\n-\t// }\n-\n \tmessages := make([]any, 0, len(params.PrevMessages)+2)\n \tif params.SystemPrompt != \"\" {\n \t\tmessages = append(messages, structs.DefaultMessage{"
+  },
+  {
+   "filename": "src/providers/pollinations/pollinations_test.go",
+   "status": "added",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,29 @@\n+package pollinations\n+\n+import (\n+\t\"encoding/json\"\n+\t\"testing\"\n+\n+\t\"github.com/aandrew-me/tgpt/v2/src/structs\"\n+\t\"github.com/stretchr/testify/assert\"\n+)\n+\n+func TestRequestBodyIncludesSamplingOptions(t *testing.T) {\n+\tencoded, err := json.Marshal(newRequestBody(structs.Params{Temperature: \"0.2\", Top_p: \"0.9\"}))\n+\tassert.NoError(t, err)\n+\n+\tvar decoded map[string]any\n+\tassert.NoError(t, json.Unmarshal(encoded, &decoded))\n+\tassert.Equal(t, 0.2, decoded[\"temperature\"])\n+\tassert.Equal(t, 0.9, decoded[\"top_p\"])\n+}\n+\n+func TestRequestBodyOmitsUnsetSamplingOptions(t *testing.T) {\n+\tencoded, err := json.Marshal(newRequestBody(structs.Params{}))\n+\tassert.NoError(t, err)\n+\n+\tvar decoded map[string]any\n+\tassert.NoError(t, json.Unmarshal(encoded, &decoded))\n+\tassert.NotContains(t, decoded, \"temperature\")\n+\tassert.NotContains(t, decoded, \"top_p\")\n+}"
+  }
+ ],
+ "test_files": [
+  "src/providers/obscurifyai/obscurifyai_test.go",
+  "src/providers/pollinations/pollinations_test.go"
+ ]
+}

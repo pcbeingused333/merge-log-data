@@ -1,0 +1,34 @@
+{
+ "repo": "temporalio/sdk-python",
+ "number": 2061,
+ "url": "https://github.com/temporalio/sdk-python/pull/2061",
+ "title": "Allow os.path in the workflow sandbox on Python 3.13.12+",
+ "merged_at": "2026-11-02T16:40:37Z",
+ "files": [
+  {
+   "filename": "temporalio/worker/workflow_sandbox/_restrictions.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 2,
+   "patch": "@@ -643,16 +643,17 @@ def _public_callables(parent: Any, *, exclude: set[str] = set()) -> set[str]:\n         \"os\": SandboxMatcher(\n             # As of https://github.com/python/cpython/pull/132662 in python 3.14 we have to allow os.path calls\n             # which may occur during exception tracing. See https://github.com/python/cpython/issues/140228.\n+            # The linecache change behind it was backported to python 3.13.12.\n             children={\n                 \"path\": SandboxMatcher.none\n-                if sys.version_info >= (3, 14)\n+                if sys.version_info >= (3, 13, 12)\n                 else SandboxMatcher.all\n             },\n             access={\"name\"},\n             use={\"*\"},\n             # As of https://github.com/python/cpython/pull/112097, os.stat\n             # calls are now made when displaying errors\n-            exclude={\"stat\", \"path\"} if sys.version_info >= (3, 14) else {\"stat\"},\n+            exclude={\"stat\", \"path\"} if sys.version_info >= (3, 13, 12) else {\"stat\"},\n             # Only restricted at runtime\n             only_runtime=True,\n         ),"
+  },
+  {
+   "filename": "tests/worker/workflow_sandbox/test_restrictions.py",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -2,6 +2,7 @@\n \n import operator\n import pathlib\n+import sys\n from collections.abc import Callable\n from dataclasses import dataclass\n from datetime import timedelta\n@@ -177,3 +178,15 @@ def test_workflow_sandbox_restricted_proxy():\n \n     # Unfortunately, we can't intercept the type() call\n     assert type(obj.foo) is _RestrictedProxy\n+\n+\n+def test_os_path_is_allowed_where_traceback_formatting_needs_it():\n+    # Formatting a traceback calls os.path (via linecache) from inside the\n+    # sandbox on Python 3.14+ and on 3.13.12+, where the linecache rewrite\n+    # (https://github.com/python/cpython/issues/133253) was backported. See\n+    # https://github.com/python/cpython/issues/140228.\n+    context = RestrictionContext()\n+    context.is_runtime = True\n+    matcher = SandboxRestrictions.invalid_module_members_default\n+    restricted = matcher.match_access(context, \"os\", \"path\", \"isabs\", include_use=True)\n+    assert restricted == (sys.version_info < (3, 13, 12))"
+  },
+  {
+   "filename": "tests/worker/workflow_sandbox/test_runner.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -192,9 +192,9 @@ async def test_workflow_sandbox_restrictions(client: Client):\n             \"import uuid\\nuuid.uuid4()\",\n         ]\n \n-        # We can only validate this restriction prior to 3.14 because we had to exempt it due to\n+        # We can only validate this restriction prior to 3.13.12 because we had to exempt it due to\n         # https://github.com/python/cpython/issues/140228\n-        if sys.version_info < (3, 14):\n+        if sys.version_info < (3, 13, 12):\n             invalid_code_to_check.append(\"import os.path\\nos.path.abspath('foo')\")  # type: ignore[reportUnreachable]\n \n         # uuid7 was only added to the stdlib in 3.14"
+  }
+ ],
+ "test_files": [
+  "tests/worker/workflow_sandbox/test_restrictions.py",
+  "tests/worker/workflow_sandbox/test_runner.py"
+ ]
+}

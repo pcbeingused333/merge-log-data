@@ -1,0 +1,26 @@
+{
+ "repo": "kestra-io/plugin-ai",
+ "number": 549,
+ "url": "https://github.com/kestra-io/plugin-ai/pull/549",
+ "title": "fix(watsonx): stop forcing a 512 output-token cap and pass topP, seed and logging",
+ "merged_at": "2026-11-06T06:57:54Z",
+ "files": [
+  {
+   "filename": "src/main/java/io/kestra/plugin/ai/provider/WatsonxAI.java",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -90,7 +90,11 @@ public ChatModel chatModel(RunContext runContext, ChatConfiguration configuratio\n             .projectId(runContext.render(this.projectId).as(String.class).orElseThrow())\n             .modelName(runContext.render(this.getModelName()).as(String.class).orElse(\"ibm/granite-3-3-8b-instruct\"))\n             .temperature(runContext.render(configuration.getTemperature()).as(Double.class).orElse(0.7))\n-            .maxOutputTokens(runContext.render(configuration.getMaxToken()).as(Integer.class).orElse(512))\n+            .topP(runContext.render(configuration.getTopP()).as(Double.class).orElse(null))\n+            .seed(runContext.render(configuration.getSeed()).as(Integer.class).orElse(null))\n+            .logRequests(runContext.render(configuration.getLogRequests()).as(Boolean.class).orElse(false))\n+            .logResponses(runContext.render(configuration.getLogResponses()).as(Boolean.class).orElse(false))\n+            .maxOutputTokens(runContext.render(configuration.getMaxToken()).as(Integer.class).orElse(null))\n             .build();\n     }\n "
+  },
+  {
+   "filename": "src/test/java/io/kestra/plugin/ai/provider/WatsonxAITest.java",
+   "status": "added",
+   "additions": 55,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,55 @@\n+package io.kestra.plugin.ai.provider;\n+\n+import java.util.Map;\n+\n+import org.junit.jupiter.api.Test;\n+\n+import io.kestra.core.context.TestRunContextFactory;\n+import io.kestra.core.junit.annotations.KestraTest;\n+import io.kestra.core.models.property.Property;\n+import io.kestra.plugin.ai.domain.ChatConfiguration;\n+\n+import dev.langchain4j.model.chat.ChatModel;\n+import jakarta.inject.Inject;\n+\n+import static org.assertj.core.api.Assertions.assertThat;\n+\n+@KestraTest\n+class WatsonxAITest {\n+\n+    @Inject\n+    private TestRunContextFactory runContextFactory;\n+\n+    @Test\n+    void chatModel_shouldNotCapOutputTokensByDefault() throws Exception {\n+        var model = chatModel(ChatConfiguration.empty());\n+\n+        assertThat(model.defaultRequestParameters().maxOutputTokens()).isNull();\n+    }\n+\n+    @Test\n+    void chatModel_shouldHonourMaxTokenAndTopP() throws Exception {\n+        var configuration = ChatConfiguration.builder()\n+            .maxToken(Property.ofValue(2048))\n+            .topP(Property.ofValue(0.5))\n+            .build();\n+\n+        var parameters = chatModel(configuration).defaultRequestParameters();\n+\n+        assertThat(parameters.maxOutputTokens()).isEqualTo(2048);\n+        assertThat(parameters.topP()).isEqualTo(0.5);\n+    }\n+\n+    // Building the model does not call watsonx.ai.\n+    private ChatModel chatModel(ChatConfiguration configuration) throws Exception {\n+        var provider = WatsonxAI.builder()\n+            .type(WatsonxAI.class.getName())\n+            .modelName(Property.ofValue(\"ibm/granite-3-3-8b-instruct\"))\n+            .baseUrl(Property.ofValue(\"https://us-south.ml.cloud.ibm.com\"))\n+            .apiKey(Property.ofValue(\"test-key\"))\n+            .projectId(Property.ofValue(\"test-project\"))\n+            .build();\n+\n+        return provider.chatModel(runContextFactory.of(Map.of()), configuration);\n+    }\n+}"
+  }
+ ],
+ "test_files": [
+  "src/test/java/io/kestra/plugin/ai/provider/WatsonxAITest.java"
+ ]
+}

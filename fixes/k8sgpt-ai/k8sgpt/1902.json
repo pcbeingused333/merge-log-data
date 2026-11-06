@@ -1,0 +1,61 @@
+{
+ "repo": "k8sgpt-ai/k8sgpt",
+ "number": 1902,
+ "url": "https://github.com/k8sgpt-ai/k8sgpt/pull/1902",
+ "title": "fix: reject empty completions from azureopenai, groq, litellm, gpt2giga and bedrockmantle",
+ "merged_at": "2026-11-05T22:29:28Z",
+ "files": [
+  {
+   "filename": "pkg/ai/azureopenai.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -122,6 +122,9 @@ func (c *AzureAIClient) GetCompletion(ctx context.Context, prompt string) (strin\n \tif len(resp.Choices) == 0 {\n \t\treturn \"\", errors.New(\"no completion choices returned\")\n \t}\n+\tif err := checkCompletionContent(resp.Choices[0].Message.Content, string(resp.Choices[0].FinishReason)); err != nil {\n+\t\treturn \"\", err\n+\t}\n \treturn resp.Choices[0].Message.Content, nil\n }\n "
+  },
+  {
+   "filename": "pkg/ai/bedrockmantle.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -88,6 +88,12 @@ func (c *AmazonBedrockMantleClient) GetCompletion(ctx context.Context, prompt st\n \tif err != nil {\n \t\treturn \"\", err\n \t}\n+\tif len(resp.Choices) == 0 {\n+\t\treturn \"\", errors.New(\"no completion choices returned from the AI provider\")\n+\t}\n+\tif err := checkCompletionContent(resp.Choices[0].Message.Content, string(resp.Choices[0].FinishReason)); err != nil {\n+\t\treturn \"\", err\n+\t}\n \treturn resp.Choices[0].Message.Content, nil\n }\n "
+  },
+  {
+   "filename": "pkg/ai/completion_content.go",
+   "status": "added",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,15 @@\n+package ai\n+\n+import (\n+\t\"fmt\"\n+\t\"strings\"\n+)\n+\n+// checkCompletionContent returns an error when a provider answered with blank\n+// content, so callers do not treat an empty completion as a successful analysis.\n+func checkCompletionContent(content, finishReason string) error {\n+\tif strings.TrimSpace(content) == \"\" {\n+\t\treturn fmt.Errorf(\"received an empty completion from the AI provider (finish reason: %s)\", finishReason)\n+\t}\n+\treturn nil\n+}"
+  },
+  {
+   "filename": "pkg/ai/empty_completion_test.go",
+   "status": "added",
+   "additions": 81,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,81 @@\n+package ai\n+\n+import (\n+\t\"context\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"testing\"\n+\n+\t\"github.com/stretchr/testify/assert\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+// A provider that answers 200 with blank content (e.g. a token limit hit by a\n+// reasoning model) must surface an error instead of an empty analysis.\n+func TestGetCompletion_EmptyContentIsAnError(t *testing.T) {\n+\tconst body = `{\"choices\": [{\"message\": {\"role\": \"assistant\", \"content\": \"  \"}, \"finish_reason\": \"length\"}]}`\n+\tt.Setenv(\"AWS_BEARER_TOKEN_BEDROCK\", \"test-key\")\n+\n+\ttests := []struct {\n+\t\tname      string\n+\t\tconfigure func(t *testing.T, url string) IAI\n+\t}{\n+\t\t{\"azureopenai\", func(t *testing.T, url string) IAI {\n+\t\t\tc := &AzureAIClient{}\n+\t\t\trequire.NoError(t, c.Configure(&azureMockConfig{baseURL: url, engine: \"gpt-4\"}))\n+\t\t\treturn c\n+\t\t}},\n+\t\t{\"groq\", func(t *testing.T, url string) IAI {\n+\t\t\tc := &GroqClient{}\n+\t\t\trequire.NoError(t, c.Configure(&litellmMockConfig{baseURL: url, model: \"llama\"}))\n+\t\t\treturn c\n+\t\t}},\n+\t\t{\"litellm\", func(t *testing.T, url string) IAI {\n+\t\t\tc := &LiteLLMClient{}\n+\t\t\trequire.NoError(t, c.Configure(&litellmMockConfig{baseURL: url, model: \"gpt-4o\"}))\n+\t\t\treturn c\n+\t\t}},\n+\t\t{\"bedrockmantle\", func(t *testing.T, url string) IAI {\n+\t\t\tc := &AmazonBedrockMantleClient{}\n+\t\t\trequire.NoError(t, c.Configure(&AIProvider{Model: \"m\", BaseURL: url, ProviderRegion: \"us-east-1\"}))\n+\t\t\treturn c\n+\t\t}},\n+\t\t{\"gpt2giga\", func(t *testing.T, url string) IAI {\n+\t\t\treturn &Gpt2GigaClient{client: http.DefaultClient, baseURL: url}\n+\t\t}},\n+\t}\n+\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {\n+\t\t\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t\t\t_, _ = w.Write([]byte(body))\n+\t\t\t}))\n+\t\t\tdefer server.Close()\n+\n+\t\t\tout, err := tt.configure(t, server.URL).GetCompletion(context.Background(), \"prompt\")\n+\n+\t\t\trequire.Error(t, err)\n+\t\t\tassert.Empty(t, out)\n+\t\t\tassert.Contains(t, err.Error(), \"empty completion\")\n+\t\t})\n+\t}\n+}\n+\n+func TestBedrockMantleGetCompletion_NoChoices(t *testing.T) {\n+\tt.Setenv(\"AWS_BEARER_TOKEN_BEDROCK\", \"test-key\")\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {\n+\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t_, _ = w.Write([]byte(`{\"choices\": []}`))\n+\t}))\n+\tdefer server.Close()\n+\n+\tc := &AmazonBedrockMantleClient{}\n+\trequire.NoError(t, c.Configure(&AIProvider{Model: \"m\", BaseURL: server.URL, ProviderRegion: \"us-east-1\"}))\n+\n+\tout, err := c.GetCompletion(context.Background(), \"prompt\")\n+\n+\trequire.Error(t, err)\n+\tassert.Empty(t, out)\n+\tassert.Contains(t, err.Error(), \"no completion choices\")\n+}"
+  },
+  {
+   "filename": "pkg/ai/gpt2giga.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -107,6 +107,9 @@ func (c *Gpt2GigaClient) GetCompletion(ctx context.Context, prompt string) (stri\n \t\treturn \"\", errors.New(\"no choices in response\")\n \t}\n \n+\tif err := checkCompletionContent(response.Choices[0].Message.Content, \"\"); err != nil {\n+\t\treturn \"\", err\n+\t}\n \treturn response.Choices[0].Message.Content, nil\n }\n "
+  },
+  {
+   "filename": "pkg/ai/groq.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -100,6 +100,9 @@ func (c *GroqClient) GetCompletion(ctx context.Context, prompt string) (string,\n \tif len(resp.Choices) == 0 {\n \t\treturn \"\", errors.New(\"no completion choices returned\")\n \t}\n+\tif err := checkCompletionContent(resp.Choices[0].Message.Content, string(resp.Choices[0].FinishReason)); err != nil {\n+\t\treturn \"\", err\n+\t}\n \treturn resp.Choices[0].Message.Content, nil\n }\n "
+  },
+  {
+   "filename": "pkg/ai/litellm.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -102,6 +102,9 @@ func (c *LiteLLMClient) GetCompletion(ctx context.Context, prompt string) (strin\n \tif len(resp.Choices) == 0 {\n \t\treturn \"\", errors.New(\"no completion choices returned from LiteLLM\")\n \t}\n+\tif err := checkCompletionContent(resp.Choices[0].Message.Content, string(resp.Choices[0].FinishReason)); err != nil {\n+\t\treturn \"\", err\n+\t}\n \treturn resp.Choices[0].Message.Content, nil\n }\n "
+  }
+ ],
+ "test_files": [
+  "pkg/ai/empty_completion_test.go"
+ ]
+}

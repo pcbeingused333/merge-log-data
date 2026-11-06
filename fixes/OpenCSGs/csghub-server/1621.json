@@ -1,0 +1,34 @@
+{
+ "repo": "OpenCSGs/csghub-server",
+ "number": 1621,
+ "url": "https://github.com/OpenCSGs/csghub-server/pull/1621",
+ "title": "fix(aigateway): map chat finish_reason content_filter to refusal stop_reason",
+ "merged_at": "2026-11-04T12:21:20Z",
+ "files": [
+  {
+   "filename": "aigateway/handler/anthropic/common.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 3,
+   "patch": "@@ -382,6 +382,8 @@ func chatFinishReasonToStopReason(finishReason string) string {\n \t\treturn \"tool_use\"\n \tcase \"stop_sequence\":\n \t\treturn \"stop_sequence\"\n+\tcase \"content_filter\":\n+\t\treturn \"refusal\"\n \tdefault:\n \t\treturn \"end_turn\"\n \t}\n@@ -390,11 +392,11 @@ func chatFinishReasonToStopReason(finishReason string) string {\n // chatStopReason derives the Messages stop_reason from the Chat finish_reason\n // and the content that was actually produced. Some OpenAI-compatible upstreams\n // (Gemini) end a tool-calling turn with finish_reason \"stop\", so a message with\n-// tool_use blocks reports tool_use; a truncated message (\"length\") still wins\n-// and reports max_tokens.\n+// tool_use blocks reports tool_use; a truncated message (\"length\") or a\n+// filtered one (\"content_filter\") still wins and reports max_tokens or refusal.\n func chatStopReason(finishReason string, hasToolUse bool) string {\n \tstopReason := chatFinishReasonToStopReason(finishReason)\n-\tif hasToolUse && stopReason != \"max_tokens\" {\n+\tif hasToolUse && stopReason != \"max_tokens\" && stopReason != \"refusal\" {\n \t\treturn \"tool_use\"\n \t}\n \treturn stopReason"
+  },
+  {
+   "filename": "aigateway/handler/anthropic/common_test.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -552,6 +552,7 @@ func TestChatFinishReasonToStopReason(t *testing.T) {\n \t\t{\"tool_calls\", \"tool_use\"},\n \t\t{\"function_call\", \"tool_use\"},\n \t\t{\"stop_sequence\", \"stop_sequence\"},\n+\t\t{\"content_filter\", \"refusal\"},\n \t\t{\"unknown\", \"end_turn\"},\n \t}\n \tfor _, tt := range tests {"
+  },
+  {
+   "filename": "aigateway/handler/anthropic/to_chat_tool_calls_test.go",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -136,6 +136,7 @@ func TestChatResponseToMessagesResponseStopReasonFromContent(t *testing.T) {\n \t\t{\"stop with tool calls\", \"stop\", toolCall, \"tool_use\"},\n \t\t{\"tool_calls with tool calls\", \"tool_calls\", toolCall, \"tool_use\"},\n \t\t{\"length wins over tool calls\", \"length\", toolCall, \"max_tokens\"},\n+\t\t{\"content_filter wins over tool calls\", \"content_filter\", toolCall, \"refusal\"},\n \t\t{\"stop without tool calls\", \"stop\", \"\", \"end_turn\"},\n \t\t{\"length without tool calls\", \"length\", \"\", \"max_tokens\"},\n \t}\n@@ -176,6 +177,14 @@ func TestToChatStreamLengthWinsOverToolCalls(t *testing.T) {\n \tassert.Equal(t, \"max_tokens\", stopReason)\n }\n \n+func TestToChatStreamContentFilterWinsOverToolCalls(t *testing.T) {\n+\t_, stopReason := streamToolCalls(t,\n+\t\tchatChunk(toolCallDelta(wholeToolCall(\"call_paris\", \"Paris\")), `\"content_filter\"`),\n+\t)\n+\n+\tassert.Equal(t, \"refusal\", stopReason)\n+}\n+\n func TestToChatStreamStopWithoutToolCallsReportsEndTurn(t *testing.T) {\n \t_, stopReason := streamToolCalls(t,\n \t\tchatChunk(`{\"role\":\"assistant\",\"content\":\"Hello\"}`, `null`),"
+  }
+ ],
+ "test_files": [
+  "aigateway/handler/anthropic/common_test.go",
+  "aigateway/handler/anthropic/to_chat_tool_calls_test.go"
+ ]
+}

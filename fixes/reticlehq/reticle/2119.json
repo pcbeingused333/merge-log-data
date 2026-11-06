@@ -1,0 +1,41 @@
+{
+ "repo": "reticlehq/reticle",
+ "number": 2119,
+ "url": "https://github.com/reticlehq/reticle/pull/2119",
+ "title": "fix(server): default the unnamed side of an emulate viewport to the headless size",
+ "merged_at": "2026-11-02T13:35:11Z",
+ "files": [
+  {
+   "filename": ".changes/emulate-viewport-default.md",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+### Fixed\n+\n+- **`@reticlehq/server` — a lease opened with `emulate` that names only a width, or only a height, keeps the headless 1440 by 900 for the other side.** The side it left out used to fall back to 1280 by 720, so `emulate: { width: 390 }` gave a 390 by 720 page, not the 390 by 900 that the headless default implies. The tool description now states 1440 by 900."
+  },
+  {
+   "filename": "server/src/portal/input/viewport-tools.test.ts",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -6,6 +6,7 @@ import {\n   VIEWPORT_NO_PROVIDER_RECOMMENDATION,\n } from '@reticlehq/core';\n import { VIEWPORT_TOOLS, leaseEmulationOf } from './viewport-tools.js';\n+import { HEADLESS_VIEWPORT } from '@/chromium-launch-options.js';\n import { contextEmulationOf } from '@/portal/pool/lease-emulation.js';\n import { ReticleTool } from '@reticlehq/core';\n import type { RealInputProvider } from './real-input.js';\n@@ -343,3 +344,16 @@ describe('a lease emulates a pointer', () => {\n     expect(calls).toEqual([]);\n   });\n });\n+\n+// ── A lease that names one side keeps the default for the other (#2052) ──\n+\n+describe('a lease that names only one side of the viewport', () => {\n+  it('fills the other side from the headless default, not from 1280 by 720', () => {\n+    expect(leaseEmulationOf({ width: 390 })).toEqual({\n+      viewport: { width: 390, height: HEADLESS_VIEWPORT.height },\n+    });\n+    expect(leaseEmulationOf({ height: 600 })).toEqual({\n+      viewport: { width: HEADLESS_VIEWPORT.width, height: 600 },\n+    });\n+  });\n+});"
+  },
+  {
+   "filename": "server/src/portal/input/viewport-tools.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 4,
+   "patch": "@@ -8,6 +8,7 @@ import {\n   viewportPxSchema,\n } from '@/surface/tools/args/numeric-bounds.js';\n import { asString } from '@reticlehq/core';\n+import { HEADLESS_VIEWPORT } from '@/chromium-launch-options.js';\n import type { RealInputProvider } from './real-input.js';\n import type { ToolDef, ToolDeps } from '@/surface/tools/tool-kit.js';\n import {\n@@ -20,9 +21,9 @@ import {\n \n // ── Media and width, as a tool call names them (reticle_viewport here, reticle_lease acquire) ──\n \n-/** Playwright's own default page size, used for the side a caller did not name. */\n-const DEFAULT_WIDTH = 1280;\n-const DEFAULT_HEIGHT = 720;\n+/** The side a caller did not name is the page size a headless lease already opens with. */\n+const DEFAULT_WIDTH = HEADLESS_VIEWPORT.width;\n+const DEFAULT_HEIGHT = HEADLESS_VIEWPORT.height;\n \n export const COLOR_SCHEME_ARG = z\n   .enum([ColorScheme.LIGHT, ColorScheme.DARK, ColorScheme.NO_PREFERENCE])\n@@ -52,7 +53,7 @@ const EmulateSchema = z\n \n export const LEASE_EMULATE_ARG = EmulateSchema.optional().describe(\n   'Open the lease with these set before the first paint: { colorScheme, reducedMotion, width, height, pointer }. ' +\n-    'A side you leave out keeps its default (1280 by 720). Change the media and the size later with ' +\n+    'A side you leave out keeps its default (1440 by 900). Change the media and the size later with ' +\n     'reticle_viewport; `pointer` cannot change on an open lease, so a touch-only rule needs a lease ' +\n     'acquired with pointer: \"coarse\".',\n );"
+  },
+  {
+   "filename": "server/src/surface/tools/lease-tools.test.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -1490,7 +1490,7 @@ describe('reticle_lease with an initScript stub', () => {\n     expect(acquired[0]?.emulate).toEqual({\n       reducedMotion: 'reduce',\n       colorScheme: 'dark',\n-      viewport: { width: 390, height: 720 },\n+      viewport: { width: 390, height: 900 },\n     });\n   });\n "
+  }
+ ],
+ "test_files": [
+  "server/src/portal/input/viewport-tools.test.ts",
+  "server/src/surface/tools/lease-tools.test.ts"
+ ]
+}

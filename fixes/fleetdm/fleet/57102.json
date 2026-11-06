@@ -1,0 +1,73 @@
+{
+ "repo": "fleetdm/fleet",
+ "number": 57102,
+ "url": "https://github.com/fleetdm/fleet/pull/57102",
+ "title": "fix(frontend): trim URL and email values before validating Settings forms",
+ "merged_at": "2026-11-03T18:33:33Z",
+ "files": [
+  {
+   "filename": "changes/56515-trim-settings-form-values",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+- Fixed Settings forms (Okta ACS URL, Fleet web address, SMTP sender address, ticket destination URL/email) showing a validation error for a valid URL or email with a leading or trailing space, which Save accepts after trimming."
+  },
+  {
+   "filename": "frontend/pages/admin/IntegrationsPage/cards/ConditionalAccess/components/OktaConditionalAccessModal/OktaConditionalAccessModal.tests.tsx",
+   "status": "added",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,27 @@\n+import { validate } from \"./OktaConditionalAccessModal\";\n+\n+describe(\"OktaConditionalAccessModal validate\", () => {\n+  const data = {\n+    okta_idp_id: \"idp\",\n+    okta_acs_url: \"https://example.okta.com/acs\",\n+    okta_audience_uri: \"audience\",\n+    okta_certificate: \"cert\",\n+  };\n+\n+  it(\"accepts a valid ACS URL with surrounding whitespace\", () => {\n+    const errors = validate({\n+      ...data,\n+      okta_acs_url: ` ${data.okta_acs_url} `,\n+    });\n+\n+    expect(errors.okta_acs_url).toBeUndefined();\n+  });\n+\n+  it(\"still rejects an invalid ACS URL\", () => {\n+    const errors = validate({ ...data, okta_acs_url: \" not a url \" });\n+\n+    expect(errors.okta_acs_url).toBe(\n+      \"Enter a valid URL with http or https scheme\"\n+    );\n+  });\n+});"
+  },
+  {
+   "filename": "frontend/pages/admin/IntegrationsPage/cards/ConditionalAccess/components/OktaConditionalAccessModal/OktaConditionalAccessModal.tsx",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -34,7 +34,7 @@ interface IFormData {\n   [OKTA_CERTIFICATE]: string;\n }\n \n-const validate = (data: IFormData): IFormErrors => {\n+export const validate = (data: IFormData): IFormErrors => {\n   const errors: IFormErrors = {};\n \n   if (!data[OKTA_IDP_ID].trim()) {\n@@ -52,7 +52,10 @@ const validate = (data: IFormData): IFormErrors => {\n       OKTA_ACS_URL\n     ] = `Assertion consumer service URL must be ${MAX_URL_LENGTH} characters or fewer`;\n   } else if (\n-    !isValidURL({ url: data[OKTA_ACS_URL], protocols: [\"http\", \"https\"] })\n+    !isValidURL({\n+      url: data[OKTA_ACS_URL].trim(),\n+      protocols: [\"http\", \"https\"],\n+    })\n   ) {\n     errors[OKTA_ACS_URL] = \"Enter a valid URL with http or https scheme\";\n   }"
+  },
+  {
+   "filename": "frontend/pages/admin/IntegrationsPage/cards/Integrations/components/IntegrationForm/IntegrationForm.tests.tsx",
+   "status": "added",
+   "additions": 26,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,26 @@\n+import { validateForm } from \"./IntegrationForm\";\n+\n+describe(\"IntegrationForm validateForm\", () => {\n+  const data = {\n+    url: \"https://example.atlassian.net\",\n+    apiToken: \"token\",\n+    email: \"user@example.com\",\n+    groupId: 1,\n+  };\n+\n+  it(\"accepts a valid URL and email with surrounding whitespace\", () => {\n+    const errors = validateForm(\n+      { ...data, url: ` ${data.url} `, email: ` ${data.email} ` },\n+      \"zendesk\"\n+    );\n+\n+    expect(errors.url).toBeUndefined();\n+    expect(errors.email).toBeUndefined();\n+  });\n+\n+  it(\"still rejects an invalid URL\", () => {\n+    const errors = validateForm({ ...data, url: \" not a url \" }, \"zendesk\");\n+\n+    expect(errors.url).toBe(\"Enter a valid HTTPS URL\");\n+  });\n+});"
+  },
+  {
+   "filename": "frontend/pages/admin/IntegrationsPage/cards/Integrations/components/IntegrationForm/IntegrationForm.tsx",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -37,15 +37,15 @@ interface IIntegrationFormProps {\n   gitOpsModeEnabled?: boolean;\n }\n \n-const validateForm = (\n+export const validateForm = (\n   data: IIntegrationFormData,\n   destination: string\n ): IFormErrors => {\n   const errors: IFormErrors = {};\n \n   if (!data.url) {\n     errors.url = \"Enter a URL\";\n-  } else if (!isValidURL({ url: data.url, protocols: [\"https\"] })) {\n+  } else if (!isValidURL({ url: data.url.trim(), protocols: [\"https\"] })) {\n     errors.url = \"Enter a valid HTTPS URL\";\n   }\n \n@@ -63,7 +63,7 @@ const validateForm = (\n   } else {\n     if (!data.email) {\n       errors.email = \"Enter an email\";\n-    } else if (!isValidEmail(data.email)) {\n+    } else if (!isValidEmail(data.email.trim())) {\n       errors.email = \"Enter a valid email\";\n     }\n     if (!data.groupId) {"
+  },
+  {
+   "filename": "frontend/pages/admin/OrgSettingsPage/cards/Smtp/Smtp.tests.tsx",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -60,6 +60,24 @@ describe(\"Smtp\", () => {\n       expect(errors.smtpPort).toBe(\"Enter a server port\");\n     });\n \n+    it(\"accepts a valid sender address with surrounding whitespace\", () => {\n+      const errors = validate({\n+        ...baseFormData,\n+        smtpSenderAddress: \" admin@example.com \",\n+      });\n+\n+      expect(errors.smtpSenderAddress).toBeUndefined();\n+    });\n+\n+    it(\"still rejects an invalid sender address\", () => {\n+      const errors = validate({\n+        ...baseFormData,\n+        smtpSenderAddress: \" not-an-email \",\n+      });\n+\n+      expect(errors.smtpSenderAddress).toBe(\"Enter a valid sender address\");\n+    });\n+\n     it(\"reports only the missing field when the other is filled\", () => {\n       const errors = validate({ ...baseFormData, smtpPort: undefined });\n "
+  },
+  {
+   "filename": "frontend/pages/admin/OrgSettingsPage/cards/Smtp/Smtp.tsx",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -49,7 +49,7 @@ export const validate = (data: ISmtpConfigFormData): IFormErrors => {\n   if (enableSMTP) {\n     if (!smtpSenderAddress) {\n       errors.smtpSenderAddress = \"Enter a sender address\";\n-    } else if (!isValidEmail(smtpSenderAddress)) {\n+    } else if (!isValidEmail(smtpSenderAddress.trim())) {\n       errors.smtpSenderAddress = \"Enter a valid sender address\";\n     }\n \n@@ -68,7 +68,7 @@ export const validate = (data: ISmtpConfigFormData): IFormErrors => {\n         errors.smtpPassword = \"Enter an SMTP password\";\n       }\n     }\n-  } else if (smtpSenderAddress && !isValidEmail(smtpSenderAddress)) {\n+  } else if (smtpSenderAddress && !isValidEmail(smtpSenderAddress.trim())) {\n     // Even when SMTP is disabled, a filled-in sender address must be a valid\n     // email so the value is ready when SMTP flips on.\n     errors.smtpSenderAddress = \"Enter a valid sender address\";"
+  },
+  {
+   "filename": "frontend/pages/admin/OrgSettingsPage/cards/WebAddress/WebAddress.tests.tsx",
+   "status": "added",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,11 @@\n+import { validate } from \"./WebAddress\";\n+\n+describe(\"WebAddress validate\", () => {\n+  it(\"accepts a valid URL with surrounding whitespace\", () => {\n+    expect(validate({ serverURL: \" https://fleet.example.com \" })).toEqual({});\n+  });\n+\n+  it(\"still rejects an invalid URL\", () => {\n+    expect(validate({ serverURL: \" fleet example \" }).serverURL).toBeDefined();\n+  });\n+});"
+  },
+  {
+   "filename": "frontend/pages/admin/OrgSettingsPage/cards/WebAddress/WebAddress.tsx",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -14,13 +14,13 @@ interface IWebAddressFormData {\n   serverURL: string;\n }\n \n-const validate = ({ serverURL }: IWebAddressFormData): IFormErrors => {\n+export const validate = ({ serverURL }: IWebAddressFormData): IFormErrors => {\n   const errors: IFormErrors = {};\n   if (!serverURL) {\n     errors.serverURL = \"Enter your Fleet web address\";\n   } else if (\n     !isValidURL({\n-      url: serverURL,\n+      url: serverURL.trim(),\n       protocols: [\"http\", \"https\"],\n       allowLocalHost: true,\n     })"
+  }
+ ],
+ "test_files": []
+}

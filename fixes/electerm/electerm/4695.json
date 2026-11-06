@@ -1,0 +1,26 @@
+{
+ "repo": "electerm/electerm",
+ "number": 4695,
+ "url": "https://github.com/electerm/electerm/pull/4695",
+ "title": "fix: do not list the WSL bash launcher as Git Bash",
+ "merged_at": "2026-11-05T01:37:16Z",
+ "files": [
+  {
+   "filename": "src/app/upgrade/default-local-bookmarks.js",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 1,
+   "patch": "@@ -70,6 +70,16 @@ function findPowerShell7 () {\n   ])\n }\n \n+/**\n+ * On Windows the first `bash` on PATH is often the WSL launcher (an app\n+ * execution alias in WindowsApps, or the one in System32), not Git Bash.\n+ * @param {string} p resolved exec path\n+ * @return {boolean}\n+ */\n+function isWslBashLauncher (p) {\n+  return /[\\\\/](WindowsApps|System32)[\\\\/]/i.test(p || '')\n+}\n+\n function findGitBash () {\n   const programFiles = process.env.ProgramFiles || 'C:\\\\Program Files'\n   const programFiles86 = process.env['ProgramFiles(x86)'] || 'C:\\\\Program Files (x86)'\n@@ -79,7 +89,11 @@ function findGitBash () {\n     path.join(programFiles86, 'Git', 'bin', 'bash.exe'),\n     localAppData && path.join(localAppData, 'Programs', 'Git', 'bin', 'bash.exe')\n   ])\n-  return found || resolveExec('bash')\n+  if (found) {\n+    return found\n+  }\n+  const onPath = resolveExec('bash')\n+  return isWslBashLauncher(onPath) ? '' : onPath\n }\n \n /**\n@@ -183,5 +197,6 @@ module.exports = {\n   getPosixBookmarks,\n   buildWindowsBookmarks,\n   buildPosixBookmark,\n+  isWslBashLauncher,\n   posixShells\n }"
+  },
+  {
+   "filename": "src/test/unit-ci/db-defaults.spec.js",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@ const defaults = require('../../app/upgrade/db-defaults')\n const {\n   buildWindowsBookmarks,\n   buildPosixBookmark,\n+  isWslBashLauncher,\n   posixShells\n } = require('../../app/upgrade/default-local-bookmarks')\n const {\n@@ -358,3 +359,17 @@ describe('built in seed items stay deletable', () => {\n     }\n   })\n })\n+\n+describe('isWslBashLauncher', () => {\n+  it('flags the WSL bash launchers that are not Git Bash', () => {\n+    assert.equal(isWslBashLauncher('C:\\\\Users\\\\me\\\\AppData\\\\Local\\\\Microsoft\\\\WindowsApps\\\\bash.exe'), true)\n+    assert.equal(isWslBashLauncher('C:\\\\Windows\\\\System32\\\\bash.exe'), true)\n+    assert.equal(isWslBashLauncher('C:\\\\Windows\\\\system32\\\\bash.exe'), true)\n+  })\n+\n+  it('keeps a real Git Bash and empty values', () => {\n+    assert.equal(isWslBashLauncher('D:\\\\tools\\\\Git\\\\bin\\\\bash.exe'), false)\n+    assert.equal(isWslBashLauncher('/usr/bin/bash'), false)\n+    assert.equal(isWslBashLauncher(''), false)\n+  })\n+})"
+  }
+ ],
+ "test_files": [
+  "src/test/unit-ci/db-defaults.spec.js"
+ ]
+}

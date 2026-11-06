@@ -1,0 +1,26 @@
+{
+ "repo": "fosrl/pangolin",
+ "number": 4066,
+ "url": "https://github.com/fosrl/pangolin/pull/4066",
+ "title": "fix(ai): count Gemini toolUsePromptTokenCount as input tokens",
+ "merged_at": "2026-11-06T14:03:25Z",
+ "files": [
+  {
+   "filename": "server/lib/aiUsageExtraction.test.ts",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -72,10 +72,40 @@ function testConverseWithoutCache() {\n     );\n }\n \n+// Gemini reports tool-result tokens (Google Search, URL context) in\n+// `toolUsePromptTokenCount`, separately from `promptTokenCount`; they are\n+// billed as input.\n+function testGeminiToolUsePromptTokens() {\n+    console.log(\"Running Gemini tool-use prompt tokens test...\");\n+    const body = JSON.stringify({\n+        usageMetadata: {\n+            promptTokenCount: 100,\n+            cachedContentTokenCount: 20,\n+            toolUsePromptTokenCount: 40,\n+            candidatesTokenCount: 15,\n+            thoughtsTokenCount: 5,\n+            totalTokenCount: 160\n+        }\n+    });\n+    assertEqualsObj(\n+        extractUsage(\"gemini_generate_content\", body, false, headers),\n+        {\n+            promptTokens: 120,\n+            cacheReadTokens: 20,\n+            cacheWriteTokens: 0,\n+            completionTokens: 15,\n+            reasoningTokens: 5,\n+            estimated: false\n+        },\n+        \"tool-use prompt tokens are added to promptTokens\"\n+    );\n+}\n+\n try {\n     testConverseJsonWithCache();\n     testConverseStreamWithCache();\n     testConverseWithoutCache();\n+    testGeminiToolUsePromptTokens();\n     console.log(\"All aiUsageExtraction tests passed!\");\n } catch (error) {\n     console.error(\"Test failed:\", error);"
+  },
+  {
+   "filename": "server/lib/aiUsageExtraction.ts",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 2,
+   "patch": "@@ -217,7 +217,8 @@ function extractGoogleGenerateContent(\n         \"promptTokenCount\",\n         \"candidatesTokenCount\",\n         \"cachedContentTokenCount\",\n-        \"thoughtsTokenCount\"\n+        \"thoughtsTokenCount\",\n+        \"toolUsePromptTokenCount\"\n     ]);\n \n     if (fields.promptTokenCount === undefined) {\n@@ -226,9 +227,15 @@ function extractGoogleGenerateContent(\n \n     const cacheReadTokens = fields.cachedContentTokenCount ?? 0;\n     const reasoningTokens = fields.thoughtsTokenCount ?? 0;\n+    // Tokens of tool results (Google Search, URL context) are reported in\n+    // `toolUsePromptTokenCount`, separately from `promptTokenCount`, but are\n+    // billed as input.\n+    const toolUsePromptTokens = fields.toolUsePromptTokenCount ?? 0;\n \n     return {\n-        promptTokens: Math.max(0, fields.promptTokenCount - cacheReadTokens),\n+        promptTokens:\n+            Math.max(0, fields.promptTokenCount - cacheReadTokens) +\n+            toolUsePromptTokens,\n         cacheReadTokens,\n         cacheWriteTokens: 0,\n         completionTokens: fields.candidatesTokenCount ?? 0,"
+  }
+ ],
+ "test_files": [
+  "server/lib/aiUsageExtraction.test.ts"
+ ]
+}

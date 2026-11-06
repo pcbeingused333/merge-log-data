@@ -1,0 +1,33 @@
+{
+ "repo": "Arize-ai/phoenix",
+ "number": 17484,
+ "url": "https://github.com/Arize-ai/phoenix/pull/17484",
+ "title": "fix(evals): keep metadata from dictionary results in create_evaluator",
+ "merged_at": "2026-10-31T03:05:21Z",
+ "files": [
+  {
+   "filename": "docs/phoenix/evaluation/how-to-evals/code-evaluators.mdx",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -201,7 +201,7 @@ The `create_evaluator` / `createEvaluator` function will convert many different\n * A boolean (converted to integer Score.score and string Score.label)\n * A short string (≤3 words, converted to Score.label)\n * A long string (≥4 words, converted to Score.explanation)\n-* A dictionary with keys \"score\", \"label\", or \"explanation\"\n+* A dictionary with keys \"score\", \"label\", \"explanation\", or \"metadata\"\n * A tuple of values (only bool, number, str types allowed)\n </Tab>\n <Tab title=\"TypeScript\" icon=\"js\">"
+  },
+  {
+   "filename": "packages/phoenix-evals/src/phoenix/evals/evaluators.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -924,7 +924,7 @@ def word_count(text: str) -> int:\n         - A boolean (converted to integer Score.score and string Score.label)\n         - A short string (≤3 words, converted to Score.label)\n         - A long string (≥4 words, converted to Score.explanation)\n-        - A dictionary with keys \"score\", \"label\", or \"explanation\"\n+        - A dictionary with keys \"score\", \"label\", \"explanation\", or \"metadata\"\n         - A tuple of values (only bool, number, str types allowed)\n \n         An input_schema is automatically created from the function signature, capturing the required\n@@ -1000,7 +1000,7 @@ def _convert_to_score(\n         if isinstance(result, dict):\n             dict_score_data: Dict[str, Any] = {}\n             for key, value in result.items():\n-                if key in [\"score\", \"label\", \"explanation\"]:\n+                if key in [\"score\", \"label\", \"explanation\", \"metadata\"]:\n                     dict_score_data[key] = value\n             return Score(name=name, kind=kind, direction=direction, **dict_score_data)\n "
+  },
+  {
+   "filename": "packages/phoenix-evals/tests/phoenix/evals/test_evaluators.py",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -711,6 +711,31 @@ def test_func(input_text: str) -> dict:\n         assert score.label == \"excellent\"\n         assert score.explanation == \"This is a detailed explanation\"\n \n+    def test_create_evaluator_with_dictionary_return_preserves_metadata(self):\n+        \"\"\"Dictionary results keep their metadata, like a returned Score does.\"\"\"\n+        metadata = {\"probabilities\": {\"correct\": 0, \"incorrect\": 1}}\n+\n+        @create_evaluator(name=\"dict_evaluator\", kind=\"code\")\n+        def test_func(input_text: str) -> dict:\n+            return {\"score\": 0, \"label\": \"incorrect\", \"metadata\": metadata}\n+\n+        score = test_func.evaluate({\"input_text\": \"test\"})[0]\n+\n+        assert score.metadata[\"probabilities\"] == metadata[\"probabilities\"]\n+\n+    @pytest.mark.asyncio\n+    async def test_async_create_evaluator_with_dictionary_return_preserves_metadata(self):\n+        \"\"\"Async evaluators keep the metadata of dictionary results too.\"\"\"\n+        metadata = {\"probabilities\": {\"correct\": 0, \"incorrect\": 1}}\n+\n+        @create_evaluator(name=\"dict_evaluator\", kind=\"code\")\n+        async def test_func(input_text: str) -> dict:\n+            return {\"score\": 0, \"label\": \"incorrect\", \"metadata\": metadata}\n+\n+        score = (await test_func.async_evaluate({\"input_text\": \"test\"}))[0]\n+\n+        assert score.metadata[\"probabilities\"] == metadata[\"probabilities\"]\n+\n     def test_create_evaluator_with_tuple_return(self):\n         \"\"\"Test create_evaluator with tuple return.\"\"\"\n "
+  }
+ ],
+ "test_files": [
+  "packages/phoenix-evals/tests/phoenix/evals/test_evaluators.py"
+ ]
+}

@@ -1,0 +1,108 @@
+{
+ "repo": "open-metadata/OpenMetadata",
+ "number": 36768,
+ "url": "https://github.com/open-metadata/OpenMetadata/pull/36768",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-31T23:30:49Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-03T10:10:21Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-05T09:13:45Z",
+   "body": "Verified the tests-only reconciliation at eef13f46824466eefb86fbdf483ea27b810a2309. Main’s production implementation and existing reproduction/CTE coverage are preserved; the three additional cases cover dollar-free SQL comment markers inside strings, bracketed identifiers and block comments. The complete native Power BI topology module passed: 63 tests, no failures or skips."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "ingestion/src/metadata/ingestion/source/dashboard/powerbi/metadata.py",
+   "created_at": "2026-10-31T23:30:49Z",
+   "body": "<details>\n<summary>💡 <b>Edge Case:</b> <code>--</code> inside a /<em> </em>/ block comment strips the closing <code>*/</code></summary>\n\nThe new regex only skips single-quoted literals. For a T-SQL query such as `SELECT a#(lf)/* old filter -- removed */#(lf)FROM orders`, it treats the `--` inside the block comment as a line comment and deletes everything up to the newline, including the `*/`. Once the whitespace is collapsed, the block comment never closes, so it covers the rest of the query: `orders` disappears and no lineage is produced, with nothing logged. Before this change the flattened query still had a valid `/* ... */` and parsed correctly, so this is a regression for queries that put `--` inside block comments. A fix is to match block comments in the same pass and keep them unchanged (or remove them) before handling `--`, and to add a test for this case.\n\n\n**Match string literals and block comments before `--` so that neither gets cut:**\n````\ncleaned_sql = re.sub(\n    r\"('(?:[^']|'')*')|(/\\*.*?\\*/)|--[^\n]*\",\n    lambda match: match.group(1) or match.group(2) or \"\",\n    cleaned_sql,\n    flags=re.DOTALL,\n)\n````\n\n<kbd>✅ Fixed by `@pcbeingused333` in 8a86891</kbd>\n\n<sub><!-- gitar:footer-start -->Reply for a change | Was this helpful? React with 👍 / 👎<!-- gitar:footer-end --></sub>\n\n</details>"
+  },
+  {
+   "role": "contributor",
+   "path": "ingestion/src/metadata/ingestion/source/dashboard/powerbi/metadata.py",
+   "created_at": "2026-11-03T10:10:21Z",
+   "body": "This regex treats `--` inside quoted identifiers and block comments as a line comment. For example, `SELECT [a--b] FROM dbo.orders` becomes `SELECT [a` and returns no tables, while the baseline finds `orders`. Likewise, `SELECT * FROM dbo.orders /* -- audit */ JOIN dbo.customers ON 1=1` loses `customers` because the closing `*/` is removed. Please preserve decoded newlines and let the T-SQL parser handle comments, or use complete lexical handling, and add regressions for both cases."
+  },
+  {
+   "role": "contributor",
+   "path": "ingestion/tests/unit/topology/dashboard/test_powerbi.py",
+   "created_at": "2026-11-03T10:10:21Z",
+   "body": "This assertion still passes if `--` is mistakenly stripped from inside `'a--b'`: the parser still finds `orders` before the damaged literal. Please also assert that the returned SQL retains `'a--b'`, or put the literal before `FROM orders` so truncating it removes a required table reference. That would make the test catch the behavior its name promises."
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-10-31T23:29:39Z",
+   "body": "<!-- pr-metadata-check -->\n### ✅ PR checks passed\n\nThe linked issue has a description and all required **Shipping** project fields set. Thanks!"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-31T23:29:49Z",
+   "body": "**Hi there 👋 Thanks for your contribution!**\n\nThe OpenMetadata team will review the PR shortly! Once it has been labeled as `safe to test`, the CI workflows\nwill start executing and we'll be able to make sure everything is working as expected.\n\nLet us know if you need any help!"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-03T10:54:52Z",
+   "body": "Thanks, both cases were real: the regex also cut `[a--b]` identifiers and treated `--` inside a `/* ... */` block comment as a line comment, dropping the tables after it.\n\nFixed in 8a86891: the regex is gone. The decoded line breaks are kept and the SQL goes to `LineageParser` as is (as the BigQuery path already does), so the parser decides where identifiers, strings and comments end. Added regressions for `SELECT [a--b] FROM dbo.orders` and `/* -- legacy */ ... JOIN dbo.customers`, and the string-literal test now asserts that `'a--b'` reaches the parser.\n\nThe four `_extract_tables_from_sql` comment cases were run against the PyPI `openmetadata-ingestion` package with this branch's `powerbi/` overlaid (the full `test_powerbi` class was not run that way): 2 of them fail on the previous commit, and all 4 pass now.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-03T10:54:53Z",
+   "body": "**Hi there 👋 Thanks for your contribution!**\n\nThe OpenMetadata team will review the PR shortly! Once it has been labeled as `safe to test`, the CI workflows\nwill start executing and we'll be able to make sure everything is working as expected.\n\nLet us know if you need any help!"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-04T13:40:03Z",
+   "body": "**The Python checkstyle failed.**\n\nPlease run `make py_format` and `py_format_check` in the root of your repository and commit the changes to this PR.\nYou can also use [pre-commit](https://pre-commit.com/) to automate the Python code formatting.\n\nYou can install the pre-commit hooks with `make install_test precommit_install`."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-04T14:23:48Z",
+   "body": "**Hi there 👋 Thanks for your contribution!**\n\nThe OpenMetadata team will review the PR shortly! Once it has been labeled as `safe to test`, the CI workflows\nwill start executing and we'll be able to make sure everything is working as expected.\n\nLet us know if you need any help!"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-05T01:46:37Z",
+   "body": "Closing as superseded by #36748, which fixes #36557 with the same change. Thanks!"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-05T09:03:11Z",
+   "body": "**Hi there 👋 Thanks for your contribution!**\n\nThe OpenMetadata team will review the PR shortly! Once it has been labeled as `safe to test`, the CI workflows\nwill start executing and we'll be able to make sure everything is working as expected.\n\nLet us know if you need any help!"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-11-05T09:04:13Z",
+   "body": "Reopened and modified as this PR contains some useful additional test coverage."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-05T09:13:23Z",
+   "body": "**Hi there 👋 Thanks for your contribution!**\n\nThe OpenMetadata team will review the PR shortly! Once it has been labeled as `safe to test`, the CI workflows\nwill start executing and we'll be able to make sure everything is working as expected.\n\nLet us know if you need any help!"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-05T09:14:08Z",
+   "body": "<details>\n<summary><b>Code Review</b> <kbd>✅ Approved</kbd> <kbd>1 closed / 1 findings</kbd></summary>\n\n<kbd>🟡 Medium risk</kbd> · Comment-aware preprocessing of PowerBI SQL changes table-lineage extraction and could leave recorded lineage incomplete if comment boundaries are misread.\n\nAdds Power BI SQL comment regression tests covering `--` inside bracketed identifiers and `/* */` block comments, and removes whitespace collapsing so line breaks are preserved for `--` comments. The block comment issue where `--` stripped the closing `*/` has been resolved. No open issues found.\n\n<details>\n<summary><kbd>✅ 1 closed</kbd></summary>\n\n<details>\n<summary>✅ <b>Edge Case:</b> <code>--</code> inside a /<em> </em>/ block comment strips the closing <code>*/</code></summary>\n\n> <kbd>📄 ingestion/src/metadata/ingestion/source/dashboard/powerbi/metadata.py:2051-2055</kbd>\n> The new regex only skips single-quoted literals. For a T-SQL query such as `SELECT a#(lf)/* old filter -- removed */#(lf)FROM orders`, it treats the `--` inside the block comment as a line comment and deletes everything up to the newline, including the `*/`. Once the whitespace is collapsed, the block comment never closes, so it covers the rest of the query: `orders` disappears and no lineage is produced, with nothing logged. Before this change the flattened query still had a valid `/* ... */` and parsed correctly, so this is a regression for queries that put `--` inside block comments. A fix is to match block comments in the same pass and keep them unchanged (or remove them) before handling `--`, and to add a test for this case.\n\n</details>\n\n</details>\n\n</details>\n\n<details>\n<summary><b>Verification</b></summary>\n\n<b>Rules</b> <kbd>No rules evaluated</kbd>\n\n<details>\n<summary><b>Functional validation</b> <kbd>Not enabled</kbd></summary>\n\n[Set up](https://docs.gitar.ai/features/functional-validation)\n\n</details>\n\n<details>\n<summary><b>Auto-approval</b> <kbd>Not enabled</kbd></summary>\n\n[Set up](https://docs.gitar.ai/features/code-review/auto-approve)\n\n</details>\n\n<sub>For more verification details, comment `gitar display:verbose`.</sub>\n\n</details>\n\n<details>\n<summary><b>Options</b> </summary>\n\n<kbd>Display: compact</kbd> → Showing compact verification results.\n\nComment with these commands to change the behavior for this request:\n\n<table>\n<tr>\n<td><kbd>Compact</kbd></td>\n</tr>\n<tr>\n<td>\n\n```\ngitar display:verbose         \n```\n</td>\n</tr>\n</table>\n\n</details>\n\n<sub>Was this helpful? React with 👍 / 👎 | Powered by [Gitar](https://gitar.ai) — free for open source</sub>"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-05T16:34:19Z",
+   "body": "## [![Quality Gate Passed](https://sonarsource.github.io/sonarcloud-github-static-resources/v2/checks/QualityGateBadge/qg-passed-20px.png 'Quality Gate Passed')](https://sonarcloud.io/dashboard?id=open-metadata-ingestion&pullRequest=36768) **Quality Gate passed for 'open-metadata-ingestion'**  \nIssues  \n![](https://sonarsource.github.io/sonarcloud-github-static-resources/v2/common/passed-16px.png '') [0 New issues](https://sonarcloud.io/project/issues?id=open-metadata-ingestion&pullRequest=36768&issueStatuses=OPEN,CONFIRMED&sinceLeakPeriod=true)  \n![](https://sonarsource.github.io/sonarcloud-github-static-resources/v2/common/accepted-16px.png '') [0 Accepted issues](https://sonarcloud.io/project/issues?id=open-metadata-ingestion&pullRequest=36768&issueStatuses=ACCEPTED)\n\nMeasures  \n![](https://sonarsource.github.io/sonarcloud-github-static-resources/v2/common/passed-16px.png '') [0 Security Hotspots](https://sonarcloud.io/project/security_hotspots?id=open-metadata-ingestion&pullRequest=36768&issueStatuses=OPEN,CONFIRMED&sinceLeakPeriod=true)  \n![](https://sonarsource.github.io/sonarcloud-github-static-resources/v2/common/passed-16px.png '') [0.0% Coverage on New Code](https://sonarcloud.io/component_measures?id=open-metadata-ingestion&pullRequest=36768&metric=new_coverage&view=list)  \n![](https://sonarsource.github.io/sonarcloud-github-static-resources/v2/common/passed-16px.png '') [0.0% Duplication on New Code](https://sonarcloud.io/component_measures?id=open-metadata-ingestion&pullRequest=36768&metric=new_duplicated_lines_density&view=list)  \n  \n<!-- sqra-placement-anchor -->\n[See analysis details on SonarQube Cloud](https://sonarcloud.io/dashboard?id=open-metadata-ingestion&pullRequest=36768)\n\n"
+  }
+ ]
+}

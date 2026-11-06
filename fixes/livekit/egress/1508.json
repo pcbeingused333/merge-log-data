@@ -1,0 +1,26 @@
+{
+ "repo": "livekit/egress",
+ "number": 1508,
+ "url": "https://github.com/livekit/egress/pull/1508",
+ "title": "fix(config): reject retries of image outputs whose explicit prefix lacks {retry}",
+ "merged_at": "2026-11-03T20:18:56Z",
+ "files": [
+  {
+   "filename": "pkg/config/output_image.go",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -18,6 +18,7 @@ import (\n \t\"fmt\"\n \t\"os\"\n \t\"path\"\n+\t\"strings\"\n \t\"time\"\n \n \t\"github.com/livekit/egress/pkg/errors\"\n@@ -78,7 +79,19 @@ func (p *PipelineConfig) getImageConfig(images *livekit.ImageOutput, upload egre\n \t\treturn nil, err\n \t}\n \n+\t// Normalize first: path cleaning can drop a {retry} directory (images/{retry}/../shot) or reduce the\n+\t// prefix to nothing (. or images/..), so the guard has to look at what is actually used.\n \tfilenamePrefix := clean(images.FilenamePrefix)\n+\n+\t// On retry, an explicit prefix must include {retry} to avoid overwriting images of the\n+\t// previous attempt. Only the index suffix restarts at 0 and collides; timestamps differ\n+\t// and NONE_OVERWRITE replaces the same file by design.\n+\tif p.Info.RetryCount > 0 && images.FilenameSuffix == livekit.ImageFileSuffix_IMAGE_SUFFIX_INDEX &&\n+\t\tfilenamePrefix != \"\" && !strings.HasSuffix(filenamePrefix, \"/\") &&\n+\t\t!strings.Contains(filenamePrefix, \"{retry}\") {\n+\t\treturn nil, errors.ErrNonRetryableOutput\n+\t}\n+\n \tconf := &ImageConfig{\n \t\toutputConfig: outputConfig{\n \t\t\tOutputType: outputType,"
+  },
+  {
+   "filename": "pkg/config/retry_test.go",
+   "status": "modified",
+   "additions": 102,
+   "deletions": 1,
+   "patch": "@@ -193,4 +193,105 @@ func TestSegmentOutputRetrySafety(t *testing.T) {\n \t\t\t}\n \t\t})\n \t}\n-}\n\\ No newline at end of file\n+}\n+\n+func TestImageOutputRetrySafety(t *testing.T) {\n+\tfor _, test := range []struct {\n+\t\tname       string\n+\t\tretryCount int32\n+\t\tprefix     string\n+\t\tsuffix     livekit.ImageFileSuffix\n+\t\texpectErr  bool\n+\t}{\n+\t\t{\n+\t\t\tname:       \"first attempt with explicit prefix\",\n+\t\t\tretryCount: 0,\n+\t\t\tprefix:     \"images/my-stream\",\n+\t\t\tsuffix:     livekit.ImageFileSuffix_IMAGE_SUFFIX_INDEX,\n+\t\t\texpectErr:  false,\n+\t\t},\n+\t\t{\n+\t\t\tname:       \"retry with empty prefix (auto-generated)\",\n+\t\t\tretryCount: 1,\n+\t\t\tprefix:     \"\",\n+\t\t\tsuffix:     livekit.ImageFileSuffix_IMAGE_SUFFIX_INDEX,\n+\t\t\texpectErr:  false,\n+\t\t},\n+\t\t{\n+\t\t\tname:       \"retry with {retry} in prefix\",\n+\t\t\tretryCount: 1,\n+\t\t\tprefix:     \"images/my-stream-{retry}\",\n+\t\t\tsuffix:     livekit.ImageFileSuffix_IMAGE_SUFFIX_INDEX,\n+\t\t\texpectErr:  false,\n+\t\t},\n+\t\t{\n+\t\t\tname:       \"retry with explicit prefix missing {retry} and index suffix\",\n+\t\t\tretryCount: 1,\n+\t\t\tprefix:     \"images/my-stream\",\n+\t\t\tsuffix:     livekit.ImageFileSuffix_IMAGE_SUFFIX_INDEX,\n+\t\t\texpectErr:  true,\n+\t\t},\n+\t\t{\n+\t\t\tname:       \"retry with directory-only prefix (auto-generated name)\",\n+\t\t\tretryCount: 1,\n+\t\t\tprefix:     \"images/\",\n+\t\t\tsuffix:     livekit.ImageFileSuffix_IMAGE_SUFFIX_INDEX,\n+\t\t\texpectErr:  false,\n+\t\t},\n+\t\t{\n+\t\t\tname:       \"retry where path cleaning drops the {retry} directory\",\n+\t\t\tretryCount: 1,\n+\t\t\tprefix:     \"images/{retry}/../shot\",\n+\t\t\tsuffix:     livekit.ImageFileSuffix_IMAGE_SUFFIX_INDEX,\n+\t\t\texpectErr:  true,\n+\t\t},\n+\t\t{\n+\t\t\tname:       \"retry with prefix that cleans to nothing (dot)\",\n+\t\t\tretryCount: 1,\n+\t\t\tprefix:     \".\",\n+\t\t\tsuffix:     livekit.ImageFileSuffix_IMAGE_SUFFIX_INDEX,\n+\t\t\texpectErr:  false,\n+\t\t},\n+\t\t{\n+\t\t\tname:       \"retry with prefix that cleans to nothing (images/..)\",\n+\t\t\tretryCount: 1,\n+\t\t\tprefix:     \"images/..\",\n+\t\t\tsuffix:     livekit.ImageFileSuffix_IMAGE_SUFFIX_INDEX,\n+\t\t\texpectErr:  false,\n+\t\t},\n+\t\t{\n+\t\t\tname:       \"retry with explicit prefix and timestamp suffix\",\n+\t\t\tretryCount: 1,\n+\t\t\tprefix:     \"images/my-stream\",\n+\t\t\tsuffix:     livekit.ImageFileSuffix_IMAGE_SUFFIX_TIMESTAMP,\n+\t\t\texpectErr:  false,\n+\t\t},\n+\t\t{\n+\t\t\tname:       \"retry with explicit prefix and overwrite suffix\",\n+\t\t\tretryCount: 1,\n+\t\t\tprefix:     \"images/my-stream\",\n+\t\t\tsuffix:     livekit.ImageFileSuffix_IMAGE_SUFFIX_NONE_OVERWRITE,\n+\t\t\texpectErr:  false,\n+\t\t},\n+\t} {\n+\t\tt.Run(test.name, func(t *testing.T) {\n+\t\t\tp := &PipelineConfig{\n+\t\t\t\tInfo:    &livekit.EgressInfo{EgressId: \"test_egress\", RoomName: \"test-room\", RetryCount: test.retryCount},\n+\t\t\t\tTmpDir:  t.TempDir(),\n+\t\t\t\tOutputs: make(map[types.EgressType][]OutputConfig),\n+\t\t\t}\n+\n+\t\t\timg := &livekit.ImageOutput{\n+\t\t\t\tFilenamePrefix: test.prefix,\n+\t\t\t\tFilenameSuffix: test.suffix,\n+\t\t\t}\n+\t\t\t_, err := p.getImageConfig(img, img)\n+\n+\t\t\tif test.expectErr {\n+\t\t\t\trequire.ErrorIs(t, err, errors.ErrNonRetryableOutput)\n+\t\t\t} else {\n+\t\t\t\trequire.NoError(t, err)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "pkg/config/retry_test.go"
+ ]
+}

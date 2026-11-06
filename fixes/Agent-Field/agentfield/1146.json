@@ -1,0 +1,26 @@
+{
+ "repo": "Agent-Field/agentfield",
+ "number": 1146,
+ "url": "https://github.com/Agent-Field/agentfield/pull/1146",
+ "title": "fix(sdk/go): omit temperature for models that reject it",
+ "merged_at": "2026-11-02T17:15:56Z",
+ "files": [
+  {
+   "filename": "sdk/go/ai/model_params.go",
+   "status": "modified",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -46,6 +46,31 @@ func needsMaxCompletionTokens(model string) bool {\n \treturn false\n }\n \n+// rejectsTemperature identifies models whose default mode rejects custom\n+// temperature. This SDK does not expose reasoning_effort.\n+// GPT-5.1/5.2/5.4 default to none and accept temperature; do not match all gpt-5*.\n+// https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.2\n+func rejectsTemperature(model string) bool {\n+\tm := strings.ToLower(strings.TrimSpace(model))\n+\tif idx := strings.LastIndex(m, \"/\"); idx >= 0 {\n+\t\tm = m[idx+1:]\n+\t}\n+\tif len(m) >= 2 && m[0] == 'o' && m[1] >= '0' && m[1] <= '9' {\n+\t\treturn true\n+\t}\n+\tif m == \"gpt-5\" || strings.HasPrefix(m, \"gpt-5-202\") {\n+\t\treturn true\n+\t}\n+\tfor _, family := range []string{\"gpt-5-mini\", \"gpt-5-nano\", \"gpt-5-pro\", \"gpt-5.2-pro\", \"gpt-5.4-pro\", \"gpt-5.5\", \"gpt-5.6\",\n+\t\t\"gpt-5-codex\", \"gpt-5.1-codex\", \"gpt-5.2-codex\", \"gpt-5.3-codex\",\n+\t\t\"claude-opus-4-7\", \"claude-opus-4-8\", \"claude-opus-5\", \"claude-sonnet-5\", \"claude-haiku-5\", \"claude-fable-5\"} {\n+\t\tif m == family || strings.HasPrefix(m, family+\"-\") {\n+\t\t\treturn true\n+\t\t}\n+\t}\n+\treturn false\n+}\n+\n // vouchedRewriteDomains lists the hosts known to accept (and, for newer\n // models, require) max_completion_tokens. Matching is by exact host or any\n // subdomain (e.g. api.openai.com, <resource>.openai.azure.com).\n@@ -148,6 +173,14 @@ func (c *Client) marshalRequest(req *Request) ([]byte, error) {\n \t\t}\n \t}\n \n+\t// Models that reject custom temperature receive no temperature field\n+\t// (on a copy; the caller's Request is untouched).\n+\tif req.Temperature != nil && rejectsTemperature(model) {\n+\t\tshadow := *req\n+\t\tshadow.Temperature = nil\n+\t\treq = &shadow\n+\t}\n+\n \t// If the model needs max_completion_tokens and we have a max_tokens value,\n \t// serialize with the rewritten field name — but only for endpoints known\n \t// to understand it."
+  },
+  {
+   "filename": "sdk/go/ai/model_params_test.go",
+   "status": "modified",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -701,3 +701,48 @@ func TestComplete_WireBody_NoStreamOptions(t *testing.T) {\n \t\tt.Errorf(\"expected no stream_options on a non-streaming request, got %s\", rt.body)\n \t}\n }\n+\n+func TestMarshalRequest_TemperatureCompatibility(t *testing.T) {\n+\tfor model, restricted := range map[string]bool{\n+\t\t\"gpt-5\": true, \"gpt-5-2025-08-07\": true, \"gpt-5-mini\": true, \"gpt-5-nano\": true,\n+\t\t\"gpt-5-pro\": true, \"gpt-5.2-pro\": true, \"gpt-5.4-pro\": true, \"gpt-5.5\": true, \"gpt-5.6-sol\": true,\n+\t\t\"o1\": true, \"o3-mini\": true, \"o4-mini\": true, \"openai/o3-mini\": true, \" AZURE/O3-MINI \": true,\n+\t\t\"openai/gpt-5-mini\": true, \"azure/deployments/GPT-5\": true,\n+\t\t\"gpt-5-codex\": true, \"openai/gpt-5.1-codex-mini\": true, \"gpt-5.2-codex\": true, \"gpt-5.3-codex\": true,\n+\t\t\"gpt-4o\": false, \"gpt-4.1\": false, \"openai/gpt-4o\": false,\n+\t\t\"gpt-5.1\": false, \"gpt-5.2\": false, \"gpt-5.4\": false, \"gpt-5-chat-latest\": false,\n+\t\t\"claude-sonnet-4-6\": false, \"anthropic/claude-opus-4-1\": false, \"claude-sonnet-5-5\": true, \"claude-opus-4-7\": true, \"claude-opus-4-8\": true,\n+\t\t\"anthropic/claude-sonnet-5\": true, \"claude-fable-5-1\": true, \"claude-haiku-5-5\": true, \"claude-opus-5-5\": true, \"llama-3\": false,\n+\t\t\"gemini-3.8-flash\": false, \"google/gemini-2.5-flash\": false, \"omni-1\": false, \"o\": false, \"gpt-50\": false,\n+\t} {\n+\t\tt.Run(model, func(t *testing.T) {\n+\t\t\tzero, configured, maxTokens := 0.0, 0.7, 42\n+\t\t\tfor _, temp := range []*float64{nil, &zero, &configured} {\n+\t\t\t\tfor _, explicitModel := range []string{model, \"\"} {\n+\t\t\t\t\tclient := &Client{config: &Config{Model: model, BaseURL: \"https://api.openai.com/v1\"}}\n+\t\t\t\t\treq := &Request{Model: explicitModel, Temperature: temp, MaxTokens: &maxTokens}\n+\t\t\t\t\tbefore := *req\n+\t\t\t\t\twantValue := 0.0\n+\t\t\t\t\tif temp != nil {\n+\t\t\t\t\t\twantValue = *temp\n+\t\t\t\t\t}\n+\t\t\t\t\tbody, err := client.marshalRequest(req)\n+\t\t\t\t\tif err != nil {\n+\t\t\t\t\t\tt.Fatal(err)\n+\t\t\t\t\t}\n+\t\t\t\t\tvar raw map[string]interface{}\n+\t\t\t\t\tif err := json.Unmarshal(body, &raw); err != nil {\n+\t\t\t\t\t\tt.Fatal(err)\n+\t\t\t\t\t}\n+\t\t\t\t\tgot, present := raw[\"temperature\"]\n+\t\t\t\t\tif want := temp != nil && !restricted; present != want || (want && got != wantValue) {\n+\t\t\t\t\t\tt.Errorf(\"temperature = %v (present %v), restricted=%v, input=%v\", got, present, restricted, temp)\n+\t\t\t\t\t}\n+\t\t\t\t\tif req.Model != before.Model || req.Temperature != before.Temperature || req.MaxTokens != before.MaxTokens || (temp != nil && *temp != wantValue) {\n+\t\t\t\t\t\tt.Fatal(\"caller's request was mutated\")\n+\t\t\t\t\t}\n+\t\t\t\t}\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "sdk/go/ai/model_params_test.go"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "truera/trulens",
+ "number": 3025,
+ "url": "https://github.com/truera/trulens/pull/3025",
+ "title": "fix(core): use %s placeholders in batch insert error logs",
+ "merged_at": "2026-11-02T18:24:06Z",
+ "files": [
+  {
+   "filename": "src/core/trulens/core/database/connector/base.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -135,7 +135,7 @@ def _batch_loop(self):\n                     for record in records:\n                         self.batch_record_queue.put(record)\n                     logger.error(\n-                        \"Re-queued records due to insertion error {}\", e\n+                        \"Re-queued records due to insertion error %s\", e\n                     )\n                     continue\n                 feedback_results = []\n@@ -158,7 +158,7 @@ def _batch_loop(self):\n                 try:\n                     self.db.batch_insert_feedback(feedback_results)\n                 except Exception as e:\n-                    logger.error(\"Failed to insert feedback results {}\", e)\n+                    logger.error(\"Failed to insert feedback results %s\", e)\n \n     def add_app(self, app: app_schema.AppDefinition) -> types_schema.AppID:\n         \"\"\""
+  },
+  {
+   "filename": "tests/unit/test_connector_batch_logging.py",
+   "status": "added",
+   "additions": 60,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,60 @@\n+\"\"\"Tests that DBConnector batch-loop error logs render the exception text.\"\"\"\n+\n+import logging\n+import queue\n+from unittest import mock\n+\n+import pytest\n+from trulens.core.database.connector.base import DBConnector\n+\n+\n+class _StopLoop(Exception):\n+    pass\n+\n+\n+class _Connector(DBConnector):\n+    db = mock.MagicMock()\n+\n+    @classmethod\n+    def connect(cls, *args, **kwargs):  # pragma: no cover\n+        raise NotImplementedError\n+\n+\n+def _run_loop_once(connector):\n+    # The loop sleeps first on every iteration; let the first sleep pass and\n+    # abort on the second one.\n+    with mock.patch(\n+        \"trulens.core.database.connector.base.time.sleep\",\n+        side_effect=[None, _StopLoop()],\n+    ):\n+        with pytest.raises(_StopLoop):\n+            connector._batch_loop()\n+\n+\n+def test_batch_insert_record_failure_logs_exception_text(caplog):\n+    connector = object.__new__(_Connector)\n+    connector.batch_record_queue = queue.Queue()\n+    connector.batch_record_queue.put(mock.MagicMock())\n+    failing_db = mock.MagicMock()\n+    failing_db.batch_insert_record.side_effect = RuntimeError(\"boom-record\")\n+    with mock.patch.object(_Connector, \"db\", failing_db):\n+        with caplog.at_level(logging.ERROR):\n+            _run_loop_once(connector)\n+\n+    assert \"boom-record\" in caplog.text\n+    assert \"Logging error\" not in caplog.text\n+\n+\n+def test_batch_insert_feedback_failure_logs_exception_text(caplog):\n+    connector = object.__new__(_Connector)\n+    connector.batch_record_queue = queue.Queue()\n+    record = mock.MagicMock()\n+    connector.batch_record_queue.put(record)\n+    db = mock.MagicMock()\n+    db.batch_insert_feedback.side_effect = RuntimeError(\"boom-feedback\")\n+    connector.get_app = mock.MagicMock(return_value={})\n+    with mock.patch.object(_Connector, \"db\", db):\n+        with caplog.at_level(logging.ERROR):\n+            _run_loop_once(connector)\n+\n+    assert \"boom-feedback\" in caplog.text"
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_connector_batch_logging.py"
+ ]
+}

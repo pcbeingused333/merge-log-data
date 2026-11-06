@@ -1,0 +1,26 @@
+{
+ "repo": "looplj/axonhub",
+ "number": 2884,
+ "url": "https://github.com/looplj/axonhub/pull/2884",
+ "title": "fix(anthropic): map refusal and pause_turn stop reasons in streaming outbound",
+ "merged_at": "2026-11-05T04:56:55Z",
+ "files": [
+  {
+   "filename": "llm/transformer/anthropic/outbound_stream.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 19,
+   "patch": "@@ -322,25 +322,8 @@ func (s *outboundStream) transformStreamChunk(event *httpclient.StreamEvent) (*l\n \t\t}\n \n \t\tif streamEvent.Delta != nil && streamEvent.Delta.StopReason != nil {\n-\t\t\t// Determine finish reason\n-\t\t\tvar finishReason *string\n-\n-\t\t\tswitch *streamEvent.Delta.StopReason {\n-\t\t\tcase \"end_turn\":\n-\t\t\t\treason := \"stop\"\n-\t\t\t\tfinishReason = &reason\n-\t\t\tcase \"max_tokens\":\n-\t\t\t\treason := \"length\"\n-\t\t\t\tfinishReason = &reason\n-\t\t\tcase \"stop_sequence\":\n-\t\t\t\treason := \"stop\"\n-\t\t\t\tfinishReason = &reason\n-\t\t\tcase \"tool_use\":\n-\t\t\t\treason := \"tool_calls\"\n-\t\t\t\tfinishReason = &reason\n-\t\t\tdefault:\n-\t\t\t\tfinishReason = streamEvent.Delta.StopReason\n-\t\t\t}\n+\t\t\t// Determine finish reason (shared with the non-streaming path).\n+\t\t\tfinishReason := convertToLlmFinishReason(streamEvent.Delta.StopReason)\n \n \t\t\t// CRITICAL: Always include Delta field (even if empty) when finish_reason is present.\n \t\t\t//"
+  },
+  {
+   "filename": "llm/transformer/anthropic/outbound_stream_test.go",
+   "status": "modified",
+   "additions": 57,
+   "deletions": 0,
+   "patch": "@@ -193,3 +193,60 @@ func TestOutboundTransformer_StreamTransformation_UsesFinalPromptTokensWhenPrese\n \trequire.EqualValues(t, 3, actualResponses[2].Usage.CompletionTokens)\n \trequire.EqualValues(t, 13, actualResponses[2].Usage.TotalTokens)\n }\n+\n+func TestOutboundTransformer_StreamTransformation_MapsStopReasonLikeNonStreaming(t *testing.T) {\n+\ttests := map[string]string{\n+\t\t\"end_turn\":      \"stop\",\n+\t\t\"max_tokens\":    \"length\",\n+\t\t\"stop_sequence\": \"stop\",\n+\t\t\"tool_use\":      \"tool_calls\",\n+\t\t\"pause_turn\":    \"stop\",\n+\t\t\"refusal\":       \"content_filter\",\n+\t}\n+\n+\tfor stopReason, want := range tests {\n+\t\tt.Run(stopReason, func(t *testing.T) {\n+\t\t\ttransformer, err := NewOutboundTransformerWithConfig(&Config{\n+\t\t\t\tType:           PlatformZhipu,\n+\t\t\t\tBaseURL:        \"https://example.com\",\n+\t\t\t\tAPIKeyProvider: auth.NewStaticKeyProvider(\"test-key\"),\n+\t\t\t})\n+\t\t\trequire.NoError(t, err)\n+\n+\t\t\treason := stopReason\n+\t\t\tmessageStartData, err := json.Marshal(StreamEvent{\n+\t\t\t\tType:    \"message_start\",\n+\t\t\t\tMessage: &StreamMessage{ID: \"msg_1\", Type: \"message\", Role: \"assistant\", Model: \"glm-5.1\", Usage: &Usage{}},\n+\t\t\t})\n+\t\t\trequire.NoError(t, err)\n+\t\t\tmessageDeltaData, err := json.Marshal(StreamEvent{\n+\t\t\t\tType:  \"message_delta\",\n+\t\t\t\tDelta: &StreamDelta{StopReason: &reason},\n+\t\t\t\tUsage: &Usage{InputTokens: 1, OutputTokens: 1},\n+\t\t\t})\n+\t\t\trequire.NoError(t, err)\n+\t\t\tmessageStopData, err := json.Marshal(StreamEvent{Type: \"message_stop\"})\n+\t\t\trequire.NoError(t, err)\n+\n+\t\t\tmockStream := streams.SliceStream([]*httpclient.StreamEvent{\n+\t\t\t\t{Type: \"message_start\", Data: messageStartData},\n+\t\t\t\t{Type: \"message_delta\", Data: messageDeltaData},\n+\t\t\t\t{Type: \"message_stop\", Data: messageStopData},\n+\t\t\t})\n+\t\t\ttransformedStream, err := transformer.TransformStream(t.Context(), nil, mockStream)\n+\t\t\trequire.NoError(t, err)\n+\n+\t\t\tvar got *string\n+\t\t\tfor transformedStream.Next() {\n+\t\t\t\tfor _, choice := range transformedStream.Current().Choices {\n+\t\t\t\t\tif choice.FinishReason != nil {\n+\t\t\t\t\t\tgot = choice.FinishReason\n+\t\t\t\t\t}\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\trequire.NoError(t, transformedStream.Err())\n+\t\t\trequire.NotNil(t, got)\n+\t\t\trequire.Equal(t, want, *got)\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "llm/transformer/anthropic/outbound_stream_test.go"
+ ]
+}

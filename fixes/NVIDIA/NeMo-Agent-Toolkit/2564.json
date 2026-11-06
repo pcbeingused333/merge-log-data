@@ -1,0 +1,26 @@
+{
+ "repo": "NVIDIA/NeMo-Agent-Toolkit",
+ "number": 2564,
+ "url": "https://github.com/NVIDIA/NeMo-Agent-Toolkit/pull/2564",
+ "title": "fix(llama_index): count Anthropic cache_read_input_tokens as cached tokens",
+ "merged_at": "2026-11-05T19:11:07Z",
+ "files": [
+  {
+   "filename": "packages/nvidia_nat_llama_index/src/nat/plugins/llama_index/callback_handler.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -104,6 +104,9 @@ def first_nested_value(container_names: tuple[str, ...], *names: str) -> Any:\n                     setattr(token_usage, field, value)\n \n             cached_tokens = first_nested_value((\"prompt_tokens_details\", \"input_tokens_details\"), \"cached_tokens\")\n+            if cached_tokens is None:\n+                # Anthropic reports prompt-cache reads directly on usage, without a *_details object\n+                cached_tokens = first_value(\"cache_read_input_tokens\")\n             if cached_tokens is not None:\n                 token_usage.cached_tokens = cached_tokens\n "
+  },
+  {
+   "filename": "packages/nvidia_nat_llama_index/tests/test_llama_index_callback_handler.py",
+   "status": "modified",
+   "additions": 46,
+   "deletions": 0,
+   "patch": "@@ -45,6 +45,52 @@ def test_extract_token_usage_from_raw_openai_usage():\n     assert usage.reasoning_tokens == 5\n \n \n+def test_extract_token_usage_reads_anthropic_cache_read_tokens():\n+    \"\"\"Anthropic reports prompt-cache reads as usage.cache_read_input_tokens (no *_details object).\"\"\"\n+    from llama_index.core.llms import ChatMessage\n+    from llama_index.core.llms import ChatResponse\n+\n+    from nat.plugins.llama_index.callback_handler import LlamaIndexProfilerHandler\n+\n+    response = ChatResponse(\n+        message=ChatMessage.from_str(\"done\"),\n+        raw=SimpleNamespace(usage=SimpleNamespace(\n+            input_tokens=12,\n+            output_tokens=8,\n+            cache_read_input_tokens=100,\n+            cache_creation_input_tokens=40,\n+        )),\n+    )\n+\n+    usage = LlamaIndexProfilerHandler._extract_token_usage(response)\n+\n+    assert usage.prompt_tokens == 12\n+    assert usage.completion_tokens == 8\n+    assert usage.cached_tokens == 100\n+\n+\n+def test_extract_token_usage_prefers_details_cached_tokens_over_anthropic_field():\n+    \"\"\"OpenAI-style cached_tokens details keep priority when both are present.\"\"\"\n+    from llama_index.core.llms import ChatMessage\n+    from llama_index.core.llms import ChatResponse\n+\n+    from nat.plugins.llama_index.callback_handler import LlamaIndexProfilerHandler\n+\n+    response = ChatResponse(\n+        message=ChatMessage.from_str(\"done\"),\n+        raw=SimpleNamespace(usage=SimpleNamespace(\n+            prompt_tokens=18,\n+            completion_tokens=34,\n+            prompt_tokens_details=SimpleNamespace(cached_tokens=3),\n+            cache_read_input_tokens=99,\n+        )),\n+    )\n+\n+    usage = LlamaIndexProfilerHandler._extract_token_usage(response)\n+\n+    assert usage.cached_tokens == 3\n+\n+\n def test_extract_token_usage_falls_back_from_partial_raw_details():\n     \"\"\"Test detail counters can fall back independently from partial raw usage.\"\"\"\n     from llama_index.core.llms import ChatMessage"
+  }
+ ],
+ "test_files": [
+  "packages/nvidia_nat_llama_index/tests/test_llama_index_callback_handler.py"
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "PostHog/posthog-python",
+ "number": 1188,
+ "url": "https://github.com/PostHog/posthog-python/pull/1188",
+ "title": "fix(ai): record the HTTP status of streaming google-genai errors",
+ "merged_at": "2026-11-05T11:47:02Z",
+ "files": [
+  {
+   "filename": ".sampo/changesets/gemini-streaming-error-http-status.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+pypi/posthog: patch\n+---\n+\n+Streaming Gemini calls that fail now record the HTTP status of the google-genai error (for example 429 or 503) in `$ai_http_status`. Before, `capture_streaming_event` read only `status_code`, so these events were captured with a status of 0."
+  },
+  {
+   "filename": "posthog/ai/utils.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 3,
+   "patch": "@@ -1096,9 +1096,7 @@ def capture_streaming_event(\n             event_data[\"privacy_mode\"],\n             finalize_ai_content(event_data[\"formatted_output\"], ph_client),\n         ),\n-        \"$ai_http_status\": (\n-            getattr(error, \"status_code\", 0) if error is not None else 200\n-        ),\n+        \"$ai_http_status\": (_get_http_status(error) if error is not None else 200),\n         **({\"$ai_input_tokens\": input_tokens} if input_tokens is not None else {}),\n         **({\"$ai_output_tokens\": output_tokens} if output_tokens is not None else {}),\n         \"$ai_latency\": event_data[\"latency\"],"
+  },
+  {
+   "filename": "posthog/test/ai/test_stream_midstream_error.py",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -267,3 +267,19 @@ async def stream():\n     props = _props(mock_client)\n     assert props[\"$ai_is_error\"] is True\n     assert props[\"$ai_http_status\"] == 0\n+\n+\n+@pytest.mark.parametrize(\n+    (\"cls_name\", \"code\"), [(\"ClientError\", 429), (\"ServerError\", 503)]\n+)\n+def test_capture_streaming_event_records_google_genai_error_status(\n+    mock_client, cls_name, code\n+):\n+    errors = pytest.importorskip(\"google.genai.errors\")\n+    error = getattr(errors, cls_name)(\n+        code, {\"error\": {\"code\": code, \"message\": \"nope\", \"status\": \"ERROR\"}}\n+    )\n+    capture_streaming_event(mock_client, _event_data(error=error))\n+    props = _props(mock_client)\n+    assert props[\"$ai_http_status\"] == code\n+    assert props[\"$ai_is_error\"] is True"
+  }
+ ],
+ "test_files": [
+  "posthog/test/ai/test_stream_midstream_error.py"
+ ]
+}

@@ -1,0 +1,24 @@
+{
+ "repo": "redis/redisctl",
+ "number": 1304,
+ "url": "https://github.com/redis/redisctl/pull/1304",
+ "title": "fix(init): avoid free_port u16 overflow and correct SKILL.md wording",
+ "merged_at": "2026-11-06T04:49:08Z",
+ "files": [
+  {
+   "filename": "crates/redisctl/src/workflows/init/engine/docker.rs",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 1,
+   "patch": "@@ -225,7 +225,7 @@ fn port_is_free(port: u16) -> bool {\n }\n \n fn free_port(start: u16) -> Option<u16> {\n-    (start..start + 100).find(|p| port_is_free(*p))\n+    (start..=start.saturating_add(99)).find(|p| port_is_free(*p))\n }\n \n /// Decide the action for a `.env` that already carries a URL. A leftover container\n@@ -825,14 +825,29 @@ mod tests {\n         // with \"port is already allocated\".\n         let listener = std::net::TcpListener::bind((\"::\", 0)).unwrap();\n         let taken = listener.local_addr().unwrap().port();\n+        // The scan covers 100 ports above `taken`; skip draws too close to u16::MAX.\n+        if taken > u16::MAX - 100 {\n+            return;\n+        }\n         let free = free_port(taken).unwrap();\n         assert!(free > taken, \"picked the ipv6-held port {taken}\");\n     }\n \n+    #[test]\n+    fn free_port_does_not_overflow_at_the_top_of_the_port_range() {\n+        // Only the top port is probed; it must neither panic nor return a port\n+        // below `start`.\n+        assert!(matches!(free_port(u16::MAX), None | Some(u16::MAX)));\n+    }\n+\n     #[test]\n     fn free_port_finds_an_unused_port() {\n         let listener = std::net::TcpListener::bind((\"127.0.0.1\", 0)).unwrap();\n         let taken = listener.local_addr().unwrap().port();\n+        // The scan covers 100 ports above `taken`; skip draws too close to u16::MAX.\n+        if taken > u16::MAX - 100 {\n+            return;\n+        }\n         let free = free_port(taken).unwrap();\n         assert!(free > taken);\n     }"
+  },
+  {
+   "filename": "crates/redisctl/src/workflows/init/engine/project_skill.rs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -412,7 +412,8 @@ description: >-\n \n # Redis setup in this project\n \n-Set up by `redisctl init`; re-running it is safe and never clobbers existing content.\n+Set up by `redisctl init`. Re-running it is safe, but it regenerates this file, so keep\n+hand-written notes in another file.\n Every credential lives in `.env` and nowhere else - not in code, not in a committed\n file.\n {database}{products}{iris}\"#,"
+  }
+ ],
+ "test_files": []
+}

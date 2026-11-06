@@ -1,0 +1,26 @@
+{
+ "repo": "aandrew-me/tgpt",
+ "number": 526,
+ "url": "https://github.com/aandrew-me/tgpt/pull/526",
+ "title": "fix(ollama): send --temperature and --top_p to the Ollama cloud provider",
+ "merged_at": "2026-11-05T06:47:52Z",
+ "files": [
+  {
+   "filename": "src/providers/ollama/ollama_cloud.go",
+   "status": "modified",
+   "additions": 26,
+   "deletions": 19,
+   "patch": "@@ -37,6 +37,25 @@ func NewCloudRequest(input string, params structs.Params) (*http.Response, error\n \t\tapiKey = os.Getenv(\"AI_API_KEY\")\n \t}\n \n+\tjsonRequest, err := cloudRequestBody(input, params, model)\n+\n+\tif err != nil {\n+\t\tlog.Fatal(\"Failed to build user request\")\n+\t}\n+\n+\treq, err := http.NewRequest(\"POST\", \"https://ollama.com/v1/chat/completions\", bytes.NewBuffer(jsonRequest))\n+\n+\tif err != nil {\n+\t\tlog.Fatal(\"Some error has occured.\\nError:\", err)\n+\t}\n+\n+\treq.Header.Set(\"Content-Type\", \"application/json\")\n+\treq.Header.Set(\"Authorization\", \"Bearer \"+apiKey)\n+\n+\treturn client.Do(req)\n+}\n+\n+func cloudRequestBody(input string, params structs.Params, model string) ([]byte, error) {\n \tmessages := make([]any, 0, len(params.PrevMessages)+2)\n \tif params.SystemPrompt != \"\" {\n \t\tmessages = append(messages, structs.DefaultMessage{\n@@ -46,14 +65,17 @@ func NewCloudRequest(input string, params structs.Params) (*http.Response, error\n \t}\n \n \trequestInfo := struct {\n-\t\tModel    string `json:\"model\"`\n-\t\tStream   bool   `json:\"stream\"`\n-\t\tMessages []any  `json:\"messages\"`\n+\t\tModel       string   `json:\"model\"`\n+\t\tStream      bool     `json:\"stream\"`\n+\t\tMessages    []any    `json:\"messages\"`\n+\t\tTemperature *float64 `json:\"temperature,omitempty\"`\n+\t\tTopP        *float64 `json:\"top_p,omitempty\"`\n \t}{\n \t\tModel:    model,\n \t\tStream:   true,\n \t\tMessages: messages,\n \t}\n+\trequestInfo.Temperature, requestInfo.TopP = params.SamplingOptions()\n \n \tif len(params.PrevMessages) > 0 {\n \t\trequestInfo.Messages = append(requestInfo.Messages, params.PrevMessages...)\n@@ -64,22 +86,7 @@ func NewCloudRequest(input string, params structs.Params) (*http.Response, error\n \t\tContent: input,\n \t})\n \n-\tjsonRequest, err := json.Marshal(requestInfo)\n-\n-\tif err != nil {\n-\t\tlog.Fatal(\"Failed to build user request\")\n-\t}\n-\n-\treq, err := http.NewRequest(\"POST\", \"https://ollama.com/v1/chat/completions\", bytes.NewBuffer(jsonRequest))\n-\n-\tif err != nil {\n-\t\tlog.Fatal(\"Some error has occured.\\nError:\", err)\n-\t}\n-\n-\treq.Header.Set(\"Content-Type\", \"application/json\")\n-\treq.Header.Set(\"Authorization\", \"Bearer \"+apiKey)\n-\n-\treturn client.Do(req)\n+\treturn json.Marshal(requestInfo)\n }\n \n func GetCloudMainText(line string) (mainText string) {"
+  },
+  {
+   "filename": "src/providers/ollama/ollama_cloud_test.go",
+   "status": "added",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,36 @@\n+package ollama\n+\n+import (\n+\t\"encoding/json\"\n+\t\"testing\"\n+\n+\t\"github.com/aandrew-me/tgpt/v2/src/structs\"\n+\t\"github.com/stretchr/testify/assert\"\n+)\n+\n+func decodeCloudBody(t *testing.T, params structs.Params) map[string]any {\n+\tt.Helper()\n+\tencoded, err := cloudRequestBody(\"Hello\", params, \"gpt-oss:120b\")\n+\tassert.NoError(t, err)\n+\n+\tvar decoded map[string]any\n+\tassert.NoError(t, json.Unmarshal(encoded, &decoded))\n+\treturn decoded\n+}\n+\n+func TestCloudRequestBodySampling(t *testing.T) {\n+\tdecoded := decodeCloudBody(t, structs.Params{Temperature: \"0.2\", Top_p: \"0.9\"})\n+\n+\tassert.Equal(t, 0.2, decoded[\"temperature\"])\n+\tassert.Equal(t, 0.9, decoded[\"top_p\"])\n+}\n+\n+func TestCloudRequestBodyOmitsUnsetSampling(t *testing.T) {\n+\tdecoded := decodeCloudBody(t, structs.Params{})\n+\n+\tassert.NotContains(t, decoded, \"temperature\")\n+\tassert.NotContains(t, decoded, \"top_p\")\n+\tassert.Equal(t, \"gpt-oss:120b\", decoded[\"model\"])\n+\tassert.Equal(t, true, decoded[\"stream\"])\n+\tassert.Len(t, decoded[\"messages\"], 1)\n+}"
+  }
+ ],
+ "test_files": [
+  "src/providers/ollama/ollama_cloud_test.go"
+ ]
+}

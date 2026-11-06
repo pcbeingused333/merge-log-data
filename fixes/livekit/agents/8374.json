@@ -1,0 +1,26 @@
+{
+ "repo": "livekit/agents",
+ "number": 8374,
+ "url": "https://github.com/livekit/agents/pull/8374",
+ "title": "fix(aws): honor language passed to STT.stream()",
+ "merged_at": "2026-11-05T01:36:42Z",
+ "files": [
+  {
+   "filename": "livekit-plugins/livekit-plugins-aws/livekit/plugins/aws/stt.py",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 2,
+   "patch": "@@ -17,7 +17,7 @@\n import contextlib\n import os\n import time\n-from dataclasses import dataclass\n+from dataclasses import dataclass, replace\n from typing import Any\n \n from livekit import rtc\n@@ -208,10 +208,18 @@ def stream(\n         language: NotGivenOr[str] = NOT_GIVEN,\n         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,\n     ) -> SpeechStream:\n+        opts = self._config\n+        # language_code cannot be combined with automatic language identification\n+        if language and (opts.identify_language or opts.identify_multiple_languages):\n+            logger.warning(\n+                \"language is ignored when identify_language or identify_multiple_languages is enabled\"\n+            )\n+        elif language:\n+            opts = replace(opts, language=LanguageCode(language))\n         return SpeechStream(\n             stt=self,\n             conn_options=conn_options,\n-            opts=self._config,\n+            opts=opts,\n             credentials=self._credentials,\n         )\n "
+  },
+  {
+   "filename": "tests/test_plugin_aws_stt.py",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -314,3 +314,22 @@ async def await_output():\n     finally:\n         await stream.aclose()\n         await provider.aclose()\n+\n+\n+async def test_aws_stream_applies_language_override():\n+    provider = aws_stt.STT(region=\"us-east-1\", language=\"en-US\")\n+    override = provider.stream(language=\"es-US\", conn_options=APIConnectOptions(max_retry=0))\n+    default = provider.stream(conn_options=APIConnectOptions(max_retry=0))\n+    # an empty override means no override: the configured language is kept\n+    empty = provider.stream(language=\"\", conn_options=APIConnectOptions(max_retry=0))\n+    try:\n+        assert override._opts.language == \"es-US\"\n+        assert default._opts.language == \"en-US\"\n+        assert empty._opts.language == \"en-US\"\n+        # the override applies to that stream only\n+        assert provider._config.language == \"en-US\"\n+    finally:\n+        await override.aclose()\n+        await default.aclose()\n+        await empty.aclose()\n+        await provider.aclose()"
+  }
+ ],
+ "test_files": [
+  "tests/test_plugin_aws_stt.py"
+ ]
+}

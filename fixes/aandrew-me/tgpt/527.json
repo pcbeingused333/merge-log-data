@@ -1,0 +1,26 @@
+{
+ "repo": "aandrew-me/tgpt",
+ "number": 527,
+ "url": "https://github.com/aandrew-me/tgpt/pull/527",
+ "title": "fix(koboldai): honor --temperature and --top_p",
+ "merged_at": "2026-11-06T15:19:59Z",
+ "files": [
+  {
+   "filename": "src/providers/koboldai/koboldai.go",
+   "status": "modified",
+   "additions": 26,
+   "deletions": 10,
+   "patch": "@@ -4,6 +4,7 @@ import (\n \t\"encoding/json\"\n \t\"fmt\"\n \t\"os\"\n+\t\"strconv\"\n \t\"strings\"\n \n \thttp \"github.com/bogdanfinn/fhttp\"\n@@ -16,29 +17,44 @@ type Response struct {\n \tToken string `json:\"token\"`\n }\n \n-func NewRequest(input string, params structs.Params) (*http.Response, error) {\n-\tclient, err := client.NewClient()\n-\n-\tif err != nil {\n-\t\tfmt.Println(err)\n-\t\tos.Exit(1)\n-\t}\n-\n+// newRequestBody builds the generate request body. The sampling values default\n+// to 0.5 and are replaced by --temperature / --top_p when the user sets them.\n+func newRequestBody(input string, params structs.Params) string {\n \tsafeInput, _ := json.Marshal(input)\n \n \ttemperature := \"0.5\"\n \n \ttop_p := \"0.5\"\n \n+\tif t, p := params.SamplingOptions(); t != nil || p != nil {\n+\t\tif t != nil {\n+\t\t\ttemperature = strconv.FormatFloat(*t, 'f', -1, 64)\n+\t\t}\n+\t\tif p != nil {\n+\t\t\ttop_p = strconv.FormatFloat(*p, 'f', -1, 64)\n+\t\t}\n+\t}\n+\n \tmax_length := \"300\"\n \n-\tvar data = strings.NewReader(fmt.Sprintf(`{\n+\treturn fmt.Sprintf(`{\n \t\t\"prompt\": %v,\n \t\t\"temperature\": %v,\n \t\t\"top_p\": %v,\n \t\t\"max_length\": %v\n \t  }\n-\t`, string(safeInput), temperature, top_p, max_length))\n+\t`, string(safeInput), temperature, top_p, max_length)\n+}\n+\n+func NewRequest(input string, params structs.Params) (*http.Response, error) {\n+\tclient, err := client.NewClient()\n+\n+\tif err != nil {\n+\t\tfmt.Println(err)\n+\t\tos.Exit(1)\n+\t}\n+\n+\tdata := strings.NewReader(newRequestBody(input, params))\n \n \treq, err := http.NewRequest(\"POST\", \"https://koboldai-koboldcpp-tiefighter.hf.space/api/extra/generate/stream\", data)\n "
+  },
+  {
+   "filename": "src/providers/koboldai/koboldai_test.go",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -1,6 +1,7 @@\n package koboldai\n \n import (\n+\t\"encoding/json\"\n \t\"fmt\"\n \t\"io\"\n \t\"testing\"\n@@ -36,3 +37,19 @@ func TestRequest(t *testing.T) {\n \tassert.Nil(err, \"Error should be Nil\")\n \tassert.Equal(200, resp.StatusCode, \"Response status code should be 200\")\n }\n+\n+func TestRequestBodyUsesSamplingOptions(t *testing.T) {\n+\tvar decoded map[string]any\n+\tbody := newRequestBody(\"hi\", structs.Params{Temperature: \"0.2\", Top_p: \"0.9\"})\n+\tassert.NoError(t, json.Unmarshal([]byte(body), &decoded))\n+\tassert.Equal(t, 0.2, decoded[\"temperature\"])\n+\tassert.Equal(t, 0.9, decoded[\"top_p\"])\n+}\n+\n+func TestRequestBodyDefaultsSamplingOptions(t *testing.T) {\n+\tvar decoded map[string]any\n+\tbody := newRequestBody(\"hi\", structs.Params{Temperature: \"warm\"})\n+\tassert.NoError(t, json.Unmarshal([]byte(body), &decoded))\n+\tassert.Equal(t, 0.5, decoded[\"temperature\"])\n+\tassert.Equal(t, 0.5, decoded[\"top_p\"])\n+}"
+  }
+ ],
+ "test_files": [
+  "src/providers/koboldai/koboldai_test.go"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "microsoft/AI-Engineering-Coach",
+ "number": 359,
+ "url": "https://github.com/microsoft/AI-Engineering-Coach/pull/359",
+ "title": "fix: rules without detection logic never trigger",
+ "merged_at": "2026-11-03T14:26:48Z",
+ "files": [
+  {
+   "filename": "src/core/rule-pipeline.test.ts",
+   "status": "added",
+   "additions": 61,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,61 @@\n+/*---------------------------------------------------------------------------------------------\n+ *  Copyright (c) Microsoft Corporation. All rights reserved.\n+ *  Licensed under the MIT License. See LICENSE in the project root for license information.\n+ *--------------------------------------------------------------------------------------------*/\n+\n+import { describe, expect, it } from 'vitest';\n+import { checkPipelineTrigger, executePipeline, parsePipeline } from './rule-pipeline';\n+import type { DetectionRule, SessionRequest } from './types';\n+\n+function makeRule(rawSource: string): DetectionRule {\n+  return {\n+    id: 'pipeline-test',\n+    name: 'Pipeline Test',\n+    group: 'prompt-quality',\n+    severity: 'medium',\n+    requiresIdeContext: false,\n+    scope: 'requests',\n+    description: 'Rule for pipeline tests',\n+    descriptionTemplate: '{{count}} of {{total}} requests matched',\n+    suggestionTemplate: 'Improve',\n+    exampleTemplate: '{{messageText}}',\n+    maxExamples: 3,\n+    conditions: [],\n+    thresholds: {},\n+    patterns: {},\n+    fileTypes: {},\n+    tests: [],\n+    source: 'built-in',\n+    sourceFilePath: '',\n+    version: 1,\n+    tags: [],\n+    rawSource,\n+  };\n+}\n+\n+const reqs = [{ messageText: 'a' }, { messageText: 'b' }] as unknown as SessionRequest[];\n+\n+function triggers(rawSource: string): boolean {\n+  const rule = makeRule(rawSource);\n+  const emission = executePipeline(parsePipeline(rule), rule, { reqs, sessions: [], skipIdeDetectors: false });\n+  return checkPipelineTrigger(parsePipeline(rule), emission, rule);\n+}\n+\n+describe('rule pipeline without detection logic', () => {\n+  it('never triggers when the rule has no detect block', () => {\n+    expect(triggers('# Filter\\nmessageLength < 0')).toBe(false);\n+  });\n+\n+  it('never triggers when the detect block has neither match: nor check:', () => {\n+    expect(triggers('```detect\\nscan: requests\\n```')).toBe(false);\n+    expect(triggers('```detect\\n```')).toBe(false);\n+  });\n+\n+  it('still triggers with match: only', () => {\n+    expect(triggers('```detect\\nmatch: messageText == \"a\"\\n```')).toBe(true);\n+  });\n+\n+  it('still evaluates check:-only rules over every row', () => {\n+    expect(triggers('```detect\\ncheck: count >= 2\\n```')).toBe(true);\n+  });\n+});"
+  },
+  {
+   "filename": "src/core/rule-pipeline.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -179,6 +179,9 @@ export function executePipeline(\n \n   if (rows.length === 0) return EMPTY_EMISSION;\n \n+  // No detection logic (no detect block, or one without match:/check:) never triggers.\n+  if (!pipeline.matchExpr && !pipeline.checkExpr) return EMPTY_EMISSION;\n+\n   const ruleCtx = buildRuleContext(rule);\n \n   // Compile match filter"
+  }
+ ],
+ "test_files": [
+  "src/core/rule-pipeline.test.ts"
+ ]
+}

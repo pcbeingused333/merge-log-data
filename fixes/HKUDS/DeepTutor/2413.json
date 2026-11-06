@@ -1,0 +1,26 @@
+{
+ "repo": "HKUDS/DeepTutor",
+ "number": 2413,
+ "url": "https://github.com/HKUDS/DeepTutor/pull/2413",
+ "title": "fix(research): price dated gpt-4o-mini names with the mini rates",
+ "merged_at": "2026-11-05T19:03:07Z",
+ "files": [
+  {
+   "filename": "deeptutor/agents/research/utils/token_tracker.py",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -73,8 +73,13 @@ def get_model_pricing(model_name: str) -> dict[str, float]:\n         return MODEL_PRICING[model_name]\n     # Fuzzy matching\n     lower = model_name.lower()\n+    # Prefer the longest key contained in the name, so \"gpt-4o-mini-<date>\" is\n+    # priced as \"gpt-4o-mini\" and not as the shorter \"gpt-4o\".\n+    contained = [key for key in MODEL_PRICING if key in lower]\n+    if contained:\n+        return MODEL_PRICING[max(contained, key=len)]\n     for key, val in MODEL_PRICING.items():\n-        if key in lower or lower in key:\n+        if lower in key:\n             return val\n     return MODEL_PRICING[\"gpt-4o-mini\"]\n "
+  },
+  {
+   "filename": "tests/agents/research/test_token_tracker_pricing.py",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -12,3 +12,14 @@ def test_deepseek_v4_pricing_entries() -> None:\n         \"input\": 0.000435,\n         \"output\": 0.00087,\n     }\n+\n+\n+def test_dated_and_prefixed_mini_models_use_mini_pricing() -> None:\n+    mini = {\"input\": 0.00015, \"output\": 0.0006}\n+    assert get_model_pricing(\"gpt-4o-mini-2024-07-18\") == mini\n+    assert get_model_pricing(\"openai/gpt-4o-mini\") == mini\n+\n+\n+def test_dated_full_model_keeps_full_pricing() -> None:\n+    assert get_model_pricing(\"gpt-4o-2024-08-06\") == {\"input\": 0.0025, \"output\": 0.010}\n+    assert get_model_pricing(\"gpt-4-turbo-2024-04-09\") == {\"input\": 0.01, \"output\": 0.03}"
+  }
+ ],
+ "test_files": [
+  "tests/agents/research/test_token_tracker_pricing.py"
+ ]
+}

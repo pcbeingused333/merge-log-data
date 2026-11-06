@@ -1,0 +1,26 @@
+{
+ "repo": "microsoft/PyRIT",
+ "number": 3878,
+ "url": "https://github.com/microsoft/PyRIT/pull/3878",
+ "title": "FIX: Validate sub-converter output type in SelectiveTextConverter range and word modes",
+ "merged_at": "2026-11-04T22:38:04Z",
+ "files": [
+  {
+   "filename": "pyrit/converter/selective_text_converter.py",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -297,6 +297,9 @@ async def _convert_word_level_async(self, *, prompt: str) -> ConverterResult:\n \n         Returns:\n             ConverterResult: The result containing the converted output and its type.\n+\n+        Raises:\n+            ValueError: If the sub-converter does not return text output.\n         \"\"\"\n         words = prompt.split(self._word_separator)\n \n@@ -310,6 +313,10 @@ async def _convert_word_level_async(self, *, prompt: str) -> ConverterResult:\n         # Convert selected words\n         for idx in selected_indices:\n             conversion_result = await self._sub_converter.convert_async(prompt=words[idx], input_type=\"text\")\n+            if conversion_result.output_type != \"text\":\n+                raise ValueError(\n+                    f\"SelectiveTextConverter requires text output, but received {conversion_result.output_type}.\"\n+                )\n             converted_word = conversion_result.output_text\n \n             if self._preserve_tokens:\n@@ -329,6 +336,9 @@ async def _convert_char_level_async(self, *, prompt: str) -> ConverterResult:\n \n         Returns:\n             ConverterResult: The result containing the converted output and its type.\n+\n+        Raises:\n+            ValueError: If the sub-converter does not return text output.\n         \"\"\"\n         start_idx, end_idx = self._selection_strategy.select_range(text=prompt)\n \n@@ -343,6 +353,10 @@ async def _convert_char_level_async(self, *, prompt: str) -> ConverterResult:\n \n         # Convert the selected region\n         conversion_result = await self._sub_converter.convert_async(prompt=selected_text, input_type=\"text\")\n+        if conversion_result.output_type != \"text\":\n+            raise ValueError(\n+                f\"SelectiveTextConverter requires text output, but received {conversion_result.output_type}.\"\n+            )\n         converted_text = conversion_result.output_text\n \n         if self._preserve_tokens:"
+  },
+  {
+   "filename": "tests/unit/converter/test_selective_text_converter.py",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -23,6 +23,7 @@\n     ProportionSelectionStrategy,\n     RangeSelectionStrategy,\n     RegexSelectionStrategy,\n+    TextSelectionStrategy,\n     TokenSelectionStrategy,\n     WordIndexSelectionStrategy,\n     WordPositionSelectionStrategy,\n@@ -177,6 +178,29 @@ async def test_token_selection_rejects_nontext_output_async(*, preserve_tokens:\n             await converter.convert_async(prompt=\"⟪test⟫\")\n \n \n+@pytest.mark.parametrize(\n+    \"selection_strategy\",\n+    [\n+        RangeSelectionStrategy(start_proportion=0.0, end_proportion=1.0),\n+        WordIndexSelectionStrategy(indices=[0]),\n+    ],\n+)\n+@pytest.mark.parametrize(\"preserve_tokens\", [False, True])\n+async def test_range_and_word_selection_reject_nontext_output_async(\n+    *, selection_strategy: TextSelectionStrategy, preserve_tokens: bool\n+) -> None:\n+    sub_converter = Base64Converter()\n+    converter = SelectiveTextConverter(\n+        sub_converter=sub_converter,\n+        selection_strategy=selection_strategy,\n+        preserve_tokens=preserve_tokens,\n+    )\n+    with patch.object(sub_converter, \"convert_async\", new_callable=AsyncMock) as convert:\n+        convert.return_value = ConverterResult(output_text=\"output.png\", output_type=\"image_path\")\n+        with pytest.raises(ValueError, match=\"text output\"):\n+            await converter.convert_async(prompt=\"hello world\")\n+\n+\n @pytest.mark.parametrize(\"token_entry\", [False, True])\n @pytest.mark.parametrize(\"outer_preserves\", [False, True])\n @pytest.mark.parametrize(\"inner_preserves\", [False, True])"
+  }
+ ],
+ "test_files": [
+  "tests/unit/converter/test_selective_text_converter.py"
+ ]
+}

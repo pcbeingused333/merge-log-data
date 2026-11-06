@@ -1,0 +1,26 @@
+{
+ "repo": "activeagents/activeagent",
+ "number": 690,
+ "url": "https://github.com/activeagents/activeagent/pull/690",
+ "title": "fix(usage): sum duration_ms when adding Usage objects",
+ "merged_at": "2026-11-06T18:12:28Z",
+ "files": [
+  {
+   "filename": "lib/active_agent/providers/common/usage.rb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -148,7 +148,8 @@ def +(other)\n             cached_tokens:         sum_optional(self.cached_tokens,         other.cached_tokens),\n             cache_creation_tokens: sum_optional(self.cache_creation_tokens, other.cache_creation_tokens),\n             reasoning_tokens:      sum_optional(self.reasoning_tokens,      other.reasoning_tokens),\n-            audio_tokens:          sum_optional(self.audio_tokens,          other.audio_tokens)\n+            audio_tokens:          sum_optional(self.audio_tokens,          other.audio_tokens),\n+            duration_ms:           sum_optional(self.duration_ms,           other.duration_ms)\n           )\n         end\n "
+  },
+  {
+   "filename": "test/providers/common/usage_test.rb",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -258,6 +258,25 @@ class UsageTest < ActiveSupport::TestCase\n           assert_equal 1000, usage.provider_details[:cache_creation][:ephemeral_5m_input_tokens]\n           assert_equal 2, usage.provider_details[:server_tool_use][:web_fetch_requests]\n         end\n+\n+        test \"+ sums duration_ms across tool-call rounds\" do\n+          first = Usage.from_ollama(\"prompt_eval_count\" => 10, \"eval_count\" => 5, \"total_duration\" => 2_000_000_000)\n+          second = Usage.from_ollama(\"prompt_eval_count\" => 20, \"eval_count\" => 8, \"total_duration\" => 3_000_000_000)\n+\n+          combined = first + second\n+\n+          assert_equal 30, combined.input_tokens\n+          assert_equal 5000, combined.duration_ms\n+        end\n+\n+        test \"+ keeps duration_ms when only one side reports it\" do\n+          timed = Usage.new(input_tokens: 1, output_tokens: 1, duration_ms: 1500)\n+          untimed = Usage.new(input_tokens: 2, output_tokens: 2)\n+\n+          assert_equal 1500, (timed + untimed).duration_ms\n+          assert_equal 1500, (untimed + timed).duration_ms\n+          assert_nil (untimed + untimed).duration_ms\n+        end\n       end\n     end\n   end"
+  }
+ ],
+ "test_files": [
+  "test/providers/common/usage_test.rb"
+ ]
+}

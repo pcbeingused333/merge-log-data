@@ -1,0 +1,26 @@
+{
+ "repo": "k8sgpt-ai/k8sgpt",
+ "number": 1905,
+ "url": "https://github.com/k8sgpt-ai/k8sgpt/pull/1905",
+ "title": "fix: send --maxtokens and --topk to Ollama",
+ "merged_at": "2026-11-06T07:17:05Z",
+ "files": [
+  {
+   "filename": "pkg/ai/ollama.go",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 7,
+   "patch": "@@ -33,6 +33,8 @@ type OllamaClient struct {\n \tmodel       string\n \ttemperature float32\n \ttopP        float32\n+\ttopK        int32\n+\tmaxTokens   int\n }\n \n const (\n@@ -77,6 +79,8 @@ func (c *OllamaClient) Configure(config IAIConfig) error {\n \t}\n \tc.temperature = config.GetTemperature()\n \tc.topP = config.GetTopP()\n+\tc.topK = config.GetTopK()\n+\tc.maxTokens = config.GetMaxTokens()\n \treturn nil\n }\n func (c *OllamaClient) GetCompletion(ctx context.Context, prompt string) (string, error) {\n@@ -115,14 +119,21 @@ func (c *OllamaClient) GetCompletion(ctx context.Context, prompt string) (string\n \t\tfmt.Printf(\"\\n[Ollama] Successfully pulled model %s!\\n\", c.model)\n \t}\n \n+\toptions := map[string]interface{}{\n+\t\t\"temperature\": c.temperature,\n+\t\t\"top_p\":       c.topP,\n+\t}\n+\tif c.topK > 0 {\n+\t\toptions[\"top_k\"] = c.topK\n+\t}\n+\tif c.maxTokens > 0 {\n+\t\toptions[\"num_predict\"] = c.maxTokens\n+\t}\n \treq := &ollama.GenerateRequest{\n-\t\tModel:  c.model,\n-\t\tPrompt: prompt,\n-\t\tStream: new(bool),\n-\t\tOptions: map[string]interface{}{\n-\t\t\t\"temperature\": c.temperature,\n-\t\t\t\"top_p\":       c.topP,\n-\t\t},\n+\t\tModel:   c.model,\n+\t\tPrompt:  prompt,\n+\t\tStream:  new(bool),\n+\t\tOptions: options,\n \t}\n \tcompletion := \"\"\n \trespFunc := func(resp ollama.GenerateResponse) error {"
+  },
+  {
+   "filename": "pkg/ai/ollama_test.go",
+   "status": "modified",
+   "additions": 46,
+   "deletions": 2,
+   "patch": "@@ -2,6 +2,7 @@ package ai\n \n import (\n \t\"context\"\n+\t\"encoding/json\"\n \t\"fmt\"\n \t\"net/http\"\n \t\"net/http/httptest\"\n@@ -114,11 +115,54 @@ func TestOllamaGetCompletionModelExists(t *testing.T) {\n \tassert.Equal(t, \"Here is a response for existing model\", resp)\n }\n \n+func ollamaGenerateOptions(t *testing.T, cfg *mockIAIConfig) map[string]interface{} {\n+\tt.Helper()\n+\tvar body struct {\n+\t\tOptions map[string]interface{} `json:\"options\"`\n+\t}\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tswitch r.URL.Path {\n+\t\tcase \"/api/tags\":\n+\t\t\t_, _ = w.Write([]byte(`{\"models\": [{\"name\": \"m:latest\"}]}`))\n+\t\tcase \"/api/generate\":\n+\t\t\t_ = json.NewDecoder(r.Body).Decode(&body)\n+\t\t\t_, _ = w.Write([]byte(`{\"response\": \"ok\", \"done\": true}` + \"\\n\"))\n+\t\tdefault:\n+\t\t\tw.WriteHeader(http.StatusNotFound)\n+\t\t}\n+\t}))\n+\tdefer server.Close()\n+\n+\tcfg.baseURL = server.URL\n+\tcfg.model = \"m\"\n+\tclient := &OllamaClient{}\n+\tassert.NoError(t, client.Configure(cfg))\n+\t_, err := client.GetCompletion(context.Background(), \"Hello\")\n+\tassert.NoError(t, err)\n+\treturn body.Options\n+}\n+\n+func TestOllamaSendsMaxTokensAndTopK(t *testing.T) {\n+\topts := ollamaGenerateOptions(t, &mockIAIConfig{temperature: 0.7, topP: 1.0, topK: 40, maxTokens: 512})\n+\n+\tassert.EqualValues(t, 512, opts[\"num_predict\"])\n+\tassert.EqualValues(t, 40, opts[\"top_k\"])\n+}\n+\n+func TestOllamaOmitsUnsetMaxTokensAndTopK(t *testing.T) {\n+\topts := ollamaGenerateOptions(t, &mockIAIConfig{temperature: 0.7, topP: 1.0})\n+\n+\tassert.NotContains(t, opts, \"num_predict\")\n+\tassert.NotContains(t, opts, \"top_k\")\n+}\n+\n type mockIAIConfig struct {\n \tbaseURL     string\n \tmodel       string\n \ttemperature float32\n \ttopP        float32\n+\ttopK        int32\n+\tmaxTokens   int\n }\n \n func (m *mockIAIConfig) GetBaseURL() string {\n@@ -141,8 +185,8 @@ func (m *mockIAIConfig) GetPassword() string { return \"\" }\n func (m *mockIAIConfig) GetEndpointName() string { return \"\" }\n func (m *mockIAIConfig) GetEngine() string { return \"\" }\n func (m *mockIAIConfig) GetProviderRegion() string { return \"\" }\n-func (m *mockIAIConfig) GetTopK() int32 { return 0 }\n-func (m *mockIAIConfig) GetMaxTokens() int { return 0 }\n+func (m *mockIAIConfig) GetTopK() int32 { return m.topK }\n+func (m *mockIAIConfig) GetMaxTokens() int { return m.maxTokens }\n func (m *mockIAIConfig) GetStopSequences() []string { return nil }\n func (m *mockIAIConfig) GetProviderId() string { return \"\" }\n func (m *mockIAIConfig) GetCompartmentId() string { return \"\" }"
+  }
+ ],
+ "test_files": [
+  "pkg/ai/ollama_test.go"
+ ]
+}

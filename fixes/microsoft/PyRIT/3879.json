@@ -1,0 +1,26 @@
+{
+ "repo": "microsoft/PyRIT",
+ "number": 3879,
+ "url": "https://github.com/microsoft/PyRIT/pull/3879",
+ "title": "FIX: Accept finding_counts when listing operations",
+ "merged_at": "2026-11-04T09:05:23Z",
+ "files": [
+  {
+   "filename": "pyrit/cli/api_client.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -278,7 +278,11 @@ async def list_operations_async(self) -> list[Operation]:\n         from pyrit.models import Operation\n \n         payload = await self._get_json_async(path=\"/api/operations\")\n-        return [Operation.model_validate(item) for item in payload[\"items\"]]\n+        # The list endpoint returns OperationListItem records, which add ``finding_counts`` to Operation.\n+        return [\n+            Operation.model_validate({key: value for key, value in item.items() if key != \"finding_counts\"})\n+            for item in payload[\"items\"]\n+        ]\n \n     async def list_datasets_async(self) -> dict[str, Any]:\n         \"\"\""
+  },
+  {
+   "filename": "tests/unit/cli/test_api_client.py",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -55,6 +55,20 @@ def handler(request: httpx.Request) -> httpx.Response:\n     assert rows == [operation]\n \n \n+async def test_list_operations_accepts_finding_counts_from_list_items_async() -> None:\n+    operation = Operation(name=\"Saved\")\n+\n+    def handler(request: httpx.Request) -> httpx.Response:\n+        item = {**operation.model_dump(mode=\"json\"), \"finding_counts\": {\"high\": 2}}\n+        return httpx.Response(200, json={\"items\": [item]})\n+\n+    client = PyRITApiClient(base_url=\"http://localhost:8000\")\n+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url=\"http://localhost:8000\") as transport:\n+        client._client = transport\n+        rows = await client.list_operations_async()\n+    assert rows == [operation]\n+\n+\n async def test_request_waiting_for_auth_stops_after_concurrent_mismatch(monkeypatch):\n     client = PyRITApiClient(base_url=\"http://localhost:8000\")\n     client._compatibility_id = COMPATIBILITY_ID"
+  }
+ ],
+ "test_files": [
+  "tests/unit/cli/test_api_client.py"
+ ]
+}

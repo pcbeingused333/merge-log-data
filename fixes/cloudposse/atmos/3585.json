@@ -1,0 +1,63 @@
+{
+ "repo": "cloudposse/atmos",
+ "number": 3585,
+ "url": "https://github.com/cloudposse/atmos/pull/3585",
+ "title": "fix(ai): default Anthropic and Bedrock to Claude Sonnet 5",
+ "merged_at": "2026-11-02T17:23:24Z",
+ "files": [
+  {
+   "filename": "pkg/ai/agent/anthropic/client.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -22,7 +22,7 @@ const (\n \t// DefaultMaxTokens is the default maximum number of tokens in AI responses.\n \tDefaultMaxTokens = 4096\n \t// DefaultModel is the default Anthropic model.\n-\tDefaultModel = \"claude-sonnet-4-5-20250929\"\n+\tDefaultModel = \"claude-sonnet-5\"\n \t// DefaultAPIKeyEnvVar is the default environment variable name for the API key (used in error hints).\n \tDefaultAPIKeyEnvVar = \"ANTHROPIC_API_KEY\"\n )"
+  },
+  {
+   "filename": "pkg/ai/agent/anthropic/client_test.go",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 4,
+   "patch": "@@ -46,7 +46,7 @@ func TestExtractConfig(t *testing.T) {\n \t\t\t},\n \t\t\texpectedConfig: &base.Config{\n \t\t\t\tEnabled:   false,\n-\t\t\t\tModel:     \"claude-sonnet-4-5-20250929\",\n+\t\t\t\tModel:     \"claude-sonnet-5\",\n \t\t\t\tAPIKey:    \"\",\n \t\t\t\tMaxTokens: 4096,\n \t\t\t},\n@@ -695,7 +695,7 @@ func TestCacheConfiguration_CostSavings(t *testing.T) {\n func TestDefaultConstants(t *testing.T) {\n \tassert.Equal(t, \"anthropic\", ProviderName)\n \tassert.Equal(t, 4096, DefaultMaxTokens)\n-\tassert.Equal(t, \"claude-sonnet-4-5-20250929\", DefaultModel)\n+\tassert.Equal(t, \"claude-sonnet-5\", DefaultModel)\n \tassert.Equal(t, \"ANTHROPIC_API_KEY\", DefaultAPIKeyEnvVar)\n }\n \n@@ -1648,10 +1648,10 @@ func TestSimpleClient_ConfigVariations(t *testing.T) {\n \t\texpectedMaxToken int\n \t}{\n \t\t{\n-\t\t\tname:             \"Default sonnet 4\",\n+\t\t\tname:             \"Default sonnet 5\",\n \t\t\tmodel:            DefaultModel,\n \t\t\tmaxTokens:        DefaultMaxTokens,\n-\t\t\texpectedModel:    \"claude-sonnet-4-5-20250929\",\n+\t\t\texpectedModel:    \"claude-sonnet-5\",\n \t\t\texpectedMaxToken: 4096,\n \t\t},\n \t\t{"
+  },
+  {
+   "filename": "pkg/ai/agent/anthropic/send_test.go",
+   "status": "modified",
+   "additions": 46,
+   "deletions": 0,
+   "patch": "@@ -598,3 +598,49 @@ func TestInitRegistersProvider(t *testing.T) {\n \t// the registration happened (indirectly, via the provider name constant).\n \tassert.Equal(t, \"anthropic\", ProviderName)\n }\n+\n+// TestSendMessageWithTools_ThinkingBlocksIgnored verifies that requests send no thinking override\n+// and that thinking blocks in a response do not affect the parsed text or tool calls.\n+func TestSendMessageWithTools_ThinkingBlocksIgnored(t *testing.T) {\n+\tvar requestBody map[string]interface{}\n+\thandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\trequire.NoError(t, json.NewDecoder(r.Body).Decode(&requestBody))\n+\t\tresp := map[string]interface{}{\n+\t\t\t\"id\":            \"msg_think\",\n+\t\t\t\"type\":          \"message\",\n+\t\t\t\"role\":          \"assistant\",\n+\t\t\t\"model\":         DefaultModel,\n+\t\t\t\"stop_reason\":   \"tool_use\",\n+\t\t\t\"stop_sequence\": nil,\n+\t\t\t\"usage\":         map[string]interface{}{\"input_tokens\": 10, \"output_tokens\": 10},\n+\t\t\t\"content\": []map[string]interface{}{\n+\t\t\t\t{\"type\": \"thinking\", \"thinking\": \"plan\", \"signature\": \"sig\"},\n+\t\t\t\t{\"type\": \"text\", \"text\": \"Searching.\"},\n+\t\t\t\t{\"type\": \"tool_use\", \"id\": \"toolu_1\", \"name\": \"search\", \"input\": map[string]interface{}{\"query\": \"q\"}},\n+\t\t\t},\n+\t\t}\n+\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\tdata, _ := json.Marshal(resp)\n+\t\t_, _ = w.Write(data)\n+\t})\n+\n+\tclient := newTestSimpleClient(t, handler)\n+\tavailableTools := []tools.Tool{\n+\t\t&mockTool{\n+\t\t\tname:        \"search\",\n+\t\t\tdescription: \"Search for information.\",\n+\t\t\tparameters: []tools.Parameter{\n+\t\t\t\t{Name: \"query\", Type: tools.ParamTypeString, Description: \"Search query\", Required: true},\n+\t\t\t},\n+\t\t},\n+\t}\n+\n+\tresult, err := client.SendMessageWithTools(context.Background(), \"Search\", availableTools)\n+\n+\trequire.NoError(t, err)\n+\tassert.NotContains(t, requestBody, \"thinking\")\n+\tassert.Equal(t, \"Searching.\", result.Content)\n+\tassert.Equal(t, types.StopReasonToolUse, result.StopReason)\n+\trequire.Len(t, result.ToolCalls, 1)\n+\tassert.Equal(t, \"toolu_1\", result.ToolCalls[0].ID)\n+}"
+  },
+  {
+   "filename": "pkg/ai/agent/bedrock/client.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -22,7 +22,7 @@ const (\n \t// DefaultMaxTokens is the default maximum number of tokens in AI responses.\n \tDefaultMaxTokens = 4096\n \t// DefaultModel is the default Bedrock model.\n-\tDefaultModel = \"anthropic.claude-sonnet-4-5-20250929-v1:0\"\n+\tDefaultModel = \"global.anthropic.claude-sonnet-5\"\n \t// DefaultRegion is the default AWS region for Bedrock.\n \tDefaultRegion = \"us-east-1\"\n "
+  },
+  {
+   "filename": "pkg/ai/agent/bedrock/client_test.go",
+   "status": "modified",
+   "additions": 56,
+   "deletions": 3,
+   "patch": "@@ -3,8 +3,13 @@ package bedrock\n import (\n \t\"context\"\n \t\"encoding/json\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n \t\"testing\"\n \n+\t\"github.com/aws/aws-sdk-go-v2/aws\"\n+\t\"github.com/aws/aws-sdk-go-v2/credentials\"\n+\t\"github.com/aws/aws-sdk-go-v2/service/bedrockruntime\"\n \t\"github.com/stretchr/testify/assert\"\n \t\"github.com/stretchr/testify/require\"\n \n@@ -45,7 +50,7 @@ func TestExtractConfig(t *testing.T) {\n \t\t\t},\n \t\t\texpectedConfig: &base.Config{\n \t\t\t\tEnabled:   false,\n-\t\t\t\tModel:     \"anthropic.claude-sonnet-4-5-20250929-v1:0\",\n+\t\t\t\tModel:     \"global.anthropic.claude-sonnet-5\",\n \t\t\t\tBaseURL:   \"us-east-1\", // Region stored in BaseURL.\n \t\t\t\tMaxTokens: 4096,\n \t\t\t},\n@@ -104,7 +109,7 @@ func TestExtractConfig(t *testing.T) {\n \t\t\t},\n \t\t\texpectedConfig: &base.Config{\n \t\t\t\tEnabled:   true,\n-\t\t\t\tModel:     \"anthropic.claude-sonnet-4-5-20250929-v1:0\",\n+\t\t\t\tModel:     \"global.anthropic.claude-sonnet-5\",\n \t\t\t\tBaseURL:   \"eu-west-1\",\n \t\t\t\tMaxTokens: 4096,\n \t\t\t},\n@@ -179,7 +184,7 @@ func TestClientGetters(t *testing.T) {\n func TestDefaultConstants(t *testing.T) {\n \tassert.Equal(t, \"bedrock\", ProviderName)\n \tassert.Equal(t, 4096, DefaultMaxTokens)\n-\tassert.Equal(t, \"anthropic.claude-sonnet-4-5-20250929-v1:0\", DefaultModel)\n+\tassert.Equal(t, \"global.anthropic.claude-sonnet-5\", DefaultModel)\n \tassert.Equal(t, \"us-east-1\", DefaultRegion)\n }\n \n@@ -2086,3 +2091,51 @@ func TestExtractConfig_MultipleProviders(t *testing.T) {\n \tassert.Equal(t, 8000, config.MaxTokens)\n \tassert.Equal(t, \"ap-southeast-1\", config.BaseURL)\n }\n+\n+func TestParseBedrockResponse_ThinkingBlockIgnored(t *testing.T) {\n+\tresponseBody := `{\n+\t\t\"content\": [\n+\t\t\t{\"type\": \"thinking\", \"thinking\": \"plan\", \"signature\": \"sig\"},\n+\t\t\t{\"type\": \"text\", \"text\": \"Searching.\"},\n+\t\t\t{\"type\": \"tool_use\", \"id\": \"tool_1\", \"name\": \"search\", \"input\": {\"query\": \"q\"}}\n+\t\t],\n+\t\t\"stop_reason\": \"tool_use\",\n+\t\t\"usage\": {\"input_tokens\": 10, \"output_tokens\": 10}\n+\t}`\n+\n+\tresult, err := parseBedrockResponse([]byte(responseBody))\n+\n+\trequire.NoError(t, err)\n+\tassert.Equal(t, \"Searching.\", result.Content)\n+\tassert.Equal(t, types.StopReasonToolUse, result.StopReason)\n+\trequire.Len(t, result.ToolCalls, 1)\n+\tassert.Equal(t, \"tool_1\", result.ToolCalls[0].ID)\n+}\n+\n+func TestSendMessageWithToolsAndHistory_ThinkingNotSent(t *testing.T) {\n+\tvar requestBody map[string]interface{}\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\trequire.NoError(t, json.NewDecoder(r.Body).Decode(&requestBody))\n+\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t_, _ = w.Write([]byte(`{\"content\":[{\"type\":\"thinking\",\"thinking\":\"x\",\"signature\":\"s\"},{\"type\":\"text\",\"text\":\"ok\"}],\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}`))\n+\t}))\n+\tt.Cleanup(server.Close)\n+\n+\truntimeClient := bedrockruntime.NewFromConfig(aws.Config{\n+\t\tRegion:      \"us-east-1\",\n+\t\tCredentials: credentials.NewStaticCredentialsProvider(\"id\", \"secret\", \"\"),\n+\t}, func(o *bedrockruntime.Options) {\n+\t\to.BaseEndpoint = aws.String(server.URL)\n+\t})\n+\tclient := &Client{\n+\t\tclient: runtimeClient,\n+\t\tconfig: &base.Config{Enabled: true, Model: DefaultModel, MaxTokens: DefaultMaxTokens},\n+\t\tregion: \"us-east-1\",\n+\t}\n+\n+\tresult, err := client.SendMessageWithToolsAndHistory(context.Background(), []types.Message{{Role: types.RoleUser, Content: \"hi\"}}, nil)\n+\n+\trequire.NoError(t, err)\n+\tassert.NotContains(t, requestBody, \"thinking\")\n+\tassert.Equal(t, \"ok\", result.Content)\n+}"
+  },
+  {
+   "filename": "website/docs/cli/commands/aws/security/analyze.mdx",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -209,7 +209,7 @@ ai:\n   default_provider: bedrock\n   providers:\n     bedrock:\n-      model: anthropic.claude-sonnet-4-5-20250929-v1:0\n+      model: global.anthropic.claude-sonnet-5\n       base_url: us-east-1\n ```\n "
+  },
+  {
+   "filename": "website/docs/cli/configuration/ai/providers.mdx",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 2,
+   "patch": "@@ -60,7 +60,7 @@ Each provider in the `providers` map supports the following settings:\n ## Supported Providers\n \n <dl>\n-  <dt>**Anthropic (Claude)** — `claude-sonnet-4-5-20250929`</dt>\n+  <dt>**Anthropic (Claude)** — `claude-sonnet-5`</dt>\n   <dd>API Key authentication. Advanced reasoning, default choice.</dd>\n \n   <dt>**OpenAI (GPT)** — `gpt-4o`</dt>\n@@ -87,7 +87,7 @@ Each provider in the `providers` map supports the following settings:\n   <dt>**Ollama (Local)** — `llama4`</dt>\n   <dd>No authentication (local). Privacy, offline use, zero API costs.</dd>\n \n-  <dt>**AWS Bedrock** — `anthropic.claude-sonnet-4-5-20250929-v1:0`</dt>\n+  <dt>**AWS Bedrock** — `global.anthropic.claude-sonnet-5`</dt>\n   <dd>AWS Credentials authentication. Enterprise security, AWS integration.</dd>\n \n   <dt>**Azure OpenAI** — `gpt-4o`</dt>\n@@ -520,6 +520,18 @@ export AWS_PROFILE=\"bedrock-profile\"\n Use the `global.` prefix for dynamic routing across regions, or the `anthropic.` prefix for a specific region. Cross-region inference profiles use IDs like `us.anthropic.claude-sonnet-4-6-v1:0`.\n :::\n \n+:::note IAM permissions for the default model\n+When `model` is not set, Atmos uses the global inference profile `global.anthropic.claude-sonnet-5`. Earlier versions defaulted to the foundation model `anthropic.claude-sonnet-4-5-20250929-v1:0`, so an IAM policy that only names that foundation-model ARN returns `AccessDenied`. Global cross-region inference needs `bedrock:InvokeModel` on all three resources (see the [AWS documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/global-cross-region-inference.html)):\n+\n+- the inference profile in your region: `arn:aws:bedrock:<region>:<account>:inference-profile/global.anthropic.claude-sonnet-5`\n+- the foundation model in your region: `arn:aws:bedrock:<region>::foundation-model/anthropic.claude-sonnet-5`\n+- the global foundation model: `arn:aws:bedrock:::foundation-model/anthropic.claude-sonnet-5`\n+\n+Alternatively, set `model` explicitly to a model your policy already allows.\n+\n+Global inference profiles are not available in the AWS GovCloud regions (`us-gov-west-1`, `us-gov-east-1`). In those regions, set `model` to an ID that is valid there.\n+:::\n+\n #### Azure OpenAI\n \n :::warning Azure-Specific Configuration"
+  }
+ ],
+ "test_files": [
+  "pkg/ai/agent/anthropic/client_test.go",
+  "pkg/ai/agent/anthropic/send_test.go",
+  "pkg/ai/agent/bedrock/client_test.go"
+ ]
+}

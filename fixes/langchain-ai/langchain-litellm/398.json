@@ -1,0 +1,26 @@
+{
+ "repo": "langchain-ai/langchain-litellm",
+ "number": 398,
+ "url": "https://github.com/langchain-ai/langchain-litellm/pull/398",
+ "title": "fix(chat_models): suggest a Router rename only when the proxy reads the same model",
+ "merged_at": "2026-11-01T20:57:16Z",
+ "files": [
+  {
+   "filename": "langchain_litellm/chat_models/litellm_router.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -73,6 +73,10 @@ def _deployment_gap(deployment: Mapping[str, Any]) -> str | None:\n     if replaced:\n         return f\"{gap}, since {' and '.join(replaced)}\"\n     bare = named.removeprefix(\"chat_completions/\").removeprefix(\"responses/\")\n+    # A rename must keep the model the provider reads: litellm drops every\n+    # 'responses/' in it, and a proxy reads a 'chat_completions/' prefix too.\n+    if \"responses/\" in bare or (provider == \"litellm_proxy\" and bare != named):\n+        return gap\n     if _sends_to_responses_api(f\"responses/{bare}\", provider):\n         return f\"{gap}; name it '{provider}/responses/{bare}'\"\n     return gap"
+  },
+  {
+   "filename": "tests/unit_tests/test_router_responses_api.py",
+   "status": "modified",
+   "additions": 74,
+   "deletions": 0,
+   "patch": "@@ -660,6 +660,80 @@ async def test_a_deployment_id_replaces_the_model(\n     ]\n \n \n+@pytest.mark.parametrize(\n+    (\"proxy\", \"deployment\", \"reason\"),\n+    [\n+        pytest.param(\n+            \"global\",\n+            \"openai/responses/gpt-4o-mini\",\n+            \"litellm sends it to Chat Completions\",\n+            id=\"use_litellm_proxy\",\n+        ),\n+        pytest.param(\n+            \"environment\",\n+            \"openai/responses/gpt-4o-mini\",\n+            \"litellm sends it to Chat Completions\",\n+            id=\"USE_LITELLM_PROXY\",\n+        ),\n+        pytest.param(\n+            None,\n+            \"litellm_proxy/openai/responses/gpt-4o-mini\",\n+            \"litellm sends it to Chat Completions\",\n+            id=\"named-for-the-proxy\",\n+        ),\n+        pytest.param(\n+            None,\n+            \"litellm_proxy/chat_completions/gpt-4o-mini\",\n+            \"its name asks for Chat Completions\",\n+            id=\"chat-completions-prefix\",\n+        ),\n+    ],\n+)\n+@pytest.mark.asyncio\n+async def test_behind_a_proxy_no_rename_that_changes_the_model_is_suggested(\n+    monkeypatch: pytest.MonkeyPatch, proxy: str | None, deployment: str, reason: str\n+) -> None:\n+    \"\"\"The proxy reads the name as written, so a rename asks it for another model.\"\"\"\n+    if proxy == \"global\":\n+        monkeypatch.setattr(litellm, \"use_litellm_proxy\", True)\n+    elif proxy == \"environment\":\n+        monkeypatch.setenv(\"USE_LITELLM_PROXY\", \"True\")\n+    llm = ChatLiteLLMRouter(router=_router(deployment), use_responses_api=True)\n+\n+    refusal = await _refused(llm, \"invoke\")\n+\n+    assert refusal.splitlines()[1:] == [f\"- {deployment!r}: {reason}\"]\n+\n+\n+def test_behind_a_proxy_the_suggested_name_keeps_the_model(\n+    monkeypatch: pytest.MonkeyPatch,\n+) -> None:\n+    \"\"\"Followed, the rename sends the proxy the same model, only to /responses.\"\"\"\n+    monkeypatch.setattr(litellm, \"use_litellm_proxy\", True)\n+    monkeypatch.setenv(\"LITELLM_PROXY_API_BASE\", \"https://proxy.example\")\n+    requests = serve_http(monkeypatch, REPLY)\n+    llm = ChatLiteLLMRouter(\n+        router=_router(\"openai/gpt-4o-mini\"), use_responses_api=True\n+    )\n+\n+    with pytest.raises(ValueError) as refusal:\n+        llm.invoke(\"hi\")\n+    ChatLiteLLMRouter(\n+        router=_router(\"litellm_proxy/responses/openai/gpt-4o-mini\"),\n+        use_responses_api=True,\n+    ).invoke(\"hi\")\n+\n+    assert str(refusal.value).splitlines()[1:] == [\n+        (\n+            \"- 'openai/gpt-4o-mini': litellm sends it to Chat Completions; \"\n+            \"name it 'litellm_proxy/responses/openai/gpt-4o-mini'\"\n+        )\n+    ]\n+    assert [\n+        (request.url.path, json.loads(request.content)[\"model\"]) for request in requests\n+    ] == [(\"/responses\", \"openai/gpt-4o-mini\")]\n+\n+\n @pytest.mark.asyncio\n async def test_a_deployment_that_mirrors_the_call_is_refused() -> None:\n     \"\"\"The Router also sends the call to the silent_model group, unchecked.\"\"\""
+  }
+ ],
+ "test_files": [
+  "tests/unit_tests/test_router_responses_api.py"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "Twigpine/openclaude",
+ "number": 2480,
+ "url": "https://github.com/Twigpine/openclaude/pull/2480",
+ "title": "fix(openai-shim): flag length-truncated non-streaming replies like the stream path",
+ "merged_at": "2026-11-04T04:28:51Z",
+ "files": [
+  {
+   "filename": "src/services/api/openaiShim/responseConversion.test.ts",
+   "status": "modified",
+   "additions": 31,
+   "deletions": 1,
+   "patch": "@@ -19,6 +19,10 @@ import {\n   type NonStreamingOpenAIResponse,\n } from './responseConversion.js'\n \n+// Same notice the streaming path appends when the provider stops with finish_reason 'length'.\n+const TRUNCATION_NOTICE =\n+  '\\n\\n[Response truncated — reached length limit or upstream stalled. Ask the model to continue.]'\n+\n const parseXmlToolCalls = (text: string, allowHy3: boolean) => {\n   let sequence = 0\n   return parseXmlToolCallsModule(text, allowHy3, () => ++sequence)\n@@ -222,7 +226,33 @@ test('normalizes array content and length stop reasons', () => {\n     }],\n   })\n \n-  expect(message.content).toEqual([{ type: 'text', text: 'first\\nsecond' }])\n+  expect(message.content).toEqual([\n+    { type: 'text', text: 'first\\nsecond' },\n+    { type: 'text', text: TRUNCATION_NOTICE },\n+  ])\n   expect(message.stop_reason).toBe('max_tokens')\n   expect(message.id).toBe('msg-test')\n })\n+\n+test('marks a length-truncated non-streaming reply like the streaming path does', () => {\n+  const message = convert({\n+    choices: [{\n+      message: { content: 'partial answer' },\n+      finish_reason: 'length',\n+    }],\n+  })\n+\n+  expect(message.stop_reason).toBe('max_tokens')\n+  expect(message.content).toEqual([\n+    { type: 'text', text: 'partial answer' },\n+    { type: 'text', text: TRUNCATION_NOTICE },\n+  ])\n+})\n+\n+test('does not add a truncation notice for a normal stop', () => {\n+  const message = convert({\n+    choices: [{ message: { content: 'done' }, finish_reason: 'stop' }],\n+  })\n+\n+  expect(message.content).toEqual([{ type: 'text', text: 'done' }])\n+})"
+  },
+  {
+   "filename": "src/services/api/openaiShim/responseConversion.ts",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -110,6 +110,12 @@ export function convertNonStreamingResponseToAnthropicMessage(\n     ? 'tool_use' : choice?.finish_reason === 'length' ? 'max_tokens' : 'end_turn'\n   if (choice?.finish_reason === 'content_filter' || choice?.finish_reason === 'safety') {\n     content.push({ type: 'text', text: '\\n\\n[Content blocked by provider safety filter]' })\n+  } else if (choice?.finish_reason === 'length') {\n+    // Keep parity with the streaming path: tell the user the reply was cut off.\n+    content.push({\n+      type: 'text',\n+      text: '\\n\\n[Response truncated — reached length limit or upstream stalled. Ask the model to continue.]',\n+    })\n   }\n   return {\n     id: data.id ?? deps.makeMessageId(), type: 'message', role: 'assistant', content,"
+  }
+ ],
+ "test_files": [
+  "src/services/api/openaiShim/responseConversion.test.ts"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "NVIDIA-NeMo/Automodel",
+ "number": 4641,
+ "url": "https://github.com/NVIDIA-NeMo/Automodel/pull/4641",
+ "title": "fix(datasets): raise instead of looping forever when no sample survives",
+ "merged_at": "2026-11-06T13:13:11Z",
+ "files": [
+  {
+   "filename": "nemo_automodel/components/datasets/llm/column_mapped_text_instruction_iterable_dataset.py",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -265,6 +265,7 @@ def __init__(\n \n     def __iter__(self) -> Iterator[Dict[str, List[int]]]:\n         while True:\n+            yielded_any = False\n             for row in self.dataset:\n                 mapped = {dest: row[src] for dest, src in self.column_mapping.items() if src in row}\n                 # Skip rows missing required fields\n@@ -276,10 +277,18 @@ def __iter__(self) -> Iterator[Dict[str, List[int]]]:\n                     continue\n                 if not _check_all_values_equal_length(tokenized):\n                     continue\n+                yielded_any = True\n                 yield tokenized\n \n             if not self.repeat_on_exhaustion:\n                 return\n+            if not yielded_any:\n+                # Looping again would never produce a sample and training would hang silently.\n+                raise ValueError(\n+                    \"No valid samples were produced from a full pass over the dataset. Check that \"\n+                    \"column_mapping refers to existing columns (including the answer column) and that \"\n+                    \"samples are not all filtered out (empty labels or mismatched lengths).\"\n+                )\n             # Wrap-around: advance epoch for deterministic reshuffle if supported and iterate again\n             try:\n                 self._current_epoch_for_repeat += 1"
+  },
+  {
+   "filename": "tests/unit_tests/datasets/llm/test_column_mapped_text_instruction_iterable.py",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -181,3 +181,21 @@ def test_iterable_dataset_mapping_checks_invalid_num_columns(tmp_path: Path):\n             column_mapping={\"answer\": \"a\"},  # only 1 key\n             tokenizer=_DummyTokenizer(),\n         )\n+\n+\n+@pytest.mark.timeout(30)\n+def test_iterable_dataset_raises_when_every_row_is_filtered(tmp_path: Path):\n+    # The answer column does not exist in the data, so every row is skipped. Without a guard\n+    # the repeat-on-exhaustion loop spins forever without yielding.\n+    jsonl_path = tmp_path / \"toy_no_answer_column.jsonl\"\n+    _write_jsonl(jsonl_path, [{\"q\": \"Q0?\", \"a\": \"A0\"}, {\"q\": \"Q1?\", \"a\": \"A1\"}])\n+\n+    ds = ColumnMappedTextInstructionIterableDataset(\n+        path_or_dataset_id=str(jsonl_path),\n+        column_mapping={\"question\": \"q\", \"answer\": \"missing\"},\n+        tokenizer=_DummyTokenizer(),\n+        answer_only_loss_mask=False,\n+    )\n+\n+    with pytest.raises(ValueError, match=\"No valid samples\"):\n+        next(iter(ds))"
+  }
+ ],
+ "test_files": [
+  "tests/unit_tests/datasets/llm/test_column_mapped_text_instruction_iterable.py"
+ ]
+}

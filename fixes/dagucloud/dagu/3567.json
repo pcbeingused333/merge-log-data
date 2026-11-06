@@ -1,0 +1,26 @@
+{
+ "repo": "dagucloud/dagu",
+ "number": 3567,
+ "url": "https://github.com/dagucloud/dagu/pull/3567",
+ "title": "fix(llm): request stream usage from local provider",
+ "merged_at": "2026-11-05T01:52:06Z",
+ "files": [
+  {
+   "filename": "internal/llm/providers/local/local.go",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -196,6 +196,12 @@ func (p *Provider) buildRequestBody(req *llm.ChatRequest, stream bool) ([]byte,\n \t// Users needing reasoning with specific models (DeepSeek-R1, etc.) should\n \t// configure model-specific parameters through the model's native interface.\n \n+\t// Ask for token usage in the final stream chunk; OpenAI-compatible servers\n+\t// (Ollama, vLLM, llama.cpp, ...) only send it when requested.\n+\tif stream {\n+\t\tchatReq.StreamOptions = &streamOptions{IncludeUsage: true}\n+\t}\n+\n \treturn json.Marshal(chatReq)\n }\n \n@@ -302,6 +308,10 @@ type toolCallFunction struct {\n \tArguments string `json:\"arguments\"`\n }\n \n+type streamOptions struct {\n+\tIncludeUsage bool `json:\"include_usage\"`\n+}\n+\n type chatCompletionRequest struct {\n \tModel       string    `json:\"model\"`\n \tMessages    []message `json:\"messages\"`\n@@ -312,6 +322,8 @@ type chatCompletionRequest struct {\n \tStream      bool      `json:\"stream,omitempty\"`\n \tTools       []tool    `json:\"tools,omitempty\"`\n \tToolChoice  any       `json:\"tool_choice,omitempty\"`\n+\n+\tStreamOptions *streamOptions `json:\"stream_options,omitempty\"`\n }\n \n type responseMessage struct {"
+  },
+  {
+   "filename": "internal/llm/providers/local/local_test.go",
+   "status": "added",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,45 @@\n+// Copyright (C) 2026 Yota Hamada\n+// SPDX-License-Identifier: GPL-3.0-or-later\n+\n+package local\n+\n+import (\n+\t\"encoding/json\"\n+\t\"testing\"\n+\n+\t\"github.com/dagucloud/dagu/v2/internal/llm\"\n+\t\"github.com/stretchr/testify/assert\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+// Streaming requests must ask the server to include token usage in the final\n+// chunk, as the OpenAI provider does. Non-streaming requests must not send the\n+// option.\n+func TestBuildRequestBody_StreamOptions(t *testing.T) {\n+\tt.Parallel()\n+\n+\tprovider := &Provider{}\n+\treq := &llm.ChatRequest{\n+\t\tModel:    \"llama3\",\n+\t\tMessages: []llm.Message{{Role: llm.RoleUser, Content: \"Hello\"}},\n+\t}\n+\n+\ttests := []struct {\n+\t\tname     string\n+\t\tstream   bool\n+\t\texpected any\n+\t}{\n+\t\t{name: \"Stream\", stream: true, expected: map[string]any{\"include_usage\": true}},\n+\t\t{name: \"NoStream\", stream: false},\n+\t}\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tbody, err := provider.buildRequestBody(req, tt.stream)\n+\t\t\trequire.NoError(t, err)\n+\n+\t\t\tvar parsed map[string]any\n+\t\t\trequire.NoError(t, json.Unmarshal(body, &parsed))\n+\t\t\tassert.Equal(t, tt.expected, parsed[\"stream_options\"])\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/llm/providers/local/local_test.go"
+ ]
+}

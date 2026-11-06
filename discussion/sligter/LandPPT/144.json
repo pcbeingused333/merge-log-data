@@ -1,0 +1,20 @@
+{
+ "repo": "sligter/LandPPT",
+ "number": 144,
+ "url": "https://github.com/sligter/LandPPT/pull/144",
+ "state": "merged",
+ "reviews": [],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "owner",
+   "created_at": "2026-11-03T11:04:46Z",
+   "body": "Thanks, Alex. Replacing the retired default makes sense. Before merging, could you also address a request-format issue that predates this PR? Otherwise, updating the model name alone will still leave the generation path broken.\n\nIn `GeminiImageProvider._prepare_api_request()`, `aspectRatio`, `imageSize`, `numberOfImages`, and `personGeneration` are currently placed directly under `generationConfig`. I checked the [official v1beta Discovery schema](https://generativelanguage.googleapis.com/$discovery/rest?version=v1beta):\n- `aspectRatio` and `imageSize` belong inside `generationConfig.imageConfig`.\n- `numberOfImages` and `personGeneration` are not supported fields there and should be removed. Please also handle `num_images > 1` explicitly, either through supported batch orchestration or a clear validation error, rather than silently ignoring the requested count.\n\nThe new default-value tests are useful, but they don't exercise the outgoing request. Could you add a mocked `generate()` test that checks the JSON structure and processes a successful image response? Keeping the default-consistency checks alongside that would give us much better coverage.\n\nCould you also confirm that `gemini-nano-banana-2.1` supports the existing `generateContent` endpoint? Google's current guide emphasizes Interactions; that alone doesn't mean `generateContent` is unsupported, but we haven't verified this model/endpoint combination with a live key. If you have access, a brief redacted smoke-test result—model/endpoint, HTTP status, and whether a final image was returned—would help. Please don't include keys or authorization headers. If a live test isn't available, please document that limitation and provide an authoritative compatibility reference.\n\nOne smaller point: the renamed model entry still advertises `max_resolution: 1024x1024`. Please check that it reflects the provider's implemented resolution support.\n\nThe build and all four browser CI shards passed, and I ran 16 related tests successfully. No paid live image request was made during the review. Thanks for taking a look at these remaining gaps."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-03T11:28:14Z",
+   "body": "Pushed a commit addressing the review:\n\n- `_prepare_api_request()` now sends `aspectRatio` and `imageSize` inside `generationConfig.imageConfig`; `numberOfImages` and `personGeneration` are removed.\n- `num_images > 1` returns an explicit `unsupported_num_images` error without calling the API (generateContent returns one image per call and the provider only read the first before).\n- New mocked `generate()` test checks the outgoing URL/JSON and processes a successful `inlineData` image response; the default-consistency tests are kept.\n- The listed `max_resolution` is now `2048x2048`, matching the 2K tier `_map_image_size()` requests for longest sides >= 1400 px.\n\nOn `generateContent`: no live Gemini key was available, so there is no smoke-test result for `gemini-nano-banana-2.1` on that endpoint. Google's [model page](https://ai.google.dev/gemini-api/docs/models/gemini-nano-banana-2.1) lists image generation and 1K/2K/4K output sizes for this model. The current [image generation guide](https://ai.google.dev/gemini-api/docs/image-generation) only shows the Interactions API (`/v1beta/interactions`); neither page says whether `generateContent` is supported for it. The request shape now follows the v1beta `GenerationConfig.imageConfig` schema you linked. If you would rather not rely on that, I can move this provider to the Interactions API in this PR.\n\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
+}

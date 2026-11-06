@@ -1,0 +1,41 @@
+{
+ "repo": "Tencent/teamai-cli",
+ "number": 1750,
+ "url": "https://github.com/Tencent/teamai-cli/pull/1750",
+ "title": "fix(doctor)!: report the Codex config error when hooks/list returns errors",
+ "merged_at": "2026-11-06T07:17:41Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -81,6 +81,7 @@ All notable changes to this project will be documented in this file. See [standa\n \n ### 💥 Breaking Changes\n \n+- **`teamai doctor` exits 0 when `hooks/list` answers with a config error for the cwd.** It reports the Codex error (for example an MCP server entry Codex rejects) as a note, where it used to exit 1 and fail \"Codex trusts the teamai hooks\" with every hook listed as `not loaded`. Codex returns no hooks and an `errors` list in that case, which says nothing about trust, so a CI job that read that exit 1 now sees 0 (for [#1748](https://github.com/Tencent/teamai-cli/issues/1748)).\n - **`teamai remove` exits 1 when it removes nothing, and the `roles` and `projects` edits exit 1 when their branch reaches no pull request.** A refusal covers an unsupported resource type, a call with no name, and a name no file matches; a failure covers a handler that deleted no file, a push that failed, and a branch pushed without the pull request that reviews the removal. All of them printed the reason and then exited 0, so a script or a CI job read a refusal, or a removal that never reached the team, as done. A provider that reaches only git, and a checkout whose `repo` and remote both name no hosted repository, open no pull request at all, so those cases stay 0.\n - **`teamai-share-session` and `teamai-share-learnings` no longer take `judge`.** They take the judging offers of the driver that runs them. A team copy that declares or passes `judge` fails to parse until it drops it (for [#1670](https://github.com/Tencent/teamai-cli/issues/1670)).\n - **Labels decided by a stage carry judge kind `stage`.** teamai 0.29.0 and earlier skip those label lines (for [#1670](https://github.com/Tencent/teamai-cli/issues/1670))."
+  },
+  {
+   "filename": "src/__tests__/codex-trust.test.ts",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -585,6 +585,17 @@ describe('readCodexHookTrustForScope (doctor)', () => {\n     expect(await readCodexHookTrustForScope(teamConfig, userConfig())).toEqual({ kind: 'listed', notTrusted: [] });\n   });\n \n+  it('reports the Codex config error instead of \"not loaded\" when hooks/list returns errors', async () => {\n+    await writeYaml(LINT_HOOK);\n+    await writeAndTrust(userConfig());\n+    writeFakeCodexOptions(codexHome(), { listErrors: 'invalid transport in mcp_servers.x' });\n+\n+    const report = await readCodexHookTrustForScope(teamConfig, userConfig());\n+\n+    expect(report?.kind).toBe('failed');\n+    expect(report?.kind === 'failed' ? report.reason : '').toContain('invalid transport in mcp_servers.x');\n+  });\n+\n   it('is null when teamai wrote no Codex hook', async () => {\n     expect(await readCodexHookTrustForScope(teamConfig, userConfig())).toBeNull();\n   });"
+  },
+  {
+   "filename": "src/__tests__/helpers/fake-codex.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -80,7 +80,7 @@ process.stdin.on('data', (chunk) => {\n     const reply = (body) => process.stdout.write(JSON.stringify({ id: m.id, ...body }) + '\\n');\n     if (opts.failMethod === m.method && (!opts.failCodex || opts.failCodex === BUILD.codex)) { reply({ error: { code: -32000, message: 'fake failure' } }); continue; }\n     if (m.method === 'initialize') reply({ result: { userAgent: 'fake' } });\n-    else if (m.method === 'hooks/list') reply({ result: { data: m.params.cwds.map((cwd) => ({ cwd, hooks: list(cwd, s), warnings: [] })) } });\n+    else if (m.method === 'hooks/list') reply({ result: { data: m.params.cwds.map((cwd) => ({ cwd, hooks: opts.listErrors ? [] : list(cwd, s), errors: opts.listErrors ? [{ path: cwd, message: opts.listErrors }] : [], warnings: [] })) } });\n     else if (m.method === 'config/read') reply({ result: { config: { projects: s.projects } } });\n     else if (m.method === 'config/batchWrite') {\n       for (const e of m.params.edits) {\n@@ -130,7 +130,7 @@ export function readFakeCodexState(codexHome: string): FakeCodexState {\n \n export function writeFakeCodexOptions(\n   codexHome: string,\n-  options: { failMethod?: string; failCodex?: string; exit?: boolean; omitCommands?: string[]; projectLayers?: Record<string, string>; windowsCommands?: boolean },\n+  options: { listErrors?: string; failMethod?: string; failCodex?: string; exit?: boolean; omitCommands?: string[]; projectLayers?: Record<string, string>; windowsCommands?: boolean },\n ): void {\n   fs.mkdirSync(codexHome, { recursive: true });\n   fs.writeFileSync(path.join(codexHome, 'fake.json'), JSON.stringify(options));"
+  },
+  {
+   "filename": "src/codex-trust.ts",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 2,
+   "patch": "@@ -471,12 +471,28 @@ function hookIds(hook: CodexHookTrustRequest['hooks'][number]): string[] {\n }\n \n /** Where `hooks/list` puts the first cwd's hooks; a reply without them lists none. */\n-const HooksListReplySchema = z.object({ data: z.tuple([z.object({ hooks: JsonValueSchema })], JsonValueSchema) });\n+const HooksListReplySchema = z.object({\n+  data: z.tuple([z.object({ hooks: JsonValueSchema, errors: JsonValueSchema.optional() })], JsonValueSchema),\n+});\n+\n+/** The messages of the config errors `hooks/list` reports for a cwd; entries without a string message are skipped. */\n+const ListErrorMessagesSchema = z\n+  .array(z.object({ message: z.string() }).transform((e) => e.message).catch(''))\n+  .catch([])\n+  .transform((messages) => messages.filter((m) => m !== ''));\n \n async function listHooks(server: AppServer, cwd: string): Promise<HookInfo[]> {\n   const listed = HooksListReplySchema.safeParse(await server.request('hooks/list', { cwds: [canonical(cwd)] }));\n \n-  if (!listed.success || listed.data.data[0].hooks === null) return [];\n+  if (!listed.success) return [];\n+\n+  // Codex answers with no hooks and `errors` when it cannot load its config for the cwd. That says nothing\n+  // about trust, so report the Codex error instead of letting every hook read as \"not loaded\".\n+  const errors = ListErrorMessagesSchema.parse(listed.data.data[0].errors);\n+\n+  if (errors.length > 0) throw new AppServerError(`Codex could not load its config for ${cwd}: ${errors.join('; ')}`);\n+\n+  if (listed.data.data[0].hooks === null) return [];\n   // A hook with another handler, such as `mcp_tool`, is listed without a command; teamai writes none of those.\n   const hooks = lenientList(HookInfoSchema).safeParse(listed.data.data[0].hooks);\n "
+  }
+ ],
+ "test_files": [
+  "src/__tests__/codex-trust.test.ts",
+  "src/__tests__/helpers/fake-codex.ts"
+ ]
+}

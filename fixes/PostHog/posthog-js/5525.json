@@ -1,0 +1,33 @@
+{
+ "repo": "PostHog/posthog-js",
+ "number": 5525,
+ "url": "https://github.com/PostHog/posthog-js/pull/5525",
+ "title": "fix(react-native): upload source maps from the SOURCEMAP_FILE directory in posthog-xcode.sh",
+ "merged_at": "2026-11-03T09:23:06Z",
+ "files": [
+  {
+   "filename": ".changeset/calm-maps-upload.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'posthog-react-native': patch\n+---\n+\n+Fix `posthog-xcode.sh` uploading from `DERIVED_FILE_DIR` when `SOURCEMAP_FILE` is preset elsewhere (e.g. EAS builds), so the composed source map is found."
+  },
+  {
+   "filename": "packages/react-native/test/posthog-xcode-parse.spec.ts",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 1,
+   "patch": "@@ -375,7 +375,7 @@ describe('posthog-xcode.sh conflict upload flags', () => {\n     expect(contents).toContain('POSTHOG_UPLOAD_ARGS+=(--skip-on-conflict)')\n     expect(contents).toContain('POSTHOG_UPLOAD_ARGS+=(--force)')\n     expect(contents).toContain(\n-      'CLI_UPLOAD_OUTPUT=$(\"$PH_CLI_PATH\" hermes upload --directory \"$DERIVED_FILE_DIR\" \"${CLI_RELEASE_ARGS[@]}\" \"${POSTHOG_UPLOAD_ARGS[@]}\" \"${POSTHOG_RELEASE_MODE_ARGS[@]}\" 2>&1)'\n+      'CLI_UPLOAD_OUTPUT=$(\"$PH_CLI_PATH\" hermes upload --directory \"$(dirname \"$SOURCEMAP_FILE\")\" \"${CLI_RELEASE_ARGS[@]}\" \"${POSTHOG_UPLOAD_ARGS[@]}\" \"${POSTHOG_RELEASE_MODE_ARGS[@]}\" 2>&1)'\n     )\n     expect(contents).not.toContain('hermes clone --skip-on-conflict')\n     expect(contents).not.toContain('hermes clone --force')\n@@ -513,6 +513,23 @@ describe('posthog-xcode.sh posthog-cli invocation', () => {\n     }\n   }\n \n+  it('uploads from the directory of a preset SOURCEMAP_FILE rather than DERIVED_FILE_DIR', () => {\n+    // EAS and similar callers point SOURCEMAP_FILE outside DERIVED_FILE_DIR; the clone writes the\n+    // composed map there, so the upload has to read from the same directory.\n+    const sourcemapDir = fs.mkdtempSync(path.join(os.tmpdir(), 'posthog-xcode-sourcemap-'))\n+    try {\n+      const { status, invocations } = runWrapper([], {\n+        SOURCEMAP_FILE: path.join(sourcemapDir, 'main.jsbundle.map'),\n+      })\n+\n+      expect(status).toBe(0)\n+      const upload = invocations.find((invocation) => invocation.includes('hermes upload'))\n+      expect(upload).toContain(`--directory ${sourcemapDir}`)\n+    } finally {\n+      fs.rmSync(sourcemapDir, { recursive: true, force: true })\n+    }\n+  })\n+\n   // `git config --get` exits 1 with no origin; `rev-parse HEAD` exits 128 with no commits.\n   it.each([\n     ['no git repo', ''],"
+  },
+  {
+   "filename": "packages/react-native/tooling/posthog-xcode.sh",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -426,7 +426,7 @@ set -x -e\n \n # Execute posthog cli upload\n set +x +e\n-CLI_UPLOAD_OUTPUT=$(\"$PH_CLI_PATH\" hermes upload --directory \"$DERIVED_FILE_DIR\" \"${CLI_RELEASE_ARGS[@]}\" \"${POSTHOG_UPLOAD_ARGS[@]}\" \"${POSTHOG_RELEASE_MODE_ARGS[@]}\" 2>&1)\n+CLI_UPLOAD_OUTPUT=$(\"$PH_CLI_PATH\" hermes upload --directory \"$(dirname \"$SOURCEMAP_FILE\")\" \"${CLI_RELEASE_ARGS[@]}\" \"${POSTHOG_UPLOAD_ARGS[@]}\" \"${POSTHOG_RELEASE_MODE_ARGS[@]}\" 2>&1)\n UPLOAD_EXIT_CODE=$?\n if [ $UPLOAD_EXIT_CODE -eq 0 ]; then\n   echo \"$CLI_UPLOAD_OUTPUT\" | awk '{print \"output: posthog-cli - \" $0}'"
+  }
+ ],
+ "test_files": [
+  "packages/react-native/test/posthog-xcode-parse.spec.ts"
+ ]
+}

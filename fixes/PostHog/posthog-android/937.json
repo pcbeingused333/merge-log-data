@@ -1,0 +1,33 @@
+{
+ "repo": "PostHog/posthog-android",
+ "number": 937,
+ "url": "https://github.com/PostHog/posthog-android/pull/937",
+ "title": "fix(surveys): do not send $feature_flag_called for survey targeting flags",
+ "merged_at": "2026-11-04T08:56:41Z",
+ "files": [
+  {
+   "filename": ".changeset/quiet-surveys-flags.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+\"posthog-android\": patch\n+---\n+\n+Survey eligibility checks no longer send `$feature_flag_called` events for keys starting with `survey-targeting-`, matching posthog-js. Other flag keys retain their configured tracking behavior, and linked-variant lookups remain silent."
+  },
+  {
+   "filename": "posthog-android/src/main/java/com/posthog/android/surveys/PostHogSurveysIntegration.kt",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -321,7 +321,9 @@ public class PostHogSurveysIntegration(\n         }\n \n         // All collected flag keys must be enabled\n-        return allKeys.all { postHog.isFeatureEnabled(it) } && matchesLinkedFlagVariant(survey, postHog)\n+        return allKeys.all {\n+            postHog.isFeatureEnabled(it, sendFeatureFlagEvent = if (it.startsWith(\"survey-targeting-\")) false else null)\n+        } && matchesLinkedFlagVariant(survey, postHog)\n     }\n \n     private fun matchesLinkedFlagVariant("
+  },
+  {
+   "filename": "posthog-android/src/test/java/com/posthog/android/surveys/PostHogSurveysFlagEventTest.kt",
+   "status": "added",
+   "additions": 80,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,80 @@\n+package com.posthog.android.surveys\n+\n+import android.content.Context\n+import androidx.test.core.app.ApplicationProvider\n+import com.posthog.PostHogConfig\n+import com.posthog.PostHogInterface\n+import com.posthog.surveys.PostHogSurveysDelegate\n+import com.posthog.surveys.Survey\n+import org.junit.runner.RunWith\n+import org.mockito.kotlin.any\n+import org.mockito.kotlin.anyOrNull\n+import org.mockito.kotlin.atLeastOnce\n+import org.mockito.kotlin.eq\n+import org.mockito.kotlin.mock\n+import org.mockito.kotlin.verify\n+import org.mockito.kotlin.whenever\n+import org.robolectric.ParameterizedRobolectricTestRunner\n+import org.robolectric.ParameterizedRobolectricTestRunner.Parameters\n+import java.io.StringReader\n+import kotlin.test.Test\n+import kotlin.test.assertEquals\n+\n+@RunWith(ParameterizedRobolectricTestRunner::class)\n+internal class PostHogSurveysFlagEventTest(\n+    private val prefix: String,\n+    private val sendFeatureFlagEvent: Boolean?,\n+) {\n+    companion object {\n+        @JvmStatic\n+        @Parameters(name = \"prefix={0}, sendFeatureFlagEvent={1}\")\n+        fun cases(): List<Array<Any?>> =\n+            listOf(\n+                arrayOf(\"survey-targeting-\", false),\n+                arrayOf(\"\", null),\n+                arrayOf(\"custom-survey-targeting-\", null),\n+            )\n+    }\n+\n+    @Test\n+    fun `only survey targeting prefixed flags suppress tracking and variant reads stay silent`() {\n+        val config =\n+            PostHogConfig(\"test-api-key\").apply {\n+                surveys = true\n+                surveysConfig.surveysDelegate = mock<PostHogSurveysDelegate>()\n+            }\n+        val postHog = mock<PostHogInterface>()\n+        whenever(postHog.isFeatureEnabled(any(), any(), anyOrNull())).thenReturn(true)\n+        whenever(postHog.getFeatureFlag(any(), anyOrNull(), anyOrNull())).thenReturn(\"blue\")\n+        val survey =\n+            config.serializer.deserialize<Survey>(\n+                StringReader(\n+                    \"\"\"\n+                    {\n+                        \"id\": \"survey\", \"name\": \"Survey\", \"type\": \"popover\", \"questions\": [],\n+                        \"start_date\": \"2024-07-23T09:18:18.376Z\",\n+                        \"schedule\": \"once\",\n+                        \"linked_flag_key\": \"${prefix}linked-flag\",\n+                        \"targeting_flag_key\": \"${prefix}targeting-flag\",\n+                        \"internal_targeting_flag_key\": \"${prefix}internal-flag\",\n+                        \"feature_flag_keys\": [{\"key\": \"flag1\", \"value\": \"${prefix}extra-flag\"}],\n+                        \"conditions\": { \"linkedFlagVariant\": \"blue\" }\n+                    }\n+                    \"\"\".trimIndent(),\n+                ),\n+            )\n+        val integration = PostHogSurveysIntegration(ApplicationProvider.getApplicationContext<Context>(), config)\n+        integration.install(postHog)\n+        try {\n+            integration.onSurveysLoaded(listOf(survey))\n+            assertEquals(listOf(\"survey\"), integration.getActiveMatchingSurveys().map { it.id })\n+        } finally {\n+            integration.uninstall()\n+        }\n+\n+        for (key in listOf(\"linked-flag\", \"targeting-flag\", \"internal-flag\", \"extra-flag\")) {\n+            verify(postHog, atLeastOnce()).isFeatureEnabled(eq(\"$prefix$key\"), any(), eq(sendFeatureFlagEvent))\n+        }\n+        verify(postHog, atLeastOnce()).getFeatureFlag(eq(\"${prefix}linked-flag\"), anyOrNull(), eq(false))\n+    }\n+}"
+  }
+ ],
+ "test_files": [
+  "posthog-android/src/test/java/com/posthog/android/surveys/PostHogSurveysFlagEventTest.kt"
+ ]
+}

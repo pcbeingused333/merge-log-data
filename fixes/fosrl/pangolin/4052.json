@@ -1,0 +1,26 @@
+{
+ "repo": "fosrl/pangolin",
+ "number": 4052,
+ "url": "https://github.com/fosrl/pangolin/pull/4052",
+ "title": "fix(ai-gateway): stop subtracting Bedrock Converse cache reads from inputTokens",
+ "merged_at": "2026-11-03T15:19:25Z",
+ "files": [
+  {
+   "filename": "server/lib/aiUsageExtraction.test.ts",
+   "status": "added",
+   "additions": 83,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,83 @@\n+import { extractUsage } from \"./aiUsageExtraction\";\n+import { assertEqualsObj } from \"@test/assert\";\n+\n+// Bedrock reports `inputTokens` as the NON-cached input tokens when prompt\n+// caching is on; cache reads/writes are separate counters. So `promptTokens`\n+// (input billed at the normal rate) must equal `inputTokens` as-is.\n+\n+const headers = new Headers();\n+\n+function testConverseJsonWithCache() {\n+    console.log(\"Running Bedrock Converse JSON cache usage test...\");\n+    const body = JSON.stringify({\n+        usage: {\n+            inputTokens: 100,\n+            outputTokens: 20,\n+            totalTokens: 1120,\n+            cacheReadInputTokens: 800,\n+            cacheWriteInputTokens: 200\n+        }\n+    });\n+    assertEqualsObj(\n+        extractUsage(\"bedrock_converse\", body, false, headers),\n+        {\n+            promptTokens: 100,\n+            cacheReadTokens: 800,\n+            cacheWriteTokens: 200,\n+            completionTokens: 20,\n+            reasoningTokens: 0,\n+            estimated: false\n+        },\n+        \"cache reads must not be subtracted from inputTokens\"\n+    );\n+}\n+\n+function testConverseStreamWithCache() {\n+    console.log(\"Running Bedrock Converse stream cache usage test...\");\n+    // converse-stream frames the metadata event in binary envelope; the JSON\n+    // text survives inside it, so it is not valid JSON as a whole.\n+    const body =\n+        '\\u0000\\u0001{\"metrics\":{\"latencyMs\":5},\"usage\":{\"cacheReadInputTokens\":800,' +\n+        '\"cacheWriteInputTokens\":0,\"inputTokens\":100,\"outputTokens\":20,\"totalTokens\":920}}\\u0002';\n+    assertEqualsObj(\n+        extractUsage(\"bedrock_converse\", body, true, headers),\n+        {\n+            promptTokens: 100,\n+            cacheReadTokens: 800,\n+            cacheWriteTokens: 0,\n+            completionTokens: 20,\n+            reasoningTokens: 0,\n+            estimated: false\n+        },\n+        \"streamed cache reads must not be subtracted from inputTokens\"\n+    );\n+}\n+\n+function testConverseWithoutCache() {\n+    console.log(\"Running Bedrock Converse no-cache usage test...\");\n+    const body = JSON.stringify({\n+        usage: { inputTokens: 50, outputTokens: 7, totalTokens: 57 }\n+    });\n+    assertEqualsObj(\n+        extractUsage(\"bedrock_converse\", body, false, headers),\n+        {\n+            promptTokens: 50,\n+            cacheReadTokens: 0,\n+            cacheWriteTokens: 0,\n+            completionTokens: 7,\n+            reasoningTokens: 0,\n+            estimated: false\n+        },\n+        \"uncached usage is unchanged\"\n+    );\n+}\n+\n+try {\n+    testConverseJsonWithCache();\n+    testConverseStreamWithCache();\n+    testConverseWithoutCache();\n+    console.log(\"All aiUsageExtraction tests passed!\");\n+} catch (error) {\n+    console.error(\"Test failed:\", error);\n+    process.exit(1);\n+}"
+  },
+  {
+   "filename": "server/lib/aiUsageExtraction.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 7,
+   "patch": "@@ -248,12 +248,11 @@ function extractBedrockConverse(\n     const parsed = tryParseJson(text);\n     const usage = parsed?.usage;\n     if (usage) {\n+        // With prompt caching on, Bedrock's `inputTokens` already excludes\n+        // the cache read/write counters, so it is used as-is.\n         const cacheReadTokens = usage.cacheReadInputTokens ?? 0;\n         return {\n-            promptTokens: Math.max(\n-                0,\n-                (usage.inputTokens ?? 0) - cacheReadTokens\n-            ),\n+            promptTokens: usage.inputTokens ?? 0,\n             cacheReadTokens,\n             cacheWriteTokens: usage.cacheWriteInputTokens ?? 0,\n             completionTokens: usage.outputTokens ?? 0,\n@@ -271,10 +270,9 @@ function extractBedrockConverse(\n     if (fields.inputTokens === undefined) {\n         return null;\n     }\n-    const cacheReadTokens = fields.cacheReadInputTokens ?? 0;\n     return {\n-        promptTokens: Math.max(0, fields.inputTokens - cacheReadTokens),\n-        cacheReadTokens,\n+        promptTokens: fields.inputTokens,\n+        cacheReadTokens: fields.cacheReadInputTokens ?? 0,\n         cacheWriteTokens: fields.cacheWriteInputTokens ?? 0,\n         completionTokens: fields.outputTokens ?? 0,\n         reasoningTokens: 0,"
+  }
+ ],
+ "test_files": [
+  "server/lib/aiUsageExtraction.test.ts"
+ ]
+}

@@ -1,0 +1,69 @@
+{
+ "repo": "tailscale/tailscale",
+ "number": 22118,
+ "url": "https://github.com/tailscale/tailscale/pull/22118",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "none",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-05T06:43:44Z",
+   "body": "The fix is right for the reported case, and resolving against the request path is a better model than prefixing the mount point. It also fixes a case the old code got wrong that isn't in the tests: `/doc/subdir/file-a/` (a file with a trailing slash) makes `http.FileServer` send `../file-a`. The old code turned that into `/doc/../file-a`, which a browser resolves to `/file-a`. Now it's `/doc/subdir/file-a/../file-a`, which resolves to `/doc/subdir/file-a`. Might be worth a test row.\n\nOne thing to tighten. With a directory mounted at `/`, a request path that starts with two slashes now produces a protocol-relative `Location`. I worked through this from the source rather than running it:\n\n1. A request for `//subdir/nested` keeps `URL.Path` as `//subdir/nested`. `url.ParseRequestURI` only reads an authority after `//` when it isn't parsing a request (`net/url/url.go`, the `viaRequest` check in `parse`).\n2. `getServeHandler` matches mounts on `path.Clean(r.URL.Path)`, so it lands on `/`.\n3. Mounted at `/`, there's no `StripPrefix`. `http.FileServer` cleans the path, finds the directory `subdir/nested`, and redirects to `nested/`.\n4. `fix()` builds `w.reqPath[:LastIndex+1] + v`, which is `//subdir/` + `nested/` = `//subdir/nested/`.\n\nA browser reads `//subdir/nested/` as `https://subdir/nested/`. So a link to `https://node.ts.net//example.com/x` sends the browser to `https://example.com/x/` whenever the served directory happens to contain `example.com/x/`. That's narrow, but it's an open redirect where there wasn't one: before this change the same request went to `/nested/`, which was wrong but stayed on the node.\n\nCollapsing leading slashes on the result would close it without changing anything else:\n\n```go\nloc := w.reqPath[:strings.LastIndex(w.reqPath, \"/\")+1] + v\nh.Set(\"Location\", \"/\"+strings.TrimLeft(loc, \"/\"))\n```\n\nA test row like `{\"//subdir/nested\", \"/\", isRedirect(\"/subdir/nested/\")}` would pin it. Mounts below `/` aren't affected, since the result starts with the mount point.\n"
+  },
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-05T18:00:42Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-05T19:02:29Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "ipn/ipnlocal/serve.go",
+   "created_at": "2026-11-05T17:58:54Z",
+   "body": "This leaves dot segments in the header. /doc/subdir/nested/index.html redirects to /doc/subdir/nested/./, and /doc/subdir/file-a/ redirects to /doc/subdir/file-a/../file-a. Browsers resolve both, but a clean path is easier to read in logs and tests. url.URL.ResolveReference on &url.URL{Path: w.reqPath} would do the resolution, remove the dots, and carry the query string. Keep the leading-slash collapse on the next line either way, since URL resolution does not fix //."
+  },
+  {
+   "role": "contributor",
+   "path": "ipn/ipnlocal/serve.go",
+   "created_at": "2026-11-05T17:59:23Z",
+   "body": "I don't think this branch is reachable. http.FileServer only sends relative Locations, and the mount-point redirect for /doc happens before the wrapper. If you keep it as a safety net, a comment saying so would help the next reader. Otherwise it can go, along with the \"any other Location\" sentence in the doc comment at line 1341."
+  },
+  {
+   "role": "contributor",
+   "path": "ipn/ipnlocal/serve_test.go",
+   "created_at": "2026-11-05T17:59:38Z",
+   "body": "If the Location gets cleaned per the comment above, this expectation becomes /doc/subdir/file-a. Worth adding the same row for the / mount too: {\"/subdir/file-a/\", \"/\", isRedirect(\"/subdir/file-a\")}."
+  },
+  {
+   "role": "contributor",
+   "path": "ipn/ipnlocal/serve_test.go",
+   "created_at": "2026-11-05T17:59:53Z",
+   "body": "Please add rows for the index.html redirect, which the old code also got wrong below the first level. Something like {\"/doc/subdir/nested/index.html\", \"/doc/\", isRedirect(\"/doc/subdir/nested/\")} and the matching row under the / mount. The test setup would need a subdir/nested/index.html file."
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-05T18:27:12Z",
+   "body": "Thanks @bcreane. Pushed a follow-up commit:\n\n- `fix()` now resolves the relative `Location` with `url.URL.ResolveReference` against the request path, so dot segments are removed (`/doc/subdir/nested/index.html` -> `/doc/subdir/nested/`, `/doc/subdir/file-a/` -> `/doc/subdir/file-a`) and the query string is carried along. The leading-slash collapse stays on the result.\n- The absolute-`Location` branch is kept only as a safety net, with a comment saying `http.FileServer` doesn't produce it; the doc comment no longer mentions it.\n- Tests: added `subdir/nested/index.html` to the fixture and rows for the index.html redirect and the trailing-slash file under both the `/` and `/doc/` mounts.\n\n`go test ./ipn/ipnlocal -run TestServeFileOrDirectory` fails on the previous tip (4 rows) and passes now.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "none",
+   "created_at": "2026-11-05T18:33:26Z",
+   "body": "Read f14b5b1 against the open-redirect case from earlier, and it still holds. `ResolveReference` keeps a leading `//` from a request like `//subdir/nested`, since the base URL has no host, but the `TrimLeft` runs on the resolved path, so the `Location` still comes out as `/subdir/nested/`. That row is in the table already.\n\nResolving with `url.URL{Path: r.URL.Path}` also means the decoded path gets re-escaped by `EscapedPath()`. So a directory name containing `%3F` or a space now produces a valid `Location`, where the old string concatenation would have put the raw character back.\n\nOne small test gap: the query-string carry-over has no row. `http.FileServer` appends `r.URL.RawQuery` to its directory redirect, so something like `{\"/doc/subdir/nested?x=1\", \"/doc/\", isRedirect(\"/doc/subdir/nested/?x=1\")}` would pin it."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-05T18:45:34Z",
+   "body": "Thanks, added the query-string rows: `/subdir/nested?x=1` (mount `/`) and `/doc/subdir/nested?x=1` (mount `/doc/`), both expecting `.../nested/?x=1`. They pass with the current tip of the branch.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
+}

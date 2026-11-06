@@ -1,0 +1,26 @@
+{
+ "repo": "tailscale/tailscale",
+ "number": 22118,
+ "url": "https://github.com/tailscale/tailscale/pull/22118",
+ "title": "ipn/ipnlocal: fix redirect for nested directories in serve",
+ "merged_at": "2026-11-05T19:14:36Z",
+ "files": [
+  {
+   "filename": "ipn/ipnlocal/serve.go",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 1,
+   "patch": "@@ -1330,20 +1330,41 @@ func (b *LocalBackend) serveFileOrDirectory(w http.ResponseWriter, r *http.Reque\n \tfs.ServeHTTP(&fixLocationHeaderResponseWriter{\n \t\tResponseWriter: w,\n \t\tmountPoint:     mountPoint,\n+\t\treqPath:        r.URL.Path,\n \t}, r)\n }\n \n // fixLocationHeaderResponseWriter is an http.ResponseWriter wrapper that, upon\n-// flushing HTTP headers, prefixes any Location header with the mount point.\n+// flushing HTTP headers, rewrites any Location header to be under the mount\n+// point. http.FileServer sends redirects relative to the (prefix-stripped)\n+// request URL, so a relative Location is resolved against the original request\n+// path.\n type fixLocationHeaderResponseWriter struct {\n \thttp.ResponseWriter\n \tmountPoint string\n+\treqPath    string    // original request path, before the mount point is stripped\n \tfixOnce    sync.Once // guards call to fix\n }\n \n func (w *fixLocationHeaderResponseWriter) fix() {\n \th := w.ResponseWriter.Header()\n \tif v := h.Get(\"Location\"); v != \"\" {\n+\t\tif ref, err := url.Parse(v); err == nil && ref.Scheme == \"\" && ref.Host == \"\" && !strings.HasPrefix(v, \"/\") && strings.HasPrefix(w.reqPath, w.mountPoint) {\n+\t\t\t// Resolve against the original request path, which keeps any\n+\t\t\t// parent directories below the mount point and removes dot\n+\t\t\t// segments. The query string, if any, is carried along.\n+\t\t\tu := (&url.URL{Path: w.reqPath}).ResolveReference(ref)\n+\t\t\tloc := u.EscapedPath()\n+\t\t\tif u.RawQuery != \"\" {\n+\t\t\t\tloc += \"?\" + u.RawQuery\n+\t\t\t}\n+\t\t\t// Collapse leading slashes so a request path like \"//foo\"\n+\t\t\t// can't produce a protocol-relative Location.\n+\t\t\th.Set(\"Location\", \"/\"+strings.TrimLeft(loc, \"/\"))\n+\t\t\treturn\n+\t\t}\n+\t\t// Not expected from http.FileServer, which only sends relative\n+\t\t// Locations; kept as a safety net.\n \t\th.Set(\"Location\", w.mountPoint+v)\n \t}\n }"
+  },
+  {
+   "filename": "ipn/ipnlocal/serve_test.go",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -1384,9 +1384,11 @@ func TestServeFileOrDirectory(t *testing.T) {\n \twriteFile(\"foo\", \"this is foo\")\n \twriteFile(\"bar\", \"this is bar\")\n \tos.MkdirAll(filepath.Join(td, \"subdir\"), 0o700)\n+\tos.MkdirAll(filepath.Join(td, \"subdir\", \"nested\"), 0o700)\n \twriteFile(\"subdir/file-a\", \"this is A\")\n \twriteFile(\"subdir/file-b\", \"this is B\")\n \twriteFile(\"subdir/file-c\", \"this is C\")\n+\twriteFile(\"subdir/nested/index.html\", \"this is nested index\")\n \n \tcontains := func(subs ...string) func([]byte, *http.Response) error {\n \t\treturn func(resBody []byte, res *http.Response) error {\n@@ -1438,7 +1440,12 @@ func TestServeFileOrDirectory(t *testing.T) {\n \t\t{\"/bar/inside-file\", \"/\", isStatus(404)},\n \t\t{\"/subdir\", \"/\", isRedirect(\"/subdir/\")},\n \t\t{\"/subdir/\", \"/\", contains(\"file-a\", \"file-b\", \"file-c\")},\n+\t\t{\"/subdir/nested\", \"/\", isRedirect(\"/subdir/nested/\")},\n+\t\t{\"//subdir/nested\", \"/\", isRedirect(\"/subdir/nested/\")},\n+\t\t{\"/subdir/nested/index.html\", \"/\", isRedirect(\"/subdir/nested/\")},\n+\t\t{\"/subdir/nested?x=1\", \"/\", isRedirect(\"/subdir/nested/?x=1\")},\n \t\t{\"/subdir/file-a\", \"/\", contains(\"this is A\")},\n+\t\t{\"/subdir/file-a/\", \"/\", isRedirect(\"/subdir/file-a\")},\n \t\t{\"/subdir/file-z\", \"/\", isStatus(404)},\n \n \t\t{\"/doc\", \"/doc/\", isRedirect(\"/doc/\")},\n@@ -1449,7 +1456,11 @@ func TestServeFileOrDirectory(t *testing.T) {\n \t\t{\"/doc/bar/inside-file\", \"/doc/\", isStatus(404)},\n \t\t{\"/doc/subdir\", \"/doc/\", isRedirect(\"/doc/subdir/\")},\n \t\t{\"/doc/subdir/\", \"/doc/\", contains(\"file-a\", \"file-b\", \"file-c\")},\n+\t\t{\"/doc/subdir/nested\", \"/doc/\", isRedirect(\"/doc/subdir/nested/\")},\n+\t\t{\"/doc/subdir/nested/index.html\", \"/doc/\", isRedirect(\"/doc/subdir/nested/\")},\n+\t\t{\"/doc/subdir/nested?x=1\", \"/doc/\", isRedirect(\"/doc/subdir/nested/?x=1\")},\n \t\t{\"/doc/subdir/file-a\", \"/doc/\", contains(\"this is A\")},\n+\t\t{\"/doc/subdir/file-a/\", \"/doc/\", isRedirect(\"/doc/subdir/file-a\")},\n \t\t{\"/doc/subdir/file-z\", \"/doc/\", isStatus(404)},\n \t}\n \tfor _, tt := range tests {"
+  }
+ ],
+ "test_files": [
+  "ipn/ipnlocal/serve_test.go"
+ ]
+}

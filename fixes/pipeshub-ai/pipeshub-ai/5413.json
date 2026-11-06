@@ -1,0 +1,26 @@
+{
+ "repo": "pipeshub-ai/pipeshub-ai",
+ "number": 5413,
+ "url": "https://github.com/pipeshub-ai/pipeshub-ai/pull/5413",
+ "title": "fix(agent-loop): keep every Ollama streamed tool call, not just the last chunk's",
+ "merged_at": "2026-11-05T18:17:59Z",
+ "files": [
+  {
+   "filename": "backend/python/app/agent_loop_lib/transport/ollama.py",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 1,
+   "patch": "@@ -269,6 +269,7 @@ async def stream(\n \n         text_parts: list[str] = []\n         final_raw_message: dict[str, Any] = {}\n+        stream_tool_calls: list[dict[str, Any]] = []\n         usage = TokenUsage()\n         try:\n             async with self._client.stream(\"POST\", \"/api/chat\", json=payload) as response:\n@@ -283,6 +284,9 @@ async def stream(\n                         text_parts.append(delta)\n                         yield TextDeltaEvent(delta=delta)\n                     if msg.get(\"tool_calls\"):\n+                        # Ollama can spread several tool calls over multiple chunks;\n+                        # accumulate them instead of keeping only the last chunk's.\n+                        stream_tool_calls.extend(msg[\"tool_calls\"])\n                         final_raw_message = msg\n                     if chunk.get(\"done\"):\n                         usage = self._usage_from(chunk)\n@@ -292,5 +296,8 @@ async def stream(\n             raise self._wrap_error(exc, \"stream\") from exc\n \n         final_text = \"\".join(text_parts) or final_raw_message.get(\"content\") or None\n-        message = self._parse_message({**final_raw_message, \"content\": final_text})\n+        final_raw_message = {**final_raw_message, \"content\": final_text}\n+        if stream_tool_calls:\n+            final_raw_message[\"tool_calls\"] = stream_tool_calls\n+        message = self._parse_message(final_raw_message)\n         yield StreamCompleteEvent(response=ModelResponse(message=message, usage=usage, model=resolved_model))"
+  },
+  {
+   "filename": "backend/python/tests/unit/agent_loop_lib/transport/test_ollama_coverage.py",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -445,6 +445,21 @@ async def test_tool_calls_captured_in_final_message(self) -> None:\n         final = next(e for e in events if isinstance(e, StreamCompleteEvent)).response\n         assert final.message.tool_calls[0].name == \"search\"\n \n+    async def test_tool_calls_across_chunks_are_all_kept(self) -> None:\n+        transport = _transport()\n+        lines = self._ndjson(\n+            {\"message\": {\"content\": \"\", \"tool_calls\": [{\"function\": {\"name\": \"search\", \"arguments\": {\"q\": \"x\"}}}]}},\n+            {\"message\": {\"content\": \"\", \"tool_calls\": [{\"function\": {\"name\": \"fetch\", \"arguments\": {\"u\": \"y\"}}}]}},\n+            {\"message\": {\"content\": \"\"}, \"done\": True},\n+        )\n+        fake_response = _FakeStreamResponse(lines)\n+        transport._client.stream = MagicMock(return_value=_FakeStreamCM(fake_response))\n+\n+        events = [event async for event in transport.stream([UserMessage(content=\"search\")])]\n+        final = next(e for e in events if isinstance(e, StreamCompleteEvent)).response\n+        assert [tc.name for tc in final.message.tool_calls] == [\"search\", \"fetch\"]\n+        assert [tc.id for tc in final.message.tool_calls] == [\"call_0\", \"call_1\"]\n+\n     async def test_done_without_prior_message_uses_final_chunk_message(self) -> None:\n         transport = _transport()\n         lines = [json.dumps({\"message\": {\"content\": \"solo\"}, \"done\": True, \"prompt_eval_count\": 1, \"eval_count\": 1})]"
+  }
+ ],
+ "test_files": [
+  "backend/python/tests/unit/agent_loop_lib/transport/test_ollama_coverage.py"
+ ]
+}

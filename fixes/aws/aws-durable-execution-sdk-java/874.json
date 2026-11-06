@@ -1,0 +1,49 @@
+{
+ "repo": "aws/aws-durable-execution-sdk-java",
+ "number": 874,
+ "url": "https://github.com/aws/aws-durable-execution-sdk-java/pull/874",
+ "title": "fix(map): return items as the declared type from MapOperation",
+ "merged_at": "2026-11-04T18:46:00Z",
+ "files": [
+  {
+   "filename": "sdk-integration-tests/src/test/java/software/amazon/lambda/durable/MapIntegrationTest.java",
+   "status": "modified",
+   "additions": 26,
+   "deletions": 0,
+   "patch": "@@ -2193,4 +2193,30 @@ void testTypedItemNamerNamesIterationsEndToEnd() {\n     }\n \n     public record Order(String id) {}\n+\n+    public record Payload(String value) {}\n+\n+    @Test\n+    void testPojoItemsKeepDeclaredTypeOnFirstExecutionAndReplay() {\n+        var runner = LocalDurableTestRunner.create(String.class, (input, context) -> {\n+            var result = context.map(\n+                    \"pojo-map\",\n+                    List.of(\"a\", \"b\"),\n+                    Payload.class,\n+                    (item, index, ctx) -> new Payload(item),\n+                    MapConfig.builder().build());\n+            Payload first = result.getResult(0);\n+            Payload second = result.getResult(1);\n+            return first.value() + second.value();\n+        });\n+\n+        var first = runner.runUntilComplete(\"x\");\n+        assertEquals(ExecutionStatus.SUCCEEDED, first.getStatus());\n+        assertEquals(\"ab\", first.getResult(String.class));\n+\n+        // Replay of the completed map must return the declared type as well.\n+        var replay = runner.run(\"x\");\n+        assertEquals(ExecutionStatus.SUCCEEDED, replay.getStatus());\n+        assertEquals(\"ab\", replay.getResult(String.class));\n+    }\n }"
+  },
+  {
+   "filename": "sdk/src/main/java/software/amazon/lambda/durable/TypeToken.java",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -4,6 +4,7 @@\n \n import java.lang.reflect.ParameterizedType;\n import java.lang.reflect.Type;\n+import java.util.Objects;\n \n /**\n  * Framework-agnostic type token for capturing generic type information at runtime.\n@@ -59,6 +60,18 @@ public static <U> TypeToken<U> get(Class<U> clazz) {\n         return new TypeToken<>(clazz) {};\n     }\n \n+    /**\n+     * Creates a TypeToken for an already-resolved {@link Type}, for example a parameterized type built at runtime.\n+     *\n+     * @param type the type to wrap\n+     * @return a TypeToken representing the given type\n+     * @throws NullPointerException if {@code type} is null\n+     */\n+    public static TypeToken<?> of(Type type) {\n+        Objects.requireNonNull(type, \"type must not be null\");\n+        return new TypeToken<>(type) {};\n+    }\n+\n     /**\n      * Creates a TypeToken by extracting a type parameter from a generic superclass.\n      *"
+  },
+  {
+   "filename": "sdk/src/main/java/software/amazon/lambda/durable/operation/MapOperation.java",
+   "status": "modified",
+   "additions": 57,
+   "deletions": 1,
+   "patch": "@@ -2,8 +2,11 @@\n // SPDX-License-Identifier: Apache-2.0\n package software.amazon.lambda.durable.operation;\n \n+import java.lang.reflect.ParameterizedType;\n+import java.lang.reflect.Type;\n import java.nio.charset.StandardCharsets;\n import java.util.ArrayList;\n+import java.util.Arrays;\n import java.util.Collections;\n import java.util.HashMap;\n import java.util.List;\n@@ -80,7 +83,7 @@ public MapOperation(\n             DurableContextImpl durableContext) {\n         super(\n                 operationIdentifier,\n-                new TypeToken<>() {},\n+                mapResultType(itemResultType),\n                 config.serDes(),\n                 durableContext,\n                 config.maxConcurrency(),\n@@ -102,6 +105,59 @@ public MapOperation(\n         }\n     }\n \n+    /**\n+     * Builds {@code MapResult<O>} from the item type. A {@code new TypeToken<MapResult<O>>() {}} here would capture\n+     * {@code O} as an unresolved type variable, and the serializer would then read each item as a plain map.\n+     *\n+     * <p>The type has value equality, because the serializer caches by type and every map operation builds a new one.\n+     */\n+    @SuppressWarnings(\"unchecked\")\n+    static <O> TypeToken<MapResult<O>> mapResultType(TypeToken<O> itemType) {\n+        return (TypeToken<MapResult<O>>) TypeToken.of(new MapResultType(itemType.getType()));\n+    }\n+\n+    private record MapResultType(Type itemType) implements ParameterizedType {\n+        @Override\n+        public Type[] getActualTypeArguments() {\n+            return new Type[] {itemType};\n+        }\n+\n+        @Override\n+        public Type getRawType() {\n+            return MapResult.class;\n+        }\n+\n+        @Override\n+        public Type getOwnerType() {\n+            return null;\n+        }\n+\n+        // equals and hashCode follow the ParameterizedType contract, so this type is interchangeable with the JDK's own\n+        // implementation as a cache key.\n+        @Override\n+        public boolean equals(Object other) {\n+            return other instanceof ParameterizedType that\n+                    && getRawType().equals(that.getRawType())\n+                    && that.getOwnerType() == null\n+                    && Arrays.equals(getActualTypeArguments(), that.getActualTypeArguments());\n+        }\n+\n+        @Override\n+        public int hashCode() {\n+            return Arrays.hashCode(getActualTypeArguments()) ^ getRawType().hashCode();\n+        }\n+\n+        @Override\n+        public String getTypeName() {\n+            return MapResult.class.getTypeName() + \"<\" + itemType.getTypeName() + \">\";\n+        }\n+\n+        @Override\n+        public String toString() {\n+            return getTypeName();\n+        }\n+    }\n+\n     /**\n      * Resolves the operation name for every iteration of a map, applying the config's item namer when present and the\n      * default {@code \"<mapName>-iteration-N\"} naming otherwise. A namer that returns null yields an unnamed iteration;"
+  },
+  {
+   "filename": "sdk/src/test/java/software/amazon/lambda/durable/TypeTokenTest.java",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -23,6 +23,16 @@ void testSimpleGenericType() {\n         assertEquals(String.class, paramType.getActualTypeArguments()[0]);\n     }\n \n+    @Test\n+    void testOfWrapsTheGivenType() {\n+        assertEquals(String.class, TypeToken.of(String.class).getType());\n+    }\n+\n+    @Test\n+    void testOfRejectsNull() {\n+        assertThrows(NullPointerException.class, () -> TypeToken.of(null));\n+    }\n+\n     @Test\n     void testNestedGenericType() {\n         var token = new TypeToken<Map<String, List<Integer>>>() {};"
+  },
+  {
+   "filename": "sdk/src/test/java/software/amazon/lambda/durable/operation/MapOperationTypeTest.java",
+   "status": "added",
+   "additions": 43,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,43 @@\n+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.\n+// SPDX-License-Identifier: Apache-2.0\n+package software.amazon.lambda.durable.operation;\n+\n+import static org.junit.jupiter.api.Assertions.assertEquals;\n+import static org.junit.jupiter.api.Assertions.assertNotEquals;\n+\n+import java.lang.reflect.ParameterizedType;\n+import org.junit.jupiter.api.Test;\n+import software.amazon.lambda.durable.TypeToken;\n+import software.amazon.lambda.durable.model.MapResult;\n+\n+class MapOperationTypeTest {\n+\n+    @Test\n+    void mapResultTypeHasValueEquality() {\n+        var first = MapOperation.mapResultType(TypeToken.get(String.class));\n+        var second = MapOperation.mapResultType(TypeToken.get(String.class));\n+\n+        assertEquals(first, second);\n+        assertEquals(first.hashCode(), second.hashCode());\n+        assertEquals(first.getType(), second.getType());\n+        assertEquals(first.getType().hashCode(), second.getType().hashCode());\n+        assertNotEquals(\n+                first.getType(),\n+                MapOperation.mapResultType(TypeToken.get(Integer.class)).getType());\n+    }\n+\n+    @SuppressWarnings(\"unused\")\n+    private MapResult<String> declaredMapResult;\n+\n+    @Test\n+    void mapResultTypeFollowsParameterizedTypeContract() throws Exception {\n+        var jdkType = (ParameterizedType)\n+                MapOperationTypeTest.class.getDeclaredField(\"declaredMapResult\").getGenericType();\n+        var ours = MapOperation.mapResultType(TypeToken.get(String.class)).getType();\n+\n+        // equals must be symmetric with other ParameterizedType implementations, and hashCode must match theirs\n+        assertEquals(jdkType, ours);\n+        assertEquals(ours, jdkType);\n+        assertEquals(jdkType.hashCode(), ours.hashCode());\n+    }\n+}"
+  }
+ ],
+ "test_files": [
+  "sdk-integration-tests/src/test/java/software/amazon/lambda/durable/MapIntegrationTest.java",
+  "sdk/src/test/java/software/amazon/lambda/durable/TypeTokenTest.java",
+  "sdk/src/test/java/software/amazon/lambda/durable/operation/MapOperationTypeTest.java"
+ ]
+}

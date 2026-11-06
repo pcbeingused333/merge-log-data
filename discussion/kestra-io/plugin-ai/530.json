@@ -1,0 +1,111 @@
+{
+ "repo": "kestra-io/plugin-ai",
+ "number": 530,
+ "url": "https://github.com/kestra-io/plugin-ai/pull/530",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-02T06:36:57Z",
+   "body": "Thanks, `>=` and the 1024 fallback are right, I checked langchain4j-anthropic 1.22.0 sends 1024 when unset and both tests fail on main. A few things inline."
+  },
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-02T08:37:31Z",
+   "body": "## Kestra Plugin Code Review\n\n### Business Requirements: met\nNo linked issue; judged against the PR description. The pre-check now uses `>=` against the effective max tokens (1024 fallback in langchain4j-anthropic 1.22.0), which closes the gap between Kestra validation and the API rule `max_tokens > thinking.budget_tokens`.\n\n### Previous Review Follow-up: 0 of 3 addressed\nBaseline: the existing kestra-io member review at `6b3d5b4c0e6f`, which is still the PR head (no new commits since).\n- ❌ `Anthropic.java:67` (🟠 [Guidelines] example uses a non-thinking model): `modelName: claude-3-haiku-20240307` is unchanged, so the example still fails at the API.\n- ❌ `Anthropic.java:190` (🟠 [Guidelines] error message not actionable): the message at `Anthropic.java:119-121` still names `max_tokens` with no values and no fix, and the `maxTokens` description still does not say the default is 1024.\n- ❌ `AnthropicTest.java:56` (🟡 [Tests] no accepting case): both new tests still cover rejection only; the `configuration.maxToken` path is untested.\n\nNo threads resolved.\n\n### Kestra Guidelines: 1 new finding (full PR diff)\n- 🟢 `Anthropic.java:184` [Guidelines] Constant declared between methods\n\n### Security (OWASP Top 10:2025 + KPS): 0 findings\n✅ No issues found. `apiKey` keeps `secret = true`, no secret is logged or output, no bean-validation constraint added on a `Property<...>` field, no build, dependency or `.github/` change.\n\n### Performance: 0 findings\n✅ No issues found\n\n**Verdict:** REQUEST CHANGES; recommendation only, posted as COMMENT, a maintainer decides.\n\n**Confidence:** 44% (100 - 15 Request Changes - 15 Request Changes - 5 Suggestion - 1 Nit - 10 - 10 prior Request Changes not addressed)\n"
+  },
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-02T08:43:19Z",
+   "body": "## Kestra Plugin Code Review\n\n### Business Requirements: met\nNo linked issue; judged against the PR description. The pre-check rejects a thinking budget that is not strictly below the effective max tokens (1024 fallback, which matches `getOrDefault(maxTokens, 1024)` in langchain4j-anthropic 1.22.0), and the documented example is now valid as written.\n\n### Previous Review Follow-up: 4 of 4 addressed\nBaseline: `6b3d5b4c0e6f` (member review and my follow-up), head `478c0f6dbce6`.\n- ✅ `Anthropic.java:63` (🟠 example uses a non-thinking model): `modelName: claude-haiku-4-5-20251001`, which supports extended thinking and is `CLAUDE_HAIKU_4_5_20251001` in langchain4j 1.22.0's `AnthropicChatModelName`. Budget 1024 (the API minimum) with `maxToken: 2048` passes the check.\n- ✅ `Anthropic.java:121-128` (🟠 error message not actionable): the message gives the budget, the effective max tokens with `(the default when unset)` when nothing is set, and the fix; `maxTokens` @Schema states the 1024 default (line 95); the value is resolved once and used for both the check and `.maxTokens(...)` (line 145).\n- ✅ `AnthropicTest.java:74-104` (🟡 no accepting case): two cases now build the model (provider `maxTokens` and `configuration.maxToken` at 2048), plus equality on `configuration.maxToken` (line 106) and the unset case asserting the default and fix text (line 124).\n- ✅ `Anthropic.java:83` (🟢 constant between methods): `DEFAULT_MAX_TOKENS` now sits next to `ENABLED`. Thread resolved.\n\nMember threads were answered in place and left for the reviewer to resolve.\n\nOn test strength: the two accept tests also pass on the old code, which is acceptable. They guard against over-rejection, and the `configuration.maxToken` one fails if that fallback is dropped (1024 would then hit the default). The equality-on-`configuration.maxToken` and unset tests fail on the old code (old `>` let equality through, and the old message had no numbers).\n\nAlso checked: `Langdock` still behaves. Its Anthropic delegate sets no `maxTokens`, so it falls back to `configuration.maxToken`, then 1024. Passing 1024 explicitly is the same request the client built before. `.maxTokens(effectiveMaxTokens)` does not change existing calls: the client already defaulted to 1024 and the plugin sets no default request parameters.\n\n### Kestra Guidelines: 2 findings (full PR diff)\n- 🟢 `Anthropic.java:95` [Guidelines] Edited @Schema description is a single-line string\n- 🟢 `Anthropic.java:127` [UX] Fix hint names a property Langdock does not have\n\n### Security (OWASP Top 10:2025 + KPS): 0 findings\n✅ No issues found. `apiKey` keeps `secret = true` with `@NotNull` only (no bean-validation constraint such as `@Min` added on a `Property<...>` field, so no HV000030 risk). The error message only holds two integers, nothing is logged or output, and there is no build, dependency or `.github/` change.\n\n### Performance: 0 findings\n✅ No issues found\n\n**Verdict:** APPROVE; recommendation only, posted as COMMENT, a maintainer decides.\n\n**Confidence:** 98% (100 - 1 Nit - 1 Nit)\n"
+  },
+  {
+   "role": "member",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-02T12:36:28Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "member",
+   "path": "src/main/java/io/kestra/plugin/ai/provider/Anthropic.java",
+   "created_at": "2026-11-02T06:36:57Z",
+   "body": "This makes the check pass, but `claude-3-haiku-20240307` above doesn't support extended thinking, so the example still fails at the API. Could it use a thinking model like `claude-haiku-4-5` or `claude-sonnet-4-5`?"
+  },
+  {
+   "role": "member",
+   "path": "src/main/java/io/kestra/plugin/ai/provider/Anthropic.java",
+   "created_at": "2026-11-02T06:36:57Z",
+   "body": "Someone who never set max tokens now gets an error about `max_tokens` they never touched. Could the message give the numbers and the fix, e.g. \"Thinking budget (1024) must be lower than max tokens (1024 when unset). Set `maxTokens` or `configuration.maxToken` above the budget.\", and the `maxTokens` description say the default is 1024? Resolving the 1024 once and passing it to both this check and `.maxTokens(...)` would also keep them from drifting."
+  },
+  {
+   "role": "member",
+   "path": "src/test/java/io/kestra/plugin/ai/provider/AnthropicTest.java",
+   "created_at": "2026-11-02T06:36:57Z",
+   "body": "Both tests cover rejection only. One case that builds fine (budget 1024 with `configuration.maxToken: 2048`) would guard against over-rejecting and cover the `configuration.maxToken` path."
+  },
+  {
+   "role": "member",
+   "path": "src/main/java/io/kestra/plugin/ai/provider/Anthropic.java",
+   "created_at": "2026-11-02T08:37:31Z",
+   "body": "🟢 [Guidelines] Constant declared between methods\nProblem: `DEFAULT_MAX_TOKENS` sits between `embeddingModel` and `isInvalidThinkingConfig`, while the class keeps its other constant (`ENABLED`) at the top, so it is easy to miss when someone looks for the 1024 default.\nFix: Move `private static final int DEFAULT_MAX_TOKENS = 1024;` (with its comment) next to `ENABLED` at the top of the class."
+  },
+  {
+   "role": "member",
+   "path": "src/main/java/io/kestra/plugin/ai/provider/Anthropic.java",
+   "created_at": "2026-11-02T08:43:09Z",
+   "body": "🟢 [Guidelines] Edited @Schema description is a single-line string\nProblem: The `maxTokens` description this PR rewrites is still a one-line string literal, and the guidelines ask for `\"\"\"` text blocks in `@Schema(description = ...)`.\nFix: Turn it into a `\"\"\"` text block when you next touch it (optional, same text)."
+  },
+  {
+   "role": "member",
+   "path": "src/main/java/io/kestra/plugin/ai/provider/Anthropic.java",
+   "created_at": "2026-11-02T08:43:09Z",
+   "body": "🟢 [UX] Fix hint names a property Langdock does not have\nProblem: `Langdock` (Anthropic family) goes through this check but has no `maxTokens` property, so a Langdock user who follows the first half of the hint gets an unknown-property error.\nFix: Optional: put `configuration.maxToken` first (it works for both providers), e.g. `Set configuration.maxToken (or maxTokens on the Anthropic provider) above ...`."
+  },
+  {
+   "role": "member",
+   "path": "src/main/java/io/kestra/plugin/ai/provider/Anthropic.java",
+   "created_at": "2026-11-02T08:43:10Z",
+   "body": "Verified on `478c0f6dbce6`: the example now uses `claude-haiku-4-5-20251001`, which supports extended thinking and is `CLAUDE_HAIKU_4_5_20251001` in langchain4j 1.22.0. Budget 1024 with `maxToken: 2048` passes the check. Looks addressed to me; leaving the thread for you to resolve."
+  },
+  {
+   "role": "member",
+   "path": "src/main/java/io/kestra/plugin/ai/provider/Anthropic.java",
+   "created_at": "2026-11-02T08:43:12Z",
+   "body": "Verified on `478c0f6dbce6`: the message now gives the budget, the effective max tokens (marked `(the default when unset)` when nothing is set) and the fix (`maxTokens` or `configuration.maxToken` above the budget). The `maxTokens` description states the 1024 default, and the value is resolved once (`Anthropic.java:121`) and used for both the check and `.maxTokens(...)` (line 145). Looks addressed to me; leaving the thread for you to resolve."
+  },
+  {
+   "role": "member",
+   "path": "src/test/java/io/kestra/plugin/ai/provider/AnthropicTest.java",
+   "created_at": "2026-11-02T08:43:13Z",
+   "body": "Verified on `478c0f6dbce6`: `chatModel_shouldAcceptThinkingBudgetBelowProviderMaxTokens` and `chatModel_shouldAcceptThinkingBudgetBelowConfigurationMaxToken` build the model with budget 1024 and max 2048, covering the `configuration.maxToken` path. There is also equality on `configuration.maxToken`, and the unset case asserts the default and fix text. Looks addressed to me; leaving the thread for you to resolve."
+  },
+  {
+   "role": "member",
+   "path": "src/main/java/io/kestra/plugin/ai/provider/Anthropic.java",
+   "created_at": "2026-11-02T08:43:14Z",
+   "body": "Verified on `478c0f6dbce6`: `DEFAULT_MAX_TOKENS` now sits next to `ENABLED` at the top of the class (line 83). Resolving."
+  }
+ ],
+ "comments": [
+  {
+   "role": "member",
+   "created_at": "2026-11-02T11:22:39Z",
+   "body": "## QA report: Anthropic thinking max tokens check\n\n**Commit**: 478c0f6dbce6\n**Edition**: OSS | **Docker tag**: v2.0.2 (gradle.properties kestraVersion) and v2.0.8; stock comparison on v2.0.8 with bundled plugin-ai 2.7.1\n**Instance**: local throwaway containers on a private docker network, removed after the run\n**Screenshots**: https://claude.ai/artifact/HEPVqxbwU3A1QEbKBf8nq2\n**Confidence**: 100% (8 PASS of 8 scenarios, no deductions)\n\n**Result: QA PASS. No HIGH or MEDIUM finding. 1 LOW (known reviewer nit).**\n\n### Setup\n- Head checked: unchanged at 478c0f6dbce6. No earlier member QA report on the PR. Build-file gate: PR touches only `Anthropic.java` and `AnthropicTest.java`, nothing in build files; no tests were run.\n- Shadow JAR built from the PR head with JDK 25, no tests, about 40 s (UI build skipped).\n- NEVER the real Anthropic API: a local stub of `POST /v1/messages` (checks `x-api-key` and `anthropic-version`, returns 400 `max_tokens must be greater than thinking.budget_tokens` like the real API, logs each request body, returns a `thinking` + `text` response). Tasks point to it with `provider.baseUrl`. Key is a fake value from a Kestra secret.\n- Every scenario below gave the same result on v2.0.2 and v2.0.8 (PR JAR), except stock rows (v2.0.8 only).\n\n### Results\n| # | Scenario | Result | Evidence |\n|---|----------|--------|----------|\n| 1 | Anthropic `@Example` (haiku-4-5, thinking, `maxToken: 2048`) validate + save via API and UI editor | PASS | Valid, no HV000030, no 500. Not executed (it would target the real API host). Langdock's 3 examples also validate. |\n| a | thinking on, provider `maxTokens: 2048`, budget 1024 | PASS | SUCCESS. Mock got `max_tokens: 2048`, `thinking.budget_tokens: 1024` |\n| b | `configuration.maxToken: 2048`, budget 1024 | PASS | SUCCESS. Mock got `max_tokens: 2048`, budget 1024 |\n| c | budget 2048, `maxToken: 2048` | PASS | FAILED before any request (0 requests at mock). Message: \"...Thinking budget is 2048 but max tokens is 2048. Set `maxTokens` (or `configuration.maxToken`) above `configuration.thinkingBudgetTokens`.\" |\n| d | maxTokens unset, budget 1024 | PASS | FAILED before any request (0 at mock). Message: \"...Thinking budget is 1024 but max tokens is 1024 (the default when unset). Set `maxTokens` ...\" |\n| e | thinking disabled | PASS | PR: SUCCESS, mock got `max_tokens: 1024`, no `thinking` field. Stock 2.7.1: identical body. With `maxTokens: 512`: both send 512. No regression. For reference, stock with thinking on and (c) or (d) sends the bad request and gets the raw API 400 (1 request each), which is what the PR now prevents. |\n| f | Langdock (`modelFamily: ANTHROPIC`) | PASS | Same check: unset + budget 1024 rejected, 0 requests. With `configuration.maxToken: 2048`, SUCCESS, mock got `max_tokens: 2048`, budget 1024 (Langdock also sends its Bearer header plus `x-api-key`, by design). |\n| g | API key never in logs/outputs | PASS | Fake key searched in execution logs (API), execution JSON, all 4 container logs: 0 hits. |\n\nFlows (all `io.kestra.plugin.ai.completion.ChatCompletion`, `modelName: claude-haiku-4-5-20251001`, `returnThinking: true`, `baseUrl` set to the stub):\n<details><summary>Flow YAML (a, others differ only in the lines named in the table)</summary>\n\n```yaml\nid: a_provider_max\nnamespace: qa.ai530\ntasks:\n  - id: chat\n    type: io.kestra.plugin.ai.completion.ChatCompletion\n    provider:\n      type: io.kestra.plugin.ai.provider.Anthropic\n      apiKey: \"{{ secret('ANTHROPIC_API_KEY') }}\"\n      modelName: claude-haiku-4-5-20251001\n      baseUrl: http://<stub>:8080/v1\n      maxTokens: 2048\n    configuration:\n      thinkingEnabled: true\n      thinkingBudgetTokens: 1024\n      returnThinking: true\n    messages:\n      - type: USER\n        content: \"Say hello\"\n```\n</details>\n\nScreenshots: [(c) rejection](https://claude.ai/artifact/HEPVqxbwU3A1QEbKBf8nq2#c_equal-logs), [(d) rejection](https://claude.ai/artifact/HEPVqxbwU3A1QEbKBf8nq2#d_unset-logs), [(a)](https://claude.ai/artifact/HEPVqxbwU3A1QEbKBf8nq2#a_provider_max-gantt), [Langdock](https://claude.ai/artifact/HEPVqxbwU3A1QEbKBf8nq2#f_langdock-gantt).\n\n### Findings\n- LOW (known nit, not new): for Langdock the message says \"Set `maxTokens`\", but Langdock has no `maxTokens` property, so only `configuration.maxToken` works there.\n- Note: a Langdock flow with the default `OPENAI` family ignores thinking and sends no `thinking` field, so the check does not apply (expected).\n\n### Not run\nReal Anthropic API (by design, mock only); real Langdock; the `@Example` flow execution; unit tests (not in scope). Boundary 1025 vs 1024 not tried.\n"
+  },
+  {
+   "role": "member",
+   "created_at": "2026-11-02T12:38:05Z",
+   "body": "Was this related to an issue @pcbeingused333 ? Thanks :pray: "
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-02T18:03:53Z",
+   "body": "No, there was no issue behind it. It came from reading the `Anthropic` thinking-budget validation against Anthropic's rule that `max_tokens` must be strictly greater than `thinking.budget_tokens`, and noticing that the documented example (budget 1024, no max tokens, so the 1024 fallback) passed the check but would fail at runtime. Happy to open an issue for the record if you want one for tracking. Thanks for merging and for the QA run!\n"
+  }
+ ]
+}

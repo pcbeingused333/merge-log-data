@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 302,
+ "url": "https://github.com/lofcz/LLMTornado/pull/302",
+ "title": "fix(google): strip data URI prefix and infer MIME type for chat images",
+ "merged_at": "2026-11-04T21:20:08Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/GoogleImageDataUriTests.cs",
+   "status": "added",
+   "additions": 48,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,48 @@\n+using LlmTornado.Chat;\n+using LlmTornado.Chat.Models;\n+using LlmTornado.Code;\n+using Newtonsoft.Json.Linq;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class GoogleImageDataUriTests\n+{\n+    private static IEndpointProvider Provider => new TornadoApi(LLmProviders.Google, \"test-key\").GetProvider(LLmProviders.Google);\n+\n+    private static JToken? InlineData(ChatImage image)\n+    {\n+        ChatRequest request = new()\n+        {\n+            Model = \"gemini-2.5-flash\",\n+            Messages = [new ChatMessage(ChatMessageRoles.User, [new ChatMessagePart(image)])]\n+        };\n+\n+        JObject body = JObject.Parse(request.Serialize(Provider).Body.ToString()!);\n+        return body[\"contents\"]?[0]?[\"parts\"]?[0]?[\"inlineData\"];\n+    }\n+\n+    [Test]\n+    public void DataUri_WithoutMimeType_StripsPrefixAndInfersMimeType()\n+    {\n+        JToken? inline = InlineData(new ChatImage(\"data:image/png;base64,QUJD\"));\n+        Assert.That(inline?[\"data\"]?.ToString(), Is.EqualTo(\"QUJD\"));\n+        Assert.That(inline?[\"mimeType\"]?.ToString(), Is.EqualTo(\"image/png\"));\n+    }\n+\n+    [Test]\n+    public void DataUri_WithExplicitMimeType_StripsPrefixAndKeepsExplicitMimeType()\n+    {\n+        JToken? inline = InlineData(new ChatImage(\"data:image/png;base64,QUJD\") { MimeType = \"image/jpeg\" });\n+        Assert.That(inline?[\"data\"]?.ToString(), Is.EqualTo(\"QUJD\"));\n+        Assert.That(inline?[\"mimeType\"]?.ToString(), Is.EqualTo(\"image/jpeg\"));\n+    }\n+\n+    [Test]\n+    public void RawBase64_WithMimeType_IsUnchanged()\n+    {\n+        JToken? inline = InlineData(new ChatImage(\"QUJD\") { MimeType = \"image/png\" });\n+        Assert.That(inline?[\"data\"]?.ToString(), Is.EqualTo(\"QUJD\"));\n+        Assert.That(inline?[\"mimeType\"]?.ToString(), Is.EqualTo(\"image/png\"));\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/Vendors/Google/VendorGoogleChatRequest.cs",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 3,
+   "patch": "@@ -335,15 +335,18 @@ public VendorGoogleChatRequestMessagePart(ChatMessagePart part)\n             {\n                 if (part.Image is not null)\n                 {\n-                    if (part.Image.MimeType is null)\n+                    (string resolvedMimeType, string resolvedData) = ResolveInlinePayload(part.Image.Url, part.Image.MimeType, string.Empty);\n+                    string? imageMimeType = part.Image.MimeType ?? (resolvedMimeType.Length > 0 ? resolvedMimeType : null);\n+\n+                    if (imageMimeType is null)\n                     {\n                         throw new Exception(\"Google requires MIME type of all images to be set, supported values are: image/png, image/jpeg\");\n                     }\n                     \n                     InlineData = new VendorGoogleChatRequest.VendorGoogleChatRequestMessagePartInlineData\n                     {\n-                        MimeType = part.Image.MimeType,\n-                        Data = part.Image.Url\n+                        MimeType = imageMimeType,\n+                        Data = resolvedData\n                     };\n                 }\n                 "
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/GoogleImageDataUriTests.cs"
+ ]
+}

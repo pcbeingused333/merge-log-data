@@ -1,0 +1,30 @@
+{
+ "repo": "supabase/supabase-csharp",
+ "number": 662,
+ "url": "https://github.com/supabase/supabase-csharp/pull/662",
+ "state": "merged",
+ "reviews": [],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "contributor",
+   "created_at": "2026-11-04T08:11:34Z",
+   "body": "@pcbeingused333 Thanks for contributing. Your fix is right, but I'd like to see a few changes before merging:\r\n\r\n- The lock/snapshot code is duplicated\r\nThe same lock + ToArray() block appears four times in `RealtimeSocket`. Other classes have the same race (`Push`, `RealtimeChannel`, `RealtimePresence`, `RealtimeBroadcast` and `Debugger`) and should be able to reuse your fix.\r\n→ Extract one small internal thread-safe handler collection (add-unique, remove, clear, snapshot).\r\n\r\n- The test calls a private method through reflection\r\n→ Drive dispatch through the public path with `FakeWebSocket.Receive(json)` from `Realtime.Tests/Support`. `InternalsVisibleTo` is already set up if you need anything internal.\r\n\r\n- The test has no assertion\r\nIt only fails if a worker throws.\r\n→ Add one explicit assertion with a reason, e.g. `await act.Should().NotThrowAsync(\"handlers change while push replies and timeouts dispatch\")`.\r\n\r\n- Changed lines aren't covered, and the mutation gate fails\r\nThe mutation job reports 9 new surviving mutants. The first is RealtimeSocket.cs:160 (NoCoverage): no unit test reaches the state, heartbeat or error paths.\r\n→ Once (1) is done, add fast, deterministic tests of the collection's behaviour: adding twice keeps one, removing a missing handler does nothing, clear empties it, a handler can remove itself mid-dispatch, and the snapshot doesn't change when the collection is modified. Every changed line should kill its mutants.\r\n\r\n- The stress test is in the Unit category\r\nIt's slow (4 × 100k iterations) and probabilistic, so it doesn't belong with the unit tests or in mutation runs.\r\n→ Change its [TestCategory(\"Unit\")] to [TestCategory(\"Stress\")]. I'll handle the mutation config on our side. "
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-04T08:59:50Z",
+   "body": "Thanks for the review. I moved the locking out of `RealtimeSocket` into one small internal `HandlerCollection<THandler>` (lock around Add/Remove/Clear, `Snapshot()` returns a copy for dispatch) and used it for every handler list in the Realtime package: socket (state, message, heartbeat, error), channel, broadcast, presence, push and the debugger. That removes the separate `handlersLock` field and the hand-written Contains/Add guards, so each list is protected the same way.\n\nNew tests: `HandlerCollectionTests` (add twice keeps one, order, remove, clear, snapshot isolation, handler removing itself or clearing mid-dispatch), `SocketHandlerDispatchTests` (state, message, heartbeat and error handlers called, removed and cleared through a fake websocket) and a `Stress` test that changes handlers while push replies and timeouts dispatch. Unit run: 168 pass (152 before); the 38 failures that need a live Supabase server fail identically on the base commit.\n\nPushed as a new commit on top of the branch.\n\n---\nThis change was prepared with the help of an AI coding assistant (Claude); the submitter is responsible for it.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-11-04T12:12:37Z",
+   "body": "@pcbeingused333  Thanks for the change.\r\nHowever, before we can merge, please address the newly created warnings (zero new warning policy). The mutation step also caught 12 surviving mutants."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-04T13:05:52Z",
+   "body": "Thanks @Tr00d. Pushed 90d4fa5 (merged the latest branch head, then): removed the unneeded `using System.Linq;` in `HandlerCollectionTests.cs` (the only new warning, IDE0005; the other build warnings already exist on master). For the surviving mutants I added unit tests for the handler add/remove paths on the changed lines: `Push`, `Debugger`, and the channel state/message/error handlers, broadcast and presence. A local Stryker run over those files shows no surviving mutants on the changed lines.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
+}

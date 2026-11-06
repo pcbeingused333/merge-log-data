@@ -1,0 +1,152 @@
+{
+ "repo": "archestra-ai/archestra",
+ "number": 10237,
+ "url": "https://github.com/archestra-ai/archestra/pull/10237",
+ "title": "fix(proxy): keep cut-off and blocked turns distinguishable across translated responses",
+ "merged_at": "2026-11-05T12:56:52Z",
+ "files": [
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/anthropic-openai-translator.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -372,8 +372,10 @@ function buildOpenAiUsage(params: {\n export function mapStopReason(\n   reason: AnthropicResponse[\"stop_reason\"],\n ): \"stop\" | \"length\" | \"tool_calls\" | \"content_filter\" {\n-  if (reason === \"max_tokens\") return \"length\";\n+  if (reason === \"max_tokens\" || reason === \"model_context_window_exceeded\")\n+    return \"length\";\n   if (reason === \"tool_use\") return \"tool_calls\";\n+  if (reason === \"refusal\") return \"content_filter\";\n   if (reason === \"stop_sequence\" || reason === \"end_turn\") return \"stop\";\n   return \"stop\";\n }"
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/anthropic-openai-translator.unit.test.ts",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 1,
+   "patch": "@@ -1,6 +1,9 @@\n import { describe, expect, test } from \"vitest\";\n import type { OpenAi } from \"@/types\";\n-import { openaiToAnthropic } from \"./anthropic-openai-translator\";\n+import {\n+  mapStopReason,\n+  openaiToAnthropic,\n+} from \"./anthropic-openai-translator\";\n \n type OpenAiRequest = OpenAi.Types.ChatCompletionsRequest;\n \n@@ -176,3 +179,20 @@ describe(\"openaiToAnthropic — multimodal user content\", () => {\n     ]);\n   });\n });\n+\n+describe(\"mapStopReason\", () => {\n+  test(\"maps Anthropic stop reasons to OpenAI finish reasons\", () => {\n+    expect(mapStopReason(\"end_turn\")).toBe(\"stop\");\n+    expect(mapStopReason(\"stop_sequence\")).toBe(\"stop\");\n+    expect(mapStopReason(\"max_tokens\")).toBe(\"length\");\n+    expect(mapStopReason(\"tool_use\")).toBe(\"tool_calls\");\n+  });\n+\n+  test(\"reports a refusal as content_filter instead of a normal stop\", () => {\n+    expect(mapStopReason(\"refusal\")).toBe(\"content_filter\");\n+  });\n+\n+  test(\"reports an exhausted context window as length instead of a normal stop\", () => {\n+    expect(mapStopReason(\"model_context_window_exceeded\")).toBe(\"length\");\n+  });\n+});"
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/anthropic-openai.test.ts",
+   "status": "modified",
+   "additions": 61,
+   "deletions": 0,
+   "patch": "@@ -367,3 +367,64 @@ describe(\"ResponsesFromChatAdapter response replacement\", () => {\n     });\n   });\n });\n+\n+// OpenAI clients branch on finish_reason: a refusal or a turn cut off by the\n+// context window must not look like a normal \"stop\", or the client treats a\n+// truncated or refused answer as complete.\n+describe.each([\n+  { stopReason: \"refusal\", finishReason: \"content_filter\" },\n+  { stopReason: \"model_context_window_exceeded\", finishReason: \"length\" },\n+])(\"Anthropic stop_reason $stopReason\", ({ stopReason, finishReason }) => {\n+  it(`reaches a non-streamed client as finish_reason ${finishReason}`, () => {\n+    const adapter = makeAnthropicOpenaiAdapterFactory(\n+      ctx,\n+    ).createResponseAdapter({\n+      id: \"msg-test\",\n+      type: \"message\",\n+      role: \"assistant\",\n+      model: \"claude-test\",\n+      content: [{ type: \"text\", text: \"partial\", citations: null }],\n+      stop_reason: stopReason,\n+      stop_sequence: null,\n+      usage: { input_tokens: 5, output_tokens: 2 },\n+    });\n+\n+    expect(adapter.getOriginalResponse()).toMatchObject({\n+      choices: [{ finish_reason: finishReason }],\n+    });\n+  });\n+\n+  it(`reaches a streamed client as finish_reason ${finishReason}`, () => {\n+    const adapter = makeAdapter();\n+    const feed = (chunk: unknown) =>\n+      adapter.processChunk(chunk as Parameters<typeof adapter.processChunk>[0]);\n+    feed({\n+      type: \"message_start\",\n+      message: { id: \"msg-test\", model: \"claude-test\", usage: {} },\n+    });\n+    feed({\n+      type: \"content_block_start\",\n+      index: 0,\n+      content_block: { type: \"text\", text: \"\" },\n+    });\n+    feed({\n+      type: \"content_block_delta\",\n+      index: 0,\n+      delta: { type: \"text_delta\", text: \"partial\" },\n+    });\n+    feed({ type: \"content_block_stop\", index: 0 });\n+    feed({\n+      type: \"message_delta\",\n+      delta: { stop_reason: stopReason, stop_sequence: null },\n+      usage: { output_tokens: 2 },\n+    });\n+    feed({ type: \"message_stop\" });\n+\n+    const finishReasons = String(adapter.formatEndSSE())\n+      .split(\"\\n\")\n+      .filter((line) => line.startsWith(\"data: {\"))\n+      .map((line) => JSON.parse(line.slice(6)).choices?.[0]?.finish_reason)\n+      .filter(Boolean);\n+    expect(finishReasons).toEqual([finishReason]);\n+  });\n+});"
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/anthropic-openai.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 3,
+   "patch": "@@ -244,10 +244,12 @@ class AnthropicOpenaiStreamAdapter\n     this.inner.prepareResponseReplacement?.();\n   }\n \n+  getOpenAiFinishReason(): string {\n+    return mapStopReason(this.inner.toProviderResponse().stop_reason);\n+  }\n+\n   formatEndSSE(): string {\n-    const finishReason = mapStopReason(\n-      this.inner.toProviderResponse().stop_reason,\n-    );\n+    const finishReason = this.getOpenAiFinishReason();\n     const suffix =\n       this.getTextSuffix &&\n       this.replacedText === null &&"
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/bedrock-openai-sse.unit.test.ts",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -288,6 +288,17 @@ describe(\"sse encoder — terminal formatters\", () => {\n     expect(events[1]).toBe(\"[DONE]\");\n   });\n \n+  test(\"formatEnd reports a full context window as finish=length\", () => {\n+    const enc = createConverseToOpenaiSseEncoder(ctx);\n+    enc.encodeBedrockEvent(\n+      chunk({ messageStop: { stopReason: \"model_context_window_exceeded\" } }),\n+    );\n+    const events = parseSseChunks(enc.formatEnd());\n+    expect(events[0]).toMatchObject({\n+      choices: [{ finish_reason: \"length\" }],\n+    });\n+  });\n+\n   test(\"formatCompleteText emits role, content, finish=stop (discards pending)\", () => {\n     const enc = createConverseToOpenaiSseEncoder(ctx);\n     // pending should not win"
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/bedrock-openai-translator.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -252,6 +252,7 @@ export function mapStopReason(\n     case \"tool_use\":\n       return \"tool_calls\";\n     case \"max_tokens\":\n+    case \"model_context_window_exceeded\":\n       return \"length\";\n     case \"guardrail_intervened\":\n     case \"content_filtered\":"
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/bedrock-openai-translator.unit.test.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -679,6 +679,7 @@ describe(\"converseResponseToOpenai — finish_reason mapping\", () => {\n     [\"stop_sequence\", \"stop\"],\n     [\"tool_use\", \"tool_calls\"],\n     [\"max_tokens\", \"length\"],\n+    [\"model_context_window_exceeded\", \"length\"],\n     [\"guardrail_intervened\", \"content_filter\"],\n     [\"content_filtered\", \"content_filter\"],\n   ] as const)(\"%s → %s\", (stopReason, expected) => {"
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/bedrock-openai.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -27,6 +27,7 @@ import {\n   type ConverseToOpenaiSseEncoder,\n   converseResponseToOpenai,\n   createConverseToOpenaiSseEncoder,\n+  mapStopReason,\n   type OpenaiContext,\n } from \"./bedrock-openai-translator\";\n \n@@ -246,6 +247,10 @@ class BedrockOpenaiStreamAdapter\n     return this.encoder.formatToolCalls(toolCalls);\n   }\n \n+  getOpenAiFinishReason(): string {\n+    return mapStopReason(this.state.stopReason ?? undefined);\n+  }\n+\n   formatEndSSE(): Uint8Array {\n     return this.encoder.formatEnd();\n   }"
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/cohere-openai-translator.ts",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 2,
+   "patch": "@@ -198,9 +198,11 @@ export function cohereResponseToOpenai(\n export function mapCohereFinishReason(\n   reason: CohereResponse[\"finish_reason\"] | string | null | undefined,\n ): \"stop\" | \"length\" | \"tool_calls\" | \"content_filter\" {\n-  if (reason === \"MAX_TOKENS\") return \"length\";\n+  // TIMEOUT cuts the answer off like MAX_TOKENS does. ERROR_TOXIC comes from\n+  // Cohere's older API, outside the v2 enum.\n+  if (reason === \"MAX_TOKENS\" || reason === \"TIMEOUT\") return \"length\";\n   if (reason === \"TOOL_CALL\") return \"tool_calls\";\n-  if (reason === \"ERROR\") return \"content_filter\";\n+  if (reason === \"ERROR\" || reason === \"ERROR_TOXIC\") return \"content_filter\";\n   return \"stop\";\n }\n "
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/cohere-openai-translator.unit.test.ts",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 1,
+   "patch": "@@ -1,6 +1,9 @@\n import { describe, expect, test } from \"vitest\";\n import type { OpenAi } from \"@/types\";\n-import { openaiToCohere } from \"./cohere-openai-translator\";\n+import {\n+  mapCohereFinishReason,\n+  openaiToCohere,\n+} from \"./cohere-openai-translator\";\n \n type OpenAiRequest = OpenAi.Types.ChatCompletionsRequest;\n \n@@ -69,3 +72,19 @@ describe(\"openaiToCohere — multimodal user content\", () => {\n     expect(cohereBody.messages[0].content).toBe(\"hello\");\n   });\n });\n+\n+describe(\"mapCohereFinishReason\", () => {\n+  test.each([\n+    [\"COMPLETE\", \"stop\"],\n+    [\"STOP_SEQUENCE\", \"stop\"],\n+    [\"MAX_TOKENS\", \"length\"],\n+    // A generation that ran out of time is cut off, not finished.\n+    [\"TIMEOUT\", \"length\"],\n+    [\"TOOL_CALL\", \"tool_calls\"],\n+    [\"ERROR\", \"content_filter\"],\n+    // Sent by Cohere's older API for a reply it judged toxic.\n+    [\"ERROR_TOXIC\", \"content_filter\"],\n+  ])(\"%s → %s\", (reason, expected) => {\n+    expect(mapCohereFinishReason(reason)).toBe(expected);\n+  });\n+});"
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/cohere-openai.ts",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 3,
+   "patch": "@@ -213,12 +213,16 @@ class CohereOpenaiStreamAdapter\n     ];\n   }\n \n+  getOpenAiFinishReason(): string {\n+    return this.responseReplacedWithText\n+      ? \"stop\"\n+      : mapCohereFinishReason(this.inner.state.stopReason);\n+  }\n+\n   formatEndSSE(): string {\n     return `${this.formatChunk({\n       delta: {},\n-      finishReason: this.responseReplacedWithText\n-        ? \"stop\"\n-        : mapCohereFinishReason(this.inner.state.stopReason),\n+      finishReason: this.getOpenAiFinishReason(),\n       usage: this.state.usage,\n     })}data: [DONE]\\n\\n`;\n   }"
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/gemini-openai.ts",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 4,
+   "patch": "@@ -268,7 +268,7 @@ class GeminiOpenaiStreamAdapter\n     ];\n   }\n \n-  formatEndSSE(): string {\n+  getOpenAiFinishReason(): string {\n     // Gemini ends a function-calling turn with STOP, but OpenAI clients read a\n     // \"stop\" finish as a finished turn and never run the calls. The inner\n     // response names only the calls that were handed over (a refusal replaces\n@@ -277,11 +277,15 @@ class GeminiOpenaiStreamAdapter\n     const hasToolCalls = candidate?.content?.parts?.some(\n       (part) => \"functionCall\" in part && part.functionCall,\n     );\n+    return hasToolCalls\n+      ? \"tool_calls\"\n+      : mapGeminiFinishReason(candidate?.finishReason);\n+  }\n+\n+  formatEndSSE(): string {\n     return `${this.formatChunk({\n       delta: {},\n-      finishReason: hasToolCalls\n-        ? \"tool_calls\"\n-        : mapGeminiFinishReason(candidate?.finishReason),\n+      finishReason: this.getOpenAiFinishReason(),\n       usage: geminiUsageViewToOpenai(this.state.usage),\n     })}data: [DONE]\\n\\n`;\n   }"
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/openai-anthropic-translator.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -346,6 +346,7 @@ function mapFinishReason(\n ): AnthropicResponse[\"stop_reason\"] {\n   if (reason === \"length\") return \"max_tokens\";\n   if (reason === \"tool_calls\" || reason === \"function_call\") return \"tool_use\";\n+  if (reason === \"content_filter\") return \"refusal\";\n   return \"end_turn\";\n }\n "
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/openai-anthropic-translator.unit.test.ts",
+   "status": "modified",
+   "additions": 44,
+   "deletions": 0,
+   "patch": "@@ -291,3 +291,47 @@ describe(\"createOpenaiToAnthropicStreamTranslator\", () => {\n     expect(() => translator.finish()).toThrow(/ended before it finished/);\n   });\n });\n+\n+// A content filter is a refusal to an Anthropic client. Reported as end_turn,\n+// Claude Code would take a blocked turn for a finished answer.\n+describe(\"content_filter reaches an Anthropic client as refusal\", () => {\n+  test(\"without streaming\", () => {\n+    const response = openaiResponseToAnthropic(\n+      {\n+        id: \"chatcmpl-1\",\n+        object: \"chat.completion\",\n+        created: 1,\n+        model: \"glm-5\",\n+        choices: [\n+          {\n+            index: 0,\n+            finish_reason: \"content_filter\",\n+            message: { role: \"assistant\", content: \"\" },\n+          },\n+        ],\n+      } as unknown as OpenAi.Types.ChatCompletionsResponse,\n+      ctx,\n+    );\n+    expect(response.stop_reason).toBe(\"refusal\");\n+  });\n+\n+  test(\"when streaming\", () => {\n+    const translator = createOpenaiToAnthropicStreamTranslator(ctx);\n+    const events = [\n+      ...translator.translate({\n+        id: \"chatcmpl-1\",\n+        object: \"chat.completion.chunk\",\n+        created: 1,\n+        model: \"glm-5\",\n+        choices: [{ index: 0, delta: {}, finish_reason: \"content_filter\" }],\n+      } as unknown as OpenAi.Types.ChatCompletionChunk),\n+      ...translator.finish(),\n+    ];\n+    expect(events).toContainEqual(\n+      expect.objectContaining({\n+        type: \"message_delta\",\n+        delta: { stop_reason: \"refusal\", stop_sequence: null },\n+      }),\n+    );\n+  });\n+});"
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/openai-responses-from-chat.test.ts",
+   "status": "added",
+   "additions": 152,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,152 @@\n+import { describe, expect, it } from \"vitest\";\n+import { makeAnthropicOpenaiAdapterFactory } from \"./anthropic-openai\";\n+import type { AnthropicOpenaiContext } from \"./anthropic-openai-translator\";\n+import { openaiAdapterFactory } from \"./openai\";\n+import { makeResponsesFromChatAdapterFactory } from \"./openai-responses-from-chat\";\n+\n+const responsesCtx = {\n+  responseId: \"resp-test\",\n+  createdUnix: 0,\n+  requestedModel: \"archestra:test\",\n+};\n+\n+const anthropicFactory = makeResponsesFromChatAdapterFactory(\n+  makeAnthropicOpenaiAdapterFactory({\n+    chatcmplId: \"chatcmpl-test\",\n+    createdUnix: 0,\n+    requestedModel: \"archestra:test\",\n+  } as AnthropicOpenaiContext),\n+  responsesCtx,\n+);\n+\n+// Responses has no finish_reason: a turn the model did not finish is\n+// `incomplete`, and clients such as Codex read `completed` as a whole answer.\n+describe.each([\n+  {\n+    stopReason: \"max_tokens\",\n+    status: \"incomplete\",\n+    incompleteDetails: { reason: \"max_output_tokens\" },\n+    terminal: \"response.incomplete\",\n+  },\n+  {\n+    stopReason: \"model_context_window_exceeded\",\n+    status: \"incomplete\",\n+    incompleteDetails: { reason: \"max_output_tokens\" },\n+    terminal: \"response.incomplete\",\n+  },\n+  {\n+    stopReason: \"refusal\",\n+    status: \"incomplete\",\n+    incompleteDetails: { reason: \"content_filter\" },\n+    terminal: \"response.incomplete\",\n+  },\n+  {\n+    stopReason: \"end_turn\",\n+    status: \"completed\",\n+    incompleteDetails: null,\n+    terminal: \"response.completed\",\n+  },\n+])(\"Responses client of a Claude turn ending in $stopReason\", ({\n+  stopReason,\n+  status,\n+  incompleteDetails,\n+  terminal,\n+}) => {\n+  it(`gets status ${status} without streaming`, () => {\n+    const adapter = anthropicFactory.createResponseAdapter({\n+      id: \"msg-test\",\n+      type: \"message\",\n+      role: \"assistant\",\n+      model: \"claude-test\",\n+      content: [{ type: \"text\", text: \"partial\", citations: null }],\n+      stop_reason: stopReason,\n+      stop_sequence: null,\n+      usage: { input_tokens: 5, output_tokens: 2 },\n+    });\n+\n+    expect(adapter.getOriginalResponse()).toMatchObject({\n+      status,\n+      incomplete_details: incompleteDetails,\n+      output: [{ type: \"message\", status }],\n+    });\n+  });\n+\n+  it(`gets a ${terminal} terminal when streaming`, () => {\n+    const adapter = anthropicFactory.createStreamAdapter();\n+    const feed = (chunk: unknown) =>\n+      adapter.processChunk(chunk as Parameters<typeof adapter.processChunk>[0]);\n+    feed({\n+      type: \"message_start\",\n+      message: { id: \"msg-test\", model: \"claude-test\", usage: {} },\n+    });\n+    feed({\n+      type: \"content_block_start\",\n+      index: 0,\n+      content_block: { type: \"text\", text: \"\" },\n+    });\n+    feed({\n+      type: \"content_block_delta\",\n+      index: 0,\n+      delta: { type: \"text_delta\", text: \"partial\" },\n+    });\n+    feed({ type: \"content_block_stop\", index: 0 });\n+    feed({\n+      type: \"message_delta\",\n+      delta: { stop_reason: stopReason, stop_sequence: null },\n+      usage: { output_tokens: 2 },\n+    });\n+    feed({ type: \"message_stop\" });\n+\n+    const events = parseEvents(adapter.formatEndSSE());\n+    expect(\n+      events.find((e) => e.type === \"response.output_item.done\"),\n+    ).toMatchObject({ item: { type: \"message\", status } });\n+    expect(events.at(-1)).toMatchObject({\n+      type: terminal,\n+      response: { status, incomplete_details: incompleteDetails },\n+    });\n+  });\n+});\n+\n+describe(\"Responses client of a streamed Chat Completions turn\", () => {\n+  it(\"gets response.incomplete when the provider stopped on length\", () => {\n+    const adapter = makeResponsesFromChatAdapterFactory(\n+      openaiAdapterFactory,\n+      responsesCtx,\n+    ).createStreamAdapter();\n+    const feed = (chunk: unknown) =>\n+      adapter.processChunk(chunk as Parameters<typeof adapter.processChunk>[0]);\n+    const base = {\n+      id: \"chatcmpl-test\",\n+      object: \"chat.completion.chunk\",\n+      created: 0,\n+      model: \"gpt-test\",\n+    };\n+    feed({\n+      ...base,\n+      choices: [\n+        { index: 0, delta: { content: \"partial\" }, finish_reason: null },\n+      ],\n+    });\n+    feed({\n+      ...base,\n+      choices: [{ index: 0, delta: {}, finish_reason: \"length\" }],\n+    });\n+\n+    expect(parseEvents(adapter.formatEndSSE()).at(-1)).toMatchObject({\n+      type: \"response.incomplete\",\n+      response: {\n+        status: \"incomplete\",\n+        incomplete_details: { reason: \"max_output_tokens\" },\n+      },\n+    });\n+  });\n+});\n+\n+function parseEvents(sse: string | Uint8Array): Array<Record<string, unknown>> {\n+  const text = typeof sse === \"string\" ? sse : new TextDecoder().decode(sse);\n+  return text\n+    .split(\"\\n\")\n+    .filter((line) => line.startsWith(\"data: {\"))\n+    .map((line) => JSON.parse(line.slice(6)));\n+}"
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/openai-responses-from-chat.ts",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 5,
+   "patch": "@@ -13,6 +13,7 @@ import type {\n import {\n   chatCompletionToResponses,\n   type OpenaiResponsesContext,\n+  responsesEndingFromFinishReason,\n } from \"./openai-responses-translator\";\n import {\n   carriesResponsesTerminal,\n@@ -315,7 +316,7 @@ class ResponsesFromChatStreamAdapter<TChunk, TResponse>\n     });\n     frames.push(\n       toSse({\n-        type: \"response.completed\",\n+        type: this.terminalEventType(),\n         sequence_number: this.nextSequenceNumber(),\n         response: {\n           ...this.buildResponsesResponse(toolCalls),\n@@ -438,7 +439,7 @@ class ResponsesFromChatStreamAdapter<TChunk, TResponse>\n           id: this.itemId,\n           type: \"message\",\n           role: \"assistant\",\n-          status: \"completed\",\n+          status: this.ending().status,\n           content: [\n             {\n               type: \"output_text\",\n@@ -449,7 +450,7 @@ class ResponsesFromChatStreamAdapter<TChunk, TResponse>\n         },\n       }),\n       toSse({\n-        type: \"response.completed\",\n+        type: this.terminalEventType(),\n         sequence_number: this.nextSequenceNumber(),\n         // The builder omits usage entirely for an unobserved turn, which is\n         // fine for the non-streaming body but not here: a terminal frame\n@@ -477,7 +478,7 @@ class ResponsesFromChatStreamAdapter<TChunk, TResponse>\n         id: this.itemId,\n         type: \"message\",\n         role: \"assistant\",\n-        status: \"completed\",\n+        status: this.ending().status,\n         content: [\n           {\n             type: \"output_text\",\n@@ -508,12 +509,29 @@ class ResponsesFromChatStreamAdapter<TChunk, TResponse>\n       object: \"response\",\n       created_at: this.ctx.createdUnix,\n       model: this.ctx.requestedModel,\n-      status: \"completed\",\n+      ...this.ending(),\n       output,\n       usage: this.state.usage ? this.getResponsesUsage() : undefined,\n     };\n   }\n \n+  // A turn the model did not finish (token budget, content filter) ends as\n+  // `incomplete`, as the non-streamed translation does. A policy refusal that\n+  // replaced the response is a finished answer.\n+  private ending() {\n+    return responsesEndingFromFinishReason(\n+      this.replacedText !== null\n+        ? \"stop\"\n+        : (this.inner.getOpenAiFinishReason?.() ?? this.state.stopReason),\n+    );\n+  }\n+\n+  private terminalEventType() {\n+    return this.ending().status === \"incomplete\"\n+      ? \"response.incomplete\"\n+      : \"response.completed\";\n+  }\n+\n   private getResponsesUsage() {\n     const usage = this.state.usage;\n     // Gemini counts thinking separately; Responses includes it in output tokens."
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/openai-responses-translator.ts",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 2,
+   "patch": "@@ -121,6 +121,32 @@ export function responsesToOpenaiChat(\n   };\n }\n \n+/**\n+ * How a Chat Completions turn ends, in Responses terms. Responses has no\n+ * finish_reason: a turn cut off by its token budget or by a content filter is\n+ * `incomplete` with a reason, and clients read `completed` as a whole answer.\n+ */\n+export function responsesEndingFromFinishReason(\n+  finishReason: string | null | undefined,\n+): {\n+  status: \"completed\" | \"incomplete\";\n+  incomplete_details: { reason: \"max_output_tokens\" | \"content_filter\" } | null;\n+} {\n+  if (finishReason === \"length\") {\n+    return {\n+      status: \"incomplete\",\n+      incomplete_details: { reason: \"max_output_tokens\" },\n+    };\n+  }\n+  if (finishReason === \"content_filter\") {\n+    return {\n+      status: \"incomplete\",\n+      incomplete_details: { reason: \"content_filter\" },\n+    };\n+  }\n+  return { status: \"completed\", incomplete_details: null };\n+}\n+\n export function chatCompletionToResponses(\n   response: OpenAiResponse,\n   ctx: OpenaiResponsesContext,\n@@ -133,6 +159,7 @@ export function chatCompletionToResponses(\n     };\n   };\n   const choice = response.choices[0];\n+  const ending = responsesEndingFromFinishReason(choice?.finish_reason);\n   const output: ResponsesResponse[\"output\"] = [];\n \n   if (choice?.message) {\n@@ -154,7 +181,7 @@ export function chatCompletionToResponses(\n         id: `msg_${randomUUID()}`,\n         type: \"message\",\n         role: \"assistant\",\n-        status: \"completed\",\n+        status: ending.status,\n         content: messageContent,\n       } as unknown as ResponsesResponse[\"output\"][number]);\n     }\n@@ -177,7 +204,7 @@ export function chatCompletionToResponses(\n     object: \"response\",\n     created_at: ctx.createdUnix,\n     model: ctx.requestedModel,\n-    status: \"completed\",\n+    ...ending,\n     output,\n     usage: response.usage\n       ? toResponsesUsage({"
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/routes/gemini-model-pool.test.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -644,7 +644,7 @@ for (const wire of [\"openai\", \"anthropic\"] as const) {\n       expect(response.body).toContain(\n         wire === \"openai\"\n           ? '\"finish_reason\":\"content_filter\"'\n-          : '\"stop_reason\":\"end_turn\"',\n+          : '\"stop_reason\":\"refusal\"',\n       );\n       expect(hits).toBe(1);\n       const rows = await db"
+  },
+  {
+   "filename": "platform/backend/src/types/llm-provider.ts",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -416,6 +416,15 @@ export interface LLMStreamAdapter<TChunk, TResponse> {\n    */\n   readonly clientResponse?: { id: string; model: string };\n \n+  /**\n+   * The Chat Completions `finish_reason` this turn ends with, for an adapter\n+   * that translates another provider's stream into Chat Completions. A wrapper\n+   * that serves another wire reads it to tell a cut-off or filtered turn from a\n+   * finished one. Adapters whose `state.stopReason` already is a Chat\n+   * Completions finish reason leave it unset.\n+   */\n+  getOpenAiFinishReason?(): string;\n+\n   // ---------------------------------------------------------------------------\n   // Chunk Processing\n   // ---------------------------------------------------------------------------"
+  }
+ ],
+ "test_files": [
+  "platform/backend/src/routes/proxy/adapters/anthropic-openai-translator.unit.test.ts",
+  "platform/backend/src/routes/proxy/adapters/anthropic-openai.test.ts",
+  "platform/backend/src/routes/proxy/adapters/bedrock-openai-sse.unit.test.ts",
+  "platform/backend/src/routes/proxy/adapters/bedrock-openai-translator.unit.test.ts",
+  "platform/backend/src/routes/proxy/adapters/cohere-openai-translator.unit.test.ts",
+  "platform/backend/src/routes/proxy/adapters/openai-anthropic-translator.unit.test.ts",
+  "platform/backend/src/routes/proxy/adapters/openai-responses-from-chat.test.ts",
+  "platform/backend/src/routes/proxy/routes/gemini-model-pool.test.ts"
+ ]
+}

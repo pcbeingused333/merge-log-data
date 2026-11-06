@@ -1,0 +1,54 @@
+{
+ "repo": "Tencent/teamai-cli",
+ "number": 1761,
+ "url": "https://github.com/Tencent/teamai-cli/pull/1761",
+ "title": "fix(hooks): keep Windows background process trees hidden",
+ "merged_at": "2026-11-06T09:40:55Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -76,6 +76,8 @@ All notable changes to this project will be documented in this file. See [standa\n \n ### 🐛 Bug Fixes\n \n+- Background hooks on Windows launch through headless conhost and avoid detached console creation, preventing Windows Terminal windows from opening on each dispatch (for [#1747](https://github.com/Tencent/teamai-cli/issues/1747)).\n+\n - `teamai recall maintenance --update-quality` finds a skill that reaches the recall threshold. A skill's vote id is its bare name, while the file is `skills/<name>/SKILL.md` or `skills/<namespace>/<name>/SKILL.md`, so looking the id up as `<id>.md` never matched and every skill was skipped without a word. An entry that clears a threshold and still matches no file is now reported rather than dropped, and the type it is reported under comes from the directory that matched, so it reads `docs`, `rules` or `skills` on Windows too (for [#1735](https://github.com/Tencent/teamai-cli/issues/1735)).\n - The learnings a draft incorporates are chosen by topic instead of by popularity. The most-opened entries used to take every slot before non-learnings were filtered out, so a draft could carry five popular docs and no learning at all, or one about an unrelated subject. A learning whose name, title and tags share no word with the entry is now left out, and a namespaced learning's vote id matches its file on Windows (for [#1735](https://github.com/Tencent/teamai-cli/issues/1735)).\n "
+  },
+  {
+   "filename": "src/__tests__/hook-dispatch-cli.test.ts",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 3,
+   "patch": "@@ -260,7 +260,8 @@ describe('hookDispatchCli', () => {\n     }\n   });\n \n-  it('starts the background pass from the temp dir when the payload cwd no longer exists', async () => {\n+  it.each(['linux', 'win32'] as const)('starts the background pass hidden on %s when the payload cwd no longer exists', async (platform) => {\n+    const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue(platform);\n     // spawn() fails on a missing cwd, and that error is swallowed: no background\n     // handler (session-start pull, webhook, update check) would run at all.\n     const stdinFile = path.join(os.tmpdir(), `gone-cwd-hook-${process.pid}-${Date.now()}.json`);\n@@ -273,15 +274,19 @@ describe('hookDispatchCli', () => {\n       stdin: { on: vi.fn(), end: vi.fn((_: string, done: () => void) => done()) },\n       unref: vi.fn(),\n     });\n+    if (platform === 'win32') mockSpawn.mockReturnValueOnce(fakePowerShell(3, undefined, 'ReturnValue=21'));\n \n     try {\n       await hookDispatchCli('stop', 'claude', '*', { stdinFile });\n-      expect(mockSpawn).toHaveBeenCalledOnce();\n+      expect(mockSpawn).toHaveBeenCalledTimes(platform === 'win32' ? 2 : 1);\n+      const plainOptions = mockSpawn.mock.calls.at(-1)![2];\n+      expect(plainOptions).toMatchObject({ detached: platform !== 'win32', windowsHide: true });\n       // The same fallback the Windows WMI launch uses: a directory that exists\n       // and belongs to no project, so a handler still reading the process cwd\n       // (the session-start pull) cannot land in the launcher's project.\n-      expect(mockSpawn.mock.calls[0][2]).toMatchObject({ cwd: os.tmpdir() });\n+      expect(plainOptions).toMatchObject({ cwd: os.tmpdir() });\n     } finally {\n+      platformSpy.mockRestore();\n       process.chdir(originalCwd);\n       fs.rmSync(stdinFile, { force: true });\n     }\n@@ -580,6 +585,7 @@ describe('trySpawnDetachedViaWmi', () => {\n     const script = argv[argv.length - 1];\n     expect(script).toContain(\"[wmiclass]'Win32_Process'\");\n     expect(script).toContain('ShowWindow = [uint16]0');\n+    expect(script).toContain(`${path.win32.join(process.env.SystemRoot || 'C:\\\\Windows', 'System32', 'conhost.exe')} --headless`);\n     // the command line is one string, so args with spaces are quoted for CreateProcess…\n     expect(script).toContain('\"a b\"');\n     // …while the working directory is a plain (PowerShell-literal) path argument"
+  },
+  {
+   "filename": "src/hook-dispatch-cli.ts",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 3,
+   "patch": "@@ -118,7 +118,7 @@ async function spawnBackground(\n   await spawnPlainDetached(process.execPath, args, raw, cwd);\n }\n \n-/** Plain `detached: true` child, awaiting the STDIN flush before the caller may exit. */\n+/** Hidden child (a separate process group on POSIX), awaiting the STDIN flush before exit. */\n async function spawnPlainDetached(\n   command: string,\n   args: string[],\n@@ -127,7 +127,8 @@ async function spawnPlainDetached(\n ): Promise<void> {\n   try {\n     const child = spawn(command, args, {\n-      detached: true,\n+      // DETACHED_PROCESS overrides CREATE_NO_WINDOW on Windows.\n+      detached: process.platform !== 'win32',\n       windowsHide: true,\n       stdio: ['pipe', 'ignore', 'ignore'],\n       // A cwd that no longer exists (a deleted worktree) fails the spawn, so the\n@@ -262,7 +263,10 @@ export async function trySpawnDetachedViaWmi(\n     args = [...args, '--stdin-file', payloadFile];\n   }\n \n-  const commandLine = [command, ...args].map(quoteWindowsArg).join(' ');\n+  // ShowWindow alone still hands the console to Windows Terminal. Give the\n+  // escaped child a headless console that its descendants can share instead.\n+  const conhost = path.win32.join(process.env.SystemRoot || 'C:\\\\Windows', 'System32', 'conhost.exe');\n+  const commandLine = [conhost, '--headless', command, ...args].map(quoteWindowsArg).join(' ');\n   // The provider rejects an empty CurrentDirectory with ReturnValue 21, and a\n   // hook payload need not carry one (a session-start event often has no cwd).\n   // Falls back to the temp dir, which always exists — the child re-resolves its"
+  },
+  {
+   "filename": "src/hook-handlers.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -405,15 +405,15 @@ async function spawnDetachedPull(cwd: string, event: GitHookEvent, how: { prepar\n   const { spawn } = await import('node:child_process');\n   const prepare = how.prepareCheckout ? { TEAMAI_PREPARE_CHECKOUT: how.prepareCheckout } : {};\n   spawn(process.execPath, [resolveCliEntry() ?? '', 'pull', '--silent'], {\n-    cwd, detached: true, stdio: 'ignore', windowsHide: true, env: { ...process.env, TEAMAI_GIT_HOOK: event, ...prepare },\n+    cwd, detached: process.platform !== 'win32', stdio: 'ignore', windowsHide: true, env: { ...process.env, TEAMAI_GIT_HOOK: event, ...prepare },\n   }).on('error', (e) => log.debug(`git hook: detached pull failed to start: ${e.message}`)).unref();\n }\n \n /** Start `workflow resume <run> --driver <driver>` in `cwd` with `env`, a process this one does not wait for. */\n async function spawnDetachedResume(run: string, { driver, cwd, env }: { driver: DriverName; cwd: string; env: NodeJS.ProcessEnv }): Promise<void> {\n   const { resolveCliEntry } = await import('./builtin-hooks.js');\n   const { spawn } = await import('node:child_process');\n-  spawn(process.execPath, [resolveCliEntry() ?? '', 'workflow', 'resume', run, '--driver', driver], { cwd, detached: true, stdio: 'ignore', windowsHide: true, env })\n+  spawn(process.execPath, [resolveCliEntry() ?? '', 'workflow', 'resume', run, '--driver', driver], { cwd, detached: process.platform !== 'win32', stdio: 'ignore', windowsHide: true, env })\n     .on('error', (e) => log.debug(`hook-dispatch: detached workflow resume ${run} failed to start: ${e.message}`)).unref();\n }\n "
+  },
+  {
+   "filename": "src/local-agent.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -1555,7 +1555,7 @@ async function maybeReconcilePlugins(context: LocalAgentContext): Promise<void>\n     }\n \n     const child = spawn(process.execPath, [process.argv[1], 'source', 'reconcile-plugins'],\n-      { detached: true, windowsHide: true, stdio: 'ignore', env: { ...process.env, TEAMAI_PLUGIN_LOCAL_AGENT_ID: localAgentId, TEAMAI_PLUGIN_TOOL: tool } });\n+      { detached: process.platform !== 'win32', windowsHide: true, stdio: 'ignore', env: { ...process.env, TEAMAI_PLUGIN_LOCAL_AGENT_ID: localAgentId, TEAMAI_PLUGIN_TOOL: tool } });\n \n     child.unref();\n   } catch (e) { log.debug(`[local-agent] plugin reconcile spawn skipped: ${messageOf(e)}`); }"
+  },
+  {
+   "filename": "src/workflow/drivers/skill/skill-runner.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -40,7 +40,7 @@ export function detachedRunners(config: LocalConfig): Runners {\n       if (!entry) throw new Error('The teamai entry script is unknown, so the runner of a workflow step cannot start. Reinstall teamai.');\n \n       const child = spawn(process.execPath, [entry, ...runnerArgs(run, attempt)], {\n-        cwd: checkout, detached: true, stdio: 'ignore', windowsHide: true, env: { ...process.env, ...attemptEnv(config, run, attempt, mode) },\n+        cwd: checkout, detached: process.platform !== 'win32', stdio: 'ignore', windowsHide: true, env: { ...process.env, ...attemptEnv(config, run, attempt, mode) },\n       });\n \n       const failed = await new Promise<NodeJS.ErrnoException | undefined>((resolve) => { child.once('spawn', () => resolve(undefined)).once('error', resolve); });"
+  }
+ ],
+ "test_files": [
+  "src/__tests__/hook-dispatch-cli.test.ts"
+ ]
+}

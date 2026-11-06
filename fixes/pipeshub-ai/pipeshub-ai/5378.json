@@ -1,0 +1,26 @@
+{
+ "repo": "pipeshub-ai/pipeshub-ai",
+ "number": 5378,
+ "url": "https://github.com/pipeshub-ai/pipeshub-ai/pull/5378",
+ "title": "fix(agent-loop): skip empty assistant turns in the OpenAI transport",
+ "merged_at": "2026-11-05T18:18:45Z",
+ "files": [
+  {
+   "filename": "backend/python/app/agent_loop_lib/transport/openai.py",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 2,
+   "patch": "@@ -462,13 +462,21 @@ def _format_messages(\n             {\"role\": \"system\", \"content\": [_marked({\"type\": \"text\", \"text\": text})] if marked else text}\n             for text, marked in _system_parts(system, system_blocks, mark_stable=plan.breakpoint)\n         ]\n-        formatted.extend(self._format_message(m) for m in messages)\n+        for m in messages:\n+            entry = self._format_message(m)\n+            if entry[\"role\"] == \"assistant\" and not entry[\"content\"] and not entry[\"tool_calls\"]:\n+                # An empty reply (no text, no tool calls) has nothing to replay;\n+                # the API rejects an assistant message with neither content nor\n+                # tool_calls with a 400.\n+                logger.debug(\"openai: skipped an empty assistant turn\")\n+                continue\n+            formatted.append(entry)\n         # The images `_format_message` left out of tool results, sent the way\n         # the LangChain arm sends them, so this transport loses none.\n         relocated = relocated_tool_images(messages)\n         if relocated is not None:\n             formatted.append(self._format_message(relocated))\n-        if plan.last_message and messages:\n+        if plan.last_message and messages and formatted:\n             _mark_last(formatted[-1], \"text\")\n         return formatted\n "
+  },
+  {
+   "filename": "backend/python/tests/unit/agents/agent_loop/transports/test_openai_empty_assistant.py",
+   "status": "added",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,36 @@\n+\"\"\"An empty assistant turn must not be replayed to Chat Completions.\"\"\"\n+\n+from __future__ import annotations\n+\n+from app.agent_loop_lib.core.messages import AssistantMessage, ToolCall, UserMessage\n+from app.agent_loop_lib.transport.openai import OpenAITransport\n+from app.agent_loop_lib.transport.prompt_cache import OpenAICachePlan\n+\n+\n+def _roles(messages: list) -> list[str]:\n+    formatted = OpenAITransport(api_key=\"x\")._format_messages(messages, None)\n+    return [m[\"role\"] for m in formatted if m[\"role\"] != \"system\"]\n+\n+\n+def test_empty_assistant_turn_is_skipped() -> None:\n+    messages = [\n+        UserMessage(content=\"hi\"),\n+        AssistantMessage(content=[]),\n+        UserMessage(content=\"again\"),\n+    ]\n+    assert _roles(messages) == [\"user\", \"user\"]\n+\n+\n+def test_assistant_turn_with_text_or_tool_calls_is_kept() -> None:\n+    call = ToolCall(id=\"c1\", name=\"search\", arguments={})\n+    messages = [\n+        UserMessage(content=\"hi\"),\n+        AssistantMessage(content=\"hello\"),\n+        AssistantMessage(content=[], tool_calls=[call]),\n+    ]\n+    assert _roles(messages) == [\"user\", \"assistant\", \"assistant\"]\n+\n+\n+def test_only_empty_assistant_turns_with_cache_marker_does_not_raise() -> None:\n+    transport = OpenAITransport(api_key=\"x\", cache_plan=OpenAICachePlan(last_message=True))\n+    assert transport._format_messages([AssistantMessage(content=[])], None) == []"
+  }
+ ],
+ "test_files": [
+  "backend/python/tests/unit/agents/agent_loop/transports/test_openai_empty_assistant.py"
+ ]
+}

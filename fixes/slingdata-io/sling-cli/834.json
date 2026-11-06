@@ -1,0 +1,26 @@
+{
+ "repo": "slingdata-io/sling-cli",
+ "number": 834,
+ "url": "https://github.com/slingdata-io/sling-cli/pull/834",
+ "title": "fix(excel): return an error when the requested sheet does not exist",
+ "merged_at": "2026-11-04T01:57:59Z",
+ "files": [
+  {
+   "filename": "core/dbio/iop/sheet_excel.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -46,7 +46,11 @@ func NewExcelDataset(reader io.Reader, props map[string]string) (data Dataset, e\n \t\t\treturn data, err\n \t\t}\n \t} else {\n-\t\tdata = xls.GetDataset(sheetName)\n+\t\trows, err := xls.File.GetRows(sheetName)\n+\t\tif err != nil {\n+\t\t\treturn data, g.Error(err, \"Unable to get rows for sheet %s\", sheetName)\n+\t\t}\n+\t\tdata = xls.makeDatasetAuto(rows)\n \t}\n \treturn\n }"
+  },
+  {
+   "filename": "core/dbio/iop/sheet_excel_test.go",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 0,
+   "patch": "@@ -1,8 +1,11 @@\n package iop\n \n import (\n+\t\"bytes\"\n \t\"testing\"\n \t\"time\"\n+\n+\t\"github.com/xuri/excelize/v2\"\n )\n \n func TestExcelDateToTime(t *testing.T) {\n@@ -138,3 +141,28 @@ func TestExcelDateToTime(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestNewExcelDatasetMissingSheet(t *testing.T) {\n+\tf := excelize.NewFile()\n+\tf.SetCellValue(\"Sheet1\", \"A1\", \"id\")\n+\tf.SetCellValue(\"Sheet1\", \"A2\", 1)\n+\tbuf, err := f.WriteToBuffer()\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\n+\t// an existing sheet works\n+\tdata, err := NewExcelDataset(bytes.NewReader(buf.Bytes()), map[string]string{\"sheet\": \"Sheet1\"})\n+\tif err != nil {\n+\t\tt.Fatalf(\"unexpected error for existing sheet: %v\", err)\n+\t}\n+\tif len(data.Rows) == 0 {\n+\t\tt.Fatalf(\"expected rows, got %d\", len(data.Rows))\n+\t}\n+\n+\t// a misspelled sheet must return an error instead of an empty dataset\n+\t_, err = NewExcelDataset(bytes.NewReader(buf.Bytes()), map[string]string{\"sheet\": \"Sheet_typo\"})\n+\tif err == nil {\n+\t\tt.Fatal(\"expected an error for a sheet that does not exist, got nil\")\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "core/dbio/iop/sheet_excel_test.go"
+ ]
+}

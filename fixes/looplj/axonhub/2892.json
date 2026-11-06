@@ -1,0 +1,33 @@
+{
+ "repo": "looplj/axonhub",
+ "number": 2892,
+ "url": "https://github.com/looplj/axonhub/pull/2892",
+ "title": "fix(anthropic): map content_filter finish reason to refusal stop reason",
+ "merged_at": "2026-11-05T04:12:02Z",
+ "files": [
+  {
+   "filename": "llm/transformer/anthropic/inbound_convert.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -712,6 +712,9 @@ func convertToAnthropicResponse(chatResp *llm.Response) *Message {\n \t\t\tcase \"tool_calls\":\n \t\t\t\tstopReason := \"tool_use\"\n \t\t\t\tresp.StopReason = &stopReason\n+\t\t\tcase \"content_filter\":\n+\t\t\t\tstopReason := \"refusal\"\n+\t\t\t\tresp.StopReason = &stopReason\n \t\t\tdefault:\n \t\t\t\tresp.StopReason = choice.FinishReason\n \t\t\t}"
+  },
+  {
+   "filename": "llm/transformer/anthropic/inbound_stop_reason_test.go",
+   "status": "added",
+   "additions": 64,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,64 @@\n+package anthropic\n+\n+import (\n+\t\"encoding/json\"\n+\t\"testing\"\n+\n+\t\"github.com/stretchr/testify/require\"\n+\n+\t\"github.com/looplj/axonhub/llm\"\n+)\n+\n+// The Anthropic API has no \"content_filter\" stop reason; the equivalent is \"refusal\".\n+func TestInboundTransformer_TransformResponse_ContentFilterStopReason(t *testing.T) {\n+\ttransformer := NewInboundTransformer()\n+\tfinishReason := \"content_filter\"\n+\ttext := \"I can't help with that.\"\n+\n+\tresp, err := transformer.TransformResponse(t.Context(), &llm.Response{\n+\t\tID:      \"msg_filtered\",\n+\t\tObject:  \"chat.completion\",\n+\t\tModel:   \"claude-sonnet-4-6\",\n+\t\tCreated: 1234567890,\n+\t\tChoices: []llm.Choice{{\n+\t\t\tIndex: 0,\n+\t\t\tMessage: &llm.Message{\n+\t\t\t\tRole:    \"assistant\",\n+\t\t\t\tContent: llm.MessageContent{Content: &text},\n+\t\t\t},\n+\t\t\tFinishReason: &finishReason,\n+\t\t}},\n+\t})\n+\trequire.NoError(t, err)\n+\n+\tvar msg Message\n+\trequire.NoError(t, json.Unmarshal(resp.Body, &msg))\n+\trequire.NotNil(t, msg.StopReason)\n+\trequire.Equal(t, \"refusal\", *msg.StopReason)\n+}\n+\n+func TestInboundStream_ContentFilterStopReason(t *testing.T) {\n+\ttransformer := NewInboundTransformer()\n+\tfinishReason := \"content_filter\"\n+\n+\tevents := collectInboundStreamEvents(t, transformer, []*llm.Response{\n+\t\t{\n+\t\t\tID:     \"msg_filtered\",\n+\t\t\tObject: \"chat.completion.chunk\",\n+\t\t\tModel:  \"test-model\",\n+\t\t\tChoices: []llm.Choice{{\n+\t\t\t\tIndex:        0,\n+\t\t\t\tFinishReason: &finishReason,\n+\t\t\t}},\n+\t\t},\n+\t})\n+\n+\tvar stopReason *string\n+\tfor _, event := range events {\n+\t\tif event.Type == \"message_delta\" && event.Delta != nil {\n+\t\t\tstopReason = event.Delta.StopReason\n+\t\t}\n+\t}\n+\trequire.NotNil(t, stopReason)\n+\trequire.Equal(t, \"refusal\", *stopReason)\n+}"
+  },
+  {
+   "filename": "llm/transformer/anthropic/inbound_stream.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -1138,6 +1138,8 @@ func (s *anthropicInboundStream) Next() bool {\n \t\t\t\tstopReason = \"max_tokens\"\n \t\t\tcase \"tool_calls\":\n \t\t\t\tstopReason = \"tool_use\"\n+\t\t\tcase \"content_filter\":\n+\t\t\t\tstopReason = \"refusal\"\n \t\t\tdefault:\n \t\t\t\tstopReason = \"end_turn\"\n \t\t\t}"
+  }
+ ],
+ "test_files": [
+  "llm/transformer/anthropic/inbound_stop_reason_test.go"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "Rails-Designer/courrier",
+ "number": 70,
+ "url": "https://github.com/Rails-Designer/courrier/pull/70",
+ "title": "Send reply_to through SMTP2GO",
+ "merged_at": "2026-11-02T19:31:12Z",
+ "files": [
+  {
+   "filename": "lib/courrier/email/providers/smtp2go.rb",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 1,
+   "patch": "@@ -14,12 +14,19 @@ def body\n             \"bcc\" => address_list(@options.bcc, as: :plain),\n             \"subject\" => @options.subject,\n             \"html_body\" => @options.html,\n-            \"text_body\" => @options.text\n+            \"text_body\" => @options.text,\n+            \"custom_headers\" => reply_to_header\n           }.compact\n         end\n \n         private\n \n+        def reply_to_header\n+          return unless (reply_to = address_line(@options.reply_to))\n+\n+          [{\"header\" => \"Reply-To\", \"value\" => reply_to}]\n+        end\n+\n         def default_headers\n           {\"X-Smtp2go-Api-Key\" => @api_key}\n         end"
+  },
+  {
+   "filename": "test/courrier/email/providers/smtp2go_test.rb",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -44,6 +44,18 @@ def test_omits_empty_address_fields\n       refute_includes body.keys, \"bcc\"\n     end\n \n+    def test_sends_reply_to_as_a_custom_header\n+      email = TestEmail.new(from: \"devs@railsdesigner.com\", to: \"to@railsdesigner.com\", reply_to: \"support@railsdesigner.com\")\n+\n+      body = Smtp2go.new(api_key: \"test_key\", options: email.options).body\n+\n+      assert_equal [{\"header\" => \"Reply-To\", \"value\" => \"support@railsdesigner.com\"}], body[\"custom_headers\"]\n+    end\n+\n+    def test_omits_custom_headers_without_reply_to\n+      refute_includes @provider.body.keys, \"custom_headers\"\n+    end\n+\n     def test_authenticates_with_api_key\n       assert_equal({\"X-Smtp2go-Api-Key\" => \"test_key\"}, @provider.send(:default_headers))\n     end"
+  }
+ ],
+ "test_files": [
+  "test/courrier/email/providers/smtp2go_test.rb"
+ ]
+}

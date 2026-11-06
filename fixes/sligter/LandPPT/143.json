@@ -1,0 +1,41 @@
+{
+ "repo": "sligter/LandPPT",
+ "number": 143,
+ "url": "https://github.com/sligter/LandPPT/pull/143",
+ "title": "fix: count Gemini thinking tokens in the reported completion usage",
+ "merged_at": "2026-10-31T02:17:05Z",
+ "files": [
+  {
+   "filename": "src/landppt/ai/providers.py",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 6,
+   "patch": "@@ -1298,11 +1298,24 @@ def _extract_rest_text(self, data: Dict[str, Any]) -> tuple[str, str, Dict[str,\n         usage_meta = data.get(\"usageMetadata\") or data.get(\"usage_metadata\") or {}\n         usage = {\n             \"prompt_tokens\": int(usage_meta.get(\"promptTokenCount\") or 0),\n-            \"completion_tokens\": int(usage_meta.get(\"candidatesTokenCount\") or 0),\n+            # Thinking tokens are billed as output but not counted in candidatesTokenCount\n+            \"completion_tokens\": int(usage_meta.get(\"candidatesTokenCount\") or 0)\n+            + int(usage_meta.get(\"thoughtsTokenCount\") or 0),\n             \"total_tokens\": int(usage_meta.get(\"totalTokenCount\") or 0),\n         }\n         return content, str(finish_reason), usage\n \n+    @staticmethod\n+    def _gemini_sdk_usage(response: Any) -> Dict[str, int]:\n+        \"\"\"Token usage of an SDK response; thinking tokens count as output.\"\"\"\n+        meta = getattr(response, \"usage_metadata\", None)\n+        return {\n+            \"prompt_tokens\": getattr(meta, \"prompt_token_count\", None) or 0,\n+            \"completion_tokens\": (getattr(meta, \"candidates_token_count\", None) or 0)\n+            + (getattr(meta, \"thoughts_token_count\", None) or 0),\n+            \"total_tokens\": getattr(meta, \"total_token_count\", None) or 0,\n+        }\n+\n     def _extract_rest_tool_calls(self, data: Dict[str, Any]) -> List[Dict[str, Any]]:\n         \"\"\"Extract function calls from a REST response, in the shape the SDK path returns.\"\"\"\n         tool_calls: List[Dict[str, Any]] = []\n@@ -1666,11 +1679,7 @@ async def chat_completion(self, messages: List[AIMessage], **kwargs) -> AIRespon\n             return AIResponse(\n                 content=content,\n                 model=self.model,\n-                usage={\n-                    \"prompt_tokens\": response.usage_metadata.prompt_token_count if hasattr(response, 'usage_metadata') else 0,\n-                    \"completion_tokens\": response.usage_metadata.candidates_token_count if hasattr(response, 'usage_metadata') else 0,\n-                    \"total_tokens\": response.usage_metadata.total_token_count if hasattr(response, 'usage_metadata') else 0\n-                },\n+                usage=self._gemini_sdk_usage(response),\n                 finish_reason=finish_reason,\n                 tool_calls=self._extract_gemini_tool_calls_from_response(response),\n                 metadata={\"provider\": \"google\"}"
+  },
+  {
+   "filename": "src/landppt/services/provider_test_utils.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -84,7 +84,8 @@ def extract_google_test_result(data: Dict[str, Any]) -> Tuple[str, Dict[str, int\n     usage_metadata = data.get(\"usageMetadata\") or data.get(\"usage_metadata\") or {}\n     usage = {\n         \"prompt_tokens\": int(usage_metadata.get(\"promptTokenCount\") or 0),\n-        \"completion_tokens\": int(usage_metadata.get(\"candidatesTokenCount\") or 0),\n+        \"completion_tokens\": int(usage_metadata.get(\"candidatesTokenCount\") or 0)\n+        + int(usage_metadata.get(\"thoughtsTokenCount\") or 0),\n         \"total_tokens\": int(usage_metadata.get(\"totalTokenCount\") or 0),\n     }\n     return response_text, usage"
+  },
+  {
+   "filename": "tests/test_google_usage_thoughts.py",
+   "status": "added",
+   "additions": 56,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,56 @@\n+from types import SimpleNamespace\n+\n+\n+def test_sdk_usage_counts_thinking_tokens_as_completion():\n+    # Import inside test so conftest adds src/ to sys.path first.\n+    from landppt.ai.providers import GoogleProvider\n+\n+    meta = SimpleNamespace(\n+        prompt_token_count=3,\n+        candidates_token_count=5,\n+        thoughts_token_count=20,\n+        total_token_count=28,\n+    )\n+\n+    usage = GoogleProvider._gemini_sdk_usage(SimpleNamespace(usage_metadata=meta))\n+\n+    assert usage == {\"prompt_tokens\": 3, \"completion_tokens\": 25, \"total_tokens\": 28}\n+\n+\n+def test_sdk_usage_tolerates_missing_counts():\n+    from landppt.ai.providers import GoogleProvider\n+\n+    meta = SimpleNamespace(\n+        prompt_token_count=None,\n+        candidates_token_count=None,\n+        thoughts_token_count=None,\n+        total_token_count=None,\n+    )\n+\n+    assert GoogleProvider._gemini_sdk_usage(SimpleNamespace(usage_metadata=meta)) == {\n+        \"prompt_tokens\": 0,\n+        \"completion_tokens\": 0,\n+        \"total_tokens\": 0,\n+    }\n+    assert GoogleProvider._gemini_sdk_usage(SimpleNamespace(usage_metadata=None))[\n+        \"completion_tokens\"\n+    ] == 0\n+\n+\n+def test_rest_usage_counts_thinking_tokens_as_completion():\n+    from landppt.ai.providers import GoogleProvider\n+\n+    provider = GoogleProvider.__new__(GoogleProvider)\n+    _, _, usage = provider._extract_rest_text(\n+        {\n+            \"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hi\"}]}, \"finishReason\": \"STOP\"}],\n+            \"usageMetadata\": {\n+                \"promptTokenCount\": 3,\n+                \"candidatesTokenCount\": 5,\n+                \"thoughtsTokenCount\": 20,\n+                \"totalTokenCount\": 28,\n+            },\n+        }\n+    )\n+\n+    assert usage[\"completion_tokens\"] == 25"
+  },
+  {
+   "filename": "tests/test_provider_test_utils.py",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -68,6 +68,22 @@ def test_extract_google_test_result_reads_text_and_usage():\n     assert usage == {\"prompt_tokens\": 3, \"completion_tokens\": 5, \"total_tokens\": 8}\n \n \n+def test_extract_google_test_result_counts_thinking_tokens_as_completion():\n+    _, usage = extract_google_test_result(\n+        {\n+            \"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hi\"}]}}],\n+            \"usageMetadata\": {\n+                \"promptTokenCount\": 3,\n+                \"candidatesTokenCount\": 5,\n+                \"thoughtsTokenCount\": 20,\n+                \"totalTokenCount\": 28,\n+            },\n+        }\n+    )\n+\n+    assert usage == {\"prompt_tokens\": 3, \"completion_tokens\": 25, \"total_tokens\": 28}\n+\n+\n def test_build_anthropic_messages_url_appends_v1_messages():\n     assert build_anthropic_messages_url(\"api.anthropic.com\") == \"https://api.anthropic.com/v1/messages\"\n "
+  }
+ ],
+ "test_files": [
+  "tests/test_google_usage_thoughts.py",
+  "tests/test_provider_test_utils.py"
+ ]
+}

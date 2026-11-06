@@ -1,0 +1,26 @@
+{
+ "repo": "slingdata-io/sling-cli",
+ "number": 828,
+ "url": "https://github.com/slingdata-io/sling-cli/pull/828",
+ "title": "fix(database): drop 1/0 -> true/false case when casting integer to string",
+ "merged_at": "2026-11-01T11:09:55Z",
+ "files": [
+  {
+   "filename": "core/dbio/database/database.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 4,
+   "patch": "@@ -2511,17 +2511,15 @@ func (conn *BaseConn) castBoolForSelect(srcCol iop.Column, tgtCol iop.Column) (s\n \t\tsql := `case when {col} = 'true' then 1 when {col} = 'false' then 0 else {col_as_int} end`\n \t\tselectStr = g.R(sql, \"col\", qName, \"col_as_int\", castExpr)\n \tcase srcCol.IsInteger() && tgtCol.IsString():\n-\t\t// assume bool-as-int, convert from 1/0 to true/false\n+\t\t// plain cast, keep the numeric value (1 stays '1', not 'true')\n \t\tstringType := conn.GetType().GetTemplateValue(\"general_type_map.string\")\n \t\tif g.In(conn.GetType(), dbio.TypeDbMySQL, dbio.TypeDbMariaDB) {\n \t\t\t// MySQL/MariaDB needs `CAST(column AS CHAR(length))`\n \t\t\tstringType = strings.ReplaceAll(stringType, \"varchar()\", \"char()\")\n \t\t}\n \n \t\tstringType = strings.ReplaceAll(stringType, \"()\", \"(100)\")\n-\t\tcastExpr := g.R(castFunc, \"field\", qName, \"type\", stringType)\n-\t\tsql := `case when {col} = 1 then 'true' when {col} = 0 then 'false' else {col_as_string} end`\n-\t\tselectStr = g.R(sql, \"col\", qName, \"col_as_string\", castExpr)\n+\t\tselectStr = g.R(castFunc, \"field\", qName, \"type\", stringType)\n \tcase srcCol.IsBool() && tgtCol.IsString():\n \t\t// Genuine boolean: PG-family rejects `boolean = integer`, and Redshift\n \t\t// rejects `CAST(boolean AS varchar)`. Use truthiness (no = 1 / no cast)."
+  },
+  {
+   "filename": "core/dbio/database/database_test.go",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -3855,6 +3855,20 @@ func TestD1StreamRowsPaged(t *testing.T) {\n \t}\n }\n \n+func TestCastColumnsForSelectIntegerToString(t *testing.T) {\n+\tconn, err := NewConn(\"redshift://user:pass@localhost:5439/db\")\n+\tg.AssertNoError(t, err)\n+\n+\tsrcColumns := iop.Columns{{Name: \"flag\", Type: iop.IntegerType, DbType: \"bigint\"}}\n+\ttgtColumns := iop.Columns{{Name: \"flag\", Type: iop.StringType, DbType: \"varchar\"}}\n+\n+\tsrcFields := conn.CastColumnsForSelect(srcColumns, tgtColumns)\n+\tassert.Len(t, srcFields, 1)\n+\tassert.NotContains(t, srcFields[0], \"'true'\")\n+\tassert.NotContains(t, srcFields[0], \"'false'\")\n+\tassert.Equal(t, `cast(\"flag\" as varchar(100)) as \"flag\"`, srcFields[0])\n+}\n+\n func TestHanaGetURL(t *testing.T) {\n \tcases := []struct {\n \t\tname   string"
+  }
+ ],
+ "test_files": [
+  "core/dbio/database/database_test.go"
+ ]
+}

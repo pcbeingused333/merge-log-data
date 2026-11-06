@@ -1,0 +1,33 @@
+{
+ "repo": "modelscope/evalscope",
+ "number": 2008,
+ "url": "https://github.com/modelscope/evalscope/pull/2008",
+ "title": "fix(anthropic): forward extra_headers and extra_query to the Anthropic client",
+ "merged_at": "2026-11-04T12:05:45Z",
+ "files": [
+  {
+   "filename": "evalscope/api/model/generate_config.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -159,10 +159,10 @@ class GenerateConfig(BaseModel):\n     \"\"\"Extra body to be sent with requests to OpenAI compatible servers. OpenAI, vLLM, and SGLang only.\"\"\"\n \n     extra_query: Optional[Dict[str, Any]] = Field(default=None)\n-    \"\"\"Extra query parameters to be sent with requests to OpenAI compatible servers. OpenAI, vLLM, and SGLang only.\"\"\"\n+    \"\"\"Extra query parameters to be sent with requests to OpenAI- or Anthropic-compatible servers.\"\"\"\n \n     extra_headers: Optional[Dict[str, Any]] = Field(default=None)\n-    \"\"\"Extra headers to be sent with requests to OpenAI compatible servers. OpenAI, vLLM, and SGLang only.\"\"\"\n+    \"\"\"Extra headers to be sent with requests to OpenAI- or Anthropic-compatible servers.\"\"\"\n \n     height: Optional[int] = Field(default=None)\n     \"\"\"Image height for image generation model only\"\"\""
+  },
+  {
+   "filename": "evalscope/models/utils/anthropic.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -42,6 +42,7 @@\n )\n from evalscope.api.model import ChatCompletionChoice, GenerateConfig, ModelOutput, ModelUsage, StopReason\n from evalscope.api.tool import ToolCall, ToolChoice, ToolFunction, ToolInfo, parse_tool_call\n+from evalscope.utils import get_secret_value\n from evalscope.utils.uri_utils import data_uri_mime_type, data_uri_to_base64, file_as_data_uri, is_http_url\n \n BASE_64_DATA_REMOVED = '<base64-data-removed>'\n@@ -522,6 +523,12 @@ def anthropic_completion_params(model: str, config: GenerateConfig) -> Dict[str,\n     if config.anthropic_cache_control and config.anthropic_cache_strategy == 'recent_messages':\n         params['cache_control'] = config.anthropic_cache_control.model_dump(exclude_none=True)\n \n+    # Extra request options (same as the OpenAI path)\n+    if config.extra_query:\n+        params['extra_query'] = config.extra_query\n+    if config.extra_headers:\n+        params['extra_headers'] = get_secret_value(config.extra_headers)\n+\n     # Extra body parameters\n     if config.extra_body:\n         for key, value in config.extra_body.items():"
+  },
+  {
+   "filename": "tests/models/test_anthropic_extra_request_options.py",
+   "status": "added",
+   "additions": 32,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,32 @@\n+import pytest\n+\n+from evalscope.api.model import GenerateConfig\n+\n+\n+def _anthropic_utils():\n+    pytest.importorskip('anthropic')\n+    from evalscope.models.utils import anthropic\n+\n+    return anthropic\n+\n+\n+def test_extra_headers_and_query_are_forwarded():\n+    # The OpenAI path forwards these; the Anthropic path used to drop them silently.\n+    anthropic = _anthropic_utils()\n+\n+    params = anthropic.anthropic_completion_params(\n+        'claude',\n+        GenerateConfig(extra_headers={'X-Tenant': 'abc'}, extra_query={'api-version': '1'}),\n+    )\n+\n+    assert params['extra_headers'] == {'X-Tenant': 'abc'}\n+    assert params['extra_query'] == {'api-version': '1'}\n+\n+\n+def test_extra_headers_and_query_absent_by_default():\n+    anthropic = _anthropic_utils()\n+\n+    params = anthropic.anthropic_completion_params('claude', GenerateConfig())\n+\n+    assert 'extra_headers' not in params\n+    assert 'extra_query' not in params"
+  }
+ ],
+ "test_files": [
+  "tests/models/test_anthropic_extra_request_options.py"
+ ]
+}

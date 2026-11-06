@@ -1,0 +1,26 @@
+{
+ "repo": "i-am-bee/beeai-framework",
+ "number": 1906,
+ "url": "https://github.com/i-am-bee/beeai-framework/pull/1906",
+ "title": "fix(adapters): report cached token usage in the LangChain chat adapter",
+ "merged_at": "2026-11-02T13:53:23Z",
+ "files": [
+  {
+   "filename": "python/beeai_framework/adapters/langchain/backend/chat.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -97,7 +97,8 @@ async def _create_stream(self, input: ChatModelInput, run: RunContext) -> AsyncG\n \n     def _transform_output(self, response: LCModelResponse) -> ChatModelOutput:\n         message = response[\"output\"]\n-        usage_metadata: dict[str, int] = message.usage_metadata if hasattr(message, \"usage_metadata\") else {}\n+        usage_metadata: dict[str, Any] = getattr(message, \"usage_metadata\", None) or {}\n+        input_token_details: dict[str, int] = usage_metadata.get(\"input_token_details\") or {}\n         return ChatModelOutput(\n             output=to_beeai_messages([message]),\n             output_structured=response[\"output_structured\"],\n@@ -106,6 +107,11 @@ def _transform_output(self, response: LCModelResponse) -> ChatModelOutput:\n                 prompt_tokens=usage_metadata.get(\"input_tokens\") or 0,\n                 completion_tokens=usage_metadata.get(\"output_tokens\") or 0,\n                 total_tokens=usage_metadata.get(\"total_tokens\") or 0,\n+                cached_prompt_tokens=input_token_details.get(\"cache_read\") or 0,\n+                # langchain-anthropic reports cache writes by TTL and sets \"cache_creation\" to 0 then.\n+                cached_creation_tokens=input_token_details.get(\"cache_creation\")\n+                or (input_token_details.get(\"ephemeral_5m_input_tokens\") or 0)\n+                + (input_token_details.get(\"ephemeral_1h_input_tokens\") or 0),\n             )\n             if usage_metadata\n             else ChatModelUsage(),"
+  },
+  {
+   "filename": "python/tests/adapters/langchain/test_chat.py",
+   "status": "modified",
+   "additions": 59,
+   "deletions": 0,
+   "patch": "@@ -71,3 +71,62 @@ async def test_clone_accepts_parallel_tool_calls_like_the_original() -> None:\n         )\n \n         assert [call.args for call in output.get_tool_calls()] == ['{\"city\": \"Paris\"}', '{\"city\": \"Rome\"}']\n+\n+\n+@pytest.mark.unit\n+def test_transform_output_reports_cached_tokens() -> None:\n+    model = LangChainChatModel(GenericFakeChatModel(messages=iter([])))\n+    message = AIMessage(\n+        content=\"hi\",\n+        usage_metadata={\n+            \"input_tokens\": 100,\n+            \"output_tokens\": 10,\n+            \"total_tokens\": 110,\n+            \"input_token_details\": {\"cache_read\": 60, \"cache_creation\": 30},\n+        },\n+    )\n+\n+    output = model._transform_output({\"output\": message, \"output_structured\": None})  # type: ignore[typeddict-item]\n+\n+    assert output.usage is not None\n+    assert output.usage.prompt_tokens == 100\n+    assert output.usage.cached_prompt_tokens == 60\n+    assert output.usage.cached_creation_tokens == 30\n+\n+\n+@pytest.mark.unit\n+def test_transform_output_reports_anthropic_cache_writes_by_ttl() -> None:\n+    model = LangChainChatModel(GenericFakeChatModel(messages=iter([])))\n+    message = AIMessage(\n+        content=\"hi\",\n+        usage_metadata={\n+            \"input_tokens\": 100,\n+            \"output_tokens\": 10,\n+            \"total_tokens\": 110,\n+            # What langchain-anthropic reports when the response has cache writes.\n+            \"input_token_details\": {\n+                \"cache_read\": 60,\n+                \"cache_creation\": 0,\n+                \"ephemeral_5m_input_tokens\": 20,\n+                \"ephemeral_1h_input_tokens\": 10,\n+            },\n+        },\n+    )\n+\n+    output = model._transform_output({\"output\": message, \"output_structured\": None})  # type: ignore[typeddict-item]\n+\n+    assert output.usage is not None\n+    assert output.usage.cached_prompt_tokens == 60\n+    assert output.usage.cached_creation_tokens == 30\n+\n+\n+@pytest.mark.unit\n+def test_transform_output_without_token_details_has_no_cached_tokens() -> None:\n+    model = LangChainChatModel(GenericFakeChatModel(messages=iter([])))\n+    message = AIMessage(content=\"hi\", usage_metadata={\"input_tokens\": 5, \"output_tokens\": 1, \"total_tokens\": 6})\n+\n+    output = model._transform_output({\"output\": message, \"output_structured\": None})  # type: ignore[typeddict-item]\n+\n+    assert output.usage is not None\n+    assert output.usage.cached_prompt_tokens == 0\n+    assert output.usage.cached_creation_tokens == 0"
+  }
+ ],
+ "test_files": [
+  "python/tests/adapters/langchain/test_chat.py"
+ ]
+}

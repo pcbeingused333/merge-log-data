@@ -1,0 +1,48 @@
+{
+ "repo": "microsoft/conductor",
+ "number": 621,
+ "url": "https://github.com/microsoft/conductor/pull/621",
+ "title": "fix(providers): replace retired default Anthropic model in agent builder",
+ "merged_at": "2026-11-02T15:00:44Z",
+ "files": [
+  {
+   "filename": "changelog.d/+anthropic-default-model.fixed.md",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+Fix Anthropic agents failing when no model is set: the default is now `claude-sonnet-4-6` (agent builder and `ClaudeProvider`) instead of the retired `claude-3-5-sonnet-latest`."
+  },
+  {
+   "filename": "src/conductor/providers/_pydantic_ai/agent_builder.py",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 6,
+   "patch": "@@ -50,10 +50,10 @@\n logger = logging.getLogger(__name__)\n \n \n-# Default model mirrors ClaudeProvider's conservative default to avoid dated\n-# model deprecation risk. The \"-latest\" suffix lets Anthropic aliases keep the\n-# identifier current without YAML changes.\n-DEFAULT_ANTHROPIC_MODEL: str = \"claude-3-5-sonnet-latest\"\n+# Used when neither the agent nor the workflow sets a model. Anthropic retired\n+# ``claude-3-5-sonnet-latest``, the previous default, so requests without an\n+# explicit model failed.\n+DEFAULT_ANTHROPIC_MODEL: str = \"claude-sonnet-4-6\"\n _FINAL_RESULT_TOOL_DESCRIPTION: Final[str] = (\n     \"Call this tool to return the final structured result and end the conversation. \"\n     \"You must call this tool before finishing; plain text responses are not accepted.\"\n@@ -284,8 +284,8 @@ def _resolve_anthropic_thinking(\n             f\"reasoning.effort={effort!r} was requested for agent \"\n             f\"{agent.name!r}.\",\n             suggestion=(\n-                \"Use a Claude 3.7+ or 4.x model (e.g. claude-3-7-sonnet-latest, \"\n-                \"claude-opus-4-20250514) or remove the reasoning config.\"\n+                \"Use a model that supports extended thinking with budget_tokens, \"\n+                \"or remove the reasoning config.\"\n             ),\n         )\n     return {\"type\": \"enabled\", \"budget_tokens\": effort_to_budget_tokens(effort)}"
+  },
+  {
+   "filename": "src/conductor/providers/claude.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 7,
+   "patch": "@@ -218,10 +218,8 @@ def __init__(\n             base_url: Custom API endpoint (e.g. Databricks gateway URL).\n                 If None, falls back to ANTHROPIC_BASE_URL env var then the\n                 default Anthropic API endpoint.\n-            model: Default model to use. Defaults to \"claude-3-5-sonnet-latest\".\n-                This default is chosen for stability and to avoid dated model\n-                deprecation risk. The \"-latest\" suffix ensures compatibility\n-                with model updates without requiring configuration changes.\n+            model: Default model to use. Defaults to \"claude-sonnet-4-6\"\n+                (Anthropic retired the previous default, claude-3-5-sonnet-latest).\n             temperature: Default temperature (0.0-1.0). SDK enforces range.\n             max_tokens: Maximum output tokens. Defaults to 16384 when not\n                 configured, applied uniformly across Claude and OpenAI providers.\n@@ -266,7 +264,7 @@ def __init__(\n         if self._base_url is None and resolve_environment:\n             self._base_url = os.environ.get(\"ANTHROPIC_BASE_URL\")\n         self._model_user_configured = model is not None\n-        self._default_model = model or \"claude-3-5-sonnet-latest\"\n+        self._default_model = model or \"claude-sonnet-4-6\"\n \n         # Validate and store temperature (enforce schema bounds at instantiation)\n         if temperature is not None:\n@@ -1004,8 +1002,8 @@ async def execute_dialog_turn(\n                     f\"but default_reasoning_effort={self._default_reasoning_effort!r} \"\n                     \"was configured.\",\n                     suggestion=(\n-                        \"Use a Claude 3.7+ or 4.x model (e.g. claude-opus-4-20250514, \"\n-                        \"claude-sonnet-4-20250514) or remove the reasoning config.\"\n+                        \"Use a model that supports extended thinking with budget_tokens, \"\n+                        \"or remove the reasoning config.\"\n                     ),\n                 )\n             budget = effort_to_budget_tokens(self._default_reasoning_effort)"
+  },
+  {
+   "filename": "tests/test_providers/test_claude.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -131,7 +131,7 @@ def test_init_with_default_parameters(\n \n         provider = ClaudeProvider()\n \n-        assert provider._default_model == \"claude-3-5-sonnet-latest\"\n+        assert provider._default_model == \"claude-sonnet-4-6\"\n         assert provider._default_max_tokens == 16_384\n         assert provider._max_tokens_user_configured is False\n         assert provider._timeout == 600.0\n@@ -935,7 +935,7 @@ class FakeResult:\n         kwargs = mock_agent.run.call_args.kwargs\n         assert kwargs[\"user_prompt\"] == \"hello\"\n         assert kwargs.get(\"message_history\") == []\n-        assert mock_resolve_model.call_args.kwargs[\"agent\"].model == \"claude-3-5-sonnet-latest\"\n+        assert mock_resolve_model.call_args.kwargs[\"agent\"].model == \"claude-sonnet-4-6\"\n \n     @pytest.mark.asyncio\n     async def test_dialog_turn_multi_turn_history_preserved_in_order(self) -> None:\n@@ -972,7 +972,7 @@ class FakeResult:\n         assert history[0].parts[0].content == \"first\"\n         assert isinstance(history[1], ModelResponse)\n         assert history[1].parts[0].content == \"second\"\n-        assert mock_resolve_model.call_args.kwargs[\"agent\"].model == \"claude-3-5-sonnet-latest\"\n+        assert mock_resolve_model.call_args.kwargs[\"agent\"].model == \"claude-sonnet-4-6\"\n \n     @pytest.mark.asyncio\n     async def test_dialog_turn_model_override_used(self) -> None:"
+  },
+  {
+   "filename": "tests/test_providers/test_pydantic_ai_agent_builder.py",
+   "status": "modified",
+   "additions": 65,
+   "deletions": 0,
+   "patch": "@@ -105,6 +105,71 @@ def test_default_constant_used_when_no_model_anywhere(self) -> None:\n \n         assert _extract_model_name(pydantic_agent) == DEFAULT_ANTHROPIC_MODEL\n \n+    def test_default_model_is_not_the_retired_claude_3_5_sonnet(self) -> None:\n+        \"\"\"Both Anthropic code paths must not default to a model Anthropic retired.\"\"\"\n+        from conductor.providers.claude import ClaudeProvider\n+\n+        provider = ClaudeProvider(api_key=\"test-key\")\n+\n+        assert DEFAULT_ANTHROPIC_MODEL != \"claude-3-5-sonnet-latest\"\n+        assert provider._default_model == DEFAULT_ANTHROPIC_MODEL\n+\n+    def test_default_model_sends_compatible_request_for_structured_output(self) -> None:\n+        \"\"\"The default model must not get a forced tool_choice that newer models reject.\n+\n+        Structured output goes through a ToolOutput tool; the emitted request must\n+        not use extended thinking with a forced ``tool_choice`` and must name the\n+        default model, so schema-bearing agents without a model keep working.\n+        \"\"\"\n+        import asyncio\n+        import json\n+\n+        from anthropic import AsyncAnthropic\n+        from pydantic_ai.providers.anthropic import AnthropicProvider\n+\n+        captured: list[dict[str, Any]] = []\n+\n+        def handler(request: httpx.Request) -> httpx.Response:\n+            captured.append(json.loads(request.content))\n+            return httpx.Response(\n+                200,\n+                json={\n+                    \"id\": \"msg_1\",\n+                    \"type\": \"message\",\n+                    \"role\": \"assistant\",\n+                    \"model\": DEFAULT_ANTHROPIC_MODEL,\n+                    \"content\": [\n+                        {\n+                            \"type\": \"tool_use\",\n+                            \"id\": \"toolu_1\",\n+                            \"name\": \"final_result\",\n+                            \"input\": {\"answer\": \"ok\"},\n+                        }\n+                    ],\n+                    \"stop_reason\": \"tool_use\",\n+                    \"stop_sequence\": None,\n+                    \"usage\": {\"input_tokens\": 1, \"output_tokens\": 1},\n+                },\n+            )\n+\n+        client = AsyncAnthropic(\n+            api_key=\"test-key\",\n+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),\n+        )\n+        model = AnthropicModel(\n+            DEFAULT_ANTHROPIC_MODEL, provider=AnthropicProvider(anthropic_client=client)\n+        )\n+        agent_def = AgentDef(name=\"mapper\", output={\"answer\": OutputField(type=\"string\")})\n+        pydantic_agent = build_agent(agent_def, system_prompt=\"\", rendered_prompt=\"hi\")\n+\n+        with pydantic_agent.override(model=model):\n+            asyncio.run(pydantic_agent.run(\"hi\"))\n+\n+        body = captured[0]\n+        assert body[\"model\"] == DEFAULT_ANTHROPIC_MODEL\n+        assert \"thinking\" not in body\n+        assert body[\"tool_choice\"] == {\"type\": \"any\"}\n+\n \n class TestOpenAIModelMapping:\n     \"\"\"Tests for resolving the OpenAI model identifier.\"\"\""
+  }
+ ],
+ "test_files": [
+  "tests/test_providers/test_claude.py",
+  "tests/test_providers/test_pydantic_ai_agent_builder.py"
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "callstack/agent-device",
+ "number": 4266,
+ "url": "https://github.com/callstack/agent-device/pull/4266",
+ "title": "fix(capture-kit): don't let an identifier-only Android leaf paint over sibling layers",
+ "merged_at": "2026-11-06T10:51:05Z",
+ "files": [
+  {
+   "filename": ".changeset/android-identifier-leaf-paint.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'agent-device': patch\n+---\n+\n+Fix Android snapshots marking every earlier sibling layer `interactionBlocked: covered` when a later layer contains a transparent leaf that only has an `identifier` (such as a full-screen `testID` view with `pointerEvents=\"box-none\"`). An identifier-only leaf no longer counts as painting its rect, but it can still be the covered target."
+  },
+  {
+   "filename": "packages/capture-kit/src/snapshot/__tests__/android-replacement-surface-occlusion.test.ts",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -177,6 +177,30 @@ test('maximum-size flat Android captures stay within the linear classifier shape\n   );\n });\n \n+test('an identifier-only leaf layer does not paint over earlier sibling layers', () => {\n+  const nodes: RawSnapshotNode[] = [\n+    node(0, undefined, 'android.widget.FrameLayout', [0, 0, 400, 800]),\n+    node(1, 0, 'android.view.ViewGroup', [0, 0, 400, 800]),\n+    { ...node(2, 1, 'android.widget.Button', [20, 40, 100, 60]), label: 'Header', hittable: true },\n+    node(3, 0, 'android.view.ViewGroup', [0, 0, 400, 800]),\n+    { ...node(4, 3, 'android.view.ViewGroup', [0, 0, 400, 800]), identifier: 'coach-container' },\n+    { ...node(5, 3, 'android.widget.Button', [20, 700, 360, 60]), label: 'Send', hittable: true },\n+  ];\n+\n+  assert.deepEqual(\n+    [\n+      ...coveredAndroidReplacementNodeIndexes(\n+        nodes,\n+        siblingOrders([\n+          [1, 1],\n+          [3, 2],\n+        ]),\n+      ),\n+    ],\n+    [],\n+  );\n+});\n+\n function siblingOrders(entries: ReadonlyArray<readonly [number, number]>) {\n   return new Map(entries.map(([index, order]) => [index, { group: 0, order }]));\n }"
+  },
+  {
+   "filename": "packages/capture-kit/src/snapshot/android-replacement-surface-occlusion.ts",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -149,7 +149,7 @@ function semanticPaintRect(node: RawSnapshotNode, childCount: number): Rect | un\n   if (!isPositiveFiniteRect(node.rect)) return undefined;\n   return node.hittable === true ||\n     isScrollableType(node.type) ||\n-    (childCount === 0 && hasSemanticContent(node))\n+    (childCount === 0 && hasPaintedContent(node))\n     ? node.rect\n     : undefined;\n }\n@@ -158,6 +158,12 @@ function semanticShowRect(node: RawSnapshotNode): Rect | undefined {\n   return isPositiveFiniteRect(node.rect) && hasSemanticContent(node) ? node.rect : undefined;\n }\n \n+// An identifier is a test hook, not something drawn: a childless, non-hittable leaf that only\n+// has one carries no evidence that it is opaque or catches touches, so it must not paint.\n+function hasPaintedContent(node: RawSnapshotNode): boolean {\n+  return Boolean(node.label?.trim() || node.value?.trim());\n+}\n+\n function hasSemanticContent(node: RawSnapshotNode): boolean {\n   return Boolean(node.label?.trim() || node.value?.trim() || node.identifier?.trim());\n }"
+  }
+ ],
+ "test_files": [
+  "packages/capture-kit/src/snapshot/__tests__/android-replacement-surface-occlusion.test.ts"
+ ]
+}

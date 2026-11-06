@@ -1,0 +1,26 @@
+{
+ "repo": "Agent-Field/agentfield",
+ "number": 1150,
+ "url": "https://github.com/Agent-Field/agentfield/pull/1150",
+ "title": "fix(sdk-python): request stream usage for more LiteLLM providers",
+ "merged_at": "2026-11-04T14:03:42Z",
+ "files": [
+  {
+   "filename": "sdk/python/agentfield/agent_ai.py",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 1,
+   "patch": "@@ -171,6 +171,18 @@ def _reset_litellm_http_clients(litellm_module: Any) -> None:\n \n _AI_TIMEOUT_RETRIES_DEFAULT = 2\n \n+# Providers whose chat API (via LiteLLM) accepts ``stream_options``; requesting\n+# ``include_usage`` makes the final streamed chunk carry token usage.\n+_STREAM_USAGE_PROVIDER_PREFIXES = (\n+    \"openrouter/\",\n+    \"openai/\",\n+    \"azure/\",\n+    \"groq/\",\n+    \"deepseek/\",\n+    \"xai/\",\n+    \"together_ai/\",\n+)\n+\n \n def _resolve_timeout_retries() -> int:\n     \"\"\"How many times to retry an LLM call that hit the wall-clock safety-net\n@@ -839,7 +851,9 @@ def has_untrimmable_media(messages_to_check: List[dict]) -> bool:\n             else getattr(self.agent.async_config, \"llm_call_timeout\", 120.0)\n         )\n         litellm_params.setdefault(\"timeout\", effective_timeout)\n-        if final_config.stream and final_config.model.startswith((\"openrouter/\", \"openai/\")):\n+        if final_config.stream and final_config.model.startswith(\n+            _STREAM_USAGE_PROVIDER_PREFIXES\n+        ):\n             litellm_params.setdefault(\"stream_options\", {\"include_usage\": True})\n \n         if schema:"
+  },
+  {
+   "filename": "sdk/python/tests/test_agent_ai_comprehensive.py",
+   "status": "modified",
+   "additions": 39,
+   "deletions": 0,
+   "patch": "@@ -154,6 +154,45 @@ async def stream_generator():\n     assert hasattr(result, \"__aiter__\") or hasattr(result, \"__iter__\")\n \n \n+@pytest.mark.asyncio\n+@pytest.mark.parametrize(\n+    \"model,expected\",\n+    [\n+        (\"openai/gpt-4o\", True),\n+        (\"openrouter/openai/gpt-4o\", True),\n+        (\"azure/my-deployment\", True),\n+        (\"groq/llama-3.3-70b-versatile\", True),\n+        (\"deepseek/deepseek-chat\", True),\n+        (\"xai/grok-3\", True),\n+        (\"together_ai/meta-llama/Llama-3-8b\", True),\n+        # LiteLLM rejects stream_options for these providers.\n+        (\"mistral/mistral-large-latest\", False),\n+        (\"anthropic/claude-3-opus\", False),\n+    ],\n+)\n+async def test_ai_streaming_requests_usage_for_supported_providers(\n+    monkeypatch, agent_with_ai, model, expected\n+):\n+    \"\"\"stream_options include_usage is only requested where LiteLLM accepts it.\"\"\"\n+    litellm_module = setup_litellm_stub(monkeypatch)\n+\n+    async def stream_generator():\n+        yield SimpleNamespace(\n+            choices=[SimpleNamespace(delta=SimpleNamespace(content=\"x\"))]\n+        )\n+\n+    litellm_module.acompletion.return_value = stream_generator()\n+\n+    ai = AgentAI(agent_with_ai)\n+    await ai.ai(\"test\", model=model, stream=True)\n+\n+    kwargs = litellm_module.acompletion.call_args[1]\n+    if expected:\n+        assert kwargs[\"stream_options\"] == {\"include_usage\": True}\n+    else:\n+        assert \"stream_options\" not in kwargs\n+\n+\n @pytest.mark.asyncio\n async def test_ai_multimodal_input_processing(monkeypatch, agent_with_ai):\n     \"\"\"Test multimodal input processing.\"\"\""
+  }
+ ],
+ "test_files": [
+  "sdk/python/tests/test_agent_ai_comprehensive.py"
+ ]
+}

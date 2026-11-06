@@ -1,0 +1,33 @@
+{
+ "repo": "Agent-Field/agentfield",
+ "number": 1154,
+ "url": "https://github.com/Agent-Field/agentfield/pull/1154",
+ "title": "fix(sdk): honor generation defaults in TypeScript tool calls",
+ "merged_at": "2026-11-06T14:12:06Z",
+ "files": [
+  {
+   "filename": "sdk/typescript/src/ai/AIClient.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -113,6 +113,11 @@ export class AIClient {\n     return this.config.promptTemplates;\n   }\n \n+  /** Generation defaults shared with the tool-calling path. */\n+  get generationDefaults(): Pick<AIRequestOptions, 'temperature' | 'maxTokens'> {\n+    return { temperature: this.config.temperature, maxTokens: this.config.maxTokens };\n+  }\n+\n   async generate<T>(prompt: string, options: AIRequestOptions & { schema: ZodSchema<T> }): Promise<T>;\n   async generate(prompt: string, options?: AIRequestOptions): Promise<string>;\n   async generate<T = any>(prompt: string, options: AIRequestOptions = {}): Promise<T | string> {"
+  },
+  {
+   "filename": "sdk/typescript/src/context/ReasonerContext.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -159,7 +159,11 @@ export class ReasonerContext<TInput = any> {\n       mergedConfig,\n       needsLazyHydration,\n       () => this.aiClient.getModel(options),\n-      options,\n+      {\n+        ...options,\n+        temperature: options.temperature ?? this.aiClient.generationDefaults?.temperature,\n+        maxTokens: options.maxTokens ?? this.aiClient.generationDefaults?.maxTokens\n+      },\n       modelChoice\n     );\n   }"
+  },
+  {
+   "filename": "sdk/typescript/tests/tool_generation_defaults.test.ts",
+   "status": "added",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,45 @@\n+import { describe, expect, it, vi } from 'vitest';\n+import { MockLanguageModelV3 } from 'ai/test';\n+import { AIClient } from '../src/ai/AIClient.js';\n+import { ReasonerContext } from '../src/context/ReasonerContext.js';\n+\n+const answer = (content: any[]) => ({\n+  content,\n+  finishReason: { unified: content[0].type === 'tool-call' ? 'tool-calls' : 'stop', raw: 'stop' },\n+  usage: { inputTokens: { total: 10 }, outputTokens: { total: 2 } },\n+  warnings: [],\n+});\n+\n+describe.each(['eager', 'lazy'] as const)('tool generation defaults (%s)', (schemaHydration) => {\n+  it.each([\n+    { config: { temperature: 0.7, maxTokens: 512 }, overrides: {}, expected: { temperature: 0.7, maxOutputTokens: 512 } },\n+    { config: { temperature: 0.7, maxTokens: 512 }, overrides: { temperature: 0, maxTokens: 128 }, expected: { temperature: 0, maxOutputTokens: 128 } },\n+    { config: {}, overrides: {}, expected: { temperature: undefined, maxOutputTokens: undefined } },\n+  ])('passes $expected to every model turn', async ({ config, overrides, expected }) => {\n+    const model = new MockLanguageModelV3({ doGenerate: [\n+      answer([{ type: 'tool-call', toolCallId: 'c1', toolName: 'node__sum', input: '{}' }]),\n+      answer([{ type: 'text', text: 'done' }]),\n+    ] as any });\n+    const aiClient = new AIClient(config);\n+    vi.spyOn(aiClient, 'getModel').mockReturnValue(model);\n+    const agent = {\n+      call: vi.fn().mockResolvedValue({ total: 3 }),\n+      discover: vi.fn().mockResolvedValue({ json: { capabilities: [{\n+        agentId: 'node', reasoners: [{ id: 'sum', invocationTarget: 'node:sum', inputSchema: { type: 'object', properties: {} } }], skills: [],\n+      }] } }),\n+    };\n+    const context = new ReasonerContext({\n+      input: {}, executionId: 'defaults-test', agent, aiClient,\n+      req: {}, res: {}, logger: {}, memory: {}, workflow: {}, did: {},\n+    } as any);\n+\n+    const result = await context.ai('go', { tools: { schemaHydration }, ...overrides });\n+\n+    expect(result).toMatchObject({ text: 'done' });\n+    expect(model.doGenerateCalls).toHaveLength(2);\n+    for (const call of model.doGenerateCalls) {\n+      expect(call.temperature).toBe(expected.temperature);\n+      expect(call.maxOutputTokens).toBe(expected.maxOutputTokens);\n+    }\n+  });\n+});"
+  }
+ ],
+ "test_files": [
+  "sdk/typescript/tests/tool_generation_defaults.test.ts"
+ ]
+}

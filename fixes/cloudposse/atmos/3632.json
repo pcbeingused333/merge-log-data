@@ -1,0 +1,26 @@
+{
+ "repo": "cloudposse/atmos",
+ "number": 3632,
+ "url": "https://github.com/cloudposse/atmos/pull/3632",
+ "title": "fix(ai): count Gemini thinking tokens in output usage",
+ "merged_at": "2026-11-05T04:16:38Z",
+ "files": [
+  {
+   "filename": "pkg/ai/agent/gemini/client.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 2,
+   "patch": "@@ -408,8 +408,9 @@ func extractGeminiFunctionCalls(functionCalls []*genai.FunctionCall, result *typ\n // extractGeminiUsage extracts usage metadata and adds it to the result.\n func extractGeminiUsage(metadata *genai.GenerateContentResponseUsageMetadata, result *types.Response) {\n \tresult.Usage = &types.Usage{\n-\t\tInputTokens:         int64(metadata.PromptTokenCount),\n-\t\tOutputTokens:        int64(metadata.CandidatesTokenCount),\n+\t\tInputTokens: int64(metadata.PromptTokenCount),\n+\t\t// Gemini reports thinking tokens separately from candidates, but bills them as output.\n+\t\tOutputTokens:        int64(metadata.CandidatesTokenCount) + int64(metadata.ThoughtsTokenCount),\n \t\tTotalTokens:         int64(metadata.TotalTokenCount),\n \t\tCacheReadTokens:     int64(metadata.CachedContentTokenCount),\n \t\tCacheCreationTokens: 0, // Gemini doesn't separately report cache creation tokens."
+  },
+  {
+   "filename": "pkg/ai/agent/gemini/client_test.go",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -803,3 +803,28 @@ func TestGeminiMaxTokensVariations(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestParseGeminiResponse_CountsThoughtsTokensAsOutput(t *testing.T) {\n+\tresponse := &genai.GenerateContentResponse{\n+\t\tCandidates: []*genai.Candidate{\n+\t\t\t{\n+\t\t\t\tContent:      &genai.Content{Parts: []*genai.Part{{Text: \"Answer\"}}},\n+\t\t\t\tFinishReason: genai.FinishReasonStop,\n+\t\t\t},\n+\t\t},\n+\t\tUsageMetadata: &genai.GenerateContentResponseUsageMetadata{\n+\t\t\tPromptTokenCount:     10,\n+\t\t\tCandidatesTokenCount: 5,\n+\t\t\tThoughtsTokenCount:   20,\n+\t\t\tTotalTokenCount:      35,\n+\t\t},\n+\t}\n+\n+\tresult, err := parseGeminiResponse(response)\n+\n+\trequire.NoError(t, err)\n+\trequire.NotNil(t, result.Usage)\n+\tassert.Equal(t, int64(10), result.Usage.InputTokens)\n+\tassert.Equal(t, int64(25), result.Usage.OutputTokens)\n+\tassert.Equal(t, int64(35), result.Usage.TotalTokens)\n+}"
+  }
+ ],
+ "test_files": [
+  "pkg/ai/agent/gemini/client_test.go"
+ ]
+}

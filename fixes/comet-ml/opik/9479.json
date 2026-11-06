@@ -1,0 +1,26 @@
+{
+ "repo": "comet-ml/opik",
+ "number": 9479,
+ "url": "https://github.com/comet-ml/opik/pull/9479",
+ "title": "[issue-9461] [SDK] fix: make scoring_key_mapping read unmodified inputs",
+ "merged_at": "2026-11-06T14:12:05Z",
+ "files": [
+  {
+   "filename": "sdks/python/src/opik/evaluation/metrics/arguments_helpers.py",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 6,
+   "patch": "@@ -124,24 +124,28 @@ def create_scoring_inputs(\n     task_output: Dict[str, Any],\n     scoring_key_mapping: Optional[evaluation_types.ScoringKeyMappingType],\n ) -> Dict[str, Any]:\n-    mapped_inputs = {**dataset_item, **task_output}\n+    source_inputs = {**dataset_item, **task_output}\n \n     if scoring_key_mapping is None:\n-        return mapped_inputs\n+        return source_inputs\n     else:\n+        # Every mapping reads from the unmodified merged inputs, so a mapping\n+        # target that is also the source of another mapping does not depend on\n+        # the order of the mapping entries.\n+        mapped_inputs = dict(source_inputs)\n         for key, value in scoring_key_mapping.items():\n             if callable(value):\n-                mapped_inputs[key] = value(mapped_inputs)\n+                mapped_inputs[key] = value(source_inputs)\n             else:\n-                if value not in mapped_inputs:\n+                if value not in source_inputs:\n                     # A mapping that matches nothing is always a mistake, and\n                     # it only surfaces later if the metric happens to have no\n                     # default for that argument. When it does have one, the\n                     # metric silently scores the wrong thing, so this cannot\n                     # stay at debug level (OPIK-6925). The available keys are\n                     # the actionable part, but they are user data and can be\n                     # numerous, so only a sample goes into the warning.\n-                    available_keys = list(mapped_inputs.keys())\n+                    available_keys = list(source_inputs.keys())\n                     sample = available_keys[:MAX_REPORTED_AVAILABLE_KEYS]\n                     remaining = len(available_keys) - len(sample)\n                     LOGGER.warning(\n@@ -153,6 +157,6 @@ def create_scoring_inputs(\n                         f\" and {remaining} more\" if remaining > 0 else \"\",\n                     )\n                 else:\n-                    mapped_inputs[key] = mapped_inputs[value]\n+                    mapped_inputs[key] = source_inputs[value]\n \n     return mapped_inputs"
+  },
+  {
+   "filename": "sdks/python/tests/unit/evaluation/test_create_scoring_inputs.py",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 0,
+   "patch": "@@ -1,3 +1,5 @@\n+import pytest\n+\n from opik.evaluation.metrics.arguments_helpers import create_scoring_inputs\n from ...testlib.assert_helpers import assert_dicts_equal\n \n@@ -95,3 +97,29 @@ def test_create_scoring_inputs_empty_mapping():\n \n     expected = {\"input\": \"hello\", \"output\": \"world\"}\n     assert_dicts_equal(result, expected)\n+\n+\n+@pytest.mark.parametrize(\n+    \"mapping\",\n+    [\n+        pytest.param({\"output\": \"answer\", \"reference\": \"output\"}, id=\"target-first\"),\n+        pytest.param({\"reference\": \"output\", \"output\": \"answer\"}, id=\"source-first\"),\n+        pytest.param(\n+            {\"output\": \"answer\", \"reference\": lambda inputs: inputs[\"output\"]},\n+            id=\"callable\",\n+        ),\n+    ],\n+)\n+def test_create_scoring_inputs_mapping_target_is_source_of_another_mapping(mapping):\n+    \"\"\"A mapping target must not change the value read by a later mapping\"\"\"\n+    dataset_item = {\"question\": \"Capital of France?\", \"output\": \"Paris\"}\n+    task_output = {\"answer\": \"London\"}\n+\n+    result = create_scoring_inputs(\n+        dataset_item=dataset_item,\n+        task_output=task_output,\n+        scoring_key_mapping=mapping,\n+    )\n+\n+    assert result[\"output\"] == \"London\"\n+    assert result[\"reference\"] == \"Paris\""
+  }
+ ],
+ "test_files": [
+  "sdks/python/tests/unit/evaluation/test_create_scoring_inputs.py"
+ ]
+}

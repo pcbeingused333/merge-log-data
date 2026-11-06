@@ -1,0 +1,26 @@
+{
+ "repo": "looplj/axonhub",
+ "number": 2907,
+ "url": "https://github.com/looplj/axonhub/pull/2907",
+ "title": "fix(responses): map content_filter and cancelled finish reasons in non-streaming responses",
+ "merged_at": "2026-11-06T13:57:57Z",
+ "files": [
+  {
+   "filename": "llm/transformer/openai/responses/inbound.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -1221,10 +1221,16 @@ func convertToResponsesAPIResponse(chatResp *llm.Response) *Response {\n \t\t\t\tresp.Status = lo.ToPtr(\"completed\")\n \t\t\tcase \"length\":\n \t\t\t\tresp.Status = lo.ToPtr(\"incomplete\")\n+\t\t\t\tresp.IncompleteDetails = &ResponseIncompleteDetails{Reason: \"max_output_tokens\"}\n+\t\t\tcase \"content_filter\":\n+\t\t\t\tresp.Status = lo.ToPtr(\"incomplete\")\n+\t\t\t\tresp.IncompleteDetails = &ResponseIncompleteDetails{Reason: \"content_filter\"}\n \t\t\tcase \"tool_calls\":\n \t\t\t\tresp.Status = lo.ToPtr(\"completed\")\n \t\t\tcase \"error\":\n \t\t\t\tresp.Status = lo.ToPtr(\"failed\")\n+\t\t\tcase \"cancelled\", \"canceled\":\n+\t\t\t\tresp.Status = lo.ToPtr(\"cancelled\")\n \t\t\t}\n \t\t}\n \t}"
+  },
+  {
+   "filename": "llm/transformer/openai/responses/inbound_test.go",
+   "status": "modified",
+   "additions": 47,
+   "deletions": 0,
+   "patch": "@@ -2440,3 +2440,50 @@ func TestInboundTransformer_TransformResponse_WithReasoningContent(t *testing.T)\n \t\t})\n \t}\n }\n+\n+func TestInboundTransformer_TransformResponse_FinishReasonStatus(t *testing.T) {\n+\ttrans := NewInboundTransformer()\n+\n+\ttests := []struct {\n+\t\tname          string\n+\t\tfinishReason  string\n+\t\twantStatus    string\n+\t\twantIncReason string\n+\t}{\n+\t\t{\"content_filter\", \"content_filter\", \"incomplete\", \"content_filter\"},\n+\t\t{\"length\", \"length\", \"incomplete\", \"max_output_tokens\"},\n+\t\t{\"cancelled\", \"cancelled\", \"cancelled\", \"\"},\n+\t\t{\"stop\", \"stop\", \"completed\", \"\"},\n+\t}\n+\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tresult, err := trans.TransformResponse(context.Background(), &llm.Response{\n+\t\t\t\tID:     \"chatcmpl-1\",\n+\t\t\t\tObject: \"chat.completion\",\n+\t\t\t\tModel:  \"gpt-4\",\n+\t\t\t\tChoices: []llm.Choice{{\n+\t\t\t\t\tIndex: 0,\n+\t\t\t\t\tMessage: &llm.Message{\n+\t\t\t\t\t\tRole:    \"assistant\",\n+\t\t\t\t\t\tContent: llm.MessageContent{Content: lo.ToPtr(\"partial\")},\n+\t\t\t\t\t},\n+\t\t\t\t\tFinishReason: lo.ToPtr(tt.finishReason),\n+\t\t\t\t}},\n+\t\t\t})\n+\t\t\trequire.NoError(t, err)\n+\n+\t\t\tvar resp Response\n+\t\t\trequire.NoError(t, json.Unmarshal(result.Body, &resp))\n+\t\t\trequire.NotNil(t, resp.Status)\n+\t\t\trequire.Equal(t, tt.wantStatus, *resp.Status)\n+\n+\t\t\tif tt.wantIncReason == \"\" {\n+\t\t\t\trequire.Nil(t, resp.IncompleteDetails)\n+\t\t\t} else {\n+\t\t\t\trequire.NotNil(t, resp.IncompleteDetails)\n+\t\t\t\trequire.Equal(t, tt.wantIncReason, resp.IncompleteDetails.Reason)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "llm/transformer/openai/responses/inbound_test.go"
+ ]
+}

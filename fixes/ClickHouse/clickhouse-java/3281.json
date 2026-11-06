@@ -1,0 +1,33 @@
+{
+ "repo": "ClickHouse/clickhouse-java",
+ "number": 3281,
+ "url": "https://github.com/ClickHouse/clickhouse-java/pull/3281",
+ "title": "fix(jdbc-v2): throw on closed connection in commit, rollback, getCatalog, getNetworkTimeout, setClientInfo",
+ "merged_at": "2026-11-03T19:10:46Z",
+ "files": [
+  {
+   "filename": "history/latest/3270.md",
+   "status": "added",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,6 @@\n+- **[jdbc-v2]** `Connection#commit`, `rollback`, `getCatalog`, `getNetworkTimeout` and both `setClientInfo` overloads\n+  now throw an `SQLException` (`SQLClientInfoException` for `setClientInfo`) with SQLState `08000` connection\n+  exception \"Connection is closed\" after the connection was closed, as the JDBC contract requires. Before, they returned a\n+  value or silently did nothing, and with `jdbc_ignore_unsupported_values=true` `commit`/`rollback` did not report the\n+  closed connection either. `close()`, `isClosed()` and `isValid()` are unchanged.\n+  (https://github.com/ClickHouse/clickhouse-java/issues/3270)"
+  },
+  {
+   "filename": "jdbc-v2/src/main/java/com/clickhouse/jdbc/ConnectionImpl.java",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 1,
+   "patch": "@@ -41,6 +41,7 @@\n import java.time.Duration;\n import java.time.temporal.ChronoUnit;\n import java.util.Calendar;\n+import java.util.Collections;\n import java.util.HashSet;\n import java.util.Map;\n import java.util.Properties;\n@@ -284,11 +285,13 @@ public boolean getAutoCommit() throws SQLException {\n \n     @Override\n     public void commit() throws SQLException {\n+        ensureOpen();\n         featureManager.unsupportedFeatureThrow(\"commit()\");\n     }\n \n     @Override\n     public void rollback() throws SQLException {\n+        ensureOpen();\n         featureManager.unsupportedFeatureThrow(\"rollback()\");\n     }\n \n@@ -302,7 +305,7 @@ public void close() throws SQLException {\n     }\n \n     @Override\n-    public boolean isClosed() throws SQLException {\n+    public boolean isClosed() {\n         return closed;\n     }\n \n@@ -335,6 +338,7 @@ public void setCatalog(String catalog) throws SQLException {\n \n     @Override\n     public String getCatalog() throws SQLException {\n+        ensureOpen();\n         return catalog;\n     }\n \n@@ -574,6 +578,7 @@ public boolean isValid(int timeout) throws SQLException {\n \n     @Override\n     public void setClientInfo(String name, String value) throws SQLClientInfoException {\n+        ensureOpenForClientInfo();\n         if (ClientInfoProperties.APPLICATION_NAME.getKey().equals(name)) {\n             config.updateUserClient(value, client);\n             appName = value;\n@@ -583,6 +588,7 @@ public void setClientInfo(String name, String value) throws SQLClientInfoExcepti\n \n     @Override\n     public void setClientInfo(Properties properties) throws SQLClientInfoException {\n+        ensureOpenForClientInfo();\n         Set<String> toSet = new HashSet<>();\n         Set<String> toReset = new HashSet<>();\n         for (ClientInfoProperties p : ClientInfoProperties .values()) {\n@@ -735,6 +741,7 @@ public synchronized void onNetworkTimeout() {\n \n     @Override\n     public int getNetworkTimeout() throws SQLException {\n+        ensureOpen();\n         return defaultQuerySettings.getNetworkTimeout().intValue();\n     }\n \n@@ -754,6 +761,13 @@ public Client getClient() throws SQLException {\n         return client;\n     }\n \n+    private void ensureOpenForClientInfo() throws SQLClientInfoException {\n+        if (isClosed()) {\n+            throw new SQLClientInfoException(\"Connection is closed\",\n+                    ExceptionUtils.SQL_STATE_CONNECTION_EXCEPTION, Collections.emptyMap());\n+        }\n+    }\n+\n     private void ensureOpen() throws SQLException {\n         if (isClosed()) {\n             throw new SQLException(\"Connection is closed\", ExceptionUtils.SQL_STATE_CONNECTION_EXCEPTION);"
+  },
+  {
+   "filename": "jdbc-v2/src/test/java/com/clickhouse/jdbc/ConnectionTest.java",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 0,
+   "patch": "@@ -33,6 +33,7 @@\n import java.sql.JDBCType;\n import java.sql.PreparedStatement;\n import java.sql.ResultSet;\n+import java.sql.SQLClientInfoException;\n import java.sql.SQLException;\n import java.sql.SQLFeatureNotSupportedException;\n import java.sql.Statement;\n@@ -178,6 +179,28 @@ public void testCommitRollback() throws SQLException {\n     }\n \n \n+    @Test(groups = { \"integration\" })\n+    public void testClosedConnectionThrows() throws SQLException {\n+        for (boolean ignoreUnsupported : new boolean[] { false, true }) {\n+            Properties prop = new Properties();\n+            prop.setProperty(DriverProperties.IGNORE_UNSUPPORTED_VALUES.getKey(), String.valueOf(ignoreUnsupported));\n+            Connection conn = this.getJdbcConnection(prop);\n+            conn.close();\n+\n+            assertThrows(SQLException.class, conn::getNetworkTimeout);\n+            assertThrows(SQLException.class, conn::getCatalog);\n+            assertThrows(SQLException.class, conn::commit);\n+            assertThrows(SQLException.class, conn::rollback);\n+            assertThrows(SQLClientInfoException.class, () -> conn.setClientInfo(\"ApplicationName\", \"x\"));\n+            assertThrows(SQLClientInfoException.class, () -> conn.setClientInfo(new Properties()));\n+\n+            // these stay allowed on a closed connection\n+            conn.close();\n+            Assert.assertTrue(conn.isClosed());\n+            Assert.assertFalse(conn.isValid(1));\n+        }\n+    }\n+\n     @Test(groups = { \"integration\" })\n     public void closeTest() throws SQLException {\n         Connection localConnection = this.getJdbcConnection();"
+  }
+ ],
+ "test_files": [
+  "jdbc-v2/src/test/java/com/clickhouse/jdbc/ConnectionTest.java"
+ ]
+}

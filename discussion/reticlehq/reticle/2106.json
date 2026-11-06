@@ -1,0 +1,33 @@
+{
+ "repo": "reticlehq/reticle",
+ "number": 2106,
+ "url": "https://github.com/reticlehq/reticle/pull/2106",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-02T02:49:41Z",
+   "body": "Thank you. The design is correct: the loop stops at a budget or at a lost session and names what did not run. Four changes are necessary before this can merge.\n\n1. **CI fails on the `directory-reach` guard** (`suite -> session`). `sessionProbe` in `suite/sequential-run.ts` imports `SessionManager`. Move `sessionProbe` to the caller (`flow-tools.ts` / `verify-change-tools.ts`), or give `runSequentially` only the `sessionAlive` function it already takes. `suite/` then stays free of session code. Do not add the reach to `REACHES_FOR`.\n2. **Free strings (AGENTS.md rule 3).** `'partial'` is written inline in `withStop`, and `stopped.reason` is `z.string()` in `PARTIAL_OUTPUT`. Put the status and the reasons in named constants in `core` next to `SuiteVerdict`, and use `z.enum(...)` for `reason`. Then `core` and the output schema cannot drift.\n3. **Wire contract changed.** `SuiteVerdict.status` gained a value in `core`. Per `docs/gates.md`, run `pnpm test:e2e` and say in the PR that it passed. Also check every consumer of `SuiteVerdict.status` (for example the HUD, telemetry and the spec runner) for a `pass`/`fail` switch that now reads `partial` as neither.\n4. **Default behaviour change.** Before this PR, a suite that takes 250 s returned `pass`. With a 240 s default it returns `partial`. That is correct for an MCP client, but say in the PR description and in the `.changes` entry that the default now applies, and confirm that no non-MCP caller (CLI or CI) goes through this loop. If one does, that caller needs no default budget.\n\nAlso: the windows and gate jobs fail because of item 1. Push again after the fix, and I will review it again.\n"
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-02T11:02:20Z",
+   "body": "Reviewed again. All four items are done:\n- `suite/` no longer reaches into `session`.\n- The status and the stop reasons are named constants in `core`, with `z.enum` in the output schema.\n- `verdictForSuite` reads `partial` as `no` when a flow failed and `unknown` otherwise, never `yes`, and the CLI exits non-zero.\n- `reticle verify` passes its own 30-minute budget, so CI runs are not cut at 240 s.\n\nThe e2e battery is green on this push, which covers the `SuiteVerdict` wire change. Thank you."
+  }
+ ],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-11-01T23:40:34Z",
+   "body": "Thanks for your first pull request to Reticle! A maintainer aims to review within two days. Before then, `pnpm verify` locally catches most of what CI will, and [CONTRIBUTING.md](https://github.com/reticlehq/reticle/blob/main/CONTRIBUTING.md) explains the rest. If CI does not start, a maintainer needs to approve it for first-time contributors; that is normal."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-02T10:38:43Z",
+   "body": "Thanks for the review. The two new commits address the four points:\n\n1. **directory-reach:** `sessionProbe` now lives in `flow-tools.ts`, its only caller, and `suite/sequential-run.ts` no longer imports anything from `session`. `REACHES_FOR` is unchanged, and `server/src/language/flows` keeps its recorded file count.\n2. **Named constants:** `SuiteVerdictStatus` and `SuiteStopReason` are now in `core/src/artifacts/flow-constants.ts`, next to the other flow constants. `SuiteVerdict.status` and `stopped.reason` use these types, `withStop` sets `SuiteVerdictStatus.PARTIAL`, and `PARTIAL_OUTPUT` uses `z.enum` for `reason`.\n3. **Consumers of `SuiteVerdict.status`:** `verdictForSuite` maps `partial` to UNKNOWN/NO, `verification-of` does not treat `partial` as a verdict, and the CLI exits non-zero on `partial`. The e2e battery was not run locally. It runs in this PR's CI (`e2e 1/3–3/3`, which passed on the previous push), so the result for this push will show there.\n4. **Default budget:** `reticle verify` is the only non-MCP caller of the sequential loop. It now passes its own 30-minute `SUITE_TIMEOUT_MS` as `budgetMs`, so CI runs are not cut at 240 s. The `.changes` entry documents the new default and the `pass` → `partial` change for callers that do not pass `budgetMs`.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
+}

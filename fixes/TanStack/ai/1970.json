@@ -1,0 +1,33 @@
+{
+ "repo": "TanStack/ai",
+ "number": 1970,
+ "url": "https://github.com/TanStack/ai/pull/1970",
+ "title": "fix(ai-gemini): include thinking tokens in completionTokens",
+ "merged_at": "2026-11-02T13:12:14Z",
+ "files": [
+  {
+   "filename": ".changeset/gemini-completion-tokens-include-thoughts.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@tanstack/ai-gemini': patch\n+---\n+\n+Count thinking tokens in `completionTokens`. Gemini reports `thoughtsTokenCount` separately from `candidatesTokenCount` but bills both as output, so `completionTokens` was lower than `totalTokens - promptTokens` for thinking models. `completionTokensDetails.reasoningTokens` is unchanged."
+  },
+  {
+   "filename": "packages/ai-gemini/src/usage.ts",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -121,7 +121,12 @@ export function buildGeminiUsage(\n   if (!usageMetadata) return undefined\n \n   const promptTokens = usageMetadata.promptTokenCount ?? 0\n-  const completionTokens = usageMetadata.candidatesTokenCount ?? 0\n+  // Gemini reports thinking tokens apart from candidatesTokenCount but bills\n+  // them as output, so completionTokens includes them (reasoningTokens is the\n+  // detail of that total, as with OpenAI).\n+  const completionTokens =\n+    (usageMetadata.candidatesTokenCount ?? 0) +\n+    (usageMetadata.thoughtsTokenCount ?? 0)\n \n   const result = buildBaseUsage<GeminiProviderUsageDetails>({\n     promptTokens: promptTokens,"
+  },
+  {
+   "filename": "packages/ai-gemini/tests/usage-extraction.test.ts",
+   "status": "modified",
+   "additions": 40,
+   "deletions": 0,
+   "patch": "@@ -185,6 +185,46 @@ describe('Gemini usage extraction', () => {\n     })\n   })\n \n+  it('counts thoughts tokens in completionTokens', async () => {\n+    const mockStream = createMockStream([\n+      {\n+        candidates: [\n+          {\n+            content: {\n+              parts: [{ text: 'Hello world' }],\n+            },\n+            finishReason: 'STOP',\n+          },\n+        ],\n+        usageMetadata: {\n+          promptTokenCount: 100,\n+          candidatesTokenCount: 50,\n+          thoughtsTokenCount: 30,\n+          totalTokenCount: 180,\n+        },\n+      },\n+    ])\n+\n+    mocks.generateContentStreamSpy.mockResolvedValueOnce(mockStream)\n+\n+    const chunks: Array<AdapterYieldChunk> = []\n+    for await (const chunk of chat({\n+      threadId: 'thread-1',\n+      adapter: createAdapter(),\n+      messages: [{ role: 'user', content: 'Hello' }],\n+    })) {\n+      chunks.push(chunk)\n+    }\n+\n+    const doneChunk = chunks.find((c) => c.type === 'RUN_FINISHED')\n+    expect(tokenUsageOf(doneChunk)).toMatchObject({\n+      promptTokens: 100,\n+      completionTokens: 80,\n+      totalTokens: 180,\n+      completionTokensDetails: { reasoningTokens: 30 },\n+    })\n+  })\n+\n   it('extracts modality token breakdown for prompt', async () => {\n     const mockStream = createMockStream([\n       {"
+  }
+ ],
+ "test_files": [
+  "packages/ai-gemini/tests/usage-extraction.test.ts"
+ ]
+}

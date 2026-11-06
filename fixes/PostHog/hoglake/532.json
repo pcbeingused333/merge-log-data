@@ -1,0 +1,26 @@
+{
+ "repo": "PostHog/hoglake",
+ "number": 532,
+ "url": "https://github.com/PostHog/hoglake/pull/532",
+ "title": "fix(server): parse HOGLAKE_S3_PATH_STYLE with boolEnv",
+ "merged_at": "2026-11-05T01:15:11Z",
+ "files": [
+  {
+   "filename": "server/src/main/kotlin/com/posthog/hoglake/Config.kt",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -154,7 +154,7 @@ data class Config(\n     val s3Region: String = env(\"HOGLAKE_S3_REGION\", \"us-east-1\"),\n     val s3AccessKey: String = env(\"HOGLAKE_S3_ACCESS_KEY\", \"\"),\n     val s3SecretKey: String = env(\"HOGLAKE_S3_SECRET_KEY\", \"\"),\n-    val s3PathStyle: Boolean = env(\"HOGLAKE_S3_PATH_STYLE\", \"true\").toBoolean(),\n+    val s3PathStyle: Boolean = boolEnv(\"HOGLAKE_S3_PATH_STYLE\", true),\n     /**\n      * Authentication at the HTTP boundary (docs/auth-tenancy.md):\n      * `off` | `warn` | `enforce` (§11)."
+  },
+  {
+   "filename": "server/src/test/kotlin/com/posthog/hoglake/S3PathStyleEnvTest.kt",
+   "status": "added",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,49 @@\n+package com.posthog.hoglake\n+\n+import org.assertj.core.api.Assertions.assertThat\n+import org.junit.jupiter.api.Test\n+import java.util.concurrent.TimeUnit\n+\n+/**\n+ * `HOGLAKE_S3_PATH_STYLE` is parsed with `boolEnv`, which refuses anything\n+ * but `true`/`false`. It used to go through `String.toBoolean()`, which\n+ * read `1`, `yes` or `on` as FALSE: a deployment that set `=1` on a\n+ * path-style endpoint (MinIO) silently switched to virtual-hosted\n+ * addressing and every request failed on DNS.\n+ *\n+ * `Config` reads the real process environment and no test can set a\n+ * variable in its own JVM, so this boots [ConfigBootProbe] in a child JVM\n+ * that really has it set (the same technique as `RemovedEnvConfigTest`).\n+ */\n+class S3PathStyleEnvTest {\n+    private fun boot(value: String): Pair<Int, String> {\n+        val java = System.getProperty(\"java.home\") + \"/bin/java\"\n+        val builder =\n+            ProcessBuilder(java, \"-cp\", System.getProperty(\"java.class.path\"), ConfigBootProbe::class.java.name)\n+                .redirectErrorStream(true)\n+        builder.environment()[\"HOGLAKE_S3_PATH_STYLE\"] = value\n+        val process = builder.start()\n+        val output = process.inputStream.bufferedReader().readText()\n+        assertThat(process.waitFor(120, TimeUnit.SECONDS))\n+            .describedAs(\"the probe JVM did not exit; output so far:%n%s\", output)\n+            .isTrue()\n+        return process.exitValue() to output\n+    }\n+\n+    @Test\n+    fun `a spelling that is not true or false is refused, naming the variable`() {\n+        // MUTATION: put `.toBoolean()` back and `1` boots as false.\n+        val (code, output) = boot(\"1\")\n+        assertThat(code).describedAs(\"probe output:%n%s\", output).isEqualTo(2)\n+        assertThat(output).contains(\"HOGLAKE_S3_PATH_STYLE must be 'true' or 'false', got '1'\")\n+    }\n+\n+    @Test\n+    fun `true and false both boot`() {\n+        for (value in listOf(\"true\", \"false\", \"TRUE\")) {\n+            val (code, output) = boot(value)\n+            assertThat(code).describedAs(\"value %s, probe output:%n%s\", value, output).isZero()\n+            assertThat(output).contains(\"CONSTRUCTED\")\n+        }\n+    }\n+}"
+  }
+ ],
+ "test_files": [
+  "server/src/test/kotlin/com/posthog/hoglake/S3PathStyleEnvTest.kt"
+ ]
+}

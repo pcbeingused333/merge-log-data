@@ -1,0 +1,27 @@
+{
+ "repo": "Tencent/AI-Infra-Guard",
+ "number": 740,
+ "url": "https://github.com/Tencent/AI-Infra-Guard/pull/740",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-04T02:16:25Z",
+   "body": "Thanks @pcbeingused333 — this is a clean, well-targeted fix. The zero-value `&http.Client{}` in these helpers was a real latent hang risk when the task server accepts the connection but never replies, and the `ResponseHeaderTimeout` (transfers) vs `Client.Timeout` (small JSON calls) split is the right distinction. I verified locally on `c0ff6c4`: `go build ./common/utils/` and `go vet ./common/utils/` are clean, and `TestAPICallsTimeOutOnUnresponsiveServer` passes (5/5 sub-calls fail fast instead of blocking).\n\nA few substantive points to consider (not blocking, happy to see follow-ups):\n\n1. **Body-read stall not covered by `ResponseHeaderTimeout`.** `ResponseHeaderTimeout` only bounds the wait for *response headers*. `DownloadFile`/`UploadFile` set no overall `Client.Timeout`, so a server that sends headers then stalls mid-body (slowloris-style) would still block `io.Copy`/`client.Do` indefinitely. The PR description explicitly accepts unbounded transfer duration, so this may be intentional — but if you want protection against a stalled body, consider wrapping the body in `http.MaxBytesReader` or a `io.LimitReader`/deadline on the copy, or at least documenting the tradeoff in the package comment.\n\n2. **Type assertion on `http.DefaultTransport`.** `newTransferClient` does `http.DefaultTransport.(*http.Transport).Clone()`. This is fine for the stdlib default, but would panic if `DefaultTransport` is ever replaced with a non-`*http.Transport`. A small defensive `if t, ok := http.DefaultTransport.(*http.Transport); ok { ... }` (falling back to `&http.Transport{}`) would make it robust. Low priority.\n\n3. **Test coverage gap.** `UploadFile` (also `newTransferClient`) isn't exercised by the new test. It's structurally similar so risk is low, but adding it would close the last untested path.\n\nThese are polish items, not blockers. The core fix is correct and safe. One note: the branch currently shows `mergeable_state: unstable` (likely the branch is behind `main` or a CI rebase is pending) — once that clears and CI is green, this is a good merge candidate. Appreciate the `Co-authored`/AI-assistance disclosure in the description."
+  }
+ ],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-04T02:27:11Z",
+   "body": "Thanks for the review. Pushed a follow-up commit: (2) `newTransferClient` now falls back to a fresh `http.Transport` if `http.DefaultTransport` is not an `*http.Transport`; (3) the unresponsive-server test now covers `UploadFile`; (1) I kept transfer duration unbounded on purpose, so the package comment now states that `ResponseHeaderTimeout` does not cut off a server that stalls mid-body.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "collaborator",
+   "created_at": "2026-11-05T02:10:52Z",
+   "body": "Merged via squash (autonomous morning-daily merge, authorized 2026-10-03).\n\n**Verification summary**\n- Local (squash head `bfb8e4d6`): `go build ./common/utils/` OK, `go vet ./common/utils/` OK, `go test ./common/utils/` OK (`TestAPICallsTimeOutOnUnresponsiveServer` passes).\n- Full `go test ./...` on the PR branch: 0 failing packages, matching `main` baseline (0 failing) — no regression.\n- CI: `Build and test Go packages` and `GITHUB_OPENSOURCE_SCAN_PIPELINE` both **success**.\n- `mergeable_state: clean`, no conflicts.\n\n**Eligibility (all 7 autonomous-merge gates passed)**\n1. Prior boy-hack review present ✓\n2. Author pushed follow-up fixes after review (defensive Transport fallback + UploadFile test coverage) ✓\n3. Fix verified locally ✓\n4. No regression vs main ✓\n5. CI green ✓\n6. mergeable / clean ✓\n7. Not in exclusion list (not doc-bot, not vuln-batch, not version bump, not large/security-sensitive) ✓\n\nMerge SHA: `de5d9f4f901e5f4bb86adb7d048a16d7a76ee7fc`\n\nThanks @pcbeingused333 for the clean, well-targeted fix!"
+  }
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "Agent-Field/agentfield",
+ "number": 1152,
+ "url": "https://github.com/Agent-Field/agentfield/pull/1152",
+ "title": "fix(agentic): honor limit and offset for resource=runs in /agentic/query",
+ "merged_at": "2026-11-04T14:03:42Z",
+ "files": [
+  {
+   "filename": "control-plane/internal/handlers/agentic/query.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -74,7 +74,7 @@ func QueryHandler(store storage.StorageProvider) gin.HandlerFunc {\n }\n \n func queryRuns(c *gin.Context, ctx context.Context, store storage.StorageProvider, req QueryRequest) {\n-\tfilter := types.ExecutionFilter{}\n+\tfilter := types.ExecutionFilter{Limit: req.Limit, Offset: req.Offset}\n \tif req.Filters.Status != \"\" {\n \t\tfilter.Status = &req.Filters.Status\n \t}"
+  },
+  {
+   "filename": "control-plane/internal/handlers/agentic/query_handler_test.go",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -417,3 +417,27 @@ func TestQueryHandler_OffsetPastEndReturnsEmptyPage(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestQueryHandler_RunsForwardsLimitAndOffset(t *testing.T) {\n+\tvar got types.ExecutionFilter\n+\tstore := &handlerTestStorage{\n+\t\tmockStatusStorage: &mockStatusStorage{},\n+\t\tqueryRunSummariesFn: func(_ context.Context, filter types.ExecutionFilter) ([]*storage.RunSummaryAggregation, int, error) {\n+\t\t\tgot = filter\n+\t\t\treturn []*storage.RunSummaryAggregation{{RunID: \"run-1\"}}, 1, nil\n+\t\t},\n+\t}\n+\n+\trouter := gin.New()\n+\trouter.POST(\"/query\", QueryHandler(store))\n+\n+\tbody := `{\"resource\":\"runs\",\"limit\":5,\"offset\":10}`\n+\treq := httptest.NewRequest(http.MethodPost, \"/query\", bytes.NewBufferString(body))\n+\treq.Header.Set(\"Content-Type\", \"application/json\")\n+\trec := httptest.NewRecorder()\n+\trouter.ServeHTTP(rec, req)\n+\n+\trequire.Equal(t, http.StatusOK, rec.Code)\n+\tassert.Equal(t, 5, got.Limit)\n+\tassert.Equal(t, 10, got.Offset)\n+}"
+  }
+ ],
+ "test_files": [
+  "control-plane/internal/handlers/agentic/query_handler_test.go"
+ ]
+}

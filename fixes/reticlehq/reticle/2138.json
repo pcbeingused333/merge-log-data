@@ -1,0 +1,33 @@
+{
+ "repo": "reticlehq/reticle",
+ "number": 2138,
+ "url": "https://github.com/reticlehq/reticle/pull/2138",
+ "title": "fix(react): rebind an auto-registered store after a hot reload",
+ "merged_at": "2026-11-03T02:49:29Z",
+ "files": [
+  {
+   "filename": ".changes/1949-hmr-rebinds-auto-store.md",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+### Fixed\n+\n+- **`@reticlehq/react` — after a hot reload, `reticle_look state` read the store instance from before the reload.** Auto-discovery registered a store once per name and skipped the name afterwards, so when HMR re-ran the module that creates the store, the new instance was never picked up and every later read stayed bound to the old one. A store the adapter registered itself is now replaced when discovery finds a different instance under the same name. Closes [#1949](https://github.com/reticlehq/reticle/issues/1949)."
+  },
+  {
+   "filename": "adapters/framework/react/src/auto-stores.test.ts",
+   "status": "modified",
+   "additions": 37,
+   "deletions": 1,
+   "patch": "@@ -1,5 +1,5 @@\n import { describe, it, expect, beforeEach } from 'vitest';\n-import { storeNames, registerStore, unregisterStore } from '@reticlehq/browser';\n+import { storeNames, registerStore, unregisterStore, readStores } from '@reticlehq/browser';\n import {\n   autoRegisterStores,\n   classifyProviderValue,\n@@ -190,6 +190,42 @@ describe('autoRegisterStores', () => {\n     expect(autoRegisterStores(document)).toEqual([]);\n   });\n \n+  it('rebinds the name to the new store after a hot reload replaces the instance', () => {\n+    const mount = (state: { n: number }): void => {\n+      document.body.innerHTML = '';\n+      const store = { getState: () => state, subscribe: () => () => {} };\n+      const provider = providerFiber({ store });\n+      const host: FakeFiber = { return: provider, type: 'div' };\n+      provider.child = host;\n+      const el = document.createElement('div');\n+      (el as unknown as Record<string, unknown>)['__reactFiber$auto'] = host;\n+      document.body.appendChild(el);\n+    };\n+    mount({ n: 1 });\n+    expect(autoRegisterStores(document)).toEqual([AUTO_STORE_KEY.REDUX]);\n+\n+    // HMR re-runs the module that creates the store: same name, new instance.\n+    mount({ n: 2 });\n+    expect(autoRegisterStores(document)).toEqual([AUTO_STORE_KEY.REDUX]);\n+    expect(readStores(AUTO_STORE_KEY.REDUX)).toEqual({ [AUTO_STORE_KEY.REDUX]: { n: 2 } });\n+  });\n+\n+  it('does no writes on repeat passes over the same unchanged stores', () => {\n+    // A QueryClient is wrapped in a NEW adapter store on every discovery pass, so the comparison that\n+    // decides \"replace\" must look at the client itself, not at what discovery builds around it.\n+    const client = queryClient();\n+    const provider = providerFiber(client);\n+    const host: FakeFiber = { return: provider, type: 'div' };\n+    provider.child = host;\n+    const el = document.createElement('div');\n+    (el as unknown as Record<string, unknown>)['__reactFiber$auto'] = host;\n+    document.body.appendChild(el);\n+\n+    expect(autoRegisterStores(document)).toEqual([AUTO_STORE_KEY.QUERY]);\n+    expect(autoRegisterStores(document)).toEqual([]);\n+    expect(autoRegisterStores(document)).toEqual([]);\n+  });\n+\n   it('never throws on a hostile fiber tree', () => {\n     const el = document.createElement('div');\n     const hostile = {"
+  },
+  {
+   "filename": "adapters/framework/react/src/auto-stores.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -246,7 +246,11 @@ export function autoRegisterStores(doc: Document): string[] {\n     // added `query` beside it — one cache listed twice in every state read. Comparing read values\n     // cannot catch it either, because that adapter builds a fresh snapshot on every `getState`.\n     if (sourceOwner(source) !== undefined) continue;\n-    if (taken.has(key) || registered.has(key)) continue;\n+    // A name we registered ourselves for a DIFFERENT source is stale: HMR re-ran the module that\n+    // creates the store, so the page now holds a new instance under the same name. Replace it —\n+    // registerStore swaps the getter and subscription — instead of reading the old instance forever.\n+    const replacesOurs = registered.has(key) && registered.get(key) !== source;\n+    if (!replacesOurs && (taken.has(key) || registered.has(key))) continue;\n     try {\n       registerStore(key, store);\n     } catch {"
+  }
+ ],
+ "test_files": [
+  "adapters/framework/react/src/auto-stores.test.ts"
+ ]
+}

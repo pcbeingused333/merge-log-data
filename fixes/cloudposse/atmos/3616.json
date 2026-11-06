@@ -1,0 +1,26 @@
+{
+ "repo": "cloudposse/atmos",
+ "number": 3616,
+ "url": "https://github.com/cloudposse/atmos/pull/3616",
+ "title": "fix(list): escape CSV/TSV cells in list vendor output",
+ "merged_at": "2026-11-05T01:10:55Z",
+ "files": [
+  {
+   "filename": "pkg/list/list_vendor_format.go",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 15,
+   "patch": "@@ -1,6 +1,7 @@\n package list\n \n import (\n+\t\"encoding/csv\"\n \t\"errors\"\n \t\"fmt\"\n \t\"strings\"\n@@ -88,30 +89,24 @@ func buildVendorDataMap(rows []map[string]interface{}, capitalizeKeys bool) map[\n }\n \n // buildVendorCSVTSV returns CSV/TSV output for vendor rows with proper header order and value rows.\n+// Values are written with encoding/csv so delimiters, quotes, and newlines inside a cell are escaped.\n func buildVendorCSVTSV(headers []string, rows []map[string]interface{}, delimiter string) string {\n \tvar b strings.Builder\n-\t// Write header row\n-\tfor i, h := range headers {\n-\t\tb.WriteString(h)\n-\t\tif i < len(headers)-1 {\n-\t\t\tb.WriteString(delimiter)\n-\t\t}\n+\tw := csv.NewWriter(&b)\n+\tif delimiter != \"\" {\n+\t\tw.Comma = []rune(delimiter)[0]\n \t}\n-\tb.WriteString(NewLine)\n-\t// Write value rows\n+\t_ = w.Write(headers)\n \tfor _, row := range rows {\n+\t\trecord := make([]string, len(headers))\n \t\tfor i, h := range headers {\n-\t\t\tval := \"\"\n \t\t\tif v, ok := row[h]; ok && v != nil {\n-\t\t\t\tval = fmt.Sprintf(\"%v\", v)\n-\t\t\t}\n-\t\t\tb.WriteString(val)\n-\t\t\tif i < len(headers)-1 {\n-\t\t\t\tb.WriteString(delimiter)\n+\t\t\t\trecord[i] = fmt.Sprintf(\"%v\", v)\n \t\t\t}\n \t\t}\n-\t\tb.WriteString(NewLine)\n+\t\t_ = w.Write(record)\n \t}\n+\tw.Flush()\n \treturn b.String()\n }\n "
+  },
+  {
+   "filename": "pkg/list/list_vendor_test.go",
+   "status": "modified",
+   "additions": 26,
+   "deletions": 0,
+   "patch": "@@ -1,6 +1,7 @@\n package list\n \n import (\n+\t\"encoding/csv\"\n \t\"errors\"\n \t\"fmt\"\n \t\"io/fs\"\n@@ -351,6 +352,31 @@ func TestBuildVendorCSVTSV(t *testing.T) {\n \t})\n }\n \n+// TestBuildVendorCSVTSV_EscapesDelimiters verifies that values containing the delimiter,\n+// quotes, or newlines do not corrupt the row structure.\n+func TestBuildVendorCSVTSV_EscapesDelimiters(t *testing.T) {\n+\theaders := []string{\"Component\", \"Type\", \"Manifest\", \"Folder\", \"Tags\"}\n+\trows := []map[string]interface{}{\n+\t\t{\"Component\": \"vpc\", \"Type\": \"Vendor Manifest\", \"Manifest\": \"vendor.yaml\", \"Folder\": \"components/terraform/vpc\", \"Tags\": \"a, b\"},\n+\t\t{\"Component\": `say \"hi\"`, \"Type\": \"Component Manifest\", \"Manifest\": \"component.yaml\", \"Folder\": \"x\", \"Tags\": \"c\"},\n+\t}\n+\tfor name, delim := range map[string]rune{\"CSV\": ',', \"TSV\": '\\t'} {\n+\t\tt.Run(name, func(t *testing.T) {\n+\t\t\tout := buildVendorCSVTSV(headers, rows, string(delim))\n+\t\t\tr := csv.NewReader(strings.NewReader(out))\n+\t\t\tr.Comma = delim\n+\t\t\trecords, err := r.ReadAll()\n+\t\t\tassert.NoError(t, err)\n+\t\t\tassert.Len(t, records, 3)\n+\t\t\tfor _, rec := range records {\n+\t\t\t\tassert.Len(t, rec, len(headers))\n+\t\t\t}\n+\t\t\tassert.Equal(t, \"a, b\", records[1][4])\n+\t\t\tassert.Equal(t, `say \"hi\"`, records[2][0])\n+\t\t})\n+\t}\n+}\n+\n // TestRenderVendorTableOutput covers empty/filled rows and missing fields.\n func TestRenderVendorTableOutput(t *testing.T) {\n \theaders := []string{\"A\", \"B\"}"
+  }
+ ],
+ "test_files": [
+  "pkg/list/list_vendor_test.go"
+ ]
+}

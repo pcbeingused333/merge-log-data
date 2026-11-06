@@ -1,0 +1,43 @@
+{
+ "repo": "OpenCSGs/csghub-server",
+ "number": 1618,
+ "url": "https://github.com/OpenCSGs/csghub-server/pull/1618",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "DISMISSED",
+   "submitted_at": "2026-11-03T01:27:01Z",
+   "body": ""
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-03T02:55:28Z",
+   "body": "LGTM"
+  }
+ ],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "collaborator",
+   "created_at": "2026-11-02T15:16:55Z",
+   "body": "1. [P1] Non-completed responses can still trigger tool execution.\r\n\r\nresponsesStopReason only checks whether the base mapping returns end_turn. However, the base mapping also returns end_turn for statuses such as failed and in_progress.\r\n\r\nAs a result, any such response containing a function_call will have its stop reason overridden to tool_use, potentially triggering tool execution even though the response has not completed successfully.\r\n\r\nRecommendation: Only override the stop reason when status == \"completed\", and add tests covering non-completed statuses.\r\n\r\n2. [P2] The new truncation test does not verify the actual HTTP response.\r\n\r\nThe test uses incomplete tool arguments ({\"city\":) and only asserts the in-memory StopReason.\r\n\r\nHowever, the actual non-streaming path will fail during response serialization, meaning the client will never receive the max_tokens response that the test claims is preserved.\r\n\r\nRecommendation: Add a regression test that exercises Finalize and verifies the actual serialized response. Also, explicitly define how truncated tool arguments should be handled.\r\n\r\n3. [P2] Non-streaming logs report a different stop reason from the client response.\r\n\r\nThe client now receives tool_use, but the logging conversion still records completed tool calls as stop. The streaming path, on the other hand, records them as tool_calls.\r\n\r\nThis results in inconsistent completion reasons between logs and traces depending on whether the request uses streaming or non-streaming mode.\r\n\r\nRecommendation: Unify the stop-reason mapping across both paths and add test coverage for streaming and non-streaming requests."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-02T15:32:44Z",
+   "body": "Thanks, all three addressed in 799a86b:\n\n1. **Non-completed statuses:** `responsesStopReason` only overrides to `tool_use` when `status == \"completed\"`. A subtest covers `failed`, `in_progress`, `queued`, `cancelled` and an empty status with a function call: all stay `end_turn`.\n2. **Truncated arguments:** when a function call's `arguments` are not valid JSON (cut off by `max_output_tokens`), the `tool_use` block gets `input: {}`, so the message still serializes. The stop reason stays `max_tokens`, so clients do not run the tool. `TestE2E_ToResponses_NonStream_TruncatedToolCall` goes through the handler and checks that the HTTP body is a valid message with `stop_reason: \"max_tokens\"`. If you would rather drop the truncated block entirely, that is a small change.\n3. **Log finish reason:** `buildChatCompletionFromResponsesResponse` now records `tool_calls` for a completed response with tool calls, the same as the streaming path. `TestBuildChatCompletionFromResponsesResponseFinishReason` covers completed with and without calls, incomplete and failed.\n\nThe new tests fail on the previous commit, and `go test ./aigateway/handler/anthropic/` passes.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "collaborator",
+   "created_at": "2026-11-03T01:58:50Z",
+   "body": "This PR has lint  failure. Could you please resolve  and update the PR?\r\n\r\nThanks!"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-03T02:05:59Z",
+   "body": "Thanks @CementZhang. The lint and test failures came from a syntax error in `common_test.go` left by my last merge of main (a missing closing brace after `TestBuildChatCompletionFromResponsesResponseFinishReason`). Fixed in 56d1e66; `go test` and `go vet` on `./aigateway/handler/anthropic/` pass locally.\n\nThis reply was drafted with Claude Code.\n"
+  }
+ ]
+}

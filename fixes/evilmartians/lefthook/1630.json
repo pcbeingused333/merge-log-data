@@ -1,0 +1,26 @@
+{
+ "repo": "evilmartians/lefthook",
+ "number": 1630,
+ "url": "https://github.com/evilmartians/lefthook/pull/1630",
+ "title": "fix(filter): do not duplicate files matched by several glob patterns",
+ "merged_at": "2026-11-06T08:06:36Z",
+ "files": [
+  {
+   "filename": "internal/run/controller/filter/filter.go",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 1,
+   "patch": "@@ -82,13 +82,20 @@ func byGlob(vs []string, matchers []string, globMatcher string) []string {\n \n \tvar hasNonEmpty bool\n \tvsf := make([]string, 0)\n+\tseen := make(map[string]struct{})\n \tfor _, matcher := range matchers {\n \t\tif len(matcher) == 0 {\n \t\t\tcontinue\n \t\t}\n \n \t\thasNonEmpty = true\n-\t\tvsf = append(vsf, matchFiles(vs, matcher, globMatcher)...)\n+\t\tfor _, file := range matchFiles(vs, matcher, globMatcher) {\n+\t\t\tif _, ok := seen[file]; ok {\n+\t\t\t\tcontinue\n+\t\t\t}\n+\t\t\tseen[file] = struct{}{}\n+\t\t\tvsf = append(vsf, file)\n+\t\t}\n \t}\n \n \tif !hasNonEmpty {"
+  },
+  {
+   "filename": "internal/run/controller/filter/filter_test.go",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -66,6 +66,12 @@ func TestByGlob(t *testing.T) {\n \t\t\tglobMatcher: \"\",\n \t\t\tresult:      []string{\"f.a\", \"f.b\", \"f.cn\"},\n \t\t},\n+\t\t{\n+\t\t\tsource:      []string{\"a.rb\", \"b.rb\", \"c.txt\"},\n+\t\t\tglob:        []string{\"*.rb\", \"a.*\"},\n+\t\t\tglobMatcher: \"\",\n+\t\t\tresult:      []string{\"a.rb\", \"b.rb\"},\n+\t\t},\n \t} {\n \t\tt.Run(fmt.Sprintf(\"%d:\", i), func(t *testing.T) {\n \t\t\tres := byGlob(tt.source, tt.glob, tt.globMatcher)\n@@ -112,6 +118,12 @@ func TestByGlobDoublestar(t *testing.T) {\n \t\t\tglobMatcher: \"doublestar\",\n \t\t\tresult:      []string{\"test.js\", \"src/app.js\", \"src/lib/util.js\"},\n \t\t},\n+\t\t{\n+\t\t\tsource:      []string{\"a.rb\", \"b.rb\", \"c.txt\"},\n+\t\t\tglob:        []string{\"*.rb\", \"a.*\"},\n+\t\t\tglobMatcher: \"doublestar\",\n+\t\t\tresult:      []string{\"a.rb\", \"b.rb\"},\n+\t\t},\n \t} {\n \t\tt.Run(fmt.Sprintf(\"doublestar-%d:\", i), func(t *testing.T) {\n \t\t\tres := byGlob(tt.source, tt.glob, tt.globMatcher)"
+  }
+ ],
+ "test_files": [
+  "internal/run/controller/filter/filter_test.go"
+ ]
+}

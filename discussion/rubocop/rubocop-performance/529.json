@@ -1,0 +1,30 @@
+{
+ "repo": "rubocop/rubocop-performance",
+ "number": 529,
+ "url": "https://github.com/rubocop/rubocop-performance/pull/529",
+ "state": "open",
+ "reviews": [],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-08-29T19:24:52Z",
+   "body": "Rebased onto current `master` (post-1.27.0) and re-pushed. Worth flagging why this PR has never shown a check: the three runs from Jul 30 came back as `startup_failure` with **zero jobs executed** — CI never ran on this branch at all. The rebase re-triggered them and they now sit in `action_required`, so a maintainer clicking *Approve and run workflows* is what it takes from here.\n\nSince there is nothing green to look at yet, here is what I verified locally on the rebased branch (`rake spec` all green, `rake internal_investigation` clean across 126 files, rubocop 1.90.0 from master).\n\n**Why the offense has to go rather than the autocorrect getting fixed.** `/o` on an interpolated regexp inside a pattern is not a parse error, it is a compile error — `ruby -c` reports `Syntax OK` and the file then dies at iseq build with `NODE_IN: unknown node (NODE_ONCE)`, which is what @morissetcl hit in #438. There is no correction the cop can emit that keeps `/o` there, so on that path the offense itself is unactionable.\n\n**Where `/o` actually breaks, against what the cop now does** (checked with `RubyVM::InstructionSequence.compile` on ruby 3.2.3):\n\n| construct | `/o` compiles | offenses after this PR |\n|---|---|---|\n| `in /#{CONST}/` | ✗ `NODE_IN` | 0 |\n| `in [/#{CONST}/, *]` | ✗ `NODE_IN` | 0 |\n| `in [*, /#{CONST}/, *]` | ✗ `NODE_IN` | 0 |\n| `in {a: /#{CONST}/}` | ✗ `NODE_IN` | 0 |\n| `in /#{CONST}/ \\| String` | ✗ `NODE_IN` | 0 |\n| `x => /#{CONST}/` | ✗ `NODE_IN` | 0 |\n| `x in /#{CONST}/` | ✗ `NODE_IN` | 0 |\n| `in String if x.match?(/#{CONST}/)` | ✓ | 1 |\n| regexp in the `in` branch body | ✓ | 1 |\n| regexp in the `case` subject | ✓ | 1 |\n| nested `case`/`in` inside a branch body | ✓ | 1 |\n\nThe guard only covers the pattern slot, so the cop keeps firing everywhere `/o` is still legal — including inside the body of an `in` branch, which is the case that would be easy to over-suppress by walking ancestors alone.\n\nI have extended the spec to cover that whole table rather than just the two cases the first version had: array, find, hash and alternative patterns, the rightward `=>` form (gated `:ruby30`, since `TargetRubyVersion` defaults to 2.7 here), plus two positive specs asserting the offense and its autocorrect still fire in an `in` guard and in a branch body. All six \"does not register\" specs fail with the guard reverted; the two positive ones pass either way by design, which is what makes them useful as a fence against over-suppression.\n\nHappy to reshape any of this — in particular if you would rather keep the offense and mark it non-correctable on that path, so the \"extract it into a constant\" advice survives inside pattern matching. I went the other way because the message leads with `/o` and an offense with no available correction is mostly noise, but it is your call.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-09-06T03:45:30Z",
+   "body": "Following up. Since the rebase the workflows were approved and all 15 checks are green — they had never executed at all before, so this is the first time there's been anything to look at. The spec now covers the full table above, with the six negative cases verified red against a reverted guard.\n\nStill happy to go the other way and keep the offense while marking it non-correctable on the pattern-matching path, if that's the direction you'd rather take. Just let me know.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-20T13:36:28Z",
+   "body": "Hi @koic, a gentle ping in case this slipped through: the branch is still clean and CI is green, and it addresses #438. Happy to rework it if you'd prefer a different approach.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-02T15:05:19Z",
+   "body": "Friendly ping: this is ready for review whenever someone has a moment. Happy to adjust anything."
+  }
+ ]
+}

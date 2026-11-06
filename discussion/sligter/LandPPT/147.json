@@ -1,0 +1,20 @@
+{
+ "repo": "sligter/LandPPT",
+ "number": 147,
+ "url": "https://github.com/sligter/LandPPT/pull/147",
+ "state": "merged",
+ "reviews": [],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "owner",
+   "created_at": "2026-11-06T07:07:44Z",
+   "body": "Thanks, Alex — this is a useful fix. Reporting the actual token usage and distinguishing `max_tokens` from a normal finish both make sense. I reviewed `c2509a2` and ran 69 related tests locally; they all passed.\n\nCould you address two edge cases before we merge?\n\n1. **Reset stream metadata for each authentication attempt.** `stream_meta` is currently initialized outside the auth loop in `_stream_chat_events()`. I reproduced a first attempt that emits `message_start` with 250 input / 1 output tokens, then an error before any text. The fallback authentication attempt succeeds with text but no usage events, and the final response incorrectly reports 250 / 1 / 251 from the failed attempt. Please initialize the metadata inside each attempt so a successful response without usage events gets the documented zero fallback. A mocked regression test covering that sequence would help.\n\n2. **Await inner-stream cleanup when the caller closes early.** The new `stream_chat_completion()` wrapper iterates over `_stream_chat_events()` without explicitly closing it. After consuming one text chunk and awaiting `stream.aclose()`, I found that the HTTP response and session were still open. On the base branch, both were closed before that call returned; with this change, cleanup was deferred to async-generator finalization. Could you wrap the inner iterator with `contextlib.aclosing()` (or equivalent explicit cleanup) and add a test asserting that both contexts have exited when `aclose()` returns?\n\nThe build and validation checks are green. These two cases came from additional mocked checks; no live paid API requests were made. Thanks for taking a look!"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-06T07:25:07Z",
+   "body": "Addressed both cases: metadata is now initialized per authentication attempt, and the public streaming wrapper uses contextlib.aclosing to await inner-stream cleanup. Added mocked regressions for the failed-attempt 250/1 usage followed by a successful response without usage, and for response/session cleanup completing before aclose returns. Both failed before this fix; all 22 related tests now pass. No live API requests were made.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
+}

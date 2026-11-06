@@ -1,0 +1,33 @@
+{
+ "repo": "PostHog/posthog-dotnet",
+ "number": 363,
+ "url": "https://github.com/PostHog/posthog-dotnet/pull/363",
+ "title": "fix(ai): capture OpenAI cached tokens and Responses API usage",
+ "merged_at": "2026-11-02T15:39:38Z",
+ "files": [
+  {
+   "filename": ".changeset/openai-cached-tokens.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+\"PostHog.AI\": patch\n+---\n+\n+Capture OpenAI cached prompt tokens and Responses API token usage in `$ai_generation` events."
+  },
+  {
+   "filename": "src/PostHog.AI/PostHogOpenAIHandler.cs",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 2,
+   "patch": "@@ -355,11 +355,16 @@ out var streamBool\n                 // Usage\n                 if (responseJson[\"usage\"] is JsonObject usage)\n                 {\n-                    if (usage[\"prompt_tokens\"] is JsonValue inputTokens)\n+                    // Chat Completions uses prompt_tokens/completion_tokens; the Responses API\n+                    // uses input_tokens/output_tokens.\n+                    if ((usage[\"prompt_tokens\"] ?? usage[\"input_tokens\"]) is JsonValue inputTokens)\n                         eventProperties[PostHogAIFieldNames.InputTokens] =\n                             inputTokens.GetValue<int>();\n \n-                    if (usage[\"completion_tokens\"] is JsonValue outputTokens)\n+                    if (\n+                        (usage[\"completion_tokens\"] ?? usage[\"output_tokens\"])\n+                        is JsonValue outputTokens\n+                    )\n                         eventProperties[PostHogAIFieldNames.OutputTokens] =\n                             outputTokens.GetValue<int>();\n \n@@ -378,6 +383,19 @@ out var streamBool\n                                 : cacheReadTokens.ToString();\n                     }\n \n+                    // OpenAI reports cached prompt tokens under *_tokens_details.cached_tokens.\n+                    if (\n+                        !eventProperties.ContainsKey(PostHogAIFieldNames.CacheReadInputTokens)\n+                        && (\n+                            (usage[\"prompt_tokens_details\"] as JsonObject)?[\"cached_tokens\"]\n+                            ?? (usage[\"input_tokens_details\"] as JsonObject)?[\"cached_tokens\"]\n+                        ) is JsonValue cachedTokens\n+                        && cachedTokens.TryGetValue<int>(out var cachedInt)\n+                    )\n+                    {\n+                        eventProperties[PostHogAIFieldNames.CacheReadInputTokens] = cachedInt;\n+                    }\n+\n                     if (usage[\"cache_creation_input_tokens\"] is JsonValue cacheCreationTokens)\n                     {\n                         eventProperties[PostHogAIFieldNames.CacheCreationInputTokens] ="
+  },
+  {
+   "filename": "tests/PostHog.AI.Tests/PostHogOpenAIHandlerTests.cs",
+   "status": "modified",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -358,6 +358,51 @@ private static bool VerifyStreamingProps(Dictionary<string, object> props)\n         return true;\n     }\n \n+    [Theory]\n+    [InlineData(\n+        \"/v1/chat/completions\",\n+        \"{\\\"model\\\":\\\"gpt-4\\\",\\\"choices\\\":[],\\\"usage\\\":{\\\"prompt_tokens\\\":100,\\\"completion_tokens\\\":12,\\\"total_tokens\\\":112,\\\"prompt_tokens_details\\\":{\\\"cached_tokens\\\":64}}}\"\n+    )]\n+    [InlineData(\n+        \"/v1/responses\",\n+        \"{\\\"model\\\":\\\"gpt-4\\\",\\\"output\\\":[],\\\"usage\\\":{\\\"input_tokens\\\":100,\\\"output_tokens\\\":12,\\\"total_tokens\\\":112,\\\"input_tokens_details\\\":{\\\"cached_tokens\\\":64}}}\"\n+    )]\n+    public async Task SendAsyncCapturesOpenAICachedAndResponsesApiTokens(\n+        string path,\n+        string responseJson\n+    )\n+    {\n+        using var responseContent = new StringContent(responseJson, Encoding.UTF8, \"application/json\");\n+        _innerHandler.Response = new HttpResponseMessage(HttpStatusCode.OK)\n+        {\n+            Content = responseContent,\n+        };\n+        using var requestContent = new StringContent(\n+            \"{\\\"model\\\":\\\"gpt-4\\\"}\",\n+            Encoding.UTF8,\n+            \"application/json\"\n+        );\n+\n+        using var response = await _client.PostAsync(new Uri(path, UriKind.Relative), requestContent);\n+\n+        Assert.True(response.IsSuccessStatusCode);\n+        _postHogClient\n+            .Received(1)\n+            .Capture(\n+                Arg.Any<string>(),\n+                PostHogAIFieldNames.Generation,\n+                Arg.Is<Dictionary<string, object>>(props =>\n+                    props.ContainsKey(PostHogAIFieldNames.InputTokens)\n+                    && (int)props[PostHogAIFieldNames.InputTokens] == 100\n+                    && (int)props[PostHogAIFieldNames.OutputTokens] == 12\n+                    && (int)props[PostHogAIFieldNames.CacheReadInputTokens] == 64\n+                ),\n+                null,\n+                false,\n+                Arg.Any<DateTimeOffset?>()\n+            );\n+    }\n+\n     private static bool VerifyProps(Dictionary<string, object> props)\n     {\n         if ("
+  }
+ ],
+ "test_files": [
+  "tests/PostHog.AI.Tests/PostHogOpenAIHandlerTests.cs"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "modelscope/evalscope",
+ "number": 2002,
+ "url": "https://github.com/modelscope/evalscope/pull/2002",
+ "title": "fix(anthropic): omit temperature and top_k when extended thinking is enabled",
+ "merged_at": "2026-11-03T09:04:07Z",
+ "files": [
+  {
+   "filename": "evalscope/models/utils/anthropic.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 4,
+   "patch": "@@ -491,16 +491,19 @@ def anthropic_completion_params(model: str, config: GenerateConfig) -> Dict[str,\n         max_tokens=max_tokens,\n     )\n \n+    # Extended thinking rejects temperature != 1 and top_k, so both are left out when it is enabled.\n+    thinking_enabled = config.reasoning_tokens is not None\n+\n     # Temperature (not compatible with extended thinking)\n-    if config.temperature is not None:\n+    if config.temperature is not None and not thinking_enabled:\n         params['temperature'] = config.temperature\n \n     # Top P\n     if config.top_p is not None:\n         params['top_p'] = config.top_p\n \n-    # Top K\n-    if config.top_k is not None:\n+    # Top K (not compatible with extended thinking)\n+    if config.top_k is not None and not thinking_enabled:\n         params['top_k'] = config.top_k\n \n     # Stop sequences\n@@ -512,7 +515,7 @@ def anthropic_completion_params(model: str, config: GenerateConfig) -> Dict[str,\n         params['timeout'] = config.timeout\n \n     # Extended thinking / reasoning\n-    if config.reasoning_tokens is not None:\n+    if thinking_enabled:\n         params['thinking'] = dict(type='enabled', budget_tokens=config.reasoning_tokens)\n \n     # Anthropic top-level automatic prompt caching."
+  },
+  {
+   "filename": "tests/models/test_anthropic_thinking_params.py",
+   "status": "added",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,33 @@\n+import pytest\n+\n+from evalscope.api.model import GenerateConfig\n+\n+\n+def _anthropic_utils():\n+    pytest.importorskip('anthropic')\n+    from evalscope.models.utils import anthropic\n+\n+    return anthropic\n+\n+\n+def test_thinking_omits_temperature_and_top_k():\n+    # The Anthropic API rejects temperature != 1 and any top_k when extended thinking is enabled.\n+    anthropic = _anthropic_utils()\n+\n+    params = anthropic.anthropic_completion_params(\n+        'claude', GenerateConfig(temperature=0.0, top_k=40, reasoning_tokens=2048)\n+    )\n+\n+    assert params['thinking'] == {'type': 'enabled', 'budget_tokens': 2048}\n+    assert 'temperature' not in params\n+    assert 'top_k' not in params\n+\n+\n+def test_without_thinking_keeps_temperature_and_top_k():\n+    anthropic = _anthropic_utils()\n+\n+    params = anthropic.anthropic_completion_params('claude', GenerateConfig(temperature=0.0, top_k=40))\n+\n+    assert params['temperature'] == 0.0\n+    assert params['top_k'] == 40\n+    assert 'thinking' not in params"
+  }
+ ],
+ "test_files": [
+  "tests/models/test_anthropic_thinking_params.py"
+ ]
+}

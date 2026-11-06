@@ -1,0 +1,19 @@
+{
+ "repo": "open-metadata/OpenMetadata",
+ "number": 36768,
+ "url": "https://github.com/open-metadata/OpenMetadata/pull/36768",
+ "title": "Fixes #36557: Add Power BI SQL comment regression coverage",
+ "merged_at": "2026-11-05T15:39:12Z",
+ "files": [
+  {
+   "filename": "ingestion/tests/unit/topology/dashboard/test_powerbi.py",
+   "status": "modified",
+   "additions": 50,
+   "deletions": 0,
+   "patch": "@@ -17,6 +17,7 @@\n from metadata.generated.schema.type.entityReferenceList import EntityReferenceList\n from metadata.generated.schema.type.filterPattern import FilterPattern\n from metadata.ingestion.api.models import Either\n+from metadata.ingestion.lineage.parser import LineageParser\n from metadata.ingestion.models.barrier import Barrier\n from metadata.ingestion.models.topology import TopologyContextManager\n from metadata.ingestion.ometa.ometa_api import OpenMetadata\n@@ -1840,6 +1841,55 @@ def test_extract_tables_from_sql_line_comment_ends_at_its_line(self):\n         tables = {t[\"table\"] for t in result}\n         assert tables == {\"first_table\", \"second_table\"}\n \n+    @pytest.mark.order(40)\n+    def test_extract_tables_from_sql_keeps_dashes_in_string_literals(self):\n+        \"\"\"\n+        `--` inside a string literal is not a comment\n+        \"\"\"\n+        with patch(\n+            \"metadata.ingestion.source.dashboard.powerbi.metadata.LineageParser\",\n+            wraps=LineageParser,\n+        ) as parser_spy:\n+            result = self.powerbi._extract_tables_from_sql(\n+                \"SELECT id#(lf)FROM orders#(lf)WHERE note = 'a--b'#(lf)  AND status = 1\",\n+                \"MyDb\",\n+                \"server\",\n+            )\n+        assert result is not None\n+        assert {t[\"table\"] for t in result} == {\"orders\"}\n+        assert \"'a--b'\" in parser_spy.call_args.args[0]\n+\n+    @pytest.mark.order(40)\n+    def test_extract_tables_from_sql_keeps_dashes_in_bracketed_identifiers(self):\n+        \"\"\"\n+        `--` inside a [bracketed identifier] is not a comment\n+        \"\"\"\n+        with patch(\n+            \"metadata.ingestion.source.dashboard.powerbi.metadata.LineageParser\",\n+            wraps=LineageParser,\n+        ) as parser_spy:\n+            result = self.powerbi._extract_tables_from_sql(\n+                \"SELECT [a--b]#(lf)FROM dbo.orders\",\n+                \"MyDb\",\n+                \"server\",\n+            )\n+        assert result is not None\n+        assert {t[\"table\"] for t in result} == {\"orders\"}\n+        assert \"[a--b]\" in parser_spy.call_args.args[0]\n+\n+    @pytest.mark.order(40)\n+    def test_extract_tables_from_sql_keeps_dashes_in_block_comments(self):\n+        \"\"\"\n+        `--` inside a /* block comment */ does not hide the rest of the query\n+        \"\"\"\n+        result = self.powerbi._extract_tables_from_sql(\n+            \"SELECT o.id#(lf)FROM dbo.orders o /* -- legacy */#(lf)JOIN dbo.customers c ON c.id = o.customer_id\",\n+            \"MyDb\",\n+            \"server\",\n+        )\n+        assert result is not None\n+        assert {t[\"table\"] for t in result} == {\"orders\", \"customers\"}\n+\n     @pytest.mark.order(41)\n     def test_create_dataflow_table_lineage(self):\n         \"\"\""
+  }
+ ],
+ "test_files": [
+  "ingestion/tests/unit/topology/dashboard/test_powerbi.py"
+ ]
+}

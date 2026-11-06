@@ -1,0 +1,26 @@
+{
+ "repo": "NVIDIA/NeMo-Agent-Toolkit",
+ "number": 2573,
+ "url": "https://github.com/NVIDIA/NeMo-Agent-Toolkit/pull/2573",
+ "title": "fix(crewai): tolerate streaming LLM responses in profiler",
+ "merged_at": "2026-11-05T19:14:48Z",
+ "files": [
+  {
+   "filename": "packages/nvidia_nat_crewai/src/nat/plugins/crewai/crewai_callback_handler.py",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 11,
+   "patch": "@@ -197,19 +197,29 @@ def wrapped_llm_call(*args, **kwargs) -> Any:\n \n             model_output = \"\".join(model_output)\n \n+            chat_response = None\n+            token_usage = TokenUsageBaseModel()\n+            try:\n+                if output.choices:\n+                    chat_response = output.choices[0].model_dump()\n+                model_extra = getattr(output, 'model_extra', None) or {}\n+                if 'usage' in model_extra:\n+                    token_usage = TokenUsageBaseModel(**model_extra['usage'].model_dump())\n+            except Exception as e:\n+                logger.exception(\"Error getting model usage: %s\", e)\n+\n             now = time.time()\n             # Record the end event\n-            output_stats = IntermediateStepPayload(\n-                event_type=IntermediateStepType.LLM_END,\n-                UUID=input_stats.UUID,\n-                span_event_timestamp=now,\n-                framework=LLMFrameworkEnum.CREWAI,\n-                name=model_name,\n-                data=StreamEventData(input=model_input, output=model_output),\n-                metadata=TraceMetadata(chat_responses=output.choices[0].model_dump()),\n-                usage_info=UsageInfo(token_usage=TokenUsageBaseModel(**output.model_extra['usage'].model_dump()),\n-                                     num_llm_calls=1,\n-                                     seconds_between_calls=seconds_between_calls))\n+            output_stats = IntermediateStepPayload(event_type=IntermediateStepType.LLM_END,\n+                                                   UUID=input_stats.UUID,\n+                                                   span_event_timestamp=now,\n+                                                   framework=LLMFrameworkEnum.CREWAI,\n+                                                   name=model_name,\n+                                                   data=StreamEventData(input=model_input, output=model_output),\n+                                                   metadata=TraceMetadata(chat_responses=chat_response),\n+                                                   usage_info=UsageInfo(token_usage=token_usage,\n+                                                                        num_llm_calls=1,\n+                                                                        seconds_between_calls=seconds_between_calls))\n \n             self.step_manager.push_intermediate_step(output_stats)\n "
+  },
+  {
+   "filename": "packages/nvidia_nat_crewai/tests/test_crewai_choice_extraction.py",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -117,3 +117,25 @@ def test_choice_with_none_content():\n     \"\"\"None content is handled gracefully without raising.\"\"\"\n     end_payload = _run_wrapped_call([_NewStyleChoice(None)])\n     assert end_payload.data.output == \"\"\n+\n+\n+def test_streaming_response_does_not_break_call():\n+    \"\"\"stream=True returns a CustomStreamWrapper without choices/model_extra; the call must still work.\"\"\"\n+    import litellm\n+\n+    handler = CrewAIProfilerHandler()\n+    handler._original_llm_call = litellm.completion\n+    handler.step_manager = MagicMock()\n+\n+    result = handler._llm_call_monkey_patch()(model=\"gpt-4o\",\n+                                              messages=[{\n+                                                  \"role\": \"user\", \"content\": \"prompt\"\n+                                              }],\n+                                              mock_response=\"hi\",\n+                                              stream=True)\n+    assert not hasattr(result, \"choices\")\n+\n+    payloads = [call.args[0] for call in handler.step_manager.push_intermediate_step.call_args_list]\n+    llm_end = [p for p in payloads if p.event_type == IntermediateStepType.LLM_END]\n+    assert len(llm_end) == 1\n+    assert llm_end[0].usage_info.token_usage.total_tokens == 0"
+  }
+ ],
+ "test_files": [
+  "packages/nvidia_nat_crewai/tests/test_crewai_choice_extraction.py"
+ ]
+}

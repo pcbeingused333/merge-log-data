@@ -1,0 +1,64 @@
+{
+ "repo": "stacklok/toolhive",
+ "number": 7050,
+ "url": "https://github.com/stacklok/toolhive/pull/7050",
+ "title": "Return invalid_target when token exchange refuses an audience",
+ "merged_at": "2026-11-05T15:56:14Z",
+ "files": [
+  {
+   "filename": "docs/arch/17-token-exchange-delegation.md",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -643,6 +643,18 @@ in addition to other grants can log users in.\n   audiences, which is checked first. The RFC 8693 `resource` check uses the\n   same strategy. Code redemption reuses the audience bound at `/authorize`, and\n   refresh is enforced by fosite.\n+- **Token exchange audience refusal.** The RFC 8693 token exchange refuses an\n+  `audience` or a `resource` that is outside the client's audiences with\n+  `invalid_target` (HTTP 400), as RFC 8693 §2.2.2 says to. Before this, an\n+  `audience` refusal returned fosite's `invalid_request`\n+  (\"Requested audience ... has not been whitelisted\"), so a client that\n+  branched on the error code saw a different code depending on which parameter\n+  it used. The hint does not say which list refused the audience. An `audience`\n+  that is not a parseable URI is still `invalid_request`. When the request\n+  names no target and the server's sole default audience is not one of the\n+  client's audiences, the refusal stays `invalid_request`: the client named no\n+  target, and the fix is to send an explicit `resource` or `audience`, which\n+  the hint says.\n - **Dynamically registered clients.** A DCR client keeps the audience list the\n   server had when it registered, and that list is never refreshed. After an\n   operator adds an audience, an existing DCR client that asks for it gets"
+  },
+  {
+   "filename": "pkg/authserver/delegate_client_runner_integration_test.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -102,7 +102,7 @@ func TestConfiguredDelegateClientTokenExchange(t *testing.T) {\n \t\t\t\tvalues.Set(\"audience\", ungrantedAudience)\n \t\t\t},\n \t\t\twantStatus: http.StatusBadRequest,\n-\t\t\twantError:  \"invalid_request\",\n+\t\t\twantError:  \"invalid_target\",\n \t\t},\n \t\t{\n \t\t\tname:         \"id_token_subject_token_type_rejected\","
+  },
+  {
+   "filename": "pkg/authserver/exchange_refresh_token_integration_test.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -276,7 +276,7 @@ func runExchangeRefreshTokenGrantFlows(t *testing.T, env *xrtEnv) {\n \n \tt.Run(\"a client that may open grants cannot exchange the token for its input audience\", func(t *testing.T) {\n \t\tconst idJAGOnlyEntry = `[{\"type\":\"` + xrtGrantType + `\",\"issuable_token_types\":[\"` + oauthproto.TokenTypeIDJAG + `\"]}]`\n-\t\tfor param, wantCode := range map[string]string{\"audience\": \"invalid_request\", \"resource\": \"invalid_target\"} {\n+\t\tfor param, wantCode := range map[string]string{\"audience\": \"invalid_target\", \"resource\": \"invalid_target\"} {\n \t\t\tt.Run(param, func(t *testing.T) {\n \t\t\t\tsubject := env.mint(t, nil)\n \t\t\t\trefused := postToken(t, env.srv.URL, env.secretIn, url.Values{"
+  },
+  {
+   "filename": "pkg/authserver/server/audience.go",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -174,3 +174,11 @@ func ValidateIDJAGClientAudience(resource string, client fosite.Client, match fo\n func errResourceNotPermitted(resource string) error {\n \treturn ErrInvalidTarget.WithHintf(\"The client is not permitted to request resource %q\", resource)\n }\n+\n+// ErrAudienceNotPermitted is the refusal for an \"audience\" request parameter that\n+// is outside the client's audiences. RFC 8693 §2.2.2 uses invalid_target for a\n+// refused resource or audience alike. Like errResourceNotPermitted, the hint does\n+// not say which list refused the audience.\n+func ErrAudienceNotPermitted(audience string) error {\n+\treturn ErrInvalidTarget.WithHintf(\"The client is not permitted to request audience %q\", audience)\n+}"
+  },
+  {
+   "filename": "pkg/authserver/server/tokenexchange/handler.go",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 3,
+   "patch": "@@ -950,10 +950,26 @@ func (h *Handler) grantAndBoundAudiences(\n }\n \n // grantAudiences validates that the requested audience is allowed for this\n-// client and grants it.\n+// client and grants it. A refused audience is reported as invalid_target, as a\n+// refused \"resource\" is (RFC 8693 §2.2.2); an audience that is not a parseable\n+// URI is a malformed request and keeps the strategy's invalid_request.\n func (h *Handler) grantAudiences(ctx context.Context, requester fosite.AccessRequester, client fosite.Client) error {\n-\tif err := h.config.GetAudienceStrategy(ctx)(client.GetAudience(), requester.GetRequestedAudience()); err != nil {\n-\t\treturn errorsx.WithStack(err)\n+\tmatch := h.config.GetAudienceStrategy(ctx)\n+\trequested := requester.GetRequestedAudience()\n+\tif err := match(client.GetAudience(), requested); err != nil {\n+\t\tfor _, aud := range requested {\n+\t\t\tif _, parseErr := url.Parse(aud); parseErr != nil {\n+\t\t\t\treturn errorsx.WithStack(err)\n+\t\t\t}\n+\t\t}\n+\t\trefused := strings.Join(requested, \" \")\n+\t\tfor _, aud := range requested {\n+\t\t\tif match(client.GetAudience(), []string{aud}) != nil {\n+\t\t\t\trefused = aud\n+\t\t\t\tbreak\n+\t\t\t}\n+\t\t}\n+\t\treturn errorsx.WithStack(server.ErrAudienceNotPermitted(refused))\n \t}\n \tfor _, aud := range requester.GetRequestedAudience() {\n \t\trequester.GrantAudience(aud)"
+  },
+  {
+   "filename": "pkg/authserver/server/tokenexchange/handler_source_policy_test.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -264,7 +264,7 @@ func TestTokenExchangeHandler_InputAudienceNotObtainable(t *testing.T) {\n \t}{\n \t\t{\n \t\t\tname: \"audience parameter\", requestedAudience: []string{testAPIAudience},\n-\t\t\twantCode: fosite.ErrInvalidRequest.ErrorField, wantHint: \"has not been whitelisted by the OAuth 2.0 Client\",\n+\t\t\twantCode: \"invalid_target\", wantHint: \"The client is not permitted to request audience\",\n \t\t},\n \t\t{\n \t\t\tname: \"resource parameter\", form: url.Values{\"resource\": {testAPIAudience}},"
+  },
+  {
+   "filename": "pkg/authserver/server/tokenexchange/handler_test.go",
+   "status": "modified",
+   "additions": 97,
+   "deletions": 2,
+   "patch": "@@ -10,6 +10,7 @@ import (\n \t\"errors\"\n \t\"fmt\"\n \t\"log/slog\"\n+\t\"net/http\"\n \t\"net/url\"\n \t\"strings\"\n \t\"testing\"\n@@ -810,8 +811,10 @@ func TestTokenExchangeHandler_HandleTokenEndpointRequest(t *testing.T) {\n \t\t\t\tf.Set(\"audience\", \"https://not-allowed.example.com\")\n \t\t\t\treturn f\n \t\t\t},\n-\t\t\tlifespan: 15 * time.Minute,\n-\t\t\twantErr:  true,\n+\t\t\tlifespan:     15 * time.Minute,\n+\t\t\twantErr:      true,\n+\t\t\twantFositeIs: server.ErrInvalidTarget,\n+\t\t\thintContains: \"not permitted to request audience\",\n \t\t},\n \t\t{\n \t\t\t// The subject token is valid only for testIssuer, but the client is\n@@ -1824,6 +1827,98 @@ func TestTokenExchangeHandler_DefaultAudience(t *testing.T) {\n \t}\n }\n \n+// TestTokenExchangeHandler_AudienceRefusalErrorCode pins the error code returned when\n+// a requested audience is refused. RFC 8693 §2.2.2 says invalid_target SHOULD be used\n+// when the server is unwilling to issue a token for the requested resource or audience,\n+// so the \"audience\" and \"resource\" parameters must report the same code. A request that\n+// names no target and fails on the server-chosen default audience, or whose audience is\n+// not a parseable URI, is a malformed request and stays invalid_request.\n+func TestTokenExchangeHandler_AudienceRefusalErrorCode(t *testing.T) {\n+\tt.Parallel()\n+\n+\ttj := newTestJWKS(t)\n+\n+\ttests := []struct {\n+\t\tname             string\n+\t\tallowedAudiences []string\n+\t\tclientAudience   []string\n+\t\trequestedAud     []string\n+\t\tresource         string\n+\t\twantCode         string\n+\t\twantHint         string\n+\t}{\n+\t\t{\n+\t\t\tname:             \"audience outside the client's audiences is invalid_target\",\n+\t\t\tallowedAudiences: []string{testIssuer},\n+\t\t\tclientAudience:   []string{\"https://allowed.example.com\"},\n+\t\t\trequestedAud:     []string{\"https://not-allowed.example.com\"},\n+\t\t\twantCode:         \"invalid_target\",\n+\t\t\twantHint:         `The client is not permitted to request audience \"https://not-allowed.example.com\"`,\n+\t\t},\n+\t\t{\n+\t\t\tname:             \"second of two audiences outside the client's audiences names that audience\",\n+\t\t\tallowedAudiences: []string{testIssuer},\n+\t\t\tclientAudience:   []string{testIssuer},\n+\t\t\trequestedAud:     []string{testIssuer, \"https://not-allowed.example.com\"},\n+\t\t\twantCode:         \"invalid_target\",\n+\t\t\twantHint:         `\"https://not-allowed.example.com\"`,\n+\t\t},\n+\t\t{\n+\t\t\tname:             \"resource outside the client's audiences is invalid_target\",\n+\t\t\tallowedAudiences: []string{testIssuer, \"https://other.example.com\"},\n+\t\t\tclientAudience:   []string{testIssuer},\n+\t\t\tresource:         \"https://other.example.com\",\n+\t\t\twantCode:         \"invalid_target\",\n+\t\t\twantHint:         \"The client is not permitted to request resource\",\n+\t\t},\n+\t\t{\n+\t\t\tname:             \"unparsable audience stays invalid_request\",\n+\t\t\tallowedAudiences: []string{testIssuer},\n+\t\t\tclientAudience:   []string{testIssuer},\n+\t\t\trequestedAud:     []string{\"https://exa mple.com/%zz\"},\n+\t\t\twantCode:         \"invalid_request\",\n+\t\t},\n+\t\t{\n+\t\t\t// No target was requested; the server picked the default audience and the\n+\t\t\t// client is not registered for it. The client's fix is to send an explicit\n+\t\t\t// parameter, so this stays a missing-parameter invalid_request.\n+\t\t\tname:             \"default audience refused for the client stays invalid_request\",\n+\t\t\tallowedAudiences: []string{testIssuer},\n+\t\t\tclientAudience:   []string{\"https://other.example.com\"},\n+\t\t\twantCode:         \"invalid_request\",\n+\t\t\twantHint:         \"an explicit 'resource' or 'audience' parameter is required\",\n+\t\t},\n+\t}\n+\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tt.Parallel()\n+\n+\t\t\th := newTestHandler(t, tj, 15*time.Minute)\n+\t\t\th.allowedAudiences = tt.allowedAudiences\n+\n+\t\t\tclient := defaultClient()\n+\t\t\tclient.Audience = tt.clientAudience\n+\t\t\tform := defaultFormValues(t, tj)\n+\t\t\tif tt.resource != \"\" {\n+\t\t\t\tform.Set(\"resource\", tt.resource)\n+\t\t\t}\n+\t\t\treq := newAccessRequest(t, client, form)\n+\t\t\tif len(tt.requestedAud) > 0 {\n+\t\t\t\treq.SetRequestedAudience(fosite.Arguments(tt.requestedAud))\n+\t\t\t}\n+\n+\t\t\terr := h.HandleTokenEndpointRequest(context.Background(), req)\n+\t\t\trequire.Error(t, err)\n+\t\t\tvar rfcErr *fosite.RFC6749Error\n+\t\t\trequire.ErrorAs(t, err, &rfcErr)\n+\t\t\tassert.Equal(t, tt.wantCode, rfcErr.ErrorField)\n+\t\t\tassert.Equal(t, http.StatusBadRequest, rfcErr.CodeField)\n+\t\t\tassert.Contains(t, rfcErr.Reason(), tt.wantHint)\n+\t\t})\n+\t}\n+}\n+\n func TestCheckDelegationConsent(t *testing.T) {\n \tt.Parallel()\n "
+  }
+ ],
+ "test_files": [
+  "pkg/authserver/delegate_client_runner_integration_test.go",
+  "pkg/authserver/exchange_refresh_token_integration_test.go",
+  "pkg/authserver/server/tokenexchange/handler_source_policy_test.go",
+  "pkg/authserver/server/tokenexchange/handler_test.go"
+ ]
+}

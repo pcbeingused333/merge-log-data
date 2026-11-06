@@ -1,0 +1,26 @@
+{
+ "repo": "microsoft/PyRIT",
+ "number": 3877,
+ "url": "https://github.com/microsoft/PyRIT/pull/3877",
+ "title": "FIX: Use source-over compositing in ImageOverlayConverter",
+ "merged_at": "2026-11-04T22:46:24Z",
+ "files": [
+  {
+   "filename": "pyrit/converter/image_overlay_converter.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -123,7 +123,11 @@ def _composite_images(self, *, base: Image.Image, overlay: Image.Image) -> Image\n             )\n \n         base = base.convert(\"RGBA\")\n-        base.paste(overlay, self._position, mask=overlay)\n+        # Composite with source-over so translucent overlay pixels blend with the base\n+        # instead of being scaled by their own alpha twice (paste with mask=overlay).\n+        layer = Image.new(\"RGBA\", base.size, (0, 0, 0, 0))\n+        layer.paste(overlay, self._position)\n+        base = Image.alpha_composite(base, layer)\n \n         if self._save_format == \"jpeg\":\n             background = Image.new(\"RGB\", base.size, (255, 255, 255))"
+  },
+  {
+   "filename": "tests/unit/converter/test_image_overlay_converter.py",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -189,6 +189,36 @@ def test_composite_images_preserves_rgba_overlay_alpha():\n     assert 100 < r < 200\n \n \n+def test_composite_images_translucent_overlay_uses_source_over_pixels():\n+    converter = ImageOverlayConverter(base_image=\"base.png\", opacity=1.0)\n+    base = Image.new(\"RGBA\", (10, 10), color=(0, 0, 0, 255))\n+    overlay = Image.new(\"RGBA\", (4, 4), color=(255, 255, 255, 128))\n+\n+    result = converter._composite_images(base=base, overlay=overlay)\n+\n+    # Source-over of 50% white on opaque black: color ~128, alpha stays opaque.\n+    pixel = result.getpixel((1, 1))\n+    assert isinstance(pixel, tuple)\n+    r, g, b, a = pixel\n+    assert abs(r - 128) <= 1\n+    assert abs(g - 128) <= 1\n+    assert abs(b - 128) <= 1\n+    assert a == 255\n+    # Pixels outside the overlay are untouched.\n+    assert result.getpixel((8, 8)) == (0, 0, 0, 255)\n+\n+\n+def test_composite_images_partially_outside_base_is_clipped():\n+    converter = ImageOverlayConverter(base_image=\"base.png\", position=(-2, -2))\n+    base = Image.new(\"RGBA\", (10, 10), color=(0, 0, 0, 255))\n+    overlay = Image.new(\"RGBA\", (4, 4), color=(255, 0, 0, 255))\n+\n+    result = converter._composite_images(base=base, overlay=overlay)\n+\n+    assert result.getpixel((1, 1)) == (255, 0, 0, 255)\n+    assert result.getpixel((3, 3)) == (0, 0, 0, 255)\n+\n+\n def test_composite_images_warns_when_overlay_out_of_bounds(caplog):\n     import logging\n "
+  }
+ ],
+ "test_files": [
+  "tests/unit/converter/test_image_overlay_converter.py"
+ ]
+}

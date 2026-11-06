@@ -1,0 +1,26 @@
+{
+ "repo": "looplj/axonhub",
+ "number": 2852,
+ "url": "https://github.com/looplj/axonhub/pull/2852",
+ "title": "fix(aisdk): keep tool call ID across index-only stream deltas",
+ "merged_at": "2026-11-03T05:17:12Z",
+ "files": [
+  {
+   "filename": "llm/transformer/aisdk/convert_stream.go",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -24,6 +24,7 @@ func (t *DataStreamTransformer) TransformStream(\n \t\tsource:          stream,\n \t\tctx:             ctx,\n \t\tactiveToolCalls: make(map[string]*llm.ToolCall),\n+\t\ttoolCallIDs:     make(map[int]string),\n \t}\n \tdoneEvent := lo.ToPtr(llm.DoneStreamEvent)\n \t// Append the DONE event to the filtered stream\n@@ -52,6 +53,7 @@ type aiSDKConvertStream struct {\n \tcurrentTextID              string\n \tcurrentReasoningID         string\n \tactiveToolCalls            map[string]*llm.ToolCall // Track tool calls by ID\n+\ttoolCallIDs                map[int]string           // Tool call ID by delta index, for deltas without ID\n }\n \n func (s *aiSDKConvertStream) enqueueEvent(_ string, data any) error {\n@@ -215,10 +217,17 @@ func (s *aiSDKConvertStream) Next() bool {\n \n \t\t\tfor _, deltaToolCall := range choice.Delta.ToolCalls {\n \t\t\t\ttoolCallID := deltaToolCall.ID\n+\t\t\t\tif toolCallID == \"\" {\n+\t\t\t\t\t// Continuation deltas carry only the index; reuse the ID assigned to it.\n+\t\t\t\t\ttoolCallID = s.toolCallIDs[deltaToolCall.Index]\n+\t\t\t\t}\n+\n \t\t\t\tif toolCallID == \"\" {\n \t\t\t\t\ttoolCallID = generateID(\"tool\")\n \t\t\t\t}\n \n+\t\t\t\ts.toolCallIDs[deltaToolCall.Index] = toolCallID\n+\n \t\t\t\t// Initialize tool call if it doesn't exist\n \t\t\t\tif _, exists := s.activeToolCalls[toolCallID]; !exists {\n \t\t\t\t\ts.activeToolCalls[toolCallID] = &llm.ToolCall{"
+  },
+  {
+   "filename": "llm/transformer/aisdk/convert_stream_test.go",
+   "status": "modified",
+   "additions": 68,
+   "deletions": 0,
+   "patch": "@@ -419,3 +419,71 @@ func TestConvertStreamTransformer_TransformStream_ToolCalls(t *testing.T) {\n \tassert.True(t, hasFinish, \"Should have finish event\")\n \tassert.True(t, hasDone, \"Should have [DONE] event\")\n }\n+\n+// Continuation deltas of an OpenAI-style stream carry only the tool call index (no ID).\n+// They must extend the call opened by the first delta instead of opening a new one.\n+func TestConvertStreamTransformer_TransformStream_ToolCallContinuationWithoutID(t *testing.T) {\n+\ttransformer := NewConvertStreamTransformer()\n+\tctx := context.Background()\n+\n+\tdelta := func(index int, id, name, args string) *llm.Response {\n+\t\treturn &llm.Response{\n+\t\t\tID:     \"msg_idx\",\n+\t\t\tObject: \"chat.completion.chunk\",\n+\t\t\tChoices: []llm.Choice{\n+\t\t\t\t{\n+\t\t\t\t\tDelta: &llm.Message{\n+\t\t\t\t\t\tToolCalls: []llm.ToolCall{\n+\t\t\t\t\t\t\t{\n+\t\t\t\t\t\t\t\tID:       id,\n+\t\t\t\t\t\t\t\tType:     \"function\",\n+\t\t\t\t\t\t\t\tIndex:    index,\n+\t\t\t\t\t\t\t\tFunction: llm.FunctionCall{Name: name, Arguments: args},\n+\t\t\t\t\t\t\t},\n+\t\t\t\t\t\t},\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t},\n+\t\t}\n+\t}\n+\n+\tmockStream := &mockLLMStream{responses: []*llm.Response{\n+\t\tdelta(0, \"call_a\", \"get_weather\", `{\"location\":`),\n+\t\tdelta(0, \"\", \"\", `\"Paris\"}`),\n+\t\tdelta(1, \"call_b\", \"get_time\", `{\"tz\":`),\n+\t\tdelta(1, \"\", \"\", `\"UTC\"}`),\n+\t}}\n+\n+\tresultStream, err := transformer.TransformStream(ctx, mockStream)\n+\trequire.NoError(t, err)\n+\n+\tstarts := map[string]string{}\n+\tdeltas := map[string]string{}\n+\n+\tfor resultStream.Next() {\n+\t\tevent := resultStream.Current()\n+\t\tif string(event.Data) == \"[DONE]\" {\n+\t\t\tcontinue\n+\t\t}\n+\n+\t\tvar streamEvent StreamEvent\n+\t\trequire.NoError(t, json.Unmarshal(event.Data, &streamEvent))\n+\n+\t\tswitch streamEvent.Type {\n+\t\tcase \"tool-input-start\":\n+\t\t\t_, dup := starts[streamEvent.ToolCallID]\n+\t\t\tassert.False(t, dup, \"duplicate tool-input-start for %s\", streamEvent.ToolCallID)\n+\t\t\tstarts[streamEvent.ToolCallID] = streamEvent.ToolName\n+\t\tcase \"tool-input-delta\":\n+\t\t\tdeltas[streamEvent.ToolCallID] += streamEvent.InputTextDelta\n+\t\t}\n+\t}\n+\n+\trequire.NoError(t, resultStream.Err())\n+\n+\tassert.Equal(t, map[string]string{\"call_a\": \"get_weather\", \"call_b\": \"get_time\"}, starts)\n+\tassert.Equal(t, map[string]string{\n+\t\t\"call_a\": `{\"location\":\"Paris\"}`,\n+\t\t\"call_b\": `{\"tz\":\"UTC\"}`,\n+\t}, deltas)\n+}"
+  }
+ ],
+ "test_files": [
+  "llm/transformer/aisdk/convert_stream_test.go"
+ ]
+}

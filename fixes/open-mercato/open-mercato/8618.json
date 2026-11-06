@@ -1,0 +1,26 @@
+{
+ "repo": "open-mercato/open-mercato",
+ "number": 8618,
+ "url": "https://github.com/open-mercato/open-mercato/pull/8618",
+ "title": "fix(search): pass AWS_SESSION_TOKEN to the Bedrock embedding client",
+ "merged_at": "2026-11-05T12:51:51Z",
+ "files": [
+  {
+   "filename": "packages/search/src/__tests__/embedding.test.ts",
+   "status": "modified",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -6,12 +6,18 @@ jest.mock('ai-sdk-ollama', () => ({\n   createOllama: jest.fn(() => ({ embedding: jest.fn(() => ({})) })),\n }))\n \n+jest.mock('@ai-sdk/amazon-bedrock', () => ({\n+  createAmazonBedrock: jest.fn(() => ({ embedding: jest.fn(() => ({})) })),\n+}))\n+\n import { embed } from 'ai'\n+import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock'\n import { createOllama } from 'ai-sdk-ollama'\n import { EmbeddingService } from '../vector/services/embedding'\n \n const mockedEmbed = jest.mocked(embed)\n const mockedCreateOllama = jest.mocked(createOllama)\n+const mockedCreateAmazonBedrock = jest.mocked(createAmazonBedrock)\n \n describe('EmbeddingService', () => {\n   const originalEnv = { ...process.env }\n@@ -147,6 +153,49 @@ describe('EmbeddingService', () => {\n   })\n })\n \n+describe('EmbeddingService bedrock credentials', () => {\n+  const originalEnv = { ...process.env }\n+  const bedrockConfig = {\n+    providerId: 'bedrock' as const,\n+    model: 'amazon.titan-embed-text-v2:0',\n+    dimension: 1024,\n+    updatedAt: new Date().toISOString(),\n+  }\n+\n+  beforeEach(() => {\n+    jest.clearAllMocks()\n+    process.env = { ...originalEnv }\n+    process.env.AWS_ACCESS_KEY_ID = 'ASIAEXAMPLE'\n+    process.env.AWS_SECRET_ACCESS_KEY = 'secret'\n+    delete process.env.AWS_SESSION_TOKEN\n+    mockedEmbed.mockResolvedValue({ embedding: [0.1, 0.2] } as never)\n+  })\n+\n+  afterAll(() => {\n+    process.env = originalEnv\n+  })\n+\n+  it('passes AWS_SESSION_TOKEN to the Bedrock client for temporary credentials', async () => {\n+    process.env.AWS_SESSION_TOKEN = 'temporary-session-token'\n+\n+    await new EmbeddingService({ config: bedrockConfig }).createEmbedding('hello')\n+\n+    expect(mockedCreateAmazonBedrock).toHaveBeenCalledWith(\n+      expect.objectContaining({\n+        accessKeyId: 'ASIAEXAMPLE',\n+        secretAccessKey: 'secret',\n+        sessionToken: 'temporary-session-token',\n+      }),\n+    )\n+  })\n+\n+  it('leaves the session token unset for long-lived credentials', async () => {\n+    await new EmbeddingService({ config: bedrockConfig }).createEmbedding('hello')\n+\n+    expect(mockedCreateAmazonBedrock.mock.calls[0][0]?.sessionToken).toBeUndefined()\n+  })\n+})\n+\n describe('EmbeddingService.updateConfig', () => {\n   const baseConfig = {\n     providerId: 'ollama' as const,"
+  },
+  {
+   "filename": "packages/search/src/vector/services/embedding.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -165,6 +165,7 @@ export class EmbeddingService {\n         client = createAmazonBedrock({\n           accessKeyId,\n           secretAccessKey,\n+          sessionToken: process.env.AWS_SESSION_TOKEN || undefined,\n           region: process.env.AWS_REGION ?? 'us-east-1',\n         })\n         break"
+  }
+ ],
+ "test_files": [
+  "packages/search/src/__tests__/embedding.test.ts"
+ ]
+}

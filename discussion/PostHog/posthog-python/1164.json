@@ -1,0 +1,35 @@
+{
+ "repo": "PostHog/posthog-python",
+ "number": 1164,
+ "url": "https://github.com/PostHog/posthog-python/pull/1164",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-02T15:25:18Z",
+   "body": "Automated advisory code review."
+  },
+  {
+   "role": "member",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-02T17:07:33Z",
+   "body": "The code looks good; no qualifying findings. Verdict: correct."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "member",
+   "path": "posthog/ai/gemini/gemini_converter.py",
+   "created_at": "2026-11-02T15:25:18Z",
+   "body": "blocking: Keep unbilled Search retrieval out of priced input tokens — For a Google Search-grounded response, this unconditional addition puts retrieved context into `$ai_input_tokens`, even though Google's [pricing documentation](https://ai.google.dev/gemini-api/docs/pricing) explicitly says Search-retrieved context is not charged as input tokens (unlike URL context). PostHog prices this field as input, so a response with 20 prompt tokens and 300 Search tool tokens now records 320 priced input tokens, overstating generation costs in both normal and streaming captures. Preserve the distinction between billed URL-context input and unbilled Search retrieval rather than adding every tool's tokens to this pool. Reproduction: reproduced — `python -m pytest -vv -p no:cacheprovider --timeout=30 test_review_tool_usage.py::test_search_generation_does_not_add_unbilled_retrieval_to_input` fails both sync/stream cases on the exact head with `320 != 20`, and both pass on the exact merge base."
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-02T16:15:27Z",
+   "body": "Thanks, that's right. Search retrieval is reported in `tool_use_prompt_token_count` but isn't billed as input. The converter now adds those tokens to `$ai_input_tokens` only when the response (or streaming chunk) carries `url_context_metadata`, i.e. URL context, which is billed as input. Search-grounded responses keep `prompt_token_count` alone (20 stays 20, not 320), in both the sync and streaming paths. Tests cover both cases and both extractors; the Search one fails on the previous head. In streaming, `url_context_metadata` may arrive on a different chunk than the final `usage_metadata`, so the sync and async clients now carry the flag across chunks; a two-chunk stream test (URL context first, usage last) fails without it. A response using both tools can't be split from these counts, noted in a code comment.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
+}

@@ -1,0 +1,40 @@
+{
+ "repo": "pypa/pipenv",
+ "number": 6778,
+ "url": "https://github.com/pypa/pipenv/pull/6778",
+ "title": "fix(check): exit non-zero when safety cannot be installed or run",
+ "merged_at": "2026-11-05T07:17:22Z",
+ "files": [
+  {
+   "filename": "news/+safety-unavailable-exit.bugfix.rst",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+Fixed ``pipenv check`` and ``pipenv scan`` exiting with status 0 when safety could not be installed (or was still missing after the install): they now exit with status 1, so CI no longer passes without having scanned anything."
+  },
+  {
+   "filename": "pipenv/routines/check.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -194,7 +194,7 @@ def install_safety(project, system=False, auto_install=False, quiet=False):\n         err.print(\n             \"[red]Failed to install safety. Please install it manually with 'pip install pipenv[safety]'[/red]\"\n         )\n-        return False\n+        sys.exit(1)\n \n     if not quiet:\n         console.print(\"[green]Safety installed successfully![/green]\")\n@@ -400,7 +400,7 @@ def do_check(  # noqa: PLR0913\n                     \"[red]Safety installation was reported successful but module not found. \"\n                     \"Please try again or install manually with 'pip install pipenv[safety]'[/red]\"\n                 )\n-                return\n+                sys.exit(1)\n \n         # Use installed safety module\n         cmd = [project_python(project, system=system), \"-m\", \"safety\", \"check\"] + options"
+  },
+  {
+   "filename": "pipenv/routines/scan.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -273,7 +273,7 @@ def install_safety(project, system=False, auto_install=False):\n         err.print(\n             \"[red]Failed to install safety. Please install it manually with 'pip install pipenv[safety]'[/red]\"\n         )\n-        return False\n+        sys.exit(1)\n \n     console.print(\"[green]Safety installed successfully![/green]\")\n     return True\n@@ -434,7 +434,7 @@ def do_scan(  # noqa: PLR0913\n                     \"[red]Safety installation was reported successful but module not found. \"\n                     \"Please try again or install manually with 'pip install pipenv[safety]'[/red]\"\n                 )\n-                return\n+                sys.exit(1)\n \n         # Set up environment variables for safety\n         os.environ[\"SAFETY_CUSTOM_INTEGRATION\"] = \"True\""
+  },
+  {
+   "filename": "tests/unit/test_safety_unavailable_exit.py",
+   "status": "added",
+   "additions": 58,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,58 @@\n+\"\"\"Tests that ``pipenv check`` / ``pipenv scan`` fail when safety cannot be used.\"\"\"\n+\n+from __future__ import annotations\n+\n+from unittest import mock\n+\n+import pytest\n+\n+from pipenv.routines import check, scan\n+\n+\n+@pytest.fixture(params=[check, scan], ids=[\"check\", \"scan\"])\n+def routine(request, monkeypatch):\n+    mod = request.param\n+    monkeypatch.setattr(mod, \"run_pep508_check\", lambda *a, **kw: {})\n+    monkeypatch.setattr(mod, \"check_pep508_requirements\", lambda *a, **kw: None)\n+    monkeypatch.setattr(mod, \"get_requirements\", lambda *a, **kw: mock.Mock(stdout=\"requests==2.0\\n\"))\n+    monkeypatch.setattr(mod, \"create_temp_requirements_file\", lambda *a, **kw: \"reqs.txt\", raising=False)\n+    monkeypatch.setattr(mod, \"create_temp_requirements\", lambda *a, **kw: mock.Mock(name=\"t\"), raising=False)\n+    monkeypatch.setattr(mod, \"build_safety_options\", lambda *a, **kw: [], raising=False)\n+    monkeypatch.setattr(mod.os, \"unlink\", lambda *a, **kw: None, raising=False)\n+    return mod\n+\n+\n+@pytest.fixture\n+def project():\n+    proj = mock.MagicMock()\n+    proj.s.is_quiet.return_value = True\n+    proj.lockfile.exists = True\n+    return proj\n+\n+\n+def _run(mod, project):\n+    func = mod.do_scan if mod is scan else mod.do_check\n+    func(project, system=True, quiet=True, auto_install=True)\n+\n+\n+def test_exits_non_zero_when_safety_install_fails(routine, project, monkeypatch):\n+    monkeypatch.setattr(routine, \"is_safety_installed\", lambda *a, **kw: False)\n+    monkeypatch.setattr(routine, \"run_command\", lambda *a, **kw: mock.Mock(returncode=1))\n+    monkeypatch.setattr(routine, \"project_python\", lambda *a, **kw: \"python\")\n+\n+    with pytest.raises(SystemExit) as exc:\n+        _run(routine, project)\n+\n+    assert exc.value.code == 1\n+\n+\n+def test_exits_non_zero_when_safety_missing_after_install(routine, project, monkeypatch):\n+    monkeypatch.setattr(routine, \"is_safety_installed\", lambda *a, **kw: False)\n+    monkeypatch.setattr(routine, \"install_safety\", lambda *a, **kw: True)\n+    monkeypatch.setattr(routine, \"project_python\", lambda *a, **kw: \"python\")\n+    monkeypatch.setattr(\"subprocess.check_call\", lambda *a, **kw: 0)\n+\n+    with pytest.raises(SystemExit) as exc:\n+        _run(routine, project)\n+\n+    assert exc.value.code == 1"
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_safety_unavailable_exit.py"
+ ]
+}

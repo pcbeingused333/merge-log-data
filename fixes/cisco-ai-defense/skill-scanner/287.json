@@ -1,0 +1,47 @@
+{
+ "repo": "cisco-ai-defense/skill-scanner",
+ "number": 287,
+ "url": "https://github.com/cisco-ai-defense/skill-scanner/pull/287",
+ "title": "fix(behavioral): replace retired gemini-2.0-flash default in the alignment analyzer",
+ "merged_at": "2026-11-06T15:22:07Z",
+ "files": [
+  {
+   "filename": "skill_scanner/core/analyzers/behavioral/alignment/alignment_llm_client.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -66,7 +66,7 @@ class AlignmentLLMClient:\n \n     def __init__(\n         self,\n-        model: str = \"gemini/gemini-2.0-flash\",\n+        model: str = \"gemini/gemini-3.8-flash\",\n         api_key: str | None = None,\n         base_url: str | None = None,\n         api_version: str | None = None,"
+  },
+  {
+   "filename": "skill_scanner/core/analyzers/behavioral/alignment/alignment_orchestrator.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -52,7 +52,7 @@ class AlignmentOrchestrator:\n \n     def __init__(\n         self,\n-        llm_model: str = \"gemini/gemini-2.0-flash\",\n+        llm_model: str = \"gemini/gemini-3.8-flash\",\n         llm_api_key: str | None = None,\n         llm_base_url: str | None = None,\n         llm_temperature: Any = _TEMPERATURE_UNSET,\n@@ -65,7 +65,7 @@ def __init__(\n         \"\"\"Initialize alignment orchestrator.\n \n         Args:\n-            llm_model: LLM model to use (e.g., \"gemini/gemini-2.0-flash\")\n+            llm_model: LLM model to use (e.g., \"gemini/gemini-3.8-flash\")\n             llm_api_key: API key for the LLM provider\n             llm_base_url: Optional base URL for LLM API\n             llm_temperature: Temperature for LLM responses"
+  },
+  {
+   "filename": "skill_scanner/core/analyzers/behavioral/alignment/threat_vulnerability_classifier.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -43,7 +43,7 @@ class ThreatVulnerabilityClassifier:\n \n     def __init__(\n         self,\n-        model: str = \"gemini/gemini-2.0-flash\",\n+        model: str = \"gemini/gemini-3.8-flash\",\n         api_key: str | None = None,\n         base_url: str | None = None,\n         provider: str | None = None,"
+  },
+  {
+   "filename": "skill_scanner/core/analyzers/behavioral_analyzer.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -101,7 +101,7 @@ def __init__(\n \n         Args:\n             use_alignment_verification: Enable LLM-powered alignment verification\n-            llm_model: LLM model for alignment verification (e.g., \"gemini/gemini-2.0-flash\")\n+            llm_model: LLM model for alignment verification (e.g., \"gemini/gemini-3.8-flash\")\n             llm_api_key: API key for the LLM provider (or resolved from environment)\n             llm_provider: Optional provider override used for request semantics\n             llm_reasoning_effort: Optional reasoning-depth control for alignment calls\n@@ -125,7 +125,7 @@ def __init__(\n                 from .behavioral.alignment import AlignmentOrchestrator\n \n                 # Resolve LLM configuration - use SKILL_SCANNER_LLM_* variables\n-                model = llm_model or os.environ.get(\"SKILL_SCANNER_LLM_MODEL\", \"gemini/gemini-2.0-flash\")\n+                model = llm_model or os.environ.get(\"SKILL_SCANNER_LLM_MODEL\", \"gemini/gemini-3.8-flash\")\n                 api_key = llm_api_key or os.environ.get(\"SKILL_SCANNER_LLM_API_KEY\")\n                 provider_name = (\n                     (llm_provider or os.environ.get(\"SKILL_SCANNER_LLM_PROVIDER\") or \"\")"
+  },
+  {
+   "filename": "tests/behavioral/test_default_models.py",
+   "status": "added",
+   "additions": 41,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,41 @@\n+# Copyright 2026 Cisco Systems, Inc. and its affiliates\n+# SPDX-License-Identifier: Apache-2.0\n+\"\"\"Regression: the behavioral analyzer's fallback model must not be a retired Gemini model.\"\"\"\n+\n+import inspect\n+\n+import pytest\n+\n+from skill_scanner.core.analyzers.behavioral.alignment.alignment_llm_client import AlignmentLLMClient\n+from skill_scanner.core.analyzers.behavioral.alignment.alignment_orchestrator import AlignmentOrchestrator\n+from skill_scanner.core.analyzers.behavioral.alignment.threat_vulnerability_classifier import (\n+    ThreatVulnerabilityClassifier,\n+)\n+\n+EXPECTED_DEFAULT = \"gemini/gemini-3.8-flash\"\n+\n+\n+@pytest.mark.parametrize(\n+    (\"cls\", \"param\"),\n+    [\n+        (AlignmentLLMClient, \"model\"),\n+        (AlignmentOrchestrator, \"llm_model\"),\n+        (ThreatVulnerabilityClassifier, \"model\"),\n+    ],\n+)\n+def test_alignment_default_model_is_current(cls, param):\n+    default = inspect.signature(cls.__init__).parameters[param].default\n+    assert default == EXPECTED_DEFAULT\n+\n+\n+def test_behavioral_analyzer_env_fallback_is_current(monkeypatch, tmp_path):\n+    from unittest.mock import patch\n+\n+    from skill_scanner.core.analyzers.behavioral_analyzer import BehavioralAnalyzer\n+\n+    monkeypatch.delenv(\"SKILL_SCANNER_LLM_MODEL\", raising=False)\n+    monkeypatch.delenv(\"SKILL_SCANNER_LLM_PROVIDER\", raising=False)\n+    monkeypatch.setenv(\"SKILL_SCANNER_LLM_API_KEY\", \"test-key\")\n+    with patch(\"skill_scanner.core.analyzers.behavioral.alignment.AlignmentOrchestrator\") as orchestrator:\n+        BehavioralAnalyzer(use_alignment_verification=True)\n+    assert orchestrator.call_args.kwargs[\"llm_model\"] == EXPECTED_DEFAULT"
+  }
+ ],
+ "test_files": [
+  "tests/behavioral/test_default_models.py"
+ ]
+}

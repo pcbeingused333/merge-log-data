@@ -1,0 +1,47 @@
+{
+ "repo": "reticlehq/reticle",
+ "number": 2079,
+ "url": "https://github.com/reticlehq/reticle/pull/2079",
+ "title": "fix(engine): take a text baseline on an SDK that refuses matchCase",
+ "merged_at": "2026-10-31T17:51:43Z",
+ "files": [
+  {
+   "filename": ".changes/2065-baseline-match-case.md",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+### Fixed\n+\n+- **`@reticlehq/engine` — A `changed` or `unchanged` text check gets a baseline on a page whose SDK is older than 3.7.0 or reports no version.** Such a page refuses an element query that carries `matchCase`, and the reading taken before the action gave up on that refusal, so the check had nothing to compare against and never graded. The before-reading now goes through the same retry as the verdict: it asks the page once more without `matchCase` and checks the case on the text that comes back. Any other refusal still gives no baseline."
+  },
+  {
+   "filename": "engine/eslint-suppressions.json",
+   "status": "modified",
+   "additions": 0,
+   "deletions": 3,
+   "patch": "@@ -94,9 +94,6 @@\n     }\n   },\n   \"src/evidence/baseline.ts\": {\n-    \"curly\": {\n-      \"count\": 9\n-    },\n     \"no-nested-ternary\": {\n       \"count\": 1\n     }"
+  },
+  {
+   "filename": "engine/src/evidence/baseline.test.ts",
+   "status": "modified",
+   "additions": 61,
+   "deletions": 0,
+   "patch": "@@ -111,3 +111,64 @@ describe('the pre-action check skips a relative leaf', () => {\n     );\n   });\n });\n+\n+/*\n+ * A page whose SDK predates `matchCase` (or reports no version) refuses the whole query for that\n+ * key. The baseline read used to give up on that refusal, so a `changed` text check had nothing to\n+ * compare against and never graded. It now asks again without the key, like the verdict does.\n+ */\n+describe('a text baseline on an SDK that refuses matchCase', () => {\n+  const REFUSAL = \"Unrecognized key(s) in object: 'matchCase'\";\n+\n+  function oldPage(texts: string[], refusal = REFUSAL): PredicateSession {\n+    let reads = 0;\n+    return {\n+      id: 's1',\n+      url: 'http://localhost/',\n+      elapsed: () => 0,\n+      eventsSince: () => [],\n+      command: (_name: string, args: unknown): Promise<CommandResult> => {\n+        const query = (args as { query: Record<string, unknown> }).query;\n+        if ('matchCase' in query) {\n+          return Promise.resolve({ kind: 'command_result', id: 'c', ok: false, error: refusal });\n+        }\n+        const text = texts[Math.min(reads++, texts.length - 1)] ?? '';\n+        const elements = [\n+          { ref: 'e0', role: 'paragraph', name: '', text, states: [], visible: true },\n+        ];\n+        return Promise.resolve({\n+          kind: 'command_result',\n+          id: 'c',\n+          ok: true,\n+          result: { matched: true, count: 1, elements, fullText: true },\n+        });\n+      },\n+    } as unknown as PredicateSession;\n+  }\n+\n+  const changed = parsePredicate({\n+    kind: 'text',\n+    contains: 'Total',\n+    satisfies: { property: 'changed' },\n+  });\n+\n+  it('still takes the baseline, so a changed text grades yes', async () => {\n+    const page = oldPage(['Total 10', 'Total 12']);\n+    const baselines = await captureBaselines(page, changed);\n+    expect(baselines.size).toBe(1);\n+    expect((await evaluatePredicate(page, changed, 0, false, baselines)).pass).toBe(true);\n+  });\n+\n+  it('grades an unchanged text no', async () => {\n+    const page = oldPage(['Total 10', 'Total 10']);\n+    const baselines = await captureBaselines(page, changed);\n+    const result = await evaluatePredicate(page, changed, 0, false, baselines);\n+    expect(result.pass).toBe(false);\n+    expect(result.inconclusive).toBeUndefined();\n+  });\n+\n+  it('still gives no baseline when the refusal is about something else', async () => {\n+    const page = oldPage(['Total 10'], 'the matcher threw: boom');\n+    expect((await captureBaselines(page, changed)).size).toBe(0);\n+  });\n+});"
+  },
+  {
+   "filename": "engine/src/evidence/baseline.ts",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 16,
+   "patch": "@@ -13,11 +13,11 @@\n  * arbitrary named checkpoints. A `snapshot(\"cart\")` / `compare(\"cart\")` pair is a different feature\n  * and has no evidence behind it.\n  */\n-import { MatchArg, PredicateKind, ReticleCommand } from '@reticlehq/core';\n+import { PredicateKind, ReticleCommand } from '@reticlehq/core';\n import type { Predicate } from '@/question/predicate/predicate.js';\n import type { Baseline } from '@/question/predicate/property.js';\n import type { PredicateSession } from '@/question/predicate/predicate-session.js';\n-import { textPredicateQuery } from '@/question/predicate/predicate-element.js';\n+import { matchOnce, textPredicateQuery } from '@/question/predicate/predicate-element.js';\n \n /** The properties that mean nothing without a before-reading. Mirrors `RELATIVE` in property.ts. */\n const NEEDS_BASELINE: ReadonlySet<string> = new Set([\n@@ -47,19 +47,25 @@ function leavesNeedingBaseline(predicate: Predicate, into: Predicate[]): void {\n   switch (predicate.kind) {\n     case PredicateKind.ALL_OF:\n     case PredicateKind.ANY_OF:\n-      for (const part of predicate.predicates) leavesNeedingBaseline(part, into);\n+      for (const part of predicate.predicates) {\n+        leavesNeedingBaseline(part, into);\n+      }\n       return;\n     case PredicateKind.NOT:\n       leavesNeedingBaseline(predicate.predicate, into);\n       return;\n     default:\n-      if (asksForComparison(predicate)) into.push(predicate);\n+      if (asksForComparison(predicate)) {\n+        into.push(predicate);\n+      }\n   }\n }\n \n /** Does the whole tree need a pre-action reading at all? One walk, so the caller pays nothing. */\n export function needsBaseline(predicate: Predicate | undefined): boolean {\n-  if (predicate === undefined) return false;\n+  if (predicate === undefined) {\n+    return false;\n+  }\n   const found: Predicate[] = [];\n   leavesNeedingBaseline(predicate, found);\n   return found.length > 0;\n@@ -74,7 +80,9 @@ async function readStateValue(\n       ? { path: predicate.path }\n       : { store: predicate.store, path: predicate.path };\n   const read = await session.command(ReticleCommand.STATE_READ, args);\n-  if (!read.ok) return undefined;\n+  if (!read.ok) {\n+    return undefined;\n+  }\n   const reply = (read.result ?? {}) as { found?: unknown; value?: unknown };\n   // `found: false` is a reading — the path held nothing — and it is NOT the same as \"nobody\n   // looked\". Only an unreadable store returns undefined above.\n@@ -88,16 +96,23 @@ async function readText(\n   const query = textPredicateQuery(predicate, session.sdkVersion);\n   // Read the way the property will read it after the action: a before-reading of the display form\n   // against an after-reading of the whole text would call every long text \"changed\".\n-  const match = await session.command(ReticleCommand.MATCH, {\n-    query,\n-    [MatchArg.FULL_TEXT]: true,\n-  });\n-  if (!match.ok) return undefined;\n-  const elements = ((match.result ?? {}) as { elements?: unknown }).elements;\n-  if (!Array.isArray(elements)) return undefined;\n+  // Through the verdict's own round-trip, so a page whose SDK refuses `matchCase` is asked again\n+  // without it and gets a baseline too. A reply that cannot be read gives no baseline.\n+  let match;\n+  try {\n+    match = await matchOnce(session, query, undefined, undefined, true);\n+  } catch {\n+    return undefined;\n+  }\n+  const elements = (match as { elements?: unknown }).elements;\n+  if (!Array.isArray(elements)) {\n+    return undefined;\n+  }\n   const text = elements\n     .map((element: unknown) => {\n-      if ('object' !== typeof element || null === element) return '';\n+      if ('object' !== typeof element || null === element) {\n+        return '';\n+      }\n       const value = (element as { text?: unknown }).text;\n       return 'string' === typeof value ? value : '';\n     })\n@@ -119,7 +134,9 @@ export async function captureBaselines(\n   predicate: Predicate | undefined,\n ): Promise<ReadonlyMap<Predicate, Baseline>> {\n   const captured = new Map<Predicate, Baseline>();\n-  if (predicate === undefined) return captured;\n+  if (predicate === undefined) {\n+    return captured;\n+  }\n   const leaves: Predicate[] = [];\n   leavesNeedingBaseline(predicate, leaves);\n   for (const leaf of leaves) {\n@@ -130,7 +147,9 @@ export async function captureBaselines(\n           : PredicateKind.TEXT === leaf.kind\n             ? await readText(session, leaf)\n             : undefined;\n-      if (reading !== undefined) captured.set(leaf, reading);\n+      if (reading !== undefined) {\n+        captured.set(leaf, reading);\n+      }\n     } catch {\n       // A reading that could not be taken leaves the leaf with no baseline, which the evaluator\n       // reports as `inconclusive`. Throwing here would lose the whole verdict for one unreadable"
+  },
+  {
+   "filename": "engine/src/question/predicate/predicate-element.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -190,7 +190,7 @@ function matchNotServedMessage(\n   );\n }\n \n-async function matchOnce(\n+export async function matchOnce(\n   session: PredicateSession,\n   query: ElementQuery,\n   state: ElementState | undefined,"
+  }
+ ],
+ "test_files": [
+  "engine/src/evidence/baseline.test.ts"
+ ]
+}

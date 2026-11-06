@@ -1,0 +1,75 @@
+{
+ "repo": "stacklok/toolhive",
+ "number": 7036,
+ "url": "https://github.com/stacklok/toolhive/pull/7036",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-03T12:15:09Z",
+   "body": "Thanks for picking this up. The remap fixes the cases from #7028 and #6995 (I checked it against fosite v0.49.0). There are a few changes needed before merge, listed below in order of importance. Each inline comment says what to change and which test should prove it.\n\n1. A Redis failure during the jti check must stay a 500 (inline on `client_assertion_errors.go:40`). This is the only change that needs some design. I've sketched it there.\n2. The integration test for the expired case must assert the status code (inline on `integration_test.go`, about line 6810).\n3. Keep a missing `client_assertion` as 400 invalid_request (inline on `client_assertion_errors.go:41`).\n4. Fix the doc comment and add the two comments explaining the matching (inline).\n5. Docs: add this paragraph to `docs/arch/17-token-exchange-delegation.md`, after \"rejects replay while the assertion is valid. No `client_secret` …\" (around line 344):\n   ```markdown\n   Every failed assertion check (unknown `kid`, bad signature, wrong `iss`, `sub`\n   or `aud`, expired or not yet valid, `exp` more than 5 minutes ahead, reused\n   `jti`) is refused with HTTP 401 `invalid_client`. The `error_description`\n   names the check that failed. A storage failure while checking or recording\n   the `jti` is HTTP 500 `server_error`, so clients can retry it. A request\n   that sets `client_assertion_type` but omits `client_assertion` is HTTP 400\n   `invalid_request`.\n   ```\n   Also add a before/after line under \"Does this introduce a user-facing change?\" for the storage-failure and missing-assertion cases.\n6. PR housekeeping:\n   - Change `Fixes #7028` to `Part of #7028`. The issue's acceptance also includes the strict issuer-only `aud` check, which this PR doesn't do.\n   - Drop the `fix(authserver):` prefix from the title and the commit subject. This repo doesn't use conventional commits (CONTRIBUTING.md). Something like \"Return invalid_client for failed client assertions\" works.\n   - Add one line under special notes: \"Without a clock-skew margin (#6954), a client whose clock runs slightly fast now gets 401 invalid_client for a future `iat` instead of a 500.\"\n\nYou don't need to do #6954 (clock skew) or the strict audience check here."
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-03T13:10:27Z",
+   "body": "Looks good, thanks for the quick turnaround. Please do switch the description to \"Closes #7028\" before merging."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "pkg/authserver/server/client_assertion_errors.go",
+   "created_at": "2026-11-03T12:15:09Z",
+   "body": "A Redis outage during the jti check still turns into 401 invalid_client, and #7028 needs it to stay 500. Here's why: fosite throws away any error from `ClientAssertionJWTValid` and returns a fresh `ErrJTIKnown` (`client_authentication.go:159` in v0.49.0). In `RedisStorage`, that call is where the jti is reserved, so a connection error comes back as jti_known and line 52 maps it to invalid_client. The wrapper can't see the cause, so the store has to pass it on through the request context. Roughly:\n\nIn `pkg/authserver/server` (storage already imports this package):\n```go\ntype clientAssertionStoreFailureKey struct{}\n\ntype clientAssertionStoreFailure struct{ err error }\n\n// RecordClientAssertionStoreFailure lets a storage backend report that it could\n// not check a client assertion's jti for a reason other than a replay. fosite\n// discards the error ClientAssertionJWTValid returns, so the client\n// authentication strategy reads it from the context instead. Storage\n// decorators must pass ctx through to the backend unchanged.\nfunc RecordClientAssertionStoreFailure(ctx context.Context, err error) {\n\tif f, ok := ctx.Value(clientAssertionStoreFailureKey{}).(*clientAssertionStoreFailure); ok {\n\t\tf.err = err\n\t}\n}\n```\nIn the wrapper, before calling `next`:\n```go\nfailure := &clientAssertionStoreFailure{}\nctx = context.WithValue(ctx, clientAssertionStoreFailureKey{}, failure)\nclient, err := next(ctx, r, form)\nif err != nil && failure.err != nil {\n\treturn nil, fosite.ErrServerError.WithWrap(failure.err).WithDebug(failure.err.Error())\n}\n```\nIn `RedisStorage.ClientAssertionJWTValid`, in the non-`redis.Nil` branch only:\n```go\nerr = fmt.Errorf(\"failed to reserve JWT: %w\", err)\nserver.RecordClientAssertionStoreFailure(ctx, err)\nreturn err\n```\nDon't record the jti-length error. That one is the client's fault, so invalid_client is right for it. `MemoryStorage` has no backend failure, so it doesn't need the call.\n\nTests:\n- In `client_assertion_errors_test.go`, add a case where the stub's `ClientAssertionJWTValid` calls `RecordClientAssertionStoreFailure` and returns an error. It should expect `server_error` with status 500.\n- Keep a case where it returns `fosite.ErrJTIKnown` without recording anything. It should still expect 401 invalid_client.\n- In `redis_test.go`, add a case that closes the miniredis instance (`mr.Close()`) and calls `ClientAssertionJWTValid` with a context set up by the recorder. It should assert that the error was recorded.\n\nThen update the doc comment above (lines 35-37). As written it says storage failures are returned unchanged, and that's only true once this is in."
+  },
+  {
+   "role": "contributor",
+   "path": "pkg/authserver/integration_test.go",
+   "created_at": "2026-11-03T12:15:09Z",
+   "body": "A few lines down, the `wrong_audience`, `wrong_subject` and `expired` subtests (line 6810) only assert `NotEqual(t, http.StatusOK, ...)`. The expired assertion is the actual bug from the issue, and the old 500 passed that check too. All three go through the real provider chain (embedded-key guard plus SPIFFE dispatcher), which the unit test skips, so please replace that line with the same check as here:\n```go\n\t\t\t\t\tassert.Equal(t, http.StatusUnauthorized, response.StatusCode, body)\n\t\t\t\t\tassert.Equal(t, \"invalid_client\", body[\"error\"])\n```"
+  },
+  {
+   "role": "contributor",
+   "path": "pkg/authserver/server/client_assertion_errors.go",
+   "created_at": "2026-11-03T12:15:09Z",
+   "body": "Line 52 maps every invalid_request, so it also catches fosite's \"The client_assertion request parameter must be set…\". RFC 6749 §5.2 treats a missing parameter as invalid_request, and the SPIFFE path returns 400 invalid_request for the same case (`spiffe_client_auth.go:81-91`). Skipping the remap when there's no assertion keeps both paths the same:\n```suggestion\n\t\tif err == nil || form.Get(\"client_assertion_type\") != jwtBearerClientAssertionType || form.Get(\"client_assertion\") == \"\" {\n```\nPlease add a test case: `client_assertion_type` set, `client_assertion` empty, expect 400 invalid_request."
+  },
+  {
+   "role": "contributor",
+   "path": "pkg/authserver/server/client_assertion_errors.go",
+   "created_at": "2026-11-03T12:15:10Z",
+   "body": "Please add a comment here listing what this catches, so the next person doesn't have to dig through fosite:\n```suggestion\n\t\t// invalid_request: fosite's findPublicKey reports an unknown kid or no\n\t\t// matching key this way. It also covers \"server configuration does not\n\t\t// support OpenID Connect specific authentication methods\", which our\n\t\t// client types never hit. jti_known: a replayed jti.\n\t\tcase fosite.ErrInvalidRequest.ErrorField, fosite.ErrJTIKnown.ErrorField:\n```"
+  },
+  {
+   "role": "contributor",
+   "path": "pkg/authserver/server/client_assertion_errors.go",
+   "created_at": "2026-11-03T12:15:10Z",
+   "body": "Matching on the message text is fine here, but please say why, so nobody tries to \"fix\" it:\n```suggestion\n// clientAssertionClaimErrors are the messages of the claim validation errors\n// that fosite returns unwrapped, as plain errors, when it parses a client\n// assertion (see fosite/token/jwt MapClaims.Valid). fosite returns the bare\n// errors.New value and drops the ValidationError flags, so there is nothing\n// typed to match. TestClientAssertionErrorStrategy runs real fosite, so a\n// changed message fails that test on upgrade.\n```"
+  },
+  {
+   "role": "contributor",
+   "path": "pkg/authserver/storage/memory_test.go",
+   "created_at": "2026-11-03T12:15:10Z",
+   "body": "Nit: the Redis twin of this test is a `t.Run` inside `TestRedisStorage_ClientAssertionJWT`. Please move this one into `TestMemoryStorage_ClientAssertionJWT` the same way."
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-03T12:35:11Z",
+   "body": "Thanks, all points addressed in the new commit:\n\n1. A Redis failure while reserving the jti stays a 500: `RedisStorage.ClientAssertionJWTValid` calls `server.RecordClientAssertionStoreFailure` in the non-`redis.Nil` branch only, and the strategy wrapper returns `server_error` when something was recorded. I added an exported `NewClientAssertionStoreFailureContext` helper so the Redis test can set up the recorder from the `storage` package. Tests: stub case that records and returns an error (500 `server_error`), `ErrJTIKnown` without a record (401 `invalid_client`), and Redis cases with `mr.Close()` (recorded) and a replay (not recorded).\n2. The `wrong_audience`, `wrong_subject` and `expired` integration subtests now assert 401 and `invalid_client`.\n3. A missing `client_assertion` skips the remap and stays 400 `invalid_request`, with a test case.\n4. Doc comment updated, and the two matching comments added.\n5. Paragraph added to `docs/arch/17-token-exchange-delegation.md`.\n6. PR body now says `Part of #7028`, with the clock-skew note added; title changed to \"Return invalid_client for failed client assertions\". The memory test now lives in `TestMemoryStorage_ClientAssertionJWT`.\n\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-11-03T12:48:59Z",
+   "body": "Thanks, all six review threads are addressed, I resolved them.\n\nOn the strict audience question: let's leave it out of this PR. It changes which assertions are accepted, not what we return on failure, and it needs a migration option, so I'll split it out of #7028 into its own issue. That way this PR covers everything left in #7028, so please change \"Part of #7028\" to \"Closes #7028\" in the description."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-03T13:23:06Z",
+   "body": "## [Codecov](https://app.codecov.io/gh/stacklok/toolhive/pull/7036?dropdown=coverage&src=pr&el=h1&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=stacklok) Report\n:white_check_mark: All modified and coverable lines are covered by tests.\n:white_check_mark: Project coverage is 80.50%. Comparing base ([`ccdcf6d`](https://app.codecov.io/gh/stacklok/toolhive/commit/ccdcf6d7fb5ccf5b4cf91654c72f53a3965cfc4e?dropdown=coverage&el=desc&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=stacklok)) to head ([`adea630`](https://app.codecov.io/gh/stacklok/toolhive/commit/adea6308592482c413f2c945bdd57a59413bf59d?dropdown=coverage&el=desc&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=stacklok)).\n:warning: Report is 1 commits behind head on main.\n\n<details><summary>Additional details and impacted files</summary>\n\n\n\n```diff\n@@            Coverage Diff             @@\n##             main    #7036      +/-   ##\n==========================================\n+ Coverage   80.46%   80.50%   +0.04%     \n==========================================\n  Files         852      853       +1     \n  Lines       87035    87063      +28     \n==========================================\n+ Hits        70030    70094      +64     \n+ Misses      17000    16964      -36     \n  Partials        5        5              \n```\n</details>\n\n[:umbrella: View full report in Codecov by Harness](https://app.codecov.io/gh/stacklok/toolhive/pull/7036?dropdown=coverage&src=pr&el=continue&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=stacklok).   \n:loudspeaker: Have feedback on the report? [Share it here](https://about.codecov.io/codecov-pr-comment-feedback/?utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=stacklok).\n<details><summary> :rocket: New features to boost your workflow: </summary>\n\n- :snowflake: [Test Analytics](https://docs.codecov.com/docs/test-analytics): Detect flaky tests, report on failures, and find test suite problems.\n</details>"
+  }
+ ]
+}

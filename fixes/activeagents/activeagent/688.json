@@ -1,0 +1,26 @@
+{
+ "repo": "activeagents/activeagent",
+ "number": 688,
+ "url": "https://github.com/activeagents/activeagent/pull/688",
+ "title": "fix(requesty): implement api_embed_execute so embed works",
+ "merged_at": "2026-11-06T18:12:08Z",
+ "files": [
+  {
+   "filename": "lib/active_agent/providers/requesty_provider.rb",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -50,6 +50,14 @@ def self.embed_request_type\n \n       protected\n \n+      # Executes an embedding request via Requesty's OpenAI-compatible API.\n+      #\n+      # @param parameters [Hash]\n+      # @return [Hash] symbolized API response\n+      def api_embed_execute(parameters)\n+        client.embeddings.create(**parameters).as_json.deep_symbolize_keys\n+      end\n+\n       # @see BaseProvider#api_response_normalize\n       # @param api_response [OpenAI::Models::ChatCompletion]\n       # @return [Hash] normalized response hash"
+  },
+  {
+   "filename": "test/providers/requesty/embed_test.rb",
+   "status": "added",
+   "additions": 51,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,51 @@\n+# frozen_string_literal: true\n+\n+require \"test_helper\"\n+\n+begin\n+  require \"openai\"\n+rescue LoadError\n+  puts \"OpenAI gem not available, skipping Requesty embed tests\"\n+  return\n+end\n+\n+require_relative \"../../../lib/active_agent/providers/requesty_provider\"\n+\n+module Providers\n+  module Requesty\n+    class EmbedTest < ActiveSupport::TestCase\n+      include WebMock::API\n+\n+      EMBEDDINGS_ENDPOINT = \"https://router.requesty.ai/v1/embeddings\"\n+\n+      test \"sends an embedding request to the Requesty embeddings endpoint\" do\n+        stub_request(:post, EMBEDDINGS_ENDPOINT).to_return(\n+          status: 200,\n+          headers: { \"Content-Type\" => \"application/json\" },\n+          body: embedding_response.to_json\n+        )\n+\n+        response = ActiveAgent::Providers::RequestyProvider.new(\n+          service: \"Requesty\",\n+          model: \"openai/text-embedding-3-small\",\n+          input: \"hello\",\n+          api_key: \"rqsty-test\"\n+        ).embed\n+\n+        assert_equal [ 0.1, 0.2 ], response.data.first[:embedding]\n+        assert_requested(:post, EMBEDDINGS_ENDPOINT, headers: { \"Authorization\" => \"Bearer rqsty-test\" })\n+      end\n+\n+      private\n+\n+      def embedding_response\n+        {\n+          object: \"list\",\n+          model: \"openai/text-embedding-3-small\",\n+          data: [ { object: \"embedding\", index: 0, embedding: [ 0.1, 0.2 ] } ],\n+          usage: { prompt_tokens: 2, total_tokens: 2 }\n+        }\n+      end\n+    end\n+  end\n+end"
+  }
+ ],
+ "test_files": [
+  "test/providers/requesty/embed_test.rb"
+ ]
+}

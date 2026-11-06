@@ -1,0 +1,33 @@
+{
+ "repo": "reticlehq/reticle",
+ "number": 2104,
+ "url": "https://github.com/reticlehq/reticle/pull/2104",
+ "title": "fix(crawl): do not click a control that has no accessible name",
+ "merged_at": "2026-11-01T23:57:25Z",
+ "files": [
+  {
+   "filename": ".changes/1668-crawl-unnamed-controls.md",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+### Fixed\n+\n+- **`@reticlehq/server` — `crawl` no longer clicks a control that has no accessible name.** An icon-only button, such as a per-row trash icon, gave the destructive-action guard no text to classify, so the crawl clicked it. The crawl now skips such a control and lists it in `notJudged` with a reason. Set `confirmDangerous` to include it. Closes [#1668](https://github.com/reticlehq/reticle/issues/1668)."
+  },
+  {
+   "filename": "server/src/features/crawl/crawl-unnamed.test.ts",
+   "status": "added",
+   "additions": 48,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,48 @@\n+/**\n+ * A control with no accessible name gives the destructive-action guard no text to classify.\n+ *\n+ * A per-row trash icon is `<button><svg/></button>`: no label, no `title`, no `aria-label`. The crawl\n+ * used to click it, so an app with no confirm step lost the row. The crawl now leaves it alone and\n+ * says so in `notJudged`. `confirmDangerous` lets the caller include it.\n+ */\n+\n+import { describe, expect, it } from 'vitest';\n+import { type CommandResult, type ReticleEvent, ReticleCommand } from '@reticlehq/core';\n+import { crawl } from './crawl.js';\n+\n+const noSleep = (): Promise<void> => Promise.resolve();\n+const TREE = '- button \"Save\" (ref=e1)\\n- button (ref=e2)';\n+\n+function makeSession(clicks: string[]): Parameters<typeof crawl>[0] {\n+  const ok = (result: unknown): Promise<CommandResult> =>\n+    Promise.resolve({ kind: 'command_result', id: 'x', ok: true, result });\n+  return {\n+    elapsed: () => 0,\n+    eventsSince: (): ReticleEvent[] => [\n+      { type: 'dom.added', t: 1, data: {} } as unknown as ReticleEvent,\n+    ],\n+    command: (name: string, args?: Record<string, unknown>): Promise<CommandResult> => {\n+      if (name === ReticleCommand.SNAPSHOT) {\n+        return ok({ tree: TREE });\n+      }\n+      clicks.push(String(args?.['ref']));\n+      return ok({ ok: true, dispatched: true });\n+    },\n+  };\n+}\n+\n+describe('crawl and a control with no accessible name', () => {\n+  it('does not click it and reports it as not judged', async () => {\n+    const clicks: string[] = [];\n+    const report = await crawl(makeSession(clicks), { maxSteps: 10 }, noSleep);\n+    expect(clicks).toEqual(['e1']);\n+    expect(report.notJudged?.map((n) => n.ref)).toEqual(['e2']);\n+    expect(report.notJudged?.[0]?.reason).toContain('no accessible name');\n+  });\n+\n+  it('clicks it when the caller sets confirmDangerous', async () => {\n+    const clicks: string[] = [];\n+    await crawl(makeSession(clicks), { maxSteps: 10, confirmDangerous: true }, noSleep);\n+    expect(clicks).toEqual(['e1', 'e2']);\n+  });\n+});"
+  },
+  {
+   "filename": "server/src/features/crawl/crawl.ts",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 1,
+   "patch": "@@ -142,6 +142,11 @@ export interface CrawlReport {\n  */\n const ENDS_SESSION = /\\b(?:sign ?out|log ?out|sign ?off|log ?off)\\b/i;\n const ENDS_SESSION_NOT_PRESSED = 'not pressed: it ends the signed-in session the crawl is driving';\n+const NO_ACCESSIBLE_NAME_NOT_PRESSED =\n+  'not pressed: no accessible name, so the destructive-action guard cannot classify it (set confirmDangerous to include it)';\n+// A snapshot line carries the accessible name, a value or an own text as a quoted string. A line\n+// with no quote has no text at all, for example an icon-only button.\n+const HAS_TEXT = /\"/;\n \n /** Why a silent control on a throttled page is not reported as dead. */\n const BACKGROUND_TAB_NOT_JUDGED =\n@@ -409,6 +414,10 @@ export async function crawl(\n         notJudged.push({ ref: item.ref, desc: item.desc, reason: ENDS_SESSION_NOT_PRESSED });\n         continue;\n       }\n+      if (!confirm && !HAS_TEXT.test(item.desc)) {\n+        notJudged.push({ ref: item.ref, desc: item.desc, reason: NO_ACCESSIBLE_NAME_NOT_PRESSED });\n+        continue;\n+      }\n       stepsRun += 1;\n       visited.push(item.desc);\n \n@@ -573,7 +582,9 @@ export async function crawl(\n   // one would only muddy it.\n   const revealed = coverageCapped ? 0 : (await revealedItems(session, opts, found)).length;\n   // Left alone on purpose, so not a step the budget ran out before.\n-  const leftAlone = notJudged.filter((n) => ENDS_SESSION_NOT_PRESSED === n.reason).length;\n+  const leftAlone = notJudged.filter(\n+    (n) => ENDS_SESSION_NOT_PRESSED === n.reason || NO_ACCESSIBLE_NAME_NOT_PRESSED === n.reason,\n+  ).length;\n \n   return {\n     interactiveFound: found.length,"
+  }
+ ],
+ "test_files": [
+  "server/src/features/crawl/crawl-unnamed.test.ts"
+ ]
+}

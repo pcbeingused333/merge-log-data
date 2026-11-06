@@ -1,0 +1,33 @@
+{
+ "repo": "TanStack/ai",
+ "number": 2039,
+ "url": "https://github.com/TanStack/ai/pull/2039",
+ "title": "fix(ai-sandbox): don't declare projection capability when no workspace",
+ "merged_at": "2026-11-05T10:50:43Z",
+ "files": [
+  {
+   "filename": ".changeset/sandbox-no-workspace-provides.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@tanstack/ai-sandbox': patch\n+---\n+\n+`withSandbox` no longer fails the first `chat()` call with `declares it provides \"sandbox-projection\" but never called provide() in setup()` when the sandbox definition has no `workspace`. `sandbox-projection` is listed in `provides` only when a workspace is declared, which is when `setup` calls `provide()`. A sandbox with a workspace still satisfies `requires: [ProjectionCapability]`."
+  },
+  {
+   "filename": "packages/ai-sandbox/src/middleware.ts",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 8,
+   "patch": "@@ -496,17 +496,18 @@ export function withSandbox<TOffset extends string = string>(\n ): DefinedChatMiddleware<\n   unknown,\n   readonly [],\n-  readonly [typeof SandboxCapability, typeof ProjectionCapability]\n+  | readonly [typeof SandboxCapability, typeof ProjectionCapability]\n+  | readonly [typeof SandboxCapability]\n > {\n   return defineChatMiddleware({\n     name: 'sandbox',\n-    provides: [SandboxCapability, ProjectionCapability],\n-    // SandboxPolicyCapability is provided conditionally (only when the\n-    // definition has a policy), so it is intentionally NOT declared here —\n-    // consumers read it via `getOptional`. SandboxDurabilityCapability and\n-    // DetachableRunCapability are conditional for the same reason (only when\n-    // `runs` + `durability` are both wired), so they are intentionally NOT\n-    // declared here either.\n+    // Listed only when setup will call provide(). chat() checks `requires`\n+    // against this array before setup. Policy, durability, and detach stay\n+    // off the list: they depend on other options and are read optionally.\n+    provides:\n+      definition.workspace !== undefined\n+        ? [SandboxCapability, ProjectionCapability]\n+        : [SandboxCapability],\n     optionalRequires: [SandboxInstanceStoreCapability, LocksCapability],\n \n     async setup(ctx) {"
+  },
+  {
+   "filename": "packages/ai-sandbox/tests/tool-capability.test.ts",
+   "status": "modified",
+   "additions": 50,
+   "deletions": 1,
+   "patch": "@@ -1,7 +1,13 @@\n import { describe, expect, it } from 'vitest'\n-import { EventType, chat, toolDefinition } from '@tanstack/ai'\n+import {\n+  EventType,\n+  chat,\n+  defineChatMiddleware,\n+  toolDefinition,\n+} from '@tanstack/ai'\n import {\n   InMemorySandboxInstanceStore,\n+  ProjectionCapability,\n   SandboxCapability,\n   defineSandbox,\n   defineWorkspace,\n@@ -79,12 +85,54 @@ describe('withSandbox + a server tool', () => {\n       fileEvents: false,\n     })\n     let seen: SandboxHandle | undefined\n+    let projected: boolean | undefined\n+    const whereAmI = toolDefinition({\n+      name: 'whereAmI',\n+      description: 'Return the sandbox id',\n+      inputSchema: { type: 'object', properties: {} },\n+    }).server((_args, context) => {\n+      seen = context?.get?.(SandboxCapability)\n+      projected = context?.getOptional?.(ProjectionCapability) !== undefined\n+      return seen?.id ?? 'none'\n+    })\n+\n+    const stream = chat({\n+      adapter: toolThenAnswer(),\n+      messages: [{ role: 'user', content: 'hi' }],\n+      runId: 'run-1',\n+      threadId: 'thread-1',\n+      tools: [whereAmI],\n+      middleware: [\n+        withSandbox(sandbox, { instances: new InMemorySandboxInstanceStore() }),\n+        defineChatMiddleware({\n+          name: 'needs-projection',\n+          requires: [ProjectionCapability],\n+        }),\n+      ],\n+    })\n+    for await (const _chunk of stream) void _chunk\n+\n+    expect(provider.created).toHaveLength(1)\n+    expect(seen).toBe(provider.created[0])\n+    expect(projected).toBe(true)\n+  })\n+\n+  it('runs setup when the definition has no workspace (no projection provided)', async () => {\n+    const provider = makeFakeProvider({ caps: FULL_CAPS })\n+    const sandbox = defineSandbox({\n+      id: 'repo',\n+      provider,\n+      fileEvents: false,\n+    })\n+    let seen: SandboxHandle | undefined\n+    let projected: boolean | undefined\n     const whereAmI = toolDefinition({\n       name: 'whereAmI',\n       description: 'Return the sandbox id',\n       inputSchema: { type: 'object', properties: {} },\n     }).server((_args, context) => {\n       seen = context?.get?.(SandboxCapability)\n+      projected = context?.getOptional?.(ProjectionCapability) !== undefined\n       return seen?.id ?? 'none'\n     })\n \n@@ -102,5 +150,6 @@ describe('withSandbox + a server tool', () => {\n \n     expect(provider.created).toHaveLength(1)\n     expect(seen).toBe(provider.created[0])\n+    expect(projected).toBe(false)\n   })\n })"
+  }
+ ],
+ "test_files": [
+  "packages/ai-sandbox/tests/tool-capability.test.ts"
+ ]
+}

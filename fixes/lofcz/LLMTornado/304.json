@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 304,
+ "url": "https://github.com/lofcz/LLMTornado/pull/304",
+ "title": "fix(anthropic): serialize stop_sequences with the correct wire name",
+ "merged_at": "2026-11-06T17:09:27Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/MultipleStopSequencesTests.cs",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -3,6 +3,8 @@\n using LlmTornado.Chat.Vendors.Cohere;\n using LlmTornado.Code;\n using LlmTornado.Code.Vendor;\n+using Newtonsoft.Json;\n+using Newtonsoft.Json.Linq;\n \n namespace LlmTornado.Tests;\n \n@@ -43,4 +45,24 @@ public void SingleStopSequence_IsKeptWhole()\n         Assert.That(anthropic.StopSequences, Is.EqualTo(new[] { \"Human: \" }));\n         Assert.That(cohere.StopSequences, Is.EqualTo(new[] { \"Human: \" }));\n     }\n+\n+    [Test]\n+    public void Anthropic_SerializesStopSequencesWithCorrectWireName()\n+    {\n+        VendorAnthropicChatRequest vendor = new VendorAnthropicChatRequest(CreateRequest(\"END\", \"STOP\"), new AnthropicEndpointProvider());\n+        JObject json = JObject.Parse(JsonConvert.SerializeObject(vendor));\n+\n+        Assert.That(json[\"stop_sequences\"]?.ToObject<string[]>(), Is.EqualTo(new[] { \"END\", \"STOP\" }));\n+        Assert.That(json.ContainsKey(\"stop_seqences\"), Is.False);\n+    }\n+\n+    [Test]\n+    public void Anthropic_OmitsStopSequencesWhenNotSet()\n+    {\n+        ChatRequest request = new ChatRequest { Messages = [new ChatMessage(ChatMessageRoles.User, \"test\")] };\n+        VendorAnthropicChatRequest vendor = new VendorAnthropicChatRequest(request, new AnthropicEndpointProvider());\n+        JObject json = JObject.Parse(JsonConvert.SerializeObject(vendor));\n+\n+        Assert.That(json.ContainsKey(\"stop_sequences\"), Is.False);\n+    }\n }"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/Vendors/Anthropic/VendorAnthropicChatRequest.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -683,7 +683,7 @@ internal class VendorAnthropicChatRequestOutputConfig\n     public int MaxTokens { get; set; }\n     [JsonProperty(\"metadata\")]\n     public VendorAnthropicChatRequestMetadata? Metadata { get; set; }\n-    [JsonProperty(\"stop_seqences\")]\n+    [JsonProperty(\"stop_sequences\", NullValueHandling = NullValueHandling.Ignore)]\n     public List<string>? StopSequences { get; set; }\n     [JsonProperty(\"stream\")]\n     public bool? Stream { get; set; }"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/MultipleStopSequencesTests.cs"
+ ]
+}

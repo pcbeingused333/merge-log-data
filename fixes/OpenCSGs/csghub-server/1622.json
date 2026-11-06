@@ -1,0 +1,26 @@
+{
+ "repo": "OpenCSGs/csghub-server",
+ "number": 1622,
+ "url": "https://github.com/OpenCSGs/csghub-server/pull/1622",
+ "title": "fix(aigateway): count delta.reasoning in the fallback token estimate",
+ "merged_at": "2026-11-04T01:46:52Z",
+ "files": [
+  {
+   "filename": "aigateway/token/chat_token_counter.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -109,6 +109,8 @@ func (l *chatTokenCounterImpl) Usage(c context.Context) (*Usage, error) {\n \t\t\t}\n \t\t\tif chunk.Choices[0].Delta.ReasoningContent != \"\" {\n \t\t\t\tcontentBuf.WriteString(chunk.Choices[0].Delta.ReasoningContent)\n+\t\t\t} else if chunk.Choices[0].Delta.Reasoning != \"\" {\n+\t\t\t\tcontentBuf.WriteString(chunk.Choices[0].Delta.Reasoning)\n \t\t\t}\n \t\t}\n \t\t// contains usage data"
+  },
+  {
+   "filename": "aigateway/token/chat_token_counter_test.go",
+   "status": "modified",
+   "additions": 51,
+   "deletions": 0,
+   "patch": "@@ -271,6 +271,57 @@ func TestChatTokenCounter_Usage_WithoutTokenizer(t *testing.T) {\n \tassert.Greater(t, usage.TotalTokens, int64(0))\n }\n \n+func TestChatTokenCounter_Usage_WithoutTokenizerCountsDeltaReasoning(t *testing.T) {\n+\t// Providers such as vLLM and OpenRouter stream the reasoning in delta.reasoning\n+\t// rather than delta.reasoning_content.\n+\tcounter := token.NewLLMTokenCounter(nil)\n+\tcounter.AppendPrompts([]openai.ChatCompletionMessageParamUnion{\n+\t\topenai.UserMessage(\"Hello, how are you?\"),\n+\t})\n+\tcounter.AppendCompletionChunk(types.ChatCompletionChunk{\n+\t\tID: \"test-id\",\n+\t\tChoices: []types.ChatCompletionChunkChoice{{\n+\t\t\tDelta: types.ChatCompletionChunkChoiceDelta{\n+\t\t\t\tReasoning: \"The user greets me, so I should greet them back politely.\",\n+\t\t\t},\n+\t\t}},\n+\t\tModel:  \"test-model\",\n+\t\tObject: new(constant.ChatCompletion).Default(),\n+\t})\n+\n+\tusage, err := counter.Usage(context.Background())\n+\n+\tassert.NoError(t, err)\n+\tassert.NotNil(t, usage)\n+\tassert.Greater(t, usage.CompletionTokens, int64(0))\n+}\n+\n+func TestChatTokenCounter_Usage_WithoutTokenizerCountsDeltaReasoningOnce(t *testing.T) {\n+\t// Providers in transition send the same text in reasoning_content and reasoning.\n+\ttext := \"The user greets me, so I should greet them back politely.\"\n+\tcount := func(delta types.ChatCompletionChunkChoiceDelta) int64 {\n+\t\tcounter := token.NewLLMTokenCounter(nil)\n+\t\tcounter.AppendPrompts([]openai.ChatCompletionMessageParamUnion{\n+\t\t\topenai.UserMessage(\"Hello, how are you?\"),\n+\t\t})\n+\t\tcounter.AppendCompletionChunk(types.ChatCompletionChunk{\n+\t\t\tID:      \"test-id\",\n+\t\t\tChoices: []types.ChatCompletionChunkChoice{{Delta: delta}},\n+\t\t\tModel:   \"test-model\",\n+\t\t\tObject:  new(constant.ChatCompletion).Default(),\n+\t\t})\n+\t\tusage, err := counter.Usage(context.Background())\n+\t\tassert.NoError(t, err)\n+\t\treturn usage.CompletionTokens\n+\t}\n+\n+\tsingle := count(types.ChatCompletionChunkChoiceDelta{ReasoningContent: text})\n+\tboth := count(types.ChatCompletionChunkChoiceDelta{ReasoningContent: text, Reasoning: text})\n+\n+\tassert.Greater(t, single, int64(0))\n+\tassert.Equal(t, single, both)\n+}\n+\n func TestChatTokenCounter_Usage_WithCompletionWithoutUsage_FallbackTokenizer(t *testing.T) {\n \ttokenizer := mocktoken.NewMockTokenizer(t)\n \tcounter := token.NewLLMTokenCounter(tokenizer)"
+  }
+ ],
+ "test_files": [
+  "aigateway/token/chat_token_counter_test.go"
+ ]
+}

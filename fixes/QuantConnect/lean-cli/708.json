@@ -1,0 +1,26 @@
+{
+ "repo": "QuantConnect/lean-cli",
+ "number": 708,
+ "url": "https://github.com/QuantConnect/lean-cli/pull/708",
+ "title": "fix: keep the modules cache when the downloaded JSON is malformed or has no modules",
+ "merged_at": "2026-11-04T19:36:28Z",
+ "files": [
+  {
+   "filename": "lean/models/__init__.py",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 2,
+   "patch": "@@ -30,10 +30,16 @@ def _download_modules_json() -> None:\n     from requests import get\n     res = get(url, timeout=5)\n     if res.ok:\n-        from json import dump\n+        from json import dumps\n+        # Decoded and checked before the file is opened, since opening it for writing empties it: a response that\n+        # isn't a modules file would replace a usable one with one the CLI can't start from\n+        data = res.json()\n+        if not isinstance(data, dict) or \"modules\" not in data:\n+            raise ValueError(f\"{url} returned no modules\")\n+        content = dumps(data, ensure_ascii=False, indent=4)\n         file_path.parent.mkdir(parents=True, exist_ok=True)\n         with open(file_path, 'w', encoding='utf-8') as f:\n-            dump(res.json(), f, ensure_ascii=False, indent=4)\n+            f.write(content)\n     else:\n         res.raise_for_status()\n "
+  },
+  {
+   "filename": "tests/models/test_download_modules_json.py",
+   "status": "added",
+   "additions": 54,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,54 @@\n+# QUANTCONNECT.COM - Democratizing Finance, Empowering Individuals.\n+# Lean CLI v1.0. Copyright 2021 QuantConnect Corporation.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\");\n+# you may not use this file except in compliance with the License.\n+# You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0\n+#\n+# Unless required by applicable law or agreed to in writing, software\n+# distributed under the License is distributed on an \"AS IS\" BASIS,\n+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+# See the License for the specific language governing permissions and\n+# limitations under the License.\n+\n+import json\n+from pathlib import Path\n+\n+import pytest\n+from responses import RequestsMock\n+\n+import lean.models as models\n+\n+\n+def _write_cache(path: Path) -> str:\n+    content = json.dumps({\"modules\": {\"SavedModule\": {\"version\": \"1.0\"}}})\n+    path.write_text(content, encoding=\"utf-8\")\n+    return content\n+\n+\n+@pytest.mark.parametrize(\"body\", [\"not json\", \"\", \"{}\", \"[]\", \"null\"])\n+def test_download_modules_json_keeps_cache_when_response_has_no_modules(requests_mock: RequestsMock,\n+                                                                        monkeypatch: pytest.MonkeyPatch,\n+                                                                        body: str) -> None:\n+    cache = Path.cwd() / \"modules.json\"\n+    content = _write_cache(cache)\n+    monkeypatch.setattr(models, \"file_path\", cache)\n+    requests_mock.add(requests_mock.GET, models.url, body=body, status=200)\n+\n+    with pytest.raises(ValueError):\n+        models._download_modules_json()\n+\n+    assert cache.read_text(encoding=\"utf-8\") == content\n+\n+\n+def test_download_modules_json_replaces_cache_with_valid_response(requests_mock: RequestsMock,\n+                                                                  monkeypatch: pytest.MonkeyPatch) -> None:\n+    cache = Path.cwd() / \"modules.json\"\n+    _write_cache(cache)\n+    monkeypatch.setattr(models, \"file_path\", cache)\n+    new_modules = {\"modules\": {\"NewModule\": {\"version\": \"2.0\"}}}\n+    requests_mock.add(requests_mock.GET, models.url, json=new_modules, status=200)\n+\n+    models._download_modules_json()\n+\n+    assert json.loads(cache.read_text(encoding=\"utf-8\")) == new_modules"
+  }
+ ],
+ "test_files": [
+  "tests/models/test_download_modules_json.py"
+ ]
+}

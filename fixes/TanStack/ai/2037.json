@@ -1,0 +1,33 @@
+{
+ "repo": "TanStack/ai",
+ "number": 2037,
+ "url": "https://github.com/TanStack/ai/pull/2037",
+ "title": "fix(ai-gemini): split embed() input into requests of at most 100",
+ "merged_at": "2026-11-05T10:46:37Z",
+ "files": [
+  {
+   "filename": ".changeset/gemini-embed-batch-limit.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@tanstack/ai-gemini': patch\n+---\n+\n+`embed()` with the Gemini adapter now sends inputs in requests of at most 100 texts, one after the other, instead of one request for the whole array. Vectors keep input order and indexes, and Vertex billable characters are summed across requests. Calls with 100 or fewer inputs are unchanged."
+  },
+  {
+   "filename": "packages/ai-gemini/src/adapters/embedding.ts",
+   "status": "modified",
+   "additions": 33,
+   "deletions": 13,
+   "patch": "@@ -7,7 +7,7 @@ import {\n   getGeminiApiKeyFromEnv,\n } from '../utils'\n import type { EmbeddingOptions, EmbeddingResult } from '@tanstack/ai'\n-import type { EmbedContentConfig } from '@google/genai'\n+import type { ContentEmbedding, EmbedContentConfig } from '@google/genai'\n import type { GeminiClient } from '../client/index'\n import type {\n   GeminiEmbeddingModel,\n@@ -17,6 +17,12 @@ import type {\n import type { GeminiEmbeddingProviderOptions } from '../embedding/embedding-provider-options'\n import type { GeminiClientConfig } from '../utils/client'\n \n+/**\n+ * Largest number of inputs sent in one `embedContent` call. The Gemini API\n+ * rejects larger batches, so longer inputs are split into sequential requests.\n+ */\n+const GEMINI_MAX_BATCH_SIZE = 100\n+\n /**\n  * Configuration for Gemini Embedding adapter\n  */\n@@ -29,7 +35,7 @@ export interface GeminiEmbeddingConfig extends GeminiClientConfig {}\n  * Supports gemini-embedding-001.\n  *\n  * Features:\n- * - Batch embedding (one request for the whole input array)\n+ * - Batch embedding (inputs are sent in requests of at most 100 texts)\n  * - Matryoshka dimension reduction via the top-level `dimensions` option\n  *   (mapped to the SDK's `outputDimensionality`)\n  * - Task-type hints (`taskType`, `title`) via provider options\n@@ -79,25 +85,39 @@ export class GeminiEmbeddingAdapter<\n         { provider: this.name, model },\n       )\n \n-      const response = await this.client.models.embedContent({\n-        model,\n-        contents: texts,\n-        config,\n-      })\n+      const embeddings: Array<ContentEmbedding> = []\n+      let billableCharacters: number | undefined\n+      for (\n+        let start = 0;\n+        start < texts.length;\n+        start += GEMINI_MAX_BATCH_SIZE\n+      ) {\n+        const batch = texts.slice(start, start + GEMINI_MAX_BATCH_SIZE)\n+        const response = await this.client.models.embedContent({\n+          model,\n+          contents: batch,\n+          config,\n+        })\n+\n+        const batchEmbeddings = response.embeddings\n+        if (!batchEmbeddings || batchEmbeddings.length !== batch.length) {\n+          throw new Error(\n+            `Gemini embedContent returned ${batchEmbeddings ? batchEmbeddings.length : 'no'} embeddings for ${batch.length} inputs (model: ${model}).`,\n+          )\n+        }\n+        embeddings.push(...batchEmbeddings)\n \n-      const embeddings = response.embeddings\n-      if (!embeddings || embeddings.length !== texts.length) {\n-        throw new Error(\n-          `Gemini embedContent returned ${embeddings ? embeddings.length : 'no'} embeddings for ${texts.length} inputs (model: ${model}).`,\n-        )\n+        const batchCharacters = response.metadata?.billableCharacterCount\n+        if (batchCharacters !== undefined) {\n+          billableCharacters = (billableCharacters ?? 0) + batchCharacters\n+        }\n       }\n \n       // Only Vertex reports usage (per-input token counts and billable\n       // characters). The Developer API reports none, so `usage` is omitted.\n       const tokenCounts = embeddings.flatMap(\n         (embedding) => embedding.statistics?.tokenCount ?? [],\n       )\n-      const billableCharacters = response.metadata?.billableCharacterCount\n       const tokens = tokenCounts.reduce((sum, count) => sum + count, 0)\n       const hasUsage =\n         tokenCounts.length > 0 || billableCharacters !== undefined"
+  },
+  {
+   "filename": "packages/ai-gemini/tests/embedding-adapter.test.ts",
+   "status": "modified",
+   "additions": 37,
+   "deletions": 0,
+   "patch": "@@ -76,6 +76,43 @@ describe('Gemini Embedding Adapter', () => {\n       expect(result.usage).toBeUndefined()\n     })\n \n+    it('splits inputs over the 100-per-request limit into sequential requests', async () => {\n+      const adapter = new TestGeminiEmbeddingAdapter(\n+        { apiKey: 'test' },\n+        'gemini-embedding-001',\n+      )\n+      const spy = adapter.spyOnEmbedContent()\n+      // Like the Gemini API, reject any request with more than 100 contents.\n+      spy.mockImplementation(({ contents }) => {\n+        const items = Array.isArray(contents) ? contents : [contents]\n+        if (items.length > 100) {\n+          return Promise.reject(new Error('at most 100 requests per batch'))\n+        }\n+        return Promise.resolve(\n+          mockResponse(items.map((text) => [Number(String(text).slice(1))])),\n+        )\n+      })\n+\n+      const input = Array.from({ length: 201 }, (_, i) => `t${i}`)\n+      const result = await adapter.createEmbeddings({\n+        model: 'gemini-embedding-001',\n+        input,\n+        logger: testLogger,\n+      })\n+\n+      expect(spy).toHaveBeenCalledTimes(3)\n+      expect(\n+        spy.mock.calls.map(([args]) => (args.contents as Array<string>).length),\n+      ).toEqual([100, 100, 1])\n+      expect(result.embeddings).toHaveLength(201)\n+      expect(result.embeddings.map((e) => e.index)).toEqual(\n+        input.map((_, i) => i),\n+      )\n+      expect(result.embeddings.map((e) => e.vector[0])).toEqual(\n+        input.map((_, i) => i),\n+      )\n+    })\n+\n     it('maps the top-level dimensions option to outputDimensionality', async () => {\n       const adapter = new TestGeminiEmbeddingAdapter(\n         { apiKey: 'test' },"
+  }
+ ],
+ "test_files": [
+  "packages/ai-gemini/tests/embedding-adapter.test.ts"
+ ]
+}

@@ -1,0 +1,75 @@
+{
+ "repo": "livekit/agents",
+ "number": 8374,
+ "url": "https://github.com/livekit/agents/pull/8374",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-04T06:03:30Z",
+   "body": "**Devin Review** found 1 potential issue.\n\n<!-- devin-review-badge-begin -->\n<a href=\"https://livekit.devinenterprise.com/review/livekit/agents/pull/8374\" target=\"_blank\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://static.devin.ai/assets/gh-devin-review-dark.svg?v=4\"><img src=\"https://static.devin.ai/assets/gh-devin-review-light.svg?v=4\" alt=\"Devin Review\"></picture></a>\n<!-- devin-review-badge-end -->"
+  },
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-04T21:21:43Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-04T23:44:52Z",
+   "body": ""
+  },
+  {
+   "role": "member",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-05T01:12:16Z",
+   "body": "thank you, lgtm! left a small suggestion, could you also sign the CLA? it's still showing as not signed\n"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "livekit-plugins/livekit-plugins-aws/livekit/plugins/aws/stt.py",
+   "created_at": "2026-11-04T06:03:28Z",
+   "body": "<!-- devin-review-comment {\"id\": \"BUG_pr-review-job-8ac407e02d164287adc36a973d065d16_0001\", \"file_path\": \"livekit-plugins/livekit-plugins-aws/livekit/plugins/aws/stt.py\", \"start_line\": 213, \"end_line\": 214, \"side\": \"RIGHT\", \"based_on_repo_rules\": false, \"kind\": \"bug\"} -->\n\n🟡 **Empty override drops the transcription language**\n\nWith `language=\"\"`, `STT.stream()` replaces the configured language with an empty `LanguageCode`. `SpeechStream._run` then omits `language_code`, so AWS rejects the request without automatic identification.\n\n<details>\n<summary>Learn more</summary>\n\nThe constructor treats an empty language as `en-US` in [STT.__init__](https://github.com/livekit/agents/blob/8f55f892bb3f8dc714952c1aa57d9eacd5f5ace8/livekit-plugins/livekit-plugins-aws/livekit/plugins/aws/stt.py#L151-L154 \"livekit-plugins/livekit-plugins-aws/livekit/plugins/aws/stt.py:151-154\"). The stream override instead stores an empty string. [SpeechStream._run](https://github.com/livekit/agents/blob/8f55f892bb3f8dc714952c1aa57d9eacd5f5ace8/livekit-plugins/livekit-plugins-aws/livekit/plugins/aws/stt.py#L319-L321 \"livekit-plugins/livekit-plugins-aws/livekit/plugins/aws/stt.py:319-321\") only sends `language_code` when that stored string is truthy, leaving a non-identification request without a language.\n\n**Example:** `STT(language=\"fr-FR\").stream(language=\"\")` previously sent `fr-FR`; the new code sends no `language_code`, and AWS rejects the stream instead of using the constructor's `en-US` fallback.\n\n**Recommended fix:** Apply the constructor's `language or \"en-US\"` fallback when building the stream override, and test an empty override against the generated request.\n\n</details>\n\n```suggestion\n        if is_given(language) and not (opts.identify_language or opts.identify_multiple_languages):\n            opts = replace(opts, language=LanguageCode(language or \"en-US\"))\n```\n\n<!-- devin-review-badge-begin -->\n<a href=\"https://livekit.devinenterprise.com/review/livekit/agents/pull/8374\" target=\"_blank\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://static.devin.ai/assets/gh-devin-review-dark.svg?v=4\"><img src=\"https://static.devin.ai/assets/gh-devin-review-light.svg?v=4\" alt=\"Devin Review\"></picture></a>\n<!-- devin-review-badge-end -->\n\n---\n*Was this helpful? React with 👍 or 👎 to provide feedback.*"
+  },
+  {
+   "role": "member",
+   "path": "livekit-plugins/livekit-plugins-aws/livekit/plugins/aws/stt.py",
+   "created_at": "2026-11-04T21:21:43Z",
+   "body": "The empty-override issue Devin flagged is real (`stream(language=\"\")` stores `\"\"`, `_run` then omits `language_code`, and AWS rejects a request with no language and no identification), but falling back to `\"en-US\"` would override the configured language, e.g. `STT(language=\"fr-FR\").stream(language=\"\")` would send `en-US`. An empty override should just mean no override and keep the configured language:\n\n```suggestion\n        if language and not (opts.identify_language or opts.identify_multiple_languages):\n            opts = replace(opts, language=LanguageCode(language))\n```\n\nCould you also add a case to the test asserting `provider.stream(language=\"\")._opts.language == \"en-US\"`?"
+  },
+  {
+   "role": "bot",
+   "path": "livekit-plugins/livekit-plugins-aws/livekit/plugins/aws/stt.py",
+   "created_at": "2026-11-04T23:44:51Z",
+   "body": "✅ **Resolved**: Resolved: an empty language is now falsy, so stream() keeps the configured language instead of replacing it with an empty LanguageCode."
+  },
+  {
+   "role": "member",
+   "path": "livekit-plugins/livekit-plugins-aws/livekit/plugins/aws/stt.py",
+   "created_at": "2026-11-05T01:12:16Z",
+   "body": "we should throw a warning when the language is ignored because of language identification, so users can expect it\n```suggestion\n        opts = self._config\n        # language_code cannot be combined with automatic language identification\n        if language and (opts.identify_language or opts.identify_multiple_languages):\n            logger.warning(\n                \"language is ignored when identify_language or identify_multiple_languages is enabled\"\n            )\n        elif language:\n            opts = replace(opts, language=LanguageCode(language))\n```"
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-04T23:44:06Z",
+   "body": "Thanks, applied as suggested: an empty `language` now means no override and keeps the configured language (`STT(language=\"fr-FR\").stream(language=\"\")` no longer ends up with an empty or `en-US` code). `test_aws_stream_applies_language_override` now also asserts that `stream(language=\"\")._opts.language == \"en-US\"` for a provider configured with `en-US`.\n\nThis change was made with Claude Code.\n"
+  },
+  {
+   "role": "none",
+   "created_at": "2026-11-04T23:47:11Z",
+   "body": "[![CLA assistant check](https://cla-assistant.io/pull/badge/signed)](https://cla-assistant.io/livekit/agents?pullRequest=8374) <br/>All committers have signed the CLA."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-05T01:27:47Z",
+   "body": "Thanks, added the `logger.warning` from your suggestion for the case where `language` is ignored because of `identify_language` / `identify_multiple_languages`.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
+}

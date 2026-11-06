@@ -1,0 +1,47 @@
+{
+ "repo": "reticlehq/reticle",
+ "number": 2055,
+ "url": "https://github.com/reticlehq/reticle/pull/2055",
+ "title": "fix(browser): refuse fill, type and clear on a code editor's textarea",
+ "merged_at": "2026-10-31T04:52:58Z",
+ "files": [
+  {
+   "filename": ".changes/1666-editor-textarea-refused.md",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+### Fixed\n+\n+- **`@reticlehq/browser` — `fill`, `type` and `clear` wrote into the hidden `<textarea>` of a code editor and reported success.** Monaco and CodeMirror keep their input in a `<textarea>` with `role=\"textbox\"`. The editor merges a direct write with its own model, so the text ended up doubled and the next check failed like an app defect. These actions now refuse such a textarea with the editor message (\"use press or an input\"). A plain `<textarea>` still fills. Closes [#1666](https://github.com/reticlehq/reticle/issues/1666)."
+  },
+  {
+   "filename": "adapters/realm/browser/eslint-suppressions.json",
+   "status": "modified",
+   "additions": 0,
+   "deletions": 5,
+   "patch": "@@ -94,11 +94,6 @@\n       \"count\": 1\n     }\n   },\n-  \"src/actions/value-input.ts\": {\n-    \"curly\": {\n-      \"count\": 6\n-    }\n-  },\n   \"src/activate.test.ts\": {\n     \"curly\": {\n       \"count\": 1"
+  },
+  {
+   "filename": "adapters/realm/browser/src/actions/actions.interactions.test.ts",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -304,6 +304,36 @@ describe('a contenteditable target is refused legibly', () => {\n     expect(el.textContent, 'the editor model must not be written through the DOM').toBe('');\n   });\n \n+  /**\n+   * Monaco keeps its input in a hidden `<textarea role=\"textbox\">`. The plain-field branch used to\n+   * take it first, so `fill`/`type`/`clear` wrote the value straight in and reported success while\n+   * the editor merged it with its own model.\n+   */\n+  it.each([\n+    ['an explicit role=textbox', '<textarea id=\"ta\" role=\"textbox\">old</textarea>'],\n+    ['a Monaco root', '<div class=\"monaco-editor\"><textarea id=\"ta\">old</textarea></div>'],\n+    ['a CodeMirror root', '<div class=\"CodeMirror\"><textarea id=\"ta\">old</textarea></div>'],\n+  ])('refuses fill, type and clear on a textarea inside %s', async (_name, html) => {\n+    document.body.innerHTML = html;\n+    const el = document.getElementById('ta') as HTMLTextAreaElement;\n+    const ref = refs.refFor(el);\n+    await expect(executeAction(ref, 'fill', { value: 'new' })).rejects.toThrow(/EditContext/i);\n+    await expect(executeAction(ref, 'type', { text: 'new' })).rejects.toThrow(/EditContext/i);\n+    await expect(executeAction(ref, 'clear')).rejects.toThrow(/EditContext/i);\n+    expect(el.value, 'the editor input must not be written through the DOM').toBe('old');\n+  });\n+\n+  it('still fills a plain textarea with no editor role or root', async () => {\n+    document.body.innerHTML = '<textarea id=\"ta\">old</textarea>';\n+    const el = document.getElementById('ta') as HTMLTextAreaElement;\n+    await executeAction(refs.refFor(el), 'fill', { value: 'new' });\n+    expect(el.value).toBe('new');\n+    await executeAction(refs.refFor(el), 'type', { text: '!' });\n+    expect(el.value).toBe('new!');\n+    await executeAction(refs.refFor(el), 'clear');\n+    expect(el.value).toBe('');\n+  });\n+\n   it('still names a plain div by its tag', async () => {\n     document.body.innerHTML = '<div id=\"plain\">keep</div>';\n     const el = document.getElementById('plain') as HTMLElement;"
+  },
+  {
+   "filename": "adapters/realm/browser/src/actions/actions.ts",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -20,6 +20,7 @@ import {\n } from './danger-context.js';\n import {\n   assertEditable,\n+  assertNotEditorTextArea,\n   assertNotRichText,\n   isAutofillSafeTarget,\n   setNativeValue,\n@@ -426,6 +427,7 @@ async function dispatchOther(\n       return false;\n     }\n     case ActionType.FILL:\n+      assertNotEditorTextArea(el, 'fill');\n       if (isInput(el) || isTextArea(el)) {\n         // A MISSING value is a malformed call, not a request to empty the field: defaulting it to ''\n         // wiped a login form's email and reported success. An explicit '' still clears.\n@@ -445,6 +447,7 @@ async function dispatchOther(\n       assertNotRichText(el, 'fill');\n       throw new Error(`cannot fill a <${el.tagName.toLowerCase()}>`);\n     case ActionType.TYPE:\n+      assertNotEditorTextArea(el, 'type into');\n       if (isInput(el) || isTextArea(el)) {\n         // Same family as the valueless FILL: a missing `text` appended '' and reported ok:true, so an\n         // agent believed it had typed into a field nothing was written to.\n@@ -460,6 +463,7 @@ async function dispatchOther(\n       assertNotRichText(el, 'type into');\n       throw new Error(`cannot type into a <${el.tagName.toLowerCase()}>`);\n     case ActionType.CLEAR:\n+      assertNotEditorTextArea(el, 'clear');\n       if (isInput(el) || isTextArea(el)) {\n         return setNativeValue(el, '');\n       }"
+  },
+  {
+   "filename": "adapters/realm/browser/src/actions/value-input.ts",
+   "status": "modified",
+   "additions": 48,
+   "deletions": 8,
+   "patch": "@@ -1,5 +1,5 @@\n import { captureValueSetter } from '@/patching/capture-method.js';\n-import { type ActionTarget, isHtmlElement, valuePrototypeOf } from '@/dom/realm.js';\n+import { type ActionTarget, isHtmlElement, isTextArea, valuePrototypeOf } from '@/dom/realm.js';\n \n /**\n  * Writing a value into a field, and the two preconditions that make it honest.\n@@ -24,11 +24,15 @@ const NOT_WEBKIT = /Chrome|Chromium|Edg\\/|Firefox|Gecko\\//;\n  * commits only on blur would not, which is why this is limited to password fields.\n  */\n export function isAutofillSafeTarget(el: Element, ua: string = navigator.userAgent): boolean {\n-  if (!(el instanceof HTMLInputElement)) return false;\n+  if (!(el instanceof HTMLInputElement)) {\n+    return false;\n+  }\n   const password =\n     'password' === el.type.toLowerCase() ||\n     PASSWORD_AUTOCOMPLETE.test(el.getAttribute('autocomplete') ?? '');\n-  if (!password || NOT_WEBKIT.test(ua)) return false;\n+  if (!password || NOT_WEBKIT.test(ua)) {\n+    return false;\n+  }\n   // Real WebKit reports 600+; Blink froze 537.36, and so do test DOMs that borrow its string.\n   return 600 <= Number(/AppleWebKit\\/(\\d+)/.exec(ua)?.[1] ?? 0);\n }\n@@ -70,21 +74,57 @@ export function setNativeValue(el: HTMLInputElement | HTMLTextAreaElement, value\n  */\n function isRichText(el: ActionTarget): boolean {\n   const flag = el.getAttribute('contenteditable');\n-  if ((isHtmlElement(el) && el.isContentEditable) || (null !== flag && 'false' !== flag))\n+  if ((isHtmlElement(el) && el.isContentEditable) || (null !== flag && 'false' !== flag)) {\n+    return true;\n+  }\n+  if ('textbox' === el.getAttribute('role')) {\n     return true;\n-  if ('textbox' === el.getAttribute('role')) return true;\n-  if (!('editContext' in el)) return false;\n+  }\n+  if (!('editContext' in el)) {\n+    return false;\n+  }\n   const surface = el as HTMLElement & { editContext?: object | null };\n   return null !== surface.editContext && undefined !== surface.editContext;\n }\n \n-export function assertNotRichText(el: ActionTarget, action: string): void {\n-  if (!isRichText(el)) return;\n+/** The roots Monaco and CodeMirror render around the hidden `<textarea>` that receives their input. */\n+const EDITOR_ROOT = '.monaco-editor, .CodeMirror, .cm-editor';\n+\n+/**\n+ * A `<textarea>` that is the input surface of a code editor, not a plain field.\n+ *\n+ * Monaco keeps its input in a hidden `<textarea role=\"textbox\">` and merges whatever is written\n+ * there with its own model, so a direct value write reports `valueChanged:true` while the editor\n+ * ends up with the old and new text together. An explicit `role=\"textbox\"` or a known editor root\n+ * marks it; a bare `<textarea>` is a real field and still fills.\n+ */\n+function isEditorTextArea(el: ActionTarget): boolean {\n+  if (!isTextArea(el)) {\n+    return false;\n+  }\n+  return 'textbox' === el.getAttribute('role') || null !== el.closest(EDITOR_ROOT);\n+}\n+\n+function refuseEditor(action: string): never {\n   throw new Error(\n     `cannot ${action} a contenteditable or EditContext editor; use press or an input`,\n   );\n }\n \n+export function assertNotRichText(el: ActionTarget, action: string): void {\n+  if (!isRichText(el)) {\n+    return;\n+  }\n+  refuseEditor(action);\n+}\n+\n+/** Refuse a value write into an editor's `<textarea>` before the plain-field branch takes it. */\n+export function assertNotEditorTextArea(el: ActionTarget, action: string): void {\n+  if (isEditorTextArea(el)) {\n+    refuseEditor(action);\n+  }\n+}\n+\n export function assertEditable(el: HTMLInputElement | HTMLTextAreaElement, action: string): void {\n   if (el.disabled) {\n     throw new Error("
+  }
+ ],
+ "test_files": [
+  "adapters/realm/browser/src/actions/actions.interactions.test.ts"
+ ]
+}

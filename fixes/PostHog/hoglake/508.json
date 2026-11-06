@@ -1,0 +1,47 @@
+{
+ "repo": "PostHog/hoglake",
+ "number": 508,
+ "url": "https://github.com/PostHog/hoglake/pull/508",
+ "title": "fix(server): pass unknown ledger task names through the runs feeds",
+ "merged_at": "2026-11-03T00:31:30Z",
+ "files": [
+  {
+   "filename": "server/src/main/kotlin/com/posthog/hoglake/api/MaintenanceDto.kt",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -319,7 +319,7 @@ fun MaintenanceRun.toDto(): MaintenanceRunDto =\n     MaintenanceRunDto(\n         runId = runId,\n         catalog = catalog,\n-        task = task.wire,\n+        task = taskName,\n         trigger = trigger.wire,\n         startedAt = startedAt,\n         finishedAt = finishedAt,\n@@ -346,7 +346,7 @@ fun MaintenanceRun.toDto(): MaintenanceRunDto =\n  * happened.\n  */\n private fun normalizeLedgerResult(\n-    task: MaintenanceTask,\n+    task: MaintenanceTask?,\n     node: JsonNode,\n ): JsonNode {\n     if (!node.isObject) return node"
+  },
+  {
+   "filename": "server/src/main/kotlin/com/posthog/hoglake/model/Model.kt",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 2,
+   "patch": "@@ -2370,14 +2370,22 @@ data class MaintenanceRun(\n     val runId: Long,\n     /** The catalog the run acted on (the ledger is per-catalog). */\n     val catalog: String,\n-    val task: MaintenanceTask,\n+    /**\n+     * The task name exactly as stored. A pod can meet a name it does not\n+     * know (a rolling deploy where a newer pod added a task), so the row\n+     * keeps the raw string; [task] is the enum when the name is known.\n+     */\n+    val taskName: String,\n     val trigger: MaintenanceTrigger,\n     val startedAt: Instant,\n     val finishedAt: Instant,\n     val status: MaintenanceRunStatus,\n     val error: String?,\n     val resultJson: String?,\n-)\n+) {\n+    /** The parsed task, or null for a name this build does not know. */\n+    val task: MaintenanceTask? get() = MaintenanceTask.fromWire(taskName)\n+}\n \n data class MaintenanceRunPage(\n     val runs: List<MaintenanceRun>,"
+  },
+  {
+   "filename": "server/src/main/kotlin/com/posthog/hoglake/persistence/MaintenanceRunStore.kt",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 5,
+   "patch": "@@ -247,7 +247,10 @@ class MaintenanceRunStore(private val jdbi: Jdbi) {\n     fun lastByTask(\n         h: Handle,\n         catalogId: Long,\n-    ): Map<MaintenanceTask, MaintenanceRun> = lastByTaskAll(h, listOf(catalogId)).values.associateBy { it.task }\n+    ): Map<MaintenanceTask, MaintenanceRun> =\n+        lastByTaskAll(h, listOf(catalogId)).values\n+            .mapNotNull { run -> run.task?.let { it to run } }\n+            .toMap()\n \n     /** The most recent run per (catalog, task) across the instance — the central page's rollup. */\n     fun lastByTaskAll(\n@@ -281,7 +284,9 @@ class MaintenanceRunStore(private val jdbi: Jdbi) {\n             .bindArray(\"tasks\", String::class.java, MaintenanceTask.entries.map { it.wire })\n             .map { rs, _ -> runMapper(rs) }\n             .list()\n-            .associateBy { it.catalog to it.task }\n+            // The query asks for known tasks only, so `task` is never null here.\n+            .mapNotNull { run -> run.task?.let { (run.catalog to it) to run } }\n+            .toMap()\n     }\n \n     /** Recent loop-run start times per task for [catalogId], on the caller's handle. */\n@@ -421,9 +426,7 @@ class MaintenanceRunStore(private val jdbi: Jdbi) {\n         return MaintenanceRun(\n             runId = rs.getLong(\"run_id\"),\n             catalog = rs.getString(\"catalog_name\"),\n-            task =\n-                MaintenanceTask.fromWire(rs.getString(\"task\"))\n-                    ?: error(\"unknown maintenance task in ledger: ${rs.getString(\"task\")}\"),\n+            taskName = rs.getString(\"task\"),\n             trigger = MaintenanceTrigger.fromWire(rs.getString(\"run_trigger\")),\n             startedAt = rs.getObject(\"started_at\", java.time.OffsetDateTime::class.java).toInstant(),\n             finishedAt = rs.getObject(\"finished_at\", java.time.OffsetDateTime::class.java).toInstant(),"
+  },
+  {
+   "filename": "server/src/main/resources/openapi/hoglake.yaml",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 1,
+   "patch": "@@ -5950,7 +5950,14 @@ components:\n         catalog:\n           type: string\n           description: The catalog the run acted on (the ledger is per-catalog).\n-        task: { $ref: \"#/components/schemas/MaintenanceTask\" }\n+        task:\n+          type: string\n+          description: >\n+            The task name as recorded. Normally one of the\n+            `MaintenanceTask` values, but a ledger written by a newer\n+            build during a rolling deploy can hold a name this build does\n+            not know; it is passed through as-is rather than failing the\n+            feed.\n         trigger:\n           type: string\n           enum: [loop, manual]"
+  },
+  {
+   "filename": "server/src/test/kotlin/com/posthog/hoglake/service/MaintenanceLedgerIntegrationTest.kt",
+   "status": "modified",
+   "additions": 42,
+   "deletions": 0,
+   "patch": "@@ -797,6 +797,48 @@ class MaintenanceLedgerIntegrationTest {\n             .containsExactlyInAnyOrder(\"catalog\", \"status\", \"checks\")\n     }\n \n+    @Test\n+    fun `a ledger row naming a task this build does not know is passed through, not a 500`() {\n+        // A rolling deploy: a newer pod's migration widened\n+        // hog_maintenance_run's task CHECK and it wrote a row for a task\n+        // this (older) build has no enum value for. Both feeds used to\n+        // throw in the row mapper for as long as that row existed.\n+        val catalogId = seedCatalog(\"led-unknown-task\")\n+        val check = \"hog_maintenance_run_task_check\"\n+        val known = MaintenanceTask.entries.joinToString(\", \") { \"'${it.wire}'\" }\n+        try {\n+            jdbi.useHandleUnchecked { h ->\n+                // Stand in for the newer build's migration.\n+                h.execute(\"ALTER TABLE hog_maintenance_run DROP CONSTRAINT IF EXISTS $check\")\n+                h.createUpdate(\n+                    \"\"\"\n+                    INSERT INTO hog_maintenance_run\n+                        (catalog_id, task, run_trigger, started_at, finished_at, status)\n+                    VALUES (:c, 'table_totals', 'loop', now(), now(), 'ok')\n+                    \"\"\",\n+                ).bind(\"c\", catalogId).execute()\n+            }\n+            // A row of a known task, so the page must decode both.\n+            ExpiryService(jdbi).runOnce(\"led-unknown-task\", 10)\n+\n+            val statusSvc = statusSvc()\n+            val perCatalog = statusSvc.runs(\"led-unknown-task\", task = null, before = null, limit = 10)\n+            assertThat(perCatalog.runs.map { it.taskName })\n+                .containsExactlyInAnyOrder(\"table_totals\", \"expiry\")\n+            val unknown = perCatalog.runs.single { it.taskName == \"table_totals\" }\n+            assertThat(unknown.task).isNull()\n+            assertThat(unknown.toDto().task).isEqualTo(\"table_totals\")\n+\n+            val instance = statusSvc.instanceRuns(task = null, before = null, limit = 500)\n+            assertThat(instance.runs.map { it.taskName }).contains(\"table_totals\", \"expiry\")\n+        } finally {\n+            jdbi.useHandleUnchecked { h ->\n+                h.createUpdate(\"DELETE FROM hog_maintenance_run WHERE catalog_id = :c\").bind(\"c\", catalogId).execute()\n+                h.execute(\"ALTER TABLE hog_maintenance_run ADD CONSTRAINT $check CHECK (task IN ($known))\")\n+            }\n+        }\n+    }\n+\n     private fun statusSvc() =\n         MaintenanceStatusService(\n             jdbi,"
+  }
+ ],
+ "test_files": [
+  "server/src/test/kotlin/com/posthog/hoglake/service/MaintenanceLedgerIntegrationTest.kt"
+ ]
+}

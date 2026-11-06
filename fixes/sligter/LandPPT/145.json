@@ -1,0 +1,26 @@
+{
+ "repo": "sligter/LandPPT",
+ "number": 145,
+ "url": "https://github.com/sligter/LandPPT/pull/145",
+ "title": "fix(google): treat BLOCKLIST/PROHIBITED_CONTENT/SPII as blocked finish reasons",
+ "merged_at": "2026-11-05T00:46:13Z",
+ "files": [
+  {
+   "filename": "src/landppt/ai/providers.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 2,
+   "patch": "@@ -1113,6 +1113,11 @@ async def stream_chat_completion(\n class GoogleProvider(AIProvider):\n     \"\"\"Google Gemini API provider\"\"\"\n \n+    # finishReason values meaning Gemini withheld the candidate's content.\n+    _SAFETY_BLOCK_FINISH_REASONS = frozenset(\n+        {\"SAFETY\", \"BLOCKLIST\", \"PROHIBITED_CONTENT\", \"SPII\", \"IMAGE_SAFETY\"}\n+    )\n+\n     def __init__(self, config: Dict[str, Any]):\n         super().__init__(config)\n         # Base URL can be a mirror/proxy endpoint. Frontend config test hits:\n@@ -1641,8 +1646,8 @@ async def chat_completion(self, messages: List[AIMessage], **kwargs) -> AIRespon\n                 finish_reason = candidate.finish_reason.name if hasattr(candidate.finish_reason, 'name') else str(candidate.finish_reason)\n \n                 # 检查是否被安全过滤器阻止或其他问题\n-                if finish_reason == \"SAFETY\":\n-                    logger.warning(\"Content was blocked by safety filters\")\n+                if finish_reason in self._SAFETY_BLOCK_FINISH_REASONS:\n+                    logger.warning(f\"Content was blocked by safety filters ({finish_reason})\")\n                     content = \"[内容被安全过滤器阻止]\"\n                 elif finish_reason == \"RECITATION\":\n                     logger.warning(\"Content was blocked due to recitation\")"
+  },
+  {
+   "filename": "tests/test_google_blocked_finish_reason.py",
+   "status": "added",
+   "additions": 43,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,43 @@\n+import asyncio\n+from types import SimpleNamespace\n+\n+import pytest\n+\n+\n+def _provider(finish_reason):\n+    from landppt.ai.providers import GoogleProvider\n+\n+    provider = GoogleProvider.__new__(GoogleProvider)\n+    provider.config = {}\n+    provider.model = \"gemini-2.5-flash\"\n+    provider.base_url = None\n+    provider.client = object()\n+    provider.model_instance = SimpleNamespace(model_name=\"gemini-2.5-flash\")\n+    provider._should_use_rest_api = lambda base_url: False\n+    provider._convert_messages_to_gemini = lambda messages: \"prompt\"\n+    provider._extract_gemini_tool_calls_from_response = lambda response: []\n+\n+    async def fake_generate(*args, **kwargs):\n+        candidate = SimpleNamespace(\n+            finish_reason=SimpleNamespace(name=finish_reason),\n+            content=None,\n+        )\n+        return SimpleNamespace(candidates=[candidate], usage_metadata=None, text=\"\")\n+\n+    provider._generate_async = fake_generate\n+    return provider\n+\n+\n+@pytest.mark.parametrize(\n+    \"reason\", [\"SAFETY\", \"BLOCKLIST\", \"PROHIBITED_CONTENT\", \"SPII\", \"IMAGE_SAFETY\"]\n+)\n+def test_blocked_finish_reasons_return_block_notice(reason):\n+    from landppt.ai.base import AIMessage, MessageRole\n+\n+    provider = _provider(reason)\n+    response = asyncio.run(\n+        provider.chat_completion([AIMessage(role=MessageRole.USER, content=\"hi\")])\n+    )\n+\n+    assert response.finish_reason == reason\n+    assert response.content == \"[内容被安全过滤器阻止]\""
+  }
+ ],
+ "test_files": [
+  "tests/test_google_blocked_finish_reason.py"
+ ]
+}

@@ -1,0 +1,52 @@
+{
+ "repo": "Giskard-AI/giskard-oss",
+ "number": 2830,
+ "url": "https://github.com/Giskard-AI/giskard-oss/pull/2830",
+ "state": "closed",
+ "reviews": [
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-09-18T03:31:23Z",
+   "body": "Thanks for your submission, I'll will probably take a look at handling `thinking` and `redacted_thinking` content block instead of silently dropping them. \n\nWe should probably have an option in the settings for ignoring unsupported content blocks."
+  }
+ ],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-09-15T09:01:46Z",
+   "body": "The workflow runs are sitting in `action_required` (first-time-contributor gate) — could someone \"Approve and run workflows\"?\n\nLocal verification while it's waiting:\n\n```\n$ make format && make check-format\nuv run ruff format .        → 369 files left unchanged\nuv run ruff check --fix .   → All checks passed!\nuv run ruff format --check . → 369 files already formatted\n\n$ make test-unit PACKAGE=giskard-llm\n238 selected, 231 passed, 7 skipped (pre-existing), 0 failed\n\n$ pre-commit run --all-files   (on the changed files, via git commit)\nruff check ............................................ Passed\nruff format ............................................ Passed\nbasedpyright ............................................ Passed\nDetect secrets .......................................... Passed\n```\n\nThe four new tests in `test_anthropic_chat_return.py` were confirmed to fail on the unpatched code (reverted the fix locally, reran — 3 `ValueError: Unsupported content block type` failures, 1 pass) before confirming green with the fix."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-02T03:55:47Z",
+   "body": "Thanks @kevinmessiaen, agreed that silently dropping them isn't ideal. Before I rework this, I'd like to check the shape you have in mind:\n\n1. **Thinking blocks:** add a `ThinkingContent` (thinking text + `signature`, plus a redacted variant) to `CompletionContent`, and exclude it from `.text` so chain-of-thought never ends up in what Equals/Contains/LLM judges evaluate. Keeping the signature would also let a thinking + tool-use turn be sent back to Anthropic unchanged.\n2. **Other unmapped blocks** (`server_tool_use`, `web_search_tool_result`, …): a setting like `ignore_unsupported_content_blocks`. Should it default to `False` (keep raising) or `True`?\n\nFor context, #2843 reports that Claude 5 models emit `thinking` blocks by default, so this currently breaks any check run against them. Happy to fold this into #2830 or close it in favour of whichever direction you prefer.\n"
+  },
+  {
+   "role": "member",
+   "created_at": "2026-10-08T04:46:33Z",
+   "body": "Hey, sorry for the slow reply, and thanks for taking the time to sketch this out. What you proposed is pretty close to where we ended up.\n\nOn your two questions:\n\n1. We're not going to add a new content type for thinking. We'd rather stick to what the OpenAI-compatible ecosystem already does (OpenRouter, vLLM, DeepSeek), so `AssistantMessage` gets a `reasoning: str | None` field (accepting `reasoning_content` as an alias) plus `reasoning_details`, a list of `reasoning.text` (with `signature`), `reasoning.summary` and `reasoning.encrypted` items. Neither one ends up in `.text`, so checks only ever see the actual answer.\n2. For blocks we can't map, the default is to raise a dedicated `UnsupportedContentError`. There'll be a provider option, `ignore_unsupported_content=True`, for people who'd rather drop them, and it logs a warning when it does.\n\nWe'll do the shared types and the option ourselves since they touch every provider, and should have a PR up soon. Once that's merged, would you be up for reworking this one on top of it? Roughly:\n- `thinking` → a `reasoning.text` detail with its signature (`format=\"anthropic-claude-v1\"`)\n- `redacted_thinking` → `reasoning.encrypted`\n- serializing them back as the leading thinking blocks on assistant turns, so tool-use turns keep working when thinking is enabled\n\nYour existing tests should mostly carry over. Since Claude 5 is affected by default we can't sit on it for too long, so if we haven't heard from you about a week after the base PR lands, we'll pick it up ourselves. No pressure either way!\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-10T06:16:44Z",
+   "body": "Thanks, that shape makes sense. Happy to rework this on top of your base PR once it lands: thinking → `reasoning.text` with signature (`anthropic-claude-v1`), redacted_thinking → `reasoning.encrypted`, and round-tripping them as leading blocks on assistant turns. Ping me when it's up."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-15T21:02:44Z",
+   "body": "@kevinmessiaen The rework is ready on top of #2867, as one commit on its current head (475b873): https://github.com/pcbeingused333/giskard-oss/compare/Giskard-AI:claude/giskard-llm-reasoning-content-c5495a...pcbeingused333:anthropic-thinking-v2\n\n- `thinking` becomes a `reasoning.text` detail with its `signature`, and `redacted_thinking` becomes a `reasoning.encrypted` detail, both with `format=\"anthropic-claude-v1\"`. The thinking text is also exposed as `reasoning`. Neither ends up in `content`, so `.text` stays the answer.\n- On assistant turns, Anthropic-format details are serialized back as the leading `thinking` / `redacted_thinking` blocks, so tool use keeps working with thinking enabled. Unsigned text, summaries and other providers' reasoning are skipped, since Anthropic verifies the signature.\n- The unsupported-content tests now use `server_tool_use`, which is still unmapped.\n\n`make test-unit PACKAGE=giskard-llm` (278 passed, 7 skipped), ruff and basedpyright are clean, with the same 52 pre-existing warnings in `anthropic.py`. Once #2867 lands I'll move it onto `main` and update this PR, or open a new one if you prefer.\n"
+  },
+  {
+   "role": "member",
+   "created_at": "2026-10-16T01:05:20Z",
+   "body": "@pcbeingused333 thanks, we will take a look at your contribution!"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-20T07:08:24Z",
+   "body": "Closing this one: #2888 fixed the same crash on Anthropic thinking blocks upstream, so it's no longer needed. Thanks!"
+  }
+ ]
+}

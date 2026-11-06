@@ -1,0 +1,33 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 297,
+ "url": "https://github.com/lofcz/LLMTornado/pull/297",
+ "title": "fix(chat): send every stop sequence to Anthropic and Cohere",
+ "merged_at": "2026-11-02T23:05:40Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/MultipleStopSequencesTests.cs",
+   "status": "added",
+   "additions": 46,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,46 @@\n+using LlmTornado.Chat;\n+using LlmTornado.Chat.Vendors.Anthropic;\n+using LlmTornado.Chat.Vendors.Cohere;\n+using LlmTornado.Code;\n+using LlmTornado.Code.Vendor;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class MultipleStopSequencesTests\n+{\n+    private static ChatRequest CreateRequest(params string[] stops)\n+    {\n+        return new ChatRequest\n+        {\n+            MultipleStopSequences = stops,\n+            Messages = [new ChatMessage(ChatMessageRoles.User, \"test\")]\n+        };\n+    }\n+\n+    [Test]\n+    public void Anthropic_SendsEveryStopSequence()\n+    {\n+        VendorAnthropicChatRequest vendor = new VendorAnthropicChatRequest(CreateRequest(\"END\", \"STOP\"), new AnthropicEndpointProvider());\n+\n+        Assert.That(vendor.StopSequences, Is.EqualTo(new[] { \"END\", \"STOP\" }));\n+    }\n+\n+    [Test]\n+    public void Cohere_SendsEveryStopSequence()\n+    {\n+        VendorCohereChatRequest vendor = new VendorCohereChatRequest(CreateRequest(\"END\", \"STOP\"), new CohereEndpointProvider());\n+\n+        Assert.That(vendor.StopSequences, Is.EqualTo(new[] { \"END\", \"STOP\" }));\n+    }\n+\n+    [Test]\n+    public void SingleStopSequence_IsKeptWhole()\n+    {\n+        VendorAnthropicChatRequest anthropic = new VendorAnthropicChatRequest(CreateRequest(\"Human: \"), new AnthropicEndpointProvider());\n+        VendorCohereChatRequest cohere = new VendorCohereChatRequest(CreateRequest(\"Human: \"), new CohereEndpointProvider());\n+\n+        Assert.That(anthropic.StopSequences, Is.EqualTo(new[] { \"Human: \" }));\n+        Assert.That(cohere.StopSequences, Is.EqualTo(new[] { \"Human: \" }));\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/Vendors/Anthropic/VendorAnthropicChatRequest.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -728,7 +728,7 @@ public VendorAnthropicChatRequest(ChatRequest request, IEndpointProvider provide\n     {\n         Model = request.Model?.Name ?? ChatModel.Anthropic.Claude5.Sonnet.Name;\n         MaxTokens = request.MaxTokens ?? 1024;\n-        StopSequences = request.StopSequence?.Split(',').ToList();\n+        StopSequences = request.MultipleStopSequences?.ToList();\n         Stream = request.Stream;\n         Temperature = ChatModelAnthropicHelper.RejectsNonDefaultSamplingParams(Model) ? null : request.Temperature;\n         TopP = ChatModelAnthropicHelper.RejectsNonDefaultSamplingParams(Model) ? null : request.TopP;"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/Vendors/Cohere/VendorCohereChatRequest.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -90,7 +90,7 @@ public VendorCohereChatRequest(ChatRequest request, IEndpointProvider provider)\n         P = request.TopP;\n         FrequencyPenalty = request.FrequencyPenalty;\n         PresencePenalty = request.PresencePenalty;\n-        StopSequences = request.StopSequence?.Split().ToList();\n+        StopSequences = request.MultipleStopSequences?.ToList();\n         Seed = request.Seed;\n         Logprobs = request.Logprobs;\n         "
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/MultipleStopSequencesTests.cs"
+ ]
+}

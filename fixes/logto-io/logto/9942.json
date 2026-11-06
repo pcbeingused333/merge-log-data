@@ -1,0 +1,33 @@
+{
+ "repo": "logto-io/logto",
+ "number": 9942,
+ "url": "https://github.com/logto-io/logto/pull/9942",
+ "title": "fix(connector): honor sendFrom and replyTo of the i18n email template",
+ "merged_at": "2026-11-05T06:37:09Z",
+ "files": [
+  {
+   "filename": ".changeset/quiet-mails-reply.md",
+   "status": "added",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,7 @@\n+---\n+\"@logto/connector-sendgrid-email\": patch\n+---\n+\n+honor `sendFrom` and `replyTo` of the i18n email template\n+\n+With a custom i18n template, the SendGrid connector put the configured sender name on the recipient and dropped it from `from`, and ignored the template's `replyTo`. The recipient is now addressed by email only, `from.name` comes from the template's `sendFrom` (falling back to the configured `fromName`), and `reply_to` is set from the template's `replyTo`."
+  },
+  {
+   "filename": "packages/connectors/connector-sendgrid-email/src/index.test.ts",
+   "status": "modified",
+   "additions": 68,
+   "deletions": 1,
+   "patch": "@@ -3,7 +3,13 @@ import nock from 'nock';\n import { TemplateType } from '@logto/connector-kit';\n \n import createConnector from './index.js';\n-import { fromEmail, mockedConfig, mockedGenericEmailParameters, toEmail } from './mock.js';\n+import {\n+  fromEmail,\n+  fromName,\n+  mockedConfig,\n+  mockedGenericEmailParameters,\n+  toEmail,\n+} from './mock.js';\n \n const getConfig = vi.fn();\n // eslint-disable-next-line unicorn/no-useless-undefined\n@@ -134,4 +140,65 @@ describe('SendGrid connector', () => {\n       },\n     });\n   });\n+\n+  it('should address the recipient by email only and honor sendFrom and replyTo of the i18n template', async () => {\n+    getI18nEmailTemplate.mockResolvedValue({\n+      subject: 'Passcode {{code}}',\n+      content: '<p>Your passcode is {{code}}</p>',\n+      contentType: 'text/html',\n+      sendFrom: '{{application.name}}',\n+      replyTo: 'support@{{domain}}',\n+    });\n+\n+    nock('https://api.sendgrid.com')\n+      .post('/v3/mail/send')\n+      .matchHeader('authorization', `Bearer ${mockedConfig.apiKey}`)\n+      .reply((_, body, callback) => {\n+        expect(body).toEqual({\n+          personalizations: [{ to: [{ email: toEmail }] }],\n+          from: { email: fromEmail, name: 'Test app' },\n+          reply_to: { email: 'support@example.com' },\n+          subject: 'Passcode 123456',\n+          content: [{ type: 'text/html', value: '<p>Your passcode is 123456</p>' }],\n+        });\n+        callback(null, [200, 'OK']);\n+      });\n+\n+    getConfig.mockResolvedValue(mockedConfig);\n+\n+    await connector.sendMessage({\n+      to: toEmail,\n+      type: TemplateType.Generic,\n+      payload: { code: '123456', domain: 'example.com', application: { name: 'Test app' } },\n+    });\n+  });\n+\n+  it('should fall back to the configured fromName when the i18n template has no sendFrom', async () => {\n+    getI18nEmailTemplate.mockResolvedValue({\n+      subject: 'Passcode {{code}}',\n+      content: 'Your passcode is {{code}}',\n+      contentType: 'text/plain',\n+    });\n+\n+    nock('https://api.sendgrid.com')\n+      .post('/v3/mail/send')\n+      .matchHeader('authorization', `Bearer ${mockedConfig.apiKey}`)\n+      .reply((_, body, callback) => {\n+        expect(body).toEqual({\n+          personalizations: [{ to: [{ email: toEmail }] }],\n+          from: { email: fromEmail, name: fromName },\n+          subject: 'Passcode 123456',\n+          content: [{ type: 'text/plain', value: 'Your passcode is 123456' }],\n+        });\n+        callback(null, [200, 'OK']);\n+      });\n+\n+    getConfig.mockResolvedValue(mockedConfig);\n+\n+    await connector.sendMessage({\n+      to: toEmail,\n+      type: TemplateType.Generic,\n+      payload: { code: '123456' },\n+    });\n+  });\n });"
+  },
+  {
+   "filename": "packages/connectors/connector-sendgrid-email/src/index.ts",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 12,
+   "patch": "@@ -48,25 +48,21 @@ const buildParametersFromDefaultTemplate = (\n const buildParametersFromCustomTemplate = (\n   to: string,\n   config: SendGridMailConfig,\n-  { subject, content, sendFrom, contentType = 'text/html' }: EmailTemplateDetails,\n+  { subject, content, sendFrom, replyTo, contentType = 'text/html' }: EmailTemplateDetails,\n   payload: SendMessagePayload\n ): PublicParameters => {\n+  const fromName = sendFrom ? replaceSendMessageHandlebars(sendFrom, payload) : config.fromName;\n+\n   return {\n-    personalizations: [\n-      {\n-        to: [\n-          {\n-            email: to,\n-            ...conditional(config.fromName && { name: config.fromName }),\n-          },\n-        ],\n-      },\n-    ],\n+    personalizations: [{ to: [{ email: to }] }],\n     from: {\n       email: config.fromEmail,\n       // If sendFrom is provided, we will replace the handlebars with the payload\n-      ...conditional(sendFrom && { name: replaceSendMessageHandlebars(sendFrom, payload) }),\n+      ...conditional(fromName && { name: fromName }),\n     },\n+    ...conditional(\n+      replyTo && { reply_to: { email: replaceSendMessageHandlebars(replyTo, payload) } }\n+    ),\n     subject: replaceSendMessageHandlebars(subject, payload),\n     content: [\n       {"
+  }
+ ],
+ "test_files": [
+  "packages/connectors/connector-sendgrid-email/src/index.test.ts"
+ ]
+}

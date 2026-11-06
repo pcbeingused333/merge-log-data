@@ -1,0 +1,40 @@
+{
+ "repo": "temporalio/ai-integrations",
+ "number": 411,
+ "url": "https://github.com/temporalio/ai-integrations/pull/411",
+ "title": "mcp: fail an MCPError wrapped in an ExceptionGroup without retrying it",
+ "merged_at": "2026-11-04T15:50:00Z",
+ "files": [
+  {
+   "filename": "python/mcp/pyproject.toml",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -21,6 +21,7 @@ dependencies = [\n   \"mcp>=2,<3\",\n   \"mcp-types>=2,<3\",\n   \"pydantic>=2,<3\",\n+  \"exceptiongroup>=1.0; python_version < '3.11'\",\n ]\n \n [project.urls]"
+  },
+  {
+   "filename": "python/mcp/src/temporalio/mcp/_activities.py",
+   "status": "modified",
+   "additions": 37,
+   "deletions": 10,
+   "patch": "@@ -2,10 +2,11 @@\n \n import asyncio\n import logging\n+import sys\n from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence\n from contextlib import asynccontextmanager\n from datetime import timedelta\n-from typing import Any, TypeVar\n+from typing import Any, TypeVar, cast\n \n from mcp import MCPError\n from mcp.types import (\n@@ -36,6 +37,9 @@\n from temporalio.mcp._backend import _MCPBackend, _MCPBackendFactory\n from temporalio.mcp._pool import _MCPConnectionPool\n \n+if sys.version_info < (3, 11):\n+    from exceptiongroup import BaseExceptionGroup  # type: ignore[reportUnreachable]\n+\n _Result = TypeVar(\"_Result\")\n _ListResult = TypeVar(\"_ListResult\", bound=BaseModel)\n \n@@ -75,6 +79,29 @@ def _session_lost(err: MCPError) -> bool:\n     )\n \n \n+def _lone_mcp_error(group: BaseExceptionGroup[Any]) -> MCPError | None:\n+    \"\"\"The MCPError that a nest of ExceptionGroups carries alone, if it does.\"\"\"\n+    while len(group.exceptions) == 1:\n+        (inner,) = group.exceptions\n+        if isinstance(inner, MCPError):\n+            return inner\n+        if not isinstance(inner, BaseExceptionGroup):\n+            return None\n+        group = cast(BaseExceptionGroup[Any], inner)\n+    return None\n+\n+\n+def _protocol_error(err: MCPError, has_session: bool) -> ApplicationError:\n+    details = (err.code,) if err.data is None else (err.code, err.data)\n+    session_lost = has_session and _session_lost(err)\n+    return ApplicationError(\n+        err.message,\n+        *details,\n+        type=\"MCPProtocolError\",\n+        non_retryable=err.code in _NON_RETRYABLE_PROTOCOL_ERRORS and not session_lost,\n+    )\n+\n+\n def _dump(model: BaseModel) -> dict[str, Any]:\n     return model.model_dump(mode=\"json\")\n \n@@ -123,15 +150,15 @@ async def _run(\n                 has_session = not backend.cacheable\n                 return await operation(backend)\n         except MCPError as err:\n-            details = (err.code,) if err.data is None else (err.code, err.data)\n-            session_lost = has_session and _session_lost(err)\n-            raise ApplicationError(\n-                err.message,\n-                *details,\n-                type=\"MCPProtocolError\",\n-                non_retryable=err.code in _NON_RETRYABLE_PROTOCOL_ERRORS\n-                and not session_lost,\n-            ) from err\n+            raise _protocol_error(err, has_session) from err\n+        except BaseExceptionGroup as group:\n+            # ``Client.__aexit__`` re-raises an error from the ``async with`` body\n+            # wrapped in task-group ExceptionGroups, which a factory argument or a\n+            # failed connect lets through.\n+            mcp_error = _lone_mcp_error(group)\n+            if mcp_error is None:\n+                raise\n+            raise _protocol_error(mcp_error, has_session) from mcp_error\n         except ValidationError as err:\n             raise ApplicationError(\n                 \"MCP server returned an invalid response\","
+  },
+  {
+   "filename": "python/mcp/tests/test_activities.py",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 0,
+   "patch": "@@ -203,6 +203,34 @@ def _page(self, cursor: str | None) -> tuple[str, str | None]:\n     assert err.value.non_retryable is True\n \n \n+async def test_protocol_error_wrapped_in_exception_group_fails_without_retry() -> None:\n+    # A client built from a factory argument is closed inside the operation, and\n+    # Client.__aexit__ re-raises the MCPError wrapped in ExceptionGroups.\n+    server = MCPServer(\"resources\")\n+\n+    @server.resource(\"test://known\", name=\"known\")\n+    def known_resource() -> str:  # type: ignore[reportUnusedFunction]\n+        return \"known\"\n+\n+    support = _MCPActivities(\n+        {\"test\": lambda argument: _MCPClientBackend(Client(server))},\n+        idle_timeout=timedelta(minutes=5),\n+    )\n+    read_resource = _activity_by_name(\n+        support,\n+        \"temporalio.mcp.test.read-resource\",\n+    )\n+    try:\n+        with pytest.raises(ApplicationError, match=\"Unknown resource\") as err:\n+            await read_resource({\"factory_argument\": \"acme\", \"uri\": \"test://unknown\"})\n+    finally:\n+        await support._pool.close()\n+\n+    assert err.value.type == \"MCPProtocolError\"\n+    assert err.value.non_retryable is True\n+    assert err.value.details == (INVALID_PARAMS, {\"uri\": \"test://unknown\"})\n+\n+\n async def test_unknown_resource_protocol_error_fails_without_retry() -> None:\n     server = MCPServer(\"resources\")\n "
+  },
+  {
+   "filename": "python/mcp/uv.lock",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -1403,6 +1403,7 @@ name = \"temporalio-mcp\"\n version = \"0.0.0\"\n source = { editable = \".\" }\n dependencies = [\n+    { name = \"exceptiongroup\", marker = \"python_full_version < '3.11'\" },\n     { name = \"mcp\" },\n     { name = \"mcp-types\" },\n     { name = \"pydantic\" },\n@@ -1428,6 +1429,7 @@ dev = [\n \n [package.metadata]\n requires-dist = [\n+    { name = \"exceptiongroup\", marker = \"python_full_version < '3.11'\", specifier = \">=1.0\" },\n     { name = \"mcp\", specifier = \">=2,<3\" },\n     { name = \"mcp-types\", specifier = \">=2,<3\" },\n     { name = \"pydantic\", specifier = \">=2,<3\" },"
+  }
+ ],
+ "test_files": [
+  "python/mcp/tests/test_activities.py"
+ ]
+}

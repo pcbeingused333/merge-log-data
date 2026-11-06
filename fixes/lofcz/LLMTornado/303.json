@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 303,
+ "url": "https://github.com/lofcz/LLMTornado/pull/303",
+ "title": "fix(anthropic): infer image MIME type from data URI when not set",
+ "merged_at": "2026-11-05T19:53:26Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/AnthropicImageBase64Tests.cs",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -45,4 +45,29 @@ public void HttpsUrl_IsSentAsUrl()\n         Assert.That(source[\"type\"]?.ToString(), Is.EqualTo(\"url\"));\n         Assert.That(source[\"url\"]?.ToString(), Is.EqualTo(\"https://example.com/cat.jpg\"));\n     }\n+\n+    [Test]\n+    public void DataUri_WithoutMimeType_StripsPrefixAndInfersMimeType()\n+    {\n+        JObject source = SerializeImageSource(\"data:image/png;base64,QUJD\", null);\n+\n+        Assert.That(source[\"type\"]?.ToString(), Is.EqualTo(\"base64\"));\n+        Assert.That(source[\"media_type\"]?.ToString(), Is.EqualTo(\"image/png\"));\n+        Assert.That(source[\"data\"]?.ToString(), Is.EqualTo(\"QUJD\"));\n+    }\n+\n+    [Test]\n+    public void DataUri_WithExplicitMimeType_KeepsExplicitMimeType()\n+    {\n+        JObject source = SerializeImageSource(\"data:image/png;base64,QUJD\", \"image/jpeg\");\n+\n+        Assert.That(source[\"media_type\"]?.ToString(), Is.EqualTo(\"image/jpeg\"));\n+        Assert.That(source[\"data\"]?.ToString(), Is.EqualTo(\"QUJD\"));\n+    }\n+\n+    [Test]\n+    public void RawBase64_WithoutMimeType_StillThrows()\n+    {\n+        Assert.Throws<Exception>(() => SerializeImageSource(\"QUJD\", null));\n+    }\n }"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/Vendors/Anthropic/VendorAnthropicChatRequest.cs",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 2,
+   "patch": "@@ -248,7 +248,20 @@ public override void WriteJson(JsonWriter writer, VendorAnthropicChatRequestMess\n                             // raw base64 may start with \"/\" (JPEG: \"/9j/\"), which parses as an absolute file URI on Unix, only http(s) is a remote URL\n                             if (dataPrefix || !Uri.TryCreate(part.Image.Url, UriKind.Absolute, out Uri? imageUri) || (imageUri.Scheme != Uri.UriSchemeHttp && imageUri.Scheme != Uri.UriSchemeHttps))\n                             {\n-                                if (part.Image.MimeType is null)\n+                                string? mediaType = part.Image.MimeType;\n+\n+                                // a data URI carries its own MIME type: data:image/png;base64,...\n+                                if (mediaType is null && dataPrefix)\n+                                {\n+                                    int semicolonIndex = part.Image.Url.IndexOf(';');\n+                                    \n+                                    if (semicolonIndex > 5)\n+                                    {\n+                                        mediaType = part.Image.Url[5..semicolonIndex];\n+                                    }\n+                                }\n+\n+                                if (mediaType is null)\n                                 {\n                                     throw new Exception(\"MIME type of the image must be set, supported values for Anthropic are: image/jpeg, image/png, image/gif, image/webp\");\n                                 }\n@@ -271,7 +284,7 @@ public override void WriteJson(JsonWriter writer, VendorAnthropicChatRequestMess\n                                 writer.WriteValue(\"base64\");\n                         \n                                 writer.WritePropertyName(\"media_type\");\n-                                writer.WriteValue(part.Image.MimeType);\n+                                writer.WriteValue(mediaType);\n                             \n                                 writer.WritePropertyName(\"data\");\n                                 writer.WriteValue(img);"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/AnthropicImageBase64Tests.cs"
+ ]
+}

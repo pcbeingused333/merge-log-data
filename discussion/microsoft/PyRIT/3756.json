@@ -1,0 +1,53 @@
+{
+ "repo": "microsoft/PyRIT",
+ "number": 3756,
+ "url": "https://github.com/microsoft/PyRIT/pull/3756",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-01T20:51:39Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-02T07:22:00Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-02T07:22:47Z",
+   "body": "Rereviewed the complete updated diff at 21fbf6689bb6a706d537180957d99b9437a4f96a after addressing the partial-extraction cleanup finding in 2a914edf9a61d0990583ee2b5564b549e2875e49. I found no remaining issue in the scoped change. Extraction owns its temporary files until it succeeds, exceptions clean up partial results, failed encodes create no file, and normal scoring keeps its existing retained-frame behavior.\n\nThe 106 targeted video, model and HTTP-target tests pass. All 11 original isolated-video review probes now pass, including the two previously failing partial-extraction cases. Changed-line coverage is 93.5%, and lint, formatting, type checks and the repository commit hooks pass. The original review thread has been answered and resolved. Required exact-head CI must pass before merge."
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-02T07:23:40Z",
+   "body": "<!-- ccr-overview-v2 -->\n\n### 🟢 Approval recommended\n\nNo active review issues block the cancellation-related temporary-frame cleanup changes.\n\n**No open issues** 🎉\n\n<details>\n<summary><strong>What changed in this PR</strong></summary>\n\nFixes #3700 by preserving ownership of temporary video frames during cancellation so the shared video-scoring helper can clean them up before propagating cancellation.\n\n**Changes:**\n- Waits for frame extraction to finish and removes its outputs when scoring is cancelled.\n- Cleans up partially extracted frames on failure and checks for unsuccessful image writes.\n- Adds regression tests for single and repeated cancellation, partial failures, and preservation of unrelated files.\n\n| File | Description |\r\n| ---- | ----------- |\r\n| `tests/​unit/​score/​test_video_scorer.py` | Adds cancellation and extraction-failure cleanup tests. |\r\n| `pyrit/​score/​video_scorer.py` | Adds cancellation-safe extraction and temporary-frame cleanup on failure. |\n</details>\n\n<sub>Review effort: Balanced</sub>"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "pyrit/score/video_scorer.py",
+   "created_at": "2026-11-01T20:51:39Z",
+   "body": "[P2] Include files from partially failed extraction in cleanup\n\nThe new helper handles cancellation when the extractor returns normally, but it still loses the files if extraction raises before this assignment. I reproduced this sequence with a generated temporary video:\n\n1. Write the first frame successfully.\n2. Cancel the scoring task while extraction is still running.\n3. Let the second frame write fail with `OSError`.\n\nThe worker finishes with the error, then cancellation cleanup runs with `frame_paths == []`. The first PNG and the empty temporary file for the second frame both remain on disk. If `cv2.imencode()` returns `False`, its temporary file is also missing from the returned list and survives cleanup.\n\nThis is a remaining gap in the proposed fix, not a leak newly introduced by this PR. Could the extractor clean up its local files on failure and remove files from unsuccessful encodes, with cancellation tests for these cases? The new test always returns a complete list, so it does not cover either failure."
+  },
+  {
+   "role": "contributor",
+   "path": "pyrit/score/video_scorer.py",
+   "created_at": "2026-11-02T07:22:00Z",
+   "body": "Fixed in 2a914edf9a61d0990583ee2b5564b549e2875e49, now included in head 21fbf6689bb6a706d537180957d99b9437a4f96a.\n\nThe extractor now registers each temporary file for cleanup as soon as it is created and transfers ownership only after extraction succeeds. Partial extraction errors remove all files created by that extraction. Failed encodes create no file, and a failed `imwrite()` result raises instead of returning an empty image path.\n\nAdded real-video regression tests for encode, write and file-creation failures, failed encode results, and cancellation once or twice during partial extraction. They also check that the source video and unrelated files stay unchanged. All 44 video scorer tests pass, and all 11 original review probes now pass, including both previously failing cases. Rereviewed the full updated diff and found no further issue.\n\n<sub>Auto-replied by the [GitHub Copilot app](https://gh.io/app)</sub>"
+  }
+ ],
+ "comments": [
+  {
+   "role": "contributor",
+   "created_at": "2026-11-02T07:54:59Z",
+   "body": "I compared the current heads of #3756 and #3806 after this PR merged. This PR contains the cancellation-safe extraction behavior, and it also covers partial extraction failure, failed encoding/writes, and single or repeated cancellation.\n\nOne useful assertion in #3806 is not explicit here: its cancellation test verifies that the source video still exists afterward. This implementation only removes the returned temporary frame paths, so the source should already be preserved. That explicit assertion could be added in a small follow-up test if we want to lock the behavior down."
+  }
+ ]
+}

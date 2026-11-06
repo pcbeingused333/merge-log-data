@@ -1,0 +1,26 @@
+{
+ "repo": "activeagents/activeagent",
+ "number": 669,
+ "url": "https://github.com/activeagents/activeagent/pull/669",
+ "title": "fix(model-capabilities): strip top_k for thinking-first models",
+ "merged_at": "2026-11-06T18:12:18Z",
+ "files": [
+  {
+   "filename": "lib/active_agent/model_capabilities.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -17,7 +17,7 @@ module ActiveAgent\n   # @example Disable sanitization entirely\n   #   ActiveAgent::ModelCapabilities.enabled = false\n   module ModelCapabilities\n-    SAMPLING_PARAMS = [ :temperature, :top_p ].freeze\n+    SAMPLING_PARAMS = [ :temperature, :top_p, :top_k ].freeze\n \n     # Model families that reject sampling parameters with a 400:\n     # - Anthropic thinking-first models (Opus 4.7+, Opus 5, Sonnet 5,"
+  },
+  {
+   "filename": "test/model_capabilities_test.rb",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -32,6 +32,22 @@ class ModelCapabilitiesTest < ActiveSupport::TestCase\n     assert_equal({ model: \"claude-sonnet-5\", max_tokens: 512 }, parameters)\n   end\n \n+  test \"sanitize! strips top_k for thinking-first Claude models\" do\n+    parameters = { model: \"claude-opus-4-7\", top_k: 40, max_tokens: 512 }\n+\n+    removed = ActiveAgent::ModelCapabilities.sanitize!(parameters)\n+\n+    assert_equal [ :top_k ], removed\n+    assert_equal({ model: \"claude-opus-4-7\", max_tokens: 512 }, parameters)\n+  end\n+\n+  test \"sanitize! keeps top_k for conventional Claude models\" do\n+    parameters = { model: \"claude-haiku-4-5\", top_k: 40 }\n+\n+    assert_empty ActiveAgent::ModelCapabilities.sanitize!(parameters)\n+    assert_equal 40, parameters[:top_k]\n+  end\n+\n   test \"sanitize! leaves conventional models untouched\" do\n     parameters = { model: \"gpt-4o-mini\", temperature: 0.7 }\n "
+  }
+ ],
+ "test_files": [
+  "test/model_capabilities_test.rb"
+ ]
+}

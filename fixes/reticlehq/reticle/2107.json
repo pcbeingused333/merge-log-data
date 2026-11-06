@@ -1,0 +1,40 @@
+{
+ "repo": "reticlehq/reticle",
+ "number": 2107,
+ "url": "https://github.com/reticlehq/reticle/pull/2107",
+ "title": "fix(browser): keep the HUD a pill on narrow viewports until tapped",
+ "merged_at": "2026-11-02T03:23:21Z",
+ "files": [
+  {
+   "filename": ".changes/2071-presenter-narrow-viewport.md",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+### Fixed\n+\n+- **`@reticlehq/browser` — the HUD no longer opens its panel by itself on a phone-width page.** Below 480 px the agent's first action and a page load both left the 320 px chat panel over the app's own controls, and a touch on a control underneath failed its hit-test. The HUD now stays a pill until somebody taps it; wider pages behave as before. Closes [#2071](https://github.com/reticlehq/reticle/issues/2071)."
+  },
+  {
+   "filename": "adapters/realm/browser/src/presenter/presenter-config.ts",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -148,6 +148,13 @@ export const STATE_ATTR = 'data-reticle-state';\n  */\n export const UNREACHABLE_STATE = 'unreachable';\n \n+/**\n+ * Below this viewport width the HUD never opens the panel by itself. The 320 px panel plus its dock\n+ * is most of a phone screen, and it covered the app's own controls (#2071). The pill stays; a tap\n+ * on it opens the panel.\n+ */\n+export const NARROW_VIEWPORT_PX = 480;\n+\n /** Overlay-root attribute toggled when the HUD is collapsed to the FAB. */\n export const MIN_ATTR = 'data-reticle-min';\n /** Overlay-root attribute toggled when the agent chat panel is open. */"
+  },
+  {
+   "filename": "adapters/realm/browser/src/presenter/presenter-narrow-viewport.test.ts",
+   "status": "added",
+   "additions": 80,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,80 @@\n+import { afterEach, beforeEach, describe, expect, it } from 'vitest';\n+import { Presenter } from './presenter.js';\n+import { rememberLeftOpen } from './presenter-shell.js';\n+import { CHAT_ATTR, FAB_ATTR, MIN_ATTR } from './presenter-config.js';\n+\n+/**\n+ * On a phone-width page the HUD covered the app's controls (#2071).\n+ *\n+ * At 412 px the agent's first log row opened the 320 px chat panel by itself, over the app's\n+ * video-settings close control, and a trusted touch on that control then failed its hit-test. Below\n+ * 480 px the HUD stays a pill until somebody taps it. A desktop width keeps the behaviour it has today.\n+ */\n+const HUD_MOUNT_TIMEOUT_MS = 30_000;\n+const PHONE_WIDTH = 412;\n+const DESKTOP_WIDTH = 1280;\n+const originalWidth = window.innerWidth;\n+\n+function setViewportWidth(width: number): void {\n+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });\n+}\n+\n+function overlay(): HTMLElement {\n+  return document.querySelector('div[data-reticle-overlay]') as HTMLElement;\n+}\n+\n+beforeEach(() => {\n+  localStorage.clear();\n+  sessionStorage.clear();\n+});\n+\n+afterEach(() => {\n+  setViewportWidth(originalWidth);\n+  document.querySelectorAll('[data-reticle-overlay]').forEach((el) => el.remove());\n+  document.body.innerHTML = '';\n+});\n+\n+describe('the HUD on a narrow viewport', { timeout: HUD_MOUNT_TIMEOUT_MS }, () => {\n+  it('stays a pill when the agent logs its first row', () => {\n+    setViewportWidth(PHONE_WIDTH);\n+    const presenter = new Presenter({});\n+    presenter.mount();\n+    presenter.sessionStart();\n+    presenter.narrate('Opening the settings dialog');\n+    expect(overlay().getAttribute(CHAT_ATTR)).not.toBe('1');\n+    expect(overlay().getAttribute(MIN_ATTR)).toBe('1');\n+    presenter.destroy();\n+  });\n+\n+  it('stays a pill on load even when the person left the panel open on a wider screen', () => {\n+    rememberLeftOpen(true);\n+    setViewportWidth(PHONE_WIDTH);\n+    const presenter = new Presenter({});\n+    presenter.mount();\n+    presenter.sessionStart();\n+    expect(overlay().getAttribute(CHAT_ATTR)).not.toBe('1');\n+    expect(overlay().getAttribute(MIN_ATTR)).toBe('1');\n+    presenter.destroy();\n+  });\n+\n+  it('opens the panel when somebody taps the pill', () => {\n+    setViewportWidth(PHONE_WIDTH);\n+    const presenter = new Presenter({});\n+    presenter.mount();\n+    presenter.sessionStart();\n+    presenter.narrate('Opening the settings dialog');\n+    (document.querySelector(`[${FAB_ATTR}]`) as HTMLElement).click();\n+    expect(overlay().getAttribute(CHAT_ATTR)).toBe('1');\n+    presenter.destroy();\n+  });\n+\n+  it('leaves a desktop width as it was: the first row opens the chat', () => {\n+    setViewportWidth(DESKTOP_WIDTH);\n+    const presenter = new Presenter({});\n+    presenter.mount();\n+    presenter.sessionStart();\n+    presenter.narrate('Opening the settings dialog');\n+    expect(overlay().getAttribute(CHAT_ATTR)).toBe('1');\n+    presenter.destroy();\n+  });\n+});"
+  },
+  {
+   "filename": "adapters/realm/browser/src/presenter/presenter-shell.ts",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 2,
+   "patch": "@@ -16,6 +16,7 @@ import {\n   DOCK_ATTR,\n   FAB_ATTR,\n   MIN_ATTR,\n+  NARROW_VIEWPORT_PX,\n   SETTINGS_ATTR,\n   SETTINGS_BTN_ATTR,\n   MINIMISED_STORAGE_KEY,\n@@ -731,7 +732,7 @@ export function rememberLeftOpen(open: boolean): void {\n  * there covered the app's own controls before any agent had done anything.\n  */\n export function shouldReopenPanel(): boolean {\n-  return wasLeftOpen() && !wasMinimised();\n+  return !isNarrowViewport() && wasLeftOpen() && !wasMinimised();\n }\n \n /**\n@@ -746,5 +747,13 @@ export function shouldReopenPanel(): boolean {\n  * question until you say why they are not.\n  */\n export function shouldAutoOpenChat(autoOpenChat: boolean): boolean {\n-  return autoOpenChat && !wasMinimised();\n+  return autoOpenChat && !isNarrowViewport() && !wasMinimised();\n+}\n+\n+/**\n+ * A phone-width page. The panel would cover most of it, so nothing opens it but a tap on the pill.\n+ * `innerWidth` rather than `matchMedia`: it is the width the app itself lays out in.\n+ */\n+export function isNarrowViewport(): boolean {\n+  return globalThis.innerWidth < NARROW_VIEWPORT_PX;\n }"
+  }
+ ],
+ "test_files": [
+  "adapters/realm/browser/src/presenter/presenter-narrow-viewport.test.ts"
+ ]
+}

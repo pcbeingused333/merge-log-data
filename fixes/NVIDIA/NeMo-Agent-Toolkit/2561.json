@@ -1,0 +1,26 @@
+{
+ "repo": "NVIDIA/NeMo-Agent-Toolkit",
+ "number": 2561,
+ "url": "https://github.com/NVIDIA/NeMo-Agent-Toolkit/pull/2561",
+ "title": "fix(adk): pass max_retries to the ADK OpenAI and Dynamo clients",
+ "merged_at": "2026-11-05T00:38:50Z",
+ "files": [
+  {
+   "filename": "packages/nvidia_nat_adk/src/nat/plugins/adk/llm.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -203,6 +203,7 @@ async def openai_adk(config: OpenAIModelConfig, _builder: Builder):\n         config_dict[\"api_base\"] = base_url\n     if config.request_timeout is not None:\n         config_dict[\"timeout\"] = config.request_timeout\n+    config_dict[\"max_retries\"] = config.max_retries\n \n     _handle_litellm_verify_ssl(config)\n \n@@ -249,6 +250,7 @@ async def dynamo_adk(config: DynamoModelConfig, _builder: Builder):\n \n     if config.base_url:\n         config_dict[\"api_base\"] = config.base_url\n+    config_dict[\"max_retries\"] = config.max_retries\n \n     async with _create_httpx_client_with_dynamo_hooks(config) as http_client:\n \n@@ -259,6 +261,7 @@ async def dynamo_adk(config: DynamoModelConfig, _builder: Builder):\n             api_key=api_key,\n             base_url=base_url,\n             http_client=http_client,\n+            max_retries=config.max_retries,\n         )\n         config_dict[\"client\"] = openai_client\n         yield _patch_llm_based_on_config(LiteLlm(config.model_name, **config_dict), config)"
+  },
+  {
+   "filename": "packages/nvidia_nat_adk/tests/test_adk_llm.py",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 1,
+   "patch": "@@ -63,7 +63,8 @@ async def test_litellm_adk_with_full_config(mock_litellm_class, litellm_config,\n     mock_litellm_class.assert_called_once_with('gpt-5.4-mini',\n                                                temperature=0.7,\n                                                api_key='test-api-key',\n-                                               api_base='https://api.openai.com/v1')\n+                                               api_base='https://api.openai.com/v1',\n+                                               max_retries=10)\n \n     # Verify the returned LLM instance\n     assert result_llm == mock_llm_instance\n@@ -120,6 +121,18 @@ async def test_litellm_adk_is_generator(mock_litellm_class, litellm_config, mock\n     assert result_llm == mock_llm_instance\n \n \n+@pytest.mark.parametrize(\"max_retries\", [0, 3, 10], ids=[\"zero\", \"custom\", \"default\"])\n+@patch('google.adk.models.lite_llm.LiteLlm')\n+async def test_openai_adk_passes_max_retries(mock_litellm_class, max_retries, mock_builder):\n+    \"\"\"max_retries from the config must reach LiteLlm instead of being silently dropped.\"\"\"\n+    config = OpenAIModelConfig(model_name=\"gpt-4\", max_retries=max_retries)\n+\n+    async with openai_adk(config, mock_builder):\n+        pass\n+\n+    assert mock_litellm_class.call_args.kwargs[\"max_retries\"] == max_retries\n+\n+\n @patch('nat.plugins.adk.llm._handle_litellm_verify_ssl')\n @patch('google.adk.models.lite_llm.LiteLlm')\n @pytest.mark.parametrize(\"verify_ssl\", [True, False], ids=[\"verify_ssl_true\", \"verify_ssl_false\"])\n@@ -228,6 +241,22 @@ async def test_creation_with_nvext_hints_enabled(self,\n \n         assert \"transport\" in mock_create_http_client.call_args.kwargs\n \n+    @patch('openai.AsyncOpenAI')\n+    @patch('google.adk.models.lite_llm.LiteLlm')\n+    async def test_max_retries_passed_to_openai_client(self,\n+                                                       mock_litellm_class,\n+                                                       mock_async_openai,\n+                                                       mock_create_http_client,\n+                                                       mock_builder):\n+        \"\"\"max_retries from the Dynamo config must be applied to the AsyncOpenAI client.\"\"\"\n+        config = DynamoModelConfig(model_name=\"test-model\", base_url=\"http://localhost:8000/v1\", max_retries=4)\n+\n+        async with dynamo_adk(config, mock_builder):\n+            pass\n+\n+        assert mock_async_openai.call_args.kwargs[\"max_retries\"] == 4\n+        assert mock_litellm_class.call_args.kwargs[\"max_retries\"] == 4\n+\n     @pytest.mark.parametrize(\"verify_ssl\", [True, False], ids=[\"verify_ssl_true\", \"verify_ssl_false\"])\n     async def test_dynamo_verify_ssl(self, mock_httpx_async_client, verify_ssl):\n         \"\"\"verify_ssl from config is passed to httpx.AsyncClient as verify.\"\"\""
+  }
+ ],
+ "test_files": [
+  "packages/nvidia_nat_adk/tests/test_adk_llm.py"
+ ]
+}

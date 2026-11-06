@@ -1,0 +1,26 @@
+{
+ "repo": "redis/redisctl",
+ "number": 1306,
+ "url": "https://github.com/redis/redisctl/pull/1306",
+ "title": "fix(enterprise): query /v1/cluster/alerts in 'cluster alerts'",
+ "merged_at": "2026-11-06T04:37:18Z",
+ "files": [
+  {
+   "filename": "crates/redisctl/src/commands/enterprise/cluster_impl.rs",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 4,
+   "patch": "@@ -542,10 +542,9 @@ pub async fn get_cluster_alerts(\n     query: Option<&str>,\n ) -> CliResult<()> {\n     let client = conn_mgr.create_enterprise_client(profile_name).await?;\n-    // `AlertHandler::list` was removed upstream; call the cluster-wide alerts\n-    // route directly to preserve this command's behavior.\n-    let alerts: Vec<redis_enterprise::alerts::Alert> = client.get(\"/v1/alerts\").await?;\n-    let alerts_json = serde_json::to_value(alerts).context(\"Failed to serialize alerts\")?;\n+    // Redis Enterprise has no `/v1/alerts` route; cluster alerts live under\n+    // `/v1/cluster/alerts` and come back as a map keyed by alert name.\n+    let alerts_json: serde_json::Value = client.get(\"/v1/cluster/alerts\").await?;\n     let data = handle_output(alerts_json, output_format, query)?;\n     print_formatted_output(data, output_format)?;\n     Ok(())"
+  },
+  {
+   "filename": "crates/redisctl/tests/cli_integration_mocked_tests.rs",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -1650,3 +1650,27 @@ async fn test_enterprise_database_create_dry_run_uses_query_param() {\n \n     // MockServer verifies the `.expect(1)` constraint on drop.\n }\n+\n+// `enterprise cluster alerts` must query the real `/v1/cluster/alerts` route\n+// (Redis Enterprise has no `/v1/alerts`) and print the map keyed by alert name.\n+#[tokio::test]\n+async fn test_enterprise_cluster_alerts_uses_cluster_alerts_route() {\n+    let temp_dir = TempDir::new().unwrap();\n+    let mock_server = MockServer::start().await;\n+    create_enterprise_profile(&temp_dir, &mock_server.uri()).unwrap();\n+\n+    Mock::given(method(\"GET\"))\n+        .and(path(\"/v1/cluster/alerts\"))\n+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({\n+            \"cluster_too_many_nodes\": { \"state\": false, \"severity\": \"WARNING\" }\n+        })))\n+        .expect(1)\n+        .mount(&mock_server)\n+        .await;\n+\n+    test_cmd(&temp_dir)\n+        .args([\"enterprise\", \"cluster\", \"alerts\"])\n+        .assert()\n+        .success()\n+        .stdout(predicate::str::contains(\"cluster_too_many_nodes\"));\n+}"
+  }
+ ],
+ "test_files": [
+  "crates/redisctl/tests/cli_integration_mocked_tests.rs"
+ ]
+}

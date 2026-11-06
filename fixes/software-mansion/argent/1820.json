@@ -1,0 +1,26 @@
+{
+ "repo": "software-mansion/argent",
+ "number": 1820,
+ "url": "https://github.com/software-mansion/argent/pull/1820",
+ "title": "fix(flow): reject non-numeric snapshot maxMismatch instead of coercing it",
+ "merged_at": "2026-11-06T16:37:14Z",
+ "files": [
+  {
+   "filename": "packages/tool-server/src/tools/flows/flow-utils.ts",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 1,
+   "patch": "@@ -3705,7 +3705,15 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {\n       // The runner compares the diff against `maxMismatch` — a NaN here\n       // (e.g. from \"5%\") would make every comparison false, failing the snapshot\n       // even on byte-identical frames.\n-      const m = Number(b.maxMismatch);\n+      // Only real numbers and plain decimal strings count: `Number()` alone would\n+      // turn null/false/[]/blank into 0, true into 1 and \"0x10\" into 16.\n+      const rawMax: unknown = b.maxMismatch;\n+      const m =\n+        typeof rawMax === \"number\"\n+          ? rawMax\n+          : typeof rawMax === \"string\" && /^\\s*[-+]?(\\d+\\.?\\d*|\\.\\d+)\\s*$/.test(rawMax)\n+            ? Number(rawMax)\n+            : NaN;\n       if (!Number.isFinite(m) || m < 0 || m > 100) {\n         badEntry(\n           raw,"
+  },
+  {
+   "filename": "packages/tool-server/test/flows/flow-utils.test.ts",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -753,6 +753,16 @@ describe(\"parseFlow\", () => {\n     expect(flow.steps).toEqual([{ kind: \"snapshot\", name: \"home\", maxMismatch: 1.5 }]);\n   });\n \n+  it.each([\n+    ['\" 1.5 \"', 1.5],\n+    ['\".5\"', 0.5],\n+    ['\"+1\"', 1],\n+    ['\"5.\"', 5],\n+  ])(\"accepts the quoted decimal maxMismatch %s\", (quoted, expected) => {\n+    const flow = parseFlow(`steps:\\n  - snapshot: { name: home, maxMismatch: ${quoted} }\\n`);\n+    expect(flow.steps).toEqual([{ kind: \"snapshot\", name: \"home\", maxMismatch: expected }]);\n+  });\n+\n   it(\"rejects a non-numeric, negative, or out-of-range maxMismatch\", async () => {\n     for (const bad of ['\"5%\"', \"-1\", \"101\", \".nan\"]) {\n       expect(() =>\n@@ -761,6 +771,14 @@ describe(\"parseFlow\", () => {\n     }\n   });\n \n+  it(\"rejects maxMismatch values that Number() would silently coerce\", async () => {\n+    for (const bad of [\"\", \"null\", \"true\", \"false\", \"[]\", '\"  \"', '\"0x10\"']) {\n+      expect(() =>\n+        parseFlow(`steps:\\n  - snapshot: { name: home, maxMismatch: ${bad} }\\n`)\n+      ).toThrow(\"snapshot maxMismatch must be a number between 0 and 100\");\n+    }\n+  });\n+\n   it(\"parses snapshot cropOn as a selector (bare-string loose, map strict)\", async () => {\n     const flow = parseFlow(\n       \"steps:\\n\" +"
+  }
+ ],
+ "test_files": [
+  "packages/tool-server/test/flows/flow-utils.test.ts"
+ ]
+}

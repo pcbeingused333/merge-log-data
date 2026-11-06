@@ -1,0 +1,26 @@
+{
+ "repo": "open-multi-agent/open-multi-agent",
+ "number": 655,
+ "url": "https://github.com/open-multi-agent/open-multi-agent/pull/655",
+ "title": "fix(core): count Gemini thinking tokens in output usage",
+ "merged_at": "2026-11-04T13:49:00Z",
+ "files": [
+  {
+   "filename": "packages/core/src/llm/gemini.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -413,7 +413,8 @@ function fromGeminiResponse(\n     stop_reason,\n     usage: {\n       input_tokens: usage?.promptTokenCount ?? 0,\n-      output_tokens: usage?.candidatesTokenCount ?? 0,\n+      // Thinking tokens are billed as output but reported apart from candidates.\n+      output_tokens: (usage?.candidatesTokenCount ?? 0) + (usage?.thoughtsTokenCount ?? 0),\n     },\n   }\n }\n@@ -508,6 +509,7 @@ export class GeminiAdapter implements LLMAdapter {\n       const accumulatedContent: ContentBlock[] = []\n       let inputTokens = 0\n       let outputTokens = 0\n+      let thoughtsTokens = 0\n       let lastFinishReason: string | undefined\n \n       for await (const chunk of streamResponse) {\n@@ -517,6 +519,7 @@ export class GeminiAdapter implements LLMAdapter {\n         if (chunk.usageMetadata) {\n           inputTokens = chunk.usageMetadata.promptTokenCount ?? inputTokens\n           outputTokens = chunk.usageMetadata.candidatesTokenCount ?? outputTokens\n+          thoughtsTokens = chunk.usageMetadata.thoughtsTokenCount ?? thoughtsTokens\n         }\n         if (candidate?.finishReason) {\n           lastFinishReason = candidate.finishReason as string\n@@ -558,7 +561,7 @@ export class GeminiAdapter implements LLMAdapter {\n         content: accumulatedContent,\n         model: options.model,\n         stop_reason,\n-        usage: { input_tokens: inputTokens, output_tokens: outputTokens },\n+        usage: { input_tokens: inputTokens, output_tokens: outputTokens + thoughtsTokens },\n       }\n \n       yield { type: 'done', data: finalResponse } satisfies StreamEvent"
+  },
+  {
+   "filename": "packages/core/tests/gemini-adapter-contract.test.ts",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -326,6 +326,17 @@ describe('GeminiAdapter (contract)', () => {\n       expect(result.stop_reason).toBe('tool_use')\n     })\n \n+    it('counts thinking tokens as output tokens', async () => {\n+      mockGenerateContent.mockResolvedValue({\n+        ...makeGeminiResponse([{ text: 'Hello' }]),\n+        usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, thoughtsTokenCount: 40 },\n+      })\n+\n+      const result = await adapter.chat([textMsg('user', 'Hi')], chatOpts())\n+\n+      expect(result.usage).toEqual({ input_tokens: 10, output_tokens: 45 })\n+    })\n+\n     it('handles missing usageMetadata (defaults to 0)', async () => {\n       mockGenerateContent.mockResolvedValue({\n         candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason: 'STOP' }],\n@@ -407,6 +418,20 @@ describe('GeminiAdapter (contract)', () => {\n       expect(response.usage).toEqual({ input_tokens: 10, output_tokens: 5 })\n     })\n \n+    it('counts thinking tokens from usageMetadata as output tokens', async () => {\n+      mockGenerateContentStream.mockResolvedValue(\n+        asyncGen([\n+          { candidates: [{ content: { parts: [{ text: 'Hi' }] } }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 2, thoughtsTokenCount: 30 } },\n+          { candidates: [{ content: { parts: [{ text: '!' }] }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, thoughtsTokenCount: 40 } },\n+        ]),\n+      )\n+\n+      const events = await collectEvents(adapter.stream([textMsg('user', 'Hi')], chatOpts()))\n+\n+      const response = events.find(e => e.type === 'done')!.data as LLMResponse\n+      expect(response.usage).toEqual({ input_tokens: 10, output_tokens: 45 })\n+    })\n+\n     it('yields done event with correct stop_reason', async () => {\n       mockGenerateContentStream.mockResolvedValue(\n         asyncGen([makeGeminiResponse([{ text: 'ok' }], { finishReason: 'MAX_TOKENS' })]),"
+  }
+ ],
+ "test_files": [
+  "packages/core/tests/gemini-adapter-contract.test.ts"
+ ]
+}

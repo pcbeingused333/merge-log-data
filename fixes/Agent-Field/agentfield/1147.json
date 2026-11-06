@@ -1,0 +1,26 @@
+{
+ "repo": "Agent-Field/agentfield",
+ "number": 1147,
+ "url": "https://github.com/Agent-Field/agentfield/pull/1147",
+ "title": "fix(sdk/go): don't cut active streams with Client.Timeout",
+ "merged_at": "2026-11-03T13:59:46Z",
+ "files": [
+  {
+   "filename": "sdk/go/ai/client.go",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 1,
+   "patch": "@@ -9,6 +9,7 @@ import (\n \t\"net/http\"\n \t\"net/url\"\n \t\"strings\"\n+\t\"time\"\n )\n \n // Client provides AI/LLM capabilities using OpenAI or OpenRouter API.\n@@ -283,8 +284,27 @@ func (c *Client) StreamComplete(ctx context.Context, prompt string, opts ...Opti\n \t\t\tapplyInfronAttributionHeaders(httpReq.Header, c.config.SiteURL, c.config.SiteName)\n \t\t}\n \n+\t\t// http.Client.Timeout covers reading the whole body, which would cut off\n+\t\t// a stream that is still delivering chunks. Bound only the wait for the\n+\t\t// response headers with the same duration instead.\n+\t\tstreamClient := c.httpClient\n+\t\tvar headerTimer *time.Timer\n+\t\tif headerTimeout := c.httpClient.Timeout; headerTimeout > 0 {\n+\t\t\tclone := *c.httpClient\n+\t\t\tclone.Timeout = 0\n+\t\t\tstreamClient = &clone\n+\n+\t\t\treqCtx, cancel := context.WithCancel(ctx)\n+\t\t\tdefer cancel()\n+\t\t\theaderTimer = time.AfterFunc(headerTimeout, cancel)\n+\t\t\thttpReq = httpReq.WithContext(reqCtx)\n+\t\t}\n+\n \t\t// Execute request\n-\t\thttpResp, err := c.httpClient.Do(httpReq)\n+\t\thttpResp, err := streamClient.Do(httpReq)\n+\t\tif headerTimer != nil {\n+\t\t\theaderTimer.Stop()\n+\t\t}\n \t\tif err != nil {\n \t\t\terrCh <- fmt.Errorf(\"execute request: %w\", err)\n \t\t\treturn"
+  },
+  {
+   "filename": "sdk/go/ai/client_test.go",
+   "status": "modified",
+   "additions": 62,
+   "deletions": 0,
+   "patch": "@@ -707,3 +707,65 @@ func TestStructuredAI(t *testing.T) {\n \t// This test requires a valid config, so we'll skip it in unit tests\n \tt.Skip(\"Requires actual API key or extensive mocking\")\n }\n+\n+func collectStream(chunks <-chan StreamChunk, errs <-chan error) ([]StreamChunk, error) {\n+\tvar got []StreamChunk\n+\tfor chunk := range chunks {\n+\t\tgot = append(got, chunk)\n+\t}\n+\tselect {\n+\tcase err := <-errs:\n+\t\treturn got, err\n+\tcase <-time.After(time.Second):\n+\t\treturn got, nil\n+\t}\n+}\n+\n+// The configured Timeout bounds how long we wait for the server to start\n+// responding; it must not cut off a stream that is still delivering chunks.\n+func TestStreamComplete_TimeoutDoesNotCutActiveStream(t *testing.T) {\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tw.Header().Set(\"Content-Type\", \"text/event-stream\")\n+\t\tw.WriteHeader(http.StatusOK)\n+\t\tfor i := 0; i < 4; i++ {\n+\t\t\t_, _ = w.Write([]byte(`data: {\"id\":\"chatcmpl-123\",\"choices\":[{\"delta\":{\"content\":\"x\"}}]}` + \"\\n\\n\"))\n+\t\t\tw.(http.Flusher).Flush()\n+\t\t\ttime.Sleep(150 * time.Millisecond)\n+\t\t}\n+\t\t_, _ = w.Write([]byte(\"data: [DONE]\\n\\n\"))\n+\t\tw.(http.Flusher).Flush()\n+\t}))\n+\tdefer server.Close()\n+\n+\tclient, err := NewClient(&Config{APIKey: \"k\", BaseURL: server.URL, Model: \"m\", Timeout: 300 * time.Millisecond})\n+\trequire.NoError(t, err)\n+\n+\tchunks, errs := client.StreamComplete(context.Background(), \"hi\")\n+\tgot, streamErr := collectStream(chunks, errs)\n+\n+\tassert.NoError(t, streamErr)\n+\tassert.Len(t, got, 4)\n+}\n+\n+// A server that never starts responding must still be bounded by Timeout.\n+func TestStreamComplete_TimeoutAppliesWhileWaitingForResponse(t *testing.T) {\n+\trelease := make(chan struct{})\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tselect {\n+\t\tcase <-release:\n+\t\tcase <-r.Context().Done():\n+\t\t}\n+\t}))\n+\tdefer server.Close()\n+\tdefer close(release)\n+\n+\tclient, err := NewClient(&Config{APIKey: \"k\", BaseURL: server.URL, Model: \"m\", Timeout: 200 * time.Millisecond})\n+\trequire.NoError(t, err)\n+\n+\tstart := time.Now()\n+\tchunks, errs := client.StreamComplete(context.Background(), \"hi\")\n+\t_, streamErr := collectStream(chunks, errs)\n+\n+\tassert.Error(t, streamErr)\n+\tassert.Less(t, time.Since(start), 2*time.Second)\n+}"
+  }
+ ],
+ "test_files": [
+  "sdk/go/ai/client_test.go"
+ ]
+}

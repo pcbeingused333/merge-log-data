@@ -1,0 +1,33 @@
+{
+ "repo": "TanStack/ai",
+ "number": 2036,
+ "url": "https://github.com/TanStack/ai/pull/2036",
+ "title": "fix(ai-cloudflare): split embed() inputs into batches of at most 100",
+ "merged_at": "2026-11-05T10:41:32Z",
+ "files": [
+  {
+   "filename": ".changeset/ai-cloudflare-embed-batch.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@tanstack/ai-cloudflare': patch\n+---\n+\n+`embed()` with more than 100 inputs no longer fails on Workers AI embedding models that accept 100 texts per request, such as the BGE models. The adapter now sends the inputs in sequential requests of at most 100 texts and returns the vectors in input order. An aborted signal stops the remaining requests. Models with a lower limit, such as `@cf/qwen/qwen3-embedding-0.6b`, can still reject large inputs."
+  },
+  {
+   "filename": "packages/ai-cloudflare/src/adapters/embedding.ts",
+   "status": "modified",
+   "additions": 32,
+   "deletions": 11,
+   "patch": "@@ -8,6 +8,13 @@ import type { EmbeddingOptions, EmbeddingResult } from '@tanstack/ai'\n import type { CloudflareConfig, CloudflareConfigInput } from '../utils/config'\n import type { CloudflareEmbeddingModel } from '../utils/models'\n \n+/**\n+ * Texts per Workers AI request. 100 is the cap of the BGE and EmbeddingGemma\n+ * models. Models with a lower cap (such as `@cf/qwen/qwen3-embedding-0.6b`)\n+ * can still reject a full batch.\n+ */\n+const CLOUDFLARE_MAX_BATCH_SIZE = 100\n+\n /** Extra inputs forwarded to the embedding model (model specific). */\n export type CloudflareEmbeddingProviderOptions = Record<string, unknown>\n \n@@ -43,21 +50,35 @@ export class CloudflareEmbeddingAdapter<\n         `activity=embed provider=${this.name} model=${model} inputs=${texts.length}`,\n         { provider: this.name, model },\n       )\n-      const output = (await runModel(\n-        this.cfConfig,\n-        model,\n-        { ...options.modelOptions, text: texts },\n-        { signal: options.abortSignal },\n-      )) as { data?: Array<Array<number>> }\n-      if (!Array.isArray(output.data) || output.data.length !== texts.length) {\n-        throw new Error(\n-          `Workers AI ${model} returned ${output.data?.length ?? 0} embeddings for ${texts.length} inputs`,\n-        )\n+      const vectors: Array<Array<number>> = []\n+      for (\n+        let start = 0;\n+        start < texts.length;\n+        start += CLOUDFLARE_MAX_BATCH_SIZE\n+      ) {\n+        // The binding path ignores the signal, so check it between batches.\n+        options.abortSignal?.throwIfAborted()\n+        const batch = texts.slice(start, start + CLOUDFLARE_MAX_BATCH_SIZE)\n+        const output = (await runModel(\n+          this.cfConfig,\n+          model,\n+          { ...options.modelOptions, text: batch },\n+          { signal: options.abortSignal },\n+        )) as { data?: Array<Array<number>> }\n+        if (\n+          !Array.isArray(output.data) ||\n+          output.data.length !== batch.length\n+        ) {\n+          throw new Error(\n+            `Workers AI ${model} returned ${output.data?.length ?? 0} embeddings for ${batch.length} inputs`,\n+          )\n+        }\n+        vectors.push(...output.data)\n       }\n       return {\n         id: generateId(this.name),\n         model,\n-        embeddings: output.data.map((vector, index) => ({\n+        embeddings: vectors.map((vector, index) => ({\n           vector,\n           index,\n         })),"
+  },
+  {
+   "filename": "packages/ai-cloudflare/tests/cloudflare-adapter.test.ts",
+   "status": "modified",
+   "additions": 39,
+   "deletions": 0,
+   "patch": "@@ -438,6 +438,45 @@ describe('embedding adapter', () => {\n     ])\n   })\n \n+  it('splits more than 100 inputs into requests of at most 100', async () => {\n+    const { binding, run } = fakeBinding((_model, inputs) => {\n+      const text = (inputs as { text: Array<string> }).text\n+      if (text.length > 100) throw new Error('too many: maxItems is 100')\n+      return { data: text.map((t) => [Number(t)]) }\n+    })\n+    const adapter = createCloudflareEmbedding('@cf/baai/bge-m3', { binding })\n+    const input = Array.from({ length: 250 }, (_, i) => String(i))\n+    const result = await adapter.createEmbeddings({\n+      model: '@cf/baai/bge-m3',\n+      input,\n+      logger,\n+    })\n+    expect(\n+      run.mock.calls.map((c) => (c[1] as { text: Array<string> }).text.length),\n+    ).toEqual([100, 100, 50])\n+    expect(result.embeddings).toHaveLength(250)\n+    expect(result.embeddings[0]).toEqual({ vector: [0], index: 0 })\n+    expect(result.embeddings[249]).toEqual({ vector: [249], index: 249 })\n+  })\n+\n+  it('stops sending batches once the signal aborts', async () => {\n+    const controller = new AbortController()\n+    const { binding, run } = fakeBinding((_model, inputs) => {\n+      controller.abort(new Error('stop'))\n+      return { data: (inputs as { text: Array<string> }).text.map(() => [0]) }\n+    })\n+    const adapter = createCloudflareEmbedding('@cf/baai/bge-m3', { binding })\n+    await expect(\n+      adapter.createEmbeddings({\n+        model: '@cf/baai/bge-m3',\n+        input: Array.from({ length: 250 }, (_, i) => String(i)),\n+        abortSignal: controller.signal,\n+        logger,\n+      }),\n+    ).rejects.toThrow('stop')\n+    expect(run).toHaveBeenCalledTimes(1)\n+  })\n+\n   it('sends defaultHeaders as extraHeaders', async () => {\n     const { binding, run } = fakeBinding(() => ({ data: [[0.1]] }))\n     const adapter = createCloudflareEmbedding('@cf/baai/bge-m3', {"
+  }
+ ],
+ "test_files": [
+  "packages/ai-cloudflare/tests/cloudflare-adapter.test.ts"
+ ]
+}

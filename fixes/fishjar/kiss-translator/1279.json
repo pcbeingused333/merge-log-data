@@ -1,0 +1,26 @@
+{
+ "repo": "fishjar/kiss-translator",
+ "number": 1279,
+ "url": "https://github.com/fishjar/kiss-translator/pull/1279",
+ "title": "fix(translator): keep sibling group's translation when a request fails",
+ "merged_at": "2026-11-06T18:17:14Z",
+ "files": [
+  {
+   "filename": "src/libs/translator.js",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 18,
+   "patch": "@@ -4216,25 +4216,19 @@ export class Translator {\n \n       // 失败重试按钮\n       try {\n-        const lastWrapper = hostNode.querySelector(\n-          `:scope > .${Translator.KISS_CLASS.warpper}:last-of-type`\n-        );\n-        if (lastWrapper) {\n-          const inner = lastWrapper.querySelector(\n-            `.${Translator.KISS_CLASS.inner}`\n-          );\n-          if (inner) {\n-            inner.textContent = \"\";\n-            const retryNode = this.#createRetryErrorNode(errorText, () => {\n-              this.#withViewportAnchor(() => {\n-                touchTranslationOwners.delete(lastWrapper);\n-                lastWrapper.remove();\n-              });\n-              this.#processedNodes.delete(hostNode);\n-              this.#translateNodeGroup(nodes, hostNode, deLang, options);\n+        // 只处理本次请求自己的 wrapper：宿主上可能还有其他分组已成功的译文\n+        const inner = wrapper.querySelector(`.${Translator.KISS_CLASS.inner}`);\n+        if (inner) {\n+          inner.textContent = \"\";\n+          const retryNode = this.#createRetryErrorNode(errorText, () => {\n+            this.#withViewportAnchor(() => {\n+              touchTranslationOwners.delete(wrapper);\n+              wrapper.remove();\n             });\n-            inner.appendChild(retryNode);\n-          }\n+            this.#processedNodes.delete(hostNode);\n+            this.#translateNodeGroup(nodes, hostNode, deLang, options);\n+          });\n+          inner.appendChild(retryNode);\n         }\n       } catch (retryErr) {\n         logger.child(\"translator\").warn(\"retry icon error: \", retryErr.message);"
+  },
+  {
+   "filename": "src/libs/translator.test.js",
+   "status": "modified",
+   "additions": 41,
+   "deletions": 0,
+   "patch": "@@ -9932,6 +9932,47 @@ describe(\"Translator rule styles\", () => {\n       expect(inner.textContent).toBe(\"智能体集合 and GPT\");\n     });\n \n+    test(\"a failed group keeps its retry node in its own wrapper and does not clear a sibling group's translation\", async () => {\n+      let rejectFirst;\n+      apiTranslate.mockImplementation(({ text }) => {\n+        if (text.includes(\"First\")) {\n+          return new Promise((_, reject) => {\n+            rejectFirst = reject;\n+          });\n+        }\n+        return Promise.resolve({ trText: `translated ${text}`, isSame: false });\n+      });\n+      document.body.innerHTML =\n+        '<main id=\"root\"><div id=\"target\">First paragraph text<br><br>Second paragraph text</div></main>';\n+\n+      createTranslator(\n+        { autoScan: \"false\", selector: \"#target\" },\n+        { minLength: 0 }\n+      );\n+      await flushAsync();\n+\n+      const wrappers = document.querySelectorAll(\n+        `#target > .${Translator.KISS_CLASS.warpper}`\n+      );\n+      expect(wrappers).toHaveLength(2);\n+      expect(wrappers[1].textContent).toContain(\"translated Second\");\n+\n+      // the earlier group fails only after the later group has succeeded\n+      rejectFirst(new Error(\"429 Too Many Requests\"));\n+      await flushAsync();\n+\n+      const after = document.querySelectorAll(\n+        `#target > .${Translator.KISS_CLASS.warpper}`\n+      );\n+      expect(after[1].textContent).toContain(\"translated Second\");\n+      expect(\n+        after[1].querySelector(`.${Translator.KISS_CLASS.retry}`)\n+      ).toBeNull();\n+      expect(\n+        after[0].querySelector(`.${Translator.KISS_CLASS.retry}`)\n+      ).not.toBeNull();\n+    });\n+\n     test(\"占位符序号跨运行隔离：每次请求都从 1 开始编号\", async () => {\n       apiTranslate.mockImplementation(({ text }) =>\n         Promise.resolve({ trText: text, isSame: false })"
+  }
+ ],
+ "test_files": [
+  "src/libs/translator.test.js"
+ ]
+}

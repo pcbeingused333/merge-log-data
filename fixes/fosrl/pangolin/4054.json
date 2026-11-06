@@ -1,0 +1,26 @@
+{
+ "repo": "fosrl/pangolin",
+ "number": 4054,
+ "url": "https://github.com/fosrl/pangolin/pull/4054",
+ "title": "fix(exit-nodes): add a request timeout to calls made to Gerbil",
+ "merged_at": "2026-11-03T15:19:59Z",
+ "files": [
+  {
+   "filename": "server/lib/exitNodes/exitNodeComms.test.ts",
+   "status": "added",
+   "additions": 74,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,74 @@\n+import { createServer } from \"node:http\";\n+import type { AddressInfo } from \"node:net\";\n+import { assertEquals } from \"@test/assert\";\n+import { sendToExitNode } from \"./exitNodeComms\";\n+\n+// A Gerbil that accepts the connection but never answers. Without a request\n+// timeout the call below never settles, so each attempt is raced against a\n+// watchdog to make the failure observable instead of hanging the test run.\n+const WATCHDOG_MS = 3000;\n+\n+async function settle(\n+    port: number,\n+    method: \"POST\" | \"DELETE\" | \"GET\" | \"PUT\"\n+): Promise<string> {\n+    const exitNode = {\n+        exitNodeId: 1,\n+        reachableAt: `http://127.0.0.1:${port}`\n+    } as any;\n+\n+    let watchdog: NodeJS.Timeout | undefined;\n+    const hung = new Promise<string>((resolve) => {\n+        watchdog = setTimeout(() => resolve(\"HUNG\"), WATCHDOG_MS);\n+    });\n+    const attempt = sendToExitNode(exitNode, {\n+        localPath: \"/peer\",\n+        method,\n+        data: method === \"POST\" || method === \"PUT\" ? { a: 1 } : undefined,\n+        timeoutMs: 200\n+    }).then(\n+        () => \"RESOLVED\",\n+        (error) => (error as { code?: string }).code ?? \"REJECTED\"\n+    );\n+    const result = await Promise.race([attempt, hung]);\n+    clearTimeout(watchdog);\n+    return result;\n+}\n+\n+async function testUnresponsiveExitNodeTimesOut() {\n+    console.log(\"Running exit node timeout tests...\");\n+\n+    const sockets = new Set<import(\"node:net\").Socket>();\n+    const server = createServer(() => {\n+        // never respond\n+    });\n+    server.on(\"connection\", (s) => sockets.add(s));\n+    await new Promise<void>((resolve) => server.listen(0, \"127.0.0.1\", resolve));\n+    const port = (server.address() as AddressInfo).port;\n+\n+    try {\n+        for (const method of [\"POST\", \"DELETE\", \"GET\", \"PUT\"] as const) {\n+            assertEquals(\n+                await settle(port, method),\n+                \"ECONNABORTED\",\n+                `${method} to an unresponsive exit node must time out`\n+            );\n+        }\n+    } finally {\n+        sockets.forEach((s) => s.destroy());\n+        await new Promise<void>((resolve) => server.close(() => resolve()));\n+    }\n+}\n+\n+async function runTests() {\n+    try {\n+        await testUnresponsiveExitNodeTimesOut();\n+        console.log(\"All exit node comms tests passed!\");\n+        process.exit(0);\n+    } catch (error) {\n+        console.error(\"Test failed:\", error);\n+        process.exit(1);\n+    }\n+}\n+\n+runTests();"
+  },
+  {
+   "filename": "server/lib/exitNodes/exitNodeComms.ts",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 4,
+   "patch": "@@ -3,12 +3,17 @@ import logger from \"@server/logger\";\n import { ExitNode } from \"@server/db\";\n import { hasExitNodeCheckedIn } from \"./exitNodeCheckIn\";\n \n+// axios has no request timeout by default, so a Gerbil that accepts the\n+// connection but never answers would leave the caller waiting forever.\n+export const EXIT_NODE_REQUEST_TIMEOUT_MS = 15_000;\n+\n interface ExitNodeRequest {\n     remoteType?: string;\n     localPath: string;\n     method?: \"POST\" | \"DELETE\" | \"GET\" | \"PUT\";\n     data?: any;\n     queryParams?: Record<string, string>;\n+    timeoutMs?: number;\n }\n \n /**\n@@ -37,6 +42,8 @@ export async function sendToExitNode(\n         url += `?${params.toString()}`;\n     }\n \n+    const timeout = request.timeoutMs ?? EXIT_NODE_REQUEST_TIMEOUT_MS;\n+\n     try {\n         let response;\n \n@@ -45,20 +52,22 @@ export async function sendToExitNode(\n                 response = await axios.post(url, request.data, {\n                     headers: {\n                         \"Content-Type\": \"application/json\"\n-                    }\n+                    },\n+                    timeout\n                 });\n                 break;\n             case \"DELETE\":\n-                response = await axios.delete(url);\n+                response = await axios.delete(url, { timeout });\n                 break;\n             case \"GET\":\n-                response = await axios.get(url);\n+                response = await axios.get(url, { timeout });\n                 break;\n             case \"PUT\":\n                 response = await axios.put(url, request.data, {\n                     headers: {\n                         \"Content-Type\": \"application/json\"\n-                    }\n+                    },\n+                    timeout\n                 });\n                 break;\n             default:"
+  }
+ ],
+ "test_files": [
+  "server/lib/exitNodes/exitNodeComms.test.ts"
+ ]
+}

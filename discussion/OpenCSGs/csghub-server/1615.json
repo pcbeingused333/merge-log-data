@@ -1,0 +1,27 @@
+{
+ "repo": "OpenCSGs/csghub-server",
+ "number": 1615,
+ "url": "https://github.com/OpenCSGs/csghub-server/pull/1615",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-03T01:25:18Z",
+   "body": "LGTM"
+  }
+ ],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "collaborator",
+   "created_at": "2026-11-02T15:15:34Z",
+   "body": "I found two issues that should be addressed before merging:\r\n\r\n1. [P1] Responses path can still double-count cache creation tokens.\r\n\r\nBoth the non-streaming conversion and streaming finalization paths only subtract cached_tokens from input_tokens, while reporting cache_creation_input_tokens separately. For upstream providers whose total input token count already includes cache creation tokens, clients will still double-count these tokens.\r\n\r\nAnthropic's token accounting convention defines total input tokens as the sum of the three fields. Both cache-read and cache-write tokens should therefore be excluded from the regular input token count.\r\n\r\nRecommendation: Subtract both cache-read and cache-write tokens, and add a test where both fields are non-zero simultaneously.\r\n\r\n2. [P2] Reconstructing billable usage from clamped values changes billing for malformed upstream data.\r\n\r\nThe helper returns 0 when cached > prompt, but Chat and Responses subsequently reconstruct billable input tokens using clamped_prompt + cached_tokens.\r\n\r\nFor example, if the upstream reports prompt=100, cached=150, the recorded billable input becomes 150. This contradicts the PR's stated goal of keeping billing unchanged.\r\n\r\nRecommendation: Preserve the original upstream total for billing instead of reconstructing it from the externally exposed, potentially clamped usage fields."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-02T15:35:51Z",
+   "body": "Thanks for the review. Both points are addressed in the new commit:\n\n1. The Responses path (non-streaming conversion and the streaming `message_delta`) now subtracts cache-read and cache-creation tokens from `input_tokens`. New tests cover both fields non-zero at once, for the conversion and for streaming.\n2. Recording keeps the upstream-reported total instead of rebuilding it from the clamped usage exposed to the client (the Responses and Chat non-streaming paths). New tests cover cached > prompt (prompt=100, cached=150 is recorded as 100, not 150).\n\nThe new tests fail on the previous commit, and `go test ./aigateway/handler/anthropic/` passes.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
+}

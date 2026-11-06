@@ -1,0 +1,64 @@
+{
+ "repo": "langchain-ai/langchain-azure",
+ "number": 1269,
+ "url": "https://github.com/langchain-ai/langchain-azure/pull/1269",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-03T01:50:19Z",
+   "body": "<!-- ccr-overview-v2 -->\n\n### 🟡 Changes recommended\n\nPer-call overrides can raise TypeError when a model parameter is set to zero, affecting all four generation and streaming paths.\n\n<details open>\n<summary><strong>1 open issue</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Merge per-call overrides before expanding parameters](https://github.com/langchain-ai/langchain-azure/pull/1269#discussion_r4450020872) · New\n</details>\n\n<details>\n<summary><strong>What changed in this PR</strong></summary>\n\nFixes `AzureAIChatCompletionsModel` silently omitting explicit zero-valued parameters, allowing those settings to reach Azure AI endpoints.\n\n**Changes:**\n- Uses `is not None` checks for six optional generation parameters, preserving zeros while omitting unset values.\n- Adds unit tests for zero-valued sampling settings and unset defaults.\n\n| File | Description |\r\n| ---- | ----------- |\r\n| `libs/​azure-ai/​tests/​unit_tests/​test_chat_models.py` | Adds regression tests for retained zeros and omitted defaults. |\r\n| `libs/​azure-ai/​langchain_azure_ai/​chat_models/​inference.py` | Preserves explicitly supplied zero-valued generation parameters. |\n</details>\n\n<sub>Review effort: Balanced</sub>"
+  },
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-04T01:58:52Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-04T02:26:10Z",
+   "body": "<!-- ccr-overview-v2 -->\n\n### 🔵 Needs a closer look\n\nThe regression test omits `max_tokens=0`, leaving its zero-value handling unprotected against a future truthiness-check regression.\n\n**No open issues** 🎉\n\n<details>\n<summary><strong>1 previously missed issue</strong></summary>\n\nIn code that hasn't changed since last review\n\n<details>\n<summary><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/low-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/low-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/low-v2-light.png\" alt=\"Low severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> Add regression coverage for zero max_tokens</summary>\n\n`libs/​azure-ai/​tests/​unit_tests/​test_chat_models.py:568`\n\n**[Low] Cover the zero-valued max_tokens case**\n\nThe new regression test covers the other five parameters but never sets `max_tokens=0`, so restoring this particular truthiness check would still pass the suite. Add `max_tokens=0` to `test_identifying_params_keep_zero_values` and assert that it is retained.\n</details>\n</details>\n\n<details>\n<summary><strong>1 resolved since last review</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Merge per-call overrides before expanding parameters](https://github.com/langchain-ai/langchain-azure/pull/1269#discussion_r4450020872)\n</details>\n\n<sub>Review effort: Balanced</sub>"
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-05T01:11:38Z",
+   "body": "<!-- ccr-overview-v2 -->\n\n### 🟢 Approval recommended\n\nNo active review issues are reported for the change preserving explicitly configured zero-valued Azure inference parameters.\n\n**No open issues** 🎉\n\n<sub>Review effort: Balanced</sub>"
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-05T01:12:42Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "libs/azure-ai/langchain_azure_ai/chat_models/inference.py",
+   "created_at": "2026-11-03T01:50:18Z",
+   "body": "**[Medium] Merge per-call overrides before expanding parameters**\n\nWith `temperature=0` on the model, `invoke(..., temperature=0.5)` now raises `TypeError` because `_generate` expands both `_identifying_params` and `kwargs` as separate keyword arguments. The same regression affects the other newly retained zero values and all four generation/streaming paths. Replace the separate expansions with `**{**self._identifying_params, **kwargs}` in `_generate`, `_agenerate`, `_stream`, and `_astream` so per-call values take precedence."
+  },
+  {
+   "role": "collaborator",
+   "path": "libs/azure-ai/langchain_azure_ai/chat_models/inference.py",
+   "created_at": "2026-11-04T01:58:52Z",
+   "body": "@pcbeingused333 Could you please check this comment? Thanks!"
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-04T02:04:43Z",
+   "body": "Thanks @herohua, and thanks to Copilot for catching this: with `temperature=0` now retained on the model, `invoke(..., temperature=0.5)` expanded the same key twice and raised `TypeError`. Pushed a follow-up commit that merges the model defaults and the call kwargs into one mapping (`**{**self._identifying_params, **kwargs}`) in `_generate`, `_agenerate`, `_stream` and `_astream`, so the per-call value wins. Added a test covering all four paths (red before the change, green after).\n\nDisclosure: this change was prepared with an AI coding assistant.\n"
+  },
+  {
+   "role": "collaborator",
+   "created_at": "2026-11-04T02:31:13Z",
+   "body": "Please fix the test typing in `libs/azure-ai/tests/unit_tests/test_chat_models.py` before merging. At line 612, `messages` is inferred as `list[HumanMessage]`, while `_generate`, `_agenerate`, `_stream`, and `_astream` expect `list[BaseMessage]`. This causes four mypy errors and leaves the required CI check failing ([log](https://github.com/langchain-ai/langchain-azure/actions/runs/41758336198/job/126339742915?pr=1269)).\n\nAdd `BaseMessage` to the existing `langchain_core.messages` import and annotate the list:\n\n```python\nmessages: list[BaseMessage] = [HumanMessage(content=\"hi\")]\n```\n\nThen rerun lint and confirm CI passes."
+  }
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "microsoft/semantic-kernel",
+ "number": 14700,
+ "url": "https://github.com/microsoft/semantic-kernel/pull/14700",
+ "title": "Python: Batch Google AI embedding requests to the 100-input limit",
+ "merged_at": "2026-11-02T13:29:01Z",
+ "files": [
+  {
+   "filename": "python/semantic_kernel/connectors/ai/google/google_ai/services/google_ai_text_embedding.py",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 13,
+   "patch": "@@ -22,6 +22,9 @@\n else:\n     from typing_extensions import override  # pragma: no cover\n \n+# The Gemini batchEmbedContents endpoint accepts at most 100 inputs per request.\n+MAX_EMBEDDING_BATCH_SIZE = 100\n+\n \n class GoogleAITextEmbedding(GoogleAIBase, EmbeddingGeneratorBase):\n     \"\"\"Google AI Text Embedding Service.\"\"\"\n@@ -119,31 +122,36 @@ async def generate_raw_embeddings(\n         if not self.service_settings.embedding_model_id:\n             raise ServiceInitializationError(\"The Google AI embedding model ID is required.\")\n \n-        async def _embed_content(client: Client) -> EmbedContentResponse:\n+        async def _embed_content(client: Client, contents: list[str]) -> EmbedContentResponse:\n             return await client.aio.models.embed_content(\n                 model=self.service_settings.embedding_model_id,  # type: ignore[arg-type]\n-                contents=texts,  # type: ignore[arg-type]\n+                contents=contents,  # type: ignore[arg-type]\n                 config=EmbedContentConfigDict(output_dimensionality=settings.output_dimensionality),\n             )\n \n+        async def _embed_all(client: Client) -> list[list[float]]:\n+            # The batch embedding endpoint accepts at most MAX_EMBEDDING_BATCH_SIZE inputs per request.\n+            embeddings: list[list[float]] = []\n+            for start in range(0, len(texts), MAX_EMBEDDING_BATCH_SIZE):\n+                response = await _embed_content(client, texts[start : start + MAX_EMBEDDING_BATCH_SIZE])\n+                embeddings.extend(embedding.values for embedding in response.embeddings)  # type: ignore\n+            return embeddings\n+\n         if self.client:\n-            response: EmbedContentResponse = await _embed_content(self.client)\n-        elif self.service_settings.use_vertexai:\n+            return await _embed_all(self.client)\n+        if self.service_settings.use_vertexai:\n             with Client(\n                 vertexai=True,\n                 project=self.service_settings.cloud_project_id,\n                 location=self.service_settings.cloud_region,\n                 http_options=self._get_http_options(),\n             ) as client:\n-                response: EmbedContentResponse = await _embed_content(client)  # type: ignore[no-redef]\n-        else:\n-            with Client(\n-                api_key=self.service_settings.api_key.get_secret_value(),  # type: ignore[union-attr]\n-                http_options=self._get_http_options(),\n-            ) as client:\n-                response: EmbedContentResponse = await _embed_content(client)  # type: ignore[no-redef]\n-\n-        return [embedding.values for embedding in response.embeddings]  # type: ignore\n+                return await _embed_all(client)\n+        with Client(\n+            api_key=self.service_settings.api_key.get_secret_value(),  # type: ignore[union-attr]\n+            http_options=self._get_http_options(),\n+        ) as client:\n+            return await _embed_all(client)\n \n     @override\n     def get_prompt_execution_settings_class("
+  },
+  {
+   "filename": "python/tests/unit/connectors/ai/google/google_ai/services/test_google_ai_text_embedding.py",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -235,3 +235,23 @@ async def test_embedding_with_custom_client(google_ai_unit_test_env, prompt) ->\n \n     # Verify that the custom client's method was called\n     mock_embed_content.assert_called_once()\n+\n+\n+@patch.object(AsyncModels, \"embed_content\", new_callable=AsyncMock)\n+async def test_raw_embedding_batches_large_inputs(mock_google_model_embed_content, google_ai_unit_test_env):\n+    \"\"\"Inputs above the 100-per-request limit are split into several requests and returned in order.\"\"\"\n+    model_id = google_ai_unit_test_env[\"GOOGLE_AI_EMBEDDING_MODEL_ID\"]\n+    texts = [f\"text {i}\" for i in range(250)]\n+\n+    async def _fake_embed(*, model, contents, config):\n+        assert len(contents) <= 100\n+        return EmbedContentResponse(embeddings=[ContentEmbedding(values=[float(t.split()[1])]) for t in contents])\n+\n+    mock_google_model_embed_content.side_effect = _fake_embed\n+    settings = GoogleAIEmbeddingPromptExecutionSettings()\n+\n+    response = await GoogleAITextEmbedding().generate_raw_embeddings(texts, settings=settings)\n+\n+    assert [len(call.kwargs[\"contents\"]) for call in mock_google_model_embed_content.call_args_list] == [100, 100, 50]\n+    assert all(call.kwargs[\"model\"] == model_id for call in mock_google_model_embed_content.call_args_list)\n+    assert response == [[float(i)] for i in range(250)]"
+  }
+ ],
+ "test_files": [
+  "python/tests/unit/connectors/ai/google/google_ai/services/test_google_ai_text_embedding.py"
+ ]
+}

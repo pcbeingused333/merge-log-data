@@ -1,0 +1,26 @@
+{
+ "repo": "NVIDIA/NeMo-Agent-Toolkit",
+ "number": 2523,
+ "url": "https://github.com/NVIDIA/NeMo-Agent-Toolkit/pull/2523",
+ "title": "fix(core): read cached and reasoning tokens from nested usage details",
+ "merged_at": "2026-10-31T11:47:23Z",
+ "files": [
+  {
+   "filename": "packages/nvidia_nat_core/src/nat/data_models/token_usage.py",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -13,8 +13,11 @@\n # See the License for the specific language governing permissions and\n # limitations under the License.\n \n+from typing import Any\n+\n from pydantic import BaseModel\n from pydantic import Field\n+from pydantic import model_validator\n \n \n class TokenUsageBaseModel(BaseModel):\n@@ -25,3 +28,17 @@ class TokenUsageBaseModel(BaseModel):\n     cached_tokens: int = Field(default=0, description=\"Number of tokens read from cache.\")\n     reasoning_tokens: int = Field(default=0, description=\"Number of tokens used for reasoning.\")\n     total_tokens: int = Field(default=0, description=\"Number of tokens total.\")\n+\n+    @model_validator(mode=\"before\")\n+    @classmethod\n+    def _flatten_nested_details(cls, data: Any) -> Any:\n+        \"\"\"Read cached/reasoning counts from OpenAI-style nested usage details when the flat fields are absent.\"\"\"\n+        if not isinstance(data, dict):\n+            return data\n+\n+        for flat, details_key, nested in ((\"cached_tokens\", \"prompt_tokens_details\", \"cached_tokens\"),\n+                                          (\"reasoning_tokens\", \"completion_tokens_details\", \"reasoning_tokens\")):\n+            details = data.get(details_key)\n+            if data.get(flat) is None and isinstance(details, dict) and details.get(nested) is not None:\n+                data = {**data, flat: details[nested]}\n+        return data"
+  },
+  {
+   "filename": "packages/nvidia_nat_core/tests/nat/data_models/test_token_usage.py",
+   "status": "added",
+   "additions": 53,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,53 @@\n+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.\n+# SPDX-License-Identifier: Apache-2.0\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\");\n+# you may not use this file except in compliance with the License.\n+# You may obtain a copy of the License at\n+#\n+# http://www.apache.org/licenses/LICENSE-2.0\n+#\n+# Unless required by applicable law or agreed to in writing, software\n+# distributed under the License is distributed on an \"AS IS\" BASIS,\n+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+# See the License for the specific language governing permissions and\n+# limitations under the License.\n+\n+from nat.data_models.token_usage import TokenUsageBaseModel\n+\n+\n+def test_flat_counters_are_kept():\n+    usage = TokenUsageBaseModel(prompt_tokens=10, completion_tokens=5, cached_tokens=4, reasoning_tokens=2)\n+    assert (usage.cached_tokens, usage.reasoning_tokens) == (4, 2)\n+\n+\n+def test_openai_nested_details_populate_cached_and_reasoning_tokens():\n+    usage = TokenUsageBaseModel(\n+        **{\n+            \"prompt_tokens\": 100,\n+            \"completion_tokens\": 50,\n+            \"total_tokens\": 150,\n+            \"prompt_tokens_details\": {\n+                \"cached_tokens\": 64\n+            },\n+            \"completion_tokens_details\": {\n+                \"reasoning_tokens\": 20\n+            },\n+        })\n+    assert usage.cached_tokens == 64\n+    assert usage.reasoning_tokens == 20\n+\n+\n+def test_nested_details_with_none_values_are_ignored():\n+    usage = TokenUsageBaseModel(**{\n+        \"prompt_tokens_details\": None, \"completion_tokens_details\": {\n+            \"reasoning_tokens\": None\n+        }\n+    })\n+    assert usage.cached_tokens == 0\n+    assert usage.reasoning_tokens == 0\n+\n+\n+def test_flat_counters_win_over_nested_details():\n+    usage = TokenUsageBaseModel(**{\"cached_tokens\": 7, \"prompt_tokens_details\": {\"cached_tokens\": 64}})\n+    assert usage.cached_tokens == 7"
+  }
+ ],
+ "test_files": [
+  "packages/nvidia_nat_core/tests/nat/data_models/test_token_usage.py"
+ ]
+}
