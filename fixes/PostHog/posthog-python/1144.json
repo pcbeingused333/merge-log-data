@@ -1,0 +1,40 @@
+{
+ "repo": "PostHog/posthog-python",
+ "number": 1144,
+ "url": "https://github.com/PostHog/posthog-python/pull/1144",
+ "title": "fix(ai): handle None and NOT_GIVEN stream_options without mutating the caller's dict",
+ "merged_at": "2026-10-29T11:39:43Z",
+ "files": [
+  {
+   "filename": ".sampo/changesets/openai-stream-options.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+pypi/posthog: patch\n+---\n+\n+Fix streaming OpenAI chat completions when `stream_options` is `None` or `NOT_GIVEN` (it raised a `TypeError`), and stop adding `include_usage` to the `stream_options` dict the caller passed in."
+  },
+  {
+   "filename": "posthog/ai/openai/openai.py",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 3,
+   "patch": "@@ -389,9 +389,12 @@ def _create_streaming(\n     ):\n         start_time = time.time()\n         state = _ChatCompletionsStreamState()\n-        if \"stream_options\" not in kwargs:\n-            kwargs[\"stream_options\"] = {}\n-        kwargs[\"stream_options\"][\"include_usage\"] = True\n+        # The caller's dict is left alone, and None / NOT_GIVEN mean \"no options\"\n+        stream_options = kwargs.get(\"stream_options\")\n+        kwargs[\"stream_options\"] = {\n+            **(stream_options if isinstance(stream_options, dict) else {}),\n+            \"include_usage\": True,\n+        }\n         response = self._original.create(**kwargs)\n \n         def generator():"
+  },
+  {
+   "filename": "posthog/ai/openai/openai_async.py",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 3,
+   "patch": "@@ -393,9 +393,12 @@ async def _create_streaming(\n         start_time = time.time()\n         state = _ChatCompletionsStreamState()\n \n-        if \"stream_options\" not in kwargs:\n-            kwargs[\"stream_options\"] = {}\n-        kwargs[\"stream_options\"][\"include_usage\"] = True\n+        # The caller's dict is left alone, and None / NOT_GIVEN mean \"no options\"\n+        stream_options = kwargs.get(\"stream_options\")\n+        kwargs[\"stream_options\"] = {\n+            **(stream_options if isinstance(stream_options, dict) else {}),\n+            \"include_usage\": True,\n+        }\n         response = await self._original.create(**kwargs)\n \n         async def async_generator():"
+  },
+  {
+   "filename": "posthog/test/ai/openai/test_openai.py",
+   "status": "modified",
+   "additions": 64,
+   "deletions": 0,
+   "patch": "@@ -7,6 +7,7 @@\n import pytest\n \n try:\n+    from openai import NOT_GIVEN\n     from openai.types.chat import ChatCompletion, ChatCompletionMessage\n     from openai.types.chat.chat_completion import Choice\n     from openai.types.chat.chat_completion_chunk import (\n@@ -460,6 +461,33 @@ def test_embeddings(mock_client, mock_embedding_response):\n         assert isinstance(props[\"$ai_latency\"], float)\n \n \n+@pytest.mark.parametrize(\"stream_options\", [None, NOT_GIVEN, {\"foo\": \"bar\"}])\n+def test_streaming_stream_options_are_not_mutated(\n+    mock_client, streaming_tool_call_chunks, stream_options\n+):\n+    captured = {}\n+\n+    def mock_create(self, **kwargs):\n+        captured[\"kwargs\"] = kwargs\n+        return iter(streaming_tool_call_chunks)\n+\n+    with patch(\"openai.resources.chat.completions.Completions.create\", new=mock_create):\n+        client = OpenAI(api_key=\"test-key\", posthog_client=mock_client)\n+        stream = client.chat.completions.create(\n+            model=\"gpt-4\",\n+            messages=[{\"role\": \"user\", \"content\": \"Hello\"}],\n+            stream=True,\n+            stream_options=stream_options,\n+        )\n+        list(stream)\n+\n+    sent = captured[\"kwargs\"][\"stream_options\"]\n+    assert sent[\"include_usage\"] is True\n+    if isinstance(stream_options, dict):\n+        assert sent == {\"foo\": \"bar\", \"include_usage\": True}\n+        assert stream_options == {\"foo\": \"bar\"}\n+\n+\n def test_groups(mock_client, mock_openai_response):\n     with patch(\n         \"openai.resources.chat.completions.Completions.create\",\n@@ -1421,6 +1449,42 @@ async def chunk_iterable():\n     assert isinstance(props[\"$ai_latency\"], float)\n \n \n+@pytest.mark.asyncio\n+@pytest.mark.parametrize(\"stream_options\", [None, NOT_GIVEN, {\"foo\": \"bar\"}])\n+async def test_async_streaming_stream_options_are_not_mutated(\n+    mock_client, streaming_tool_call_chunks, stream_options\n+):\n+    captured = {}\n+\n+    async def mock_create(self, **kwargs):\n+        captured[\"kwargs\"] = kwargs\n+\n+        async def chunk_iterable():\n+            for chunk in streaming_tool_call_chunks:\n+                yield chunk\n+\n+        return chunk_iterable()\n+\n+    with patch(\n+        \"openai.resources.chat.completions.AsyncCompletions.create\", new=mock_create\n+    ):\n+        client = AsyncOpenAI(api_key=\"test-key\", posthog_client=mock_client)\n+        stream = await client.chat.completions.create(\n+            model=\"gpt-4\",\n+            messages=[{\"role\": \"user\", \"content\": \"Hello\"}],\n+            stream=True,\n+            stream_options=stream_options,\n+        )\n+        async for _ in stream:\n+            pass\n+\n+    sent = captured[\"kwargs\"][\"stream_options\"]\n+    assert sent[\"include_usage\"] is True\n+    if isinstance(stream_options, dict):\n+        assert sent == {\"foo\": \"bar\", \"include_usage\": True}\n+        assert stream_options == {\"foo\": \"bar\"}\n+\n+\n @pytest.mark.asyncio\n async def test_async_embeddings_create(mock_client, mock_embedding_response):\n     mock_create = AsyncMock(return_value=mock_embedding_response)"
+  }
+ ],
+ "test_files": [
+  "posthog/test/ai/openai/test_openai.py"
+ ]
+}

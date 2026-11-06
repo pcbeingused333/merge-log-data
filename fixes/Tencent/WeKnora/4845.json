@@ -1,0 +1,26 @@
+{
+ "repo": "Tencent/WeKnora",
+ "number": 4845,
+ "url": "https://github.com/Tencent/WeKnora/pull/4845",
+ "title": "fix(chat): carry Ollama's done_reason on the final stream chunk",
+ "merged_at": "2026-10-28T15:37:31Z",
+ "files": [
+  {
+   "filename": "internal/models/chat/ollama.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -308,6 +308,9 @@ func (c *OllamaChat) ChatStream(\n \t\t\t\t\tResponseType: types.ResponseTypeAnswer,\n \t\t\t\t\tDone:         true,\n \t\t\t\t\tUsage:        usage,\n+\t\t\t\t\t// 与非流式分支一致：透传 done_reason，否则 num_predict 打满\n+\t\t\t\t\t// 的截断在流式里看起来像正常结束。\n+\t\t\t\t\tFinishReason: resp.DoneReason,\n \t\t\t\t}\n \t\t\t}\n "
+  },
+  {
+   "filename": "internal/models/chat/ollama_test.go",
+   "status": "modified",
+   "additions": 48,
+   "deletions": 0,
+   "patch": "@@ -8,6 +8,7 @@ import (\n \t\"testing\"\n \n \t\"github.com/Tencent/WeKnora/internal/models/utils/ollama\"\n+\t\"github.com/Tencent/WeKnora/internal/types\"\n \tsecutils \"github.com/Tencent/WeKnora/internal/utils\"\n )\n \n@@ -74,3 +75,50 @@ func TestOllamaChatPropagatesDoneReason(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+// The streaming path reports the same done_reason: a stream that ends because\n+// num_predict ran out must reach the caller as \"length\", not as a normal stop.\n+func TestOllamaChatStreamPropagatesDoneReason(t *testing.T) {\n+\tfor _, reason := range []string{\"stop\", \"length\"} {\n+\t\tt.Run(reason, func(t *testing.T) {\n+\t\t\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\t\t\tswitch r.URL.Path {\n+\t\t\t\tcase \"/\":\n+\t\t\t\t\tw.WriteHeader(http.StatusOK)\n+\t\t\t\tcase \"/api/tags\":\n+\t\t\t\t\t_, _ = fmt.Fprint(w, `{\"models\":[{\"name\":\"m:latest\"}]}`)\n+\t\t\t\tcase \"/api/chat\":\n+\t\t\t\t\t_, _ = fmt.Fprint(w, `{\"model\":\"m\",\"message\":{\"role\":\"assistant\",\"content\":\"Step 1\"},`+\n+\t\t\t\t\t\t`\"done\":false}`+\"\\n\")\n+\t\t\t\t\t_, _ = fmt.Fprintf(w, `{\"model\":\"m\",\"message\":{\"role\":\"assistant\",\"content\":\"\"},`+\n+\t\t\t\t\t\t`\"done\":true,\"done_reason\":%q,\"eval_count\":3}`+\"\\n\", reason)\n+\t\t\t\tdefault:\n+\t\t\t\t\thttp.NotFound(w, r)\n+\t\t\t\t}\n+\t\t\t}))\n+\t\t\tdefer server.Close()\n+\t\t\tt.Setenv(\"OLLAMA_BASE_URL\", server.URL)\n+\t\t\tt.Setenv(\"OLLAMA_OPTIONAL\", \"\")\n+\t\t\tsvc, err := ollama.GetOllamaService()\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\n+\t\t\tc := &OllamaChat{modelName: \"m\", ollamaService: svc}\n+\t\t\tstream, err := c.ChatStream(context.Background(), []Message{{Role: \"user\", Content: \"hi\"}}, &ChatOptions{})\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\t\t\tvar last types.StreamResponse\n+\t\t\tfor chunk := range stream {\n+\t\t\t\tlast = chunk\n+\t\t\t}\n+\t\t\tif !last.Done {\n+\t\t\t\tt.Fatalf(\"last chunk is not Done: %+v\", last)\n+\t\t\t}\n+\t\t\tif last.FinishReason != reason {\n+\t\t\t\tt.Fatalf(\"FinishReason = %q, want %q\", last.FinishReason, reason)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/models/chat/ollama_test.go"
+ ]
+}

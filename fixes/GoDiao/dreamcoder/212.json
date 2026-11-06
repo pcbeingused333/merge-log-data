@@ -1,0 +1,33 @@
+{
+ "repo": "GoDiao/dreamcoder",
+ "number": 212,
+ "url": "https://github.com/GoDiao/dreamcoder/pull/212",
+ "title": "fix(proxy): send a forced tool_choice in the Responses shape",
+ "merged_at": "2026-10-30T02:25:06Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -7,6 +7,7 @@ All notable changes to DreamCoder will be documented in this file.\n ### Fixed\n \n - Dev mode (`bun run electron:dev`) finds the bundled ripgrep, so Glob and Grep work without a system `rg` on `PATH`. `bun run build:sidecars` now writes `desktop/binaries/<target>/dreamcoder-sidecar` and `rg`, the same names as the packaged app; run it once more in an existing checkout and delete the old suffixed files in `desktop/binaries/` (#195). Thanks @pcbeingused333.\n+- A forced tool (`tool_choice` of type `tool`) from an Anthropic client is now sent to OpenAI Responses providers in the Responses shape (`{ type: 'function', name }`), so the request no longer fails with a 400 (#212). Thanks @pcbeingused333.\n \n ## [0.8.0-beta.2] — 2026-10-29\n "
+  },
+  {
+   "filename": "src/server/__tests__/proxy-transform.test.ts",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -591,6 +591,30 @@ describe('anthropicToOpenaiResponses', () => {\n     ])\n   })\n \n+  test('tool_choice type=tool uses the flat Responses function shape', () => {\n+    const req: AnthropicRequest = {\n+      model: 'gpt-4o',\n+      max_tokens: 100,\n+      messages: [{ role: 'user', content: 'Hi' }],\n+      tool_choice: { type: 'tool', name: 'get_weather' },\n+    }\n+    const result = anthropicToOpenaiResponses(req)\n+    expect(result.tool_choice).toEqual({ type: 'function', name: 'get_weather' })\n+  })\n+\n+  test('tool_choice any, auto and none map to the Responses string values', () => {\n+    const choose = (tool_choice: AnthropicRequest['tool_choice']) =>\n+      anthropicToOpenaiResponses({\n+        model: 'gpt-4o',\n+        max_tokens: 100,\n+        messages: [{ role: 'user', content: 'Hi' }],\n+        tool_choice,\n+      }).tool_choice\n+    expect(choose({ type: 'any' })).toBe('required')\n+    expect(choose({ type: 'auto' })).toBe('auto')\n+    expect(choose({ type: 'none' })).toBe('none')\n+  })\n+\n   test('single assistant text part is flattened to a string', () => {\n     const req: AnthropicRequest = {\n       model: 'gpt-4o',"
+  },
+  {
+   "filename": "src/server/proxy/transform/anthropicToOpenaiResponses.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -129,7 +129,7 @@ function convertToolChoice(choice: unknown): unknown {\n     if (c.type === 'any') return 'required'\n     if (c.type === 'none') return 'none'\n     if (c.type === 'tool' && typeof c.name === 'string') {\n-      return { type: 'function', function: { name: c.name } }\n+      return { type: 'function', name: c.name }\n     }\n   }\n   return 'auto'"
+  }
+ ],
+ "test_files": [
+  "src/server/__tests__/proxy-transform.test.ts"
+ ]
+}

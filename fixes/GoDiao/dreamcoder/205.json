@@ -1,0 +1,33 @@
+{
+ "repo": "GoDiao/dreamcoder",
+ "number": 205,
+ "url": "https://github.com/GoDiao/dreamcoder/pull/205",
+ "title": "fix(agents): keep EnterWorktree and ExitWorktree away from in-process teammates",
+ "merged_at": "2026-10-29T13:27:04Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -18,6 +18,7 @@ All notable changes to DreamCoder will be documented in this file.\n - When the AI title of a session cannot be generated, the server log now says why (session, provider, model and reason: upstream status and error excerpt, no text in reply, reply is not a title) instead of keeping the placeholder silently (#176).\n - **In-process teammates claim the team's tasks** (#163). Once the lead creates a team, its tasks are stored in the team's task list, but in-process teammates looked for them in a list named after the lead's session, so they never claimed one and the tasks stayed unowned. Teammates now read the same task list as the lead, both when they start and while they are idle.\n - Streamed replies from providers using the OpenAI Chat Completions format show their token usage and cost instead of 0 (#203). The request now asks for usage with `stream_options`, which backends such as Qwen (DashScope) and vLLM need before they report it.\n+- An in-process teammate can no longer call `EnterWorktree` or `ExitWorktree` (#198). Teammates share one process with the lead, so entering a worktree moved the lead and every other teammate into it, and their reads, writes and commands ran there.\n \n ## [0.8.0-beta.1] — 2026-10-26\n "
+  },
+  {
+   "filename": "src/tools/AgentTool/agentToolUtils.test.ts",
+   "status": "modified",
+   "additions": 46,
+   "deletions": 2,
+   "patch": "@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'\n import type { AppState } from '../../state/AppState.js'\n import { IDLE_SPECULATION_STATE } from '../../state/AppStateStore.js'\n import { createTaskStateBase } from '../../Task.js'\n-import type { ToolUseContext } from '../../Tool.js'\n+import type { ToolUseContext, Tools } from '../../Tool.js'\n import type { LocalAgentTaskState } from '../../tasks/LocalAgentTask/LocalAgentTask.js'\n import type { Message } from '../../types/message.js'\n import { getEmptyToolPermissionContext } from '../../Tool.js'\n@@ -11,7 +11,13 @@ import {\n   resetCommandQueue,\n } from '../../utils/messageQueueManager.js'\n import { createAssistantMessage } from '../../utils/messages.js'\n-import { runAsyncAgentLifecycle } from './agentToolUtils.js'\n+import {\n+  createTeammateContext,\n+  runWithTeammateContext,\n+} from '../../utils/teammateContext.js'\n+import { ENTER_WORKTREE_TOOL_NAME } from '../EnterWorktreeTool/constants.js'\n+import { EXIT_WORKTREE_TOOL_NAME } from '../ExitWorktreeTool/constants.js'\n+import { filterToolsForAgent, runAsyncAgentLifecycle } from './agentToolUtils.js'\n \n describe('runAsyncAgentLifecycle', () => {\n   afterEach(() => {\n@@ -93,3 +99,41 @@ describe('runAsyncAgentLifecycle', () => {\n     expect(String(getCommandQueue()[0]?.value)).toContain('Review complete.')\n   })\n })\n+\n+describe('filterToolsForAgent worktree tools', () => {\n+  const tools = [\n+    { name: 'Read' },\n+    { name: ENTER_WORKTREE_TOOL_NAME },\n+    { name: EXIT_WORKTREE_TOOL_NAME },\n+  ] as unknown as Tools\n+\n+  function namesForAsyncAgent(): string[] {\n+    return filterToolsForAgent({ tools, isBuiltIn: true, isAsync: true }).map(\n+      tool => tool.name,\n+    )\n+  }\n+\n+  test('in-process teammates do not get EnterWorktree or ExitWorktree', () => {\n+    const names = runWithTeammateContext(\n+      createTeammateContext({\n+        agentId: 'researcher@team',\n+        agentName: 'researcher',\n+        teamName: 'team',\n+        planModeRequired: false,\n+        parentSessionId: 'session',\n+        abortController: new AbortController(),\n+      }),\n+      namesForAsyncAgent,\n+    )\n+\n+    expect(names).toEqual(['Read'])\n+  })\n+\n+  test('async agents outside a teammate context keep the worktree tools', () => {\n+    expect(namesForAsyncAgent()).toEqual([\n+      'Read',\n+      ENTER_WORKTREE_TOOL_NAME,\n+      EXIT_WORKTREE_TOOL_NAME,\n+    ])\n+  })\n+})"
+  },
+  {
+   "filename": "src/tools/AgentTool/agentToolUtils.ts",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -56,7 +56,9 @@ import {\n import { emitTaskProgress as emitTaskProgressEvent } from '../../utils/task/sdkProgress.js'\n import { isInProcessTeammate } from '../../utils/teammateContext.js'\n import { getTokenCountFromUsage } from '../../utils/tokens.js'\n+import { ENTER_WORKTREE_TOOL_NAME } from '../EnterWorktreeTool/constants.js'\n import { EXIT_PLAN_MODE_V2_TOOL_NAME } from '../ExitPlanModeTool/constants.js'\n+import { EXIT_WORKTREE_TOOL_NAME } from '../ExitWorktreeTool/constants.js'\n import { AGENT_TOOL_NAME, LEGACY_AGENT_TOOL_NAME } from './constants.js'\n import type { AgentDefinition } from './loadAgentsDir.js'\n export type ResolvedAgentTools = {\n@@ -94,6 +96,13 @@ export function filterToolsForAgent({\n     if (ALL_AGENT_DISALLOWED_TOOLS.has(tool.name)) {\n       return false\n     }\n+    if (\n+      (tool.name === ENTER_WORKTREE_TOOL_NAME ||\n+        tool.name === EXIT_WORKTREE_TOOL_NAME) &&\n+      isInProcessTeammate()\n+    ) {\n+      return false\n+    }\n     if (!isBuiltIn && CUSTOM_AGENT_DISALLOWED_TOOLS.has(tool.name)) {\n       return false\n     }"
+  }
+ ],
+ "test_files": [
+  "src/tools/AgentTool/agentToolUtils.test.ts"
+ ]
+}

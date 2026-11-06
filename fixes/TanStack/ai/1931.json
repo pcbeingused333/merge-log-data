@@ -1,0 +1,33 @@
+{
+ "repo": "TanStack/ai",
+ "number": 1931,
+ "url": "https://github.com/TanStack/ai/pull/1931",
+ "title": "fix(ai-vercel-gateway): report gatewayCost as usage.cost",
+ "merged_at": "2026-11-02T13:11:43Z",
+ "files": [
+  {
+   "filename": ".changeset/vercel-gateway-surcharge-cost.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@tanstack/ai-vercel-gateway': patch\n+---\n+\n+Report the gateway's debited amount (`gatewayCost`, which includes surcharges) as `usage.cost` instead of the inference charge alone."
+  },
+  {
+   "filename": "packages/ai-vercel-gateway/src/utils/gateway-cost.ts",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 3,
+   "patch": "@@ -21,8 +21,10 @@ function finiteNumber(value: unknown): number | undefined {\n  *\n  * Responses puts it on `provider_metadata.gateway` (`cost`, `marketCost`,\n  * `generationId`, `routing.finalProvider`). Chat Completions can put `cost`\n- * and `market_cost` on `usage`. `cost` is the amount debited. `marketCost`\n- * is the list price, stored as `costDetails.upstreamCost`.\n+ * and `market_cost` on `usage`. `gatewayCost` is the amount debited: `cost`\n+ * plus `surchargeCost` (Custom Reporting writes, Zero Data Retention), so it\n+ * is preferred; `cost` alone leaves the surcharge out. `marketCost` is the\n+ * list price, stored as `costDetails.upstreamCost`.\n  */\n export function withGatewayCost(\n   usage: TokenUsage | undefined,\n@@ -38,7 +40,8 @@ export function withGatewayCost(\n   const nestedUsage = asRecord(record.usage)\n   const bag = gateway ?? nestedUsage ?? record\n \n-  const cost = finiteNumber(bag.cost)\n+  const cost =\n+    finiteNumber(bag.gatewayCost ?? bag.gateway_cost) ?? finiteNumber(bag.cost)\n   if (cost === undefined) return usage\n \n   const market = finiteNumber(bag.marketCost ?? bag.market_cost)"
+  },
+  {
+   "filename": "packages/ai-vercel-gateway/tests/gateway-cost.test.ts",
+   "status": "modified",
+   "additions": 46,
+   "deletions": 0,
+   "patch": "@@ -40,6 +40,52 @@ describe('withGatewayCost', () => {\n     })\n   })\n \n+  it('reports gatewayCost, which includes surcharges, as the cost', () => {\n+    expect(\n+      withGatewayCost(tokens, {\n+        provider_metadata: {\n+          gateway: {\n+            cost: '0.0000019',\n+            marketCost: '0.0000019',\n+            surchargeCost: '0.00015',\n+            gatewayCost: '0.0001519',\n+          },\n+        },\n+      }),\n+    ).toEqual({\n+      ...tokens,\n+      cost: 0.0001519,\n+      costDetails: { upstreamCost: 0.0000019 },\n+    })\n+  })\n+\n+  it('reports the surcharge as the cost on a BYOK request', () => {\n+    expect(\n+      withGatewayCost(tokens, {\n+        provider_metadata: {\n+          gateway: {\n+            cost: '0',\n+            marketCost: '0.00008',\n+            surchargeCost: '0.00015',\n+            gatewayCost: '0.00015',\n+          },\n+        },\n+      }),\n+    ).toEqual({\n+      ...tokens,\n+      cost: 0.00015,\n+      costDetails: { upstreamCost: 0.00008 },\n+    })\n+  })\n+\n+  it('falls back to cost when gatewayCost is absent', () => {\n+    expect(\n+      withGatewayCost(tokens, {\n+        provider_metadata: { gateway: { cost: '0.002' } },\n+      }),\n+    ).toEqual({ ...tokens, cost: 0.002 })\n+  })\n+\n   it('leaves usage unchanged when the gateway sends no cost', () => {\n     expect(withGatewayCost(tokens, { provider_metadata: {} })).toEqual(tokens)\n     expect(withGatewayCost(undefined, { cost: '1' })).toBeUndefined()"
+  }
+ ],
+ "test_files": [
+  "packages/ai-vercel-gateway/tests/gateway-cost.test.ts"
+ ]
+}

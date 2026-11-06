@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 287,
+ "url": "https://github.com/lofcz/LLMTornado/pull/287",
+ "title": "fix(a2a): honour the mime type of a URI file part",
+ "merged_at": "2026-10-28T14:33:45Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.A2A/A2ATornadoExtension.ToTornado.cs",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 1,
+   "patch": "@@ -16,7 +16,25 @@ public static partial class A2ATornadoExtension\n \n         if (file.Uri is not null)\n         {\n-            return ChatMessagePart.Create(file.Uri, ChatMessageTypes.Image);\n+            string? mimeType = file.MimeType;\n+\n+            if (mimeType?.Contains(\"audio\") == true)\n+            {\n+                return ChatMessagePart.Create(file.Uri, ChatMessageTypes.Audio);\n+            }\n+\n+            if (mimeType?.Contains(\"video\") == true)\n+            {\n+                return ChatMessagePart.Create(file.Uri, ChatMessageTypes.Video);\n+            }\n+\n+            // A URL without a declared type keeps being read as an image, as before.\n+            if (string.IsNullOrEmpty(mimeType) || mimeType.Contains(\"image\"))\n+            {\n+                return ChatMessagePart.Create(file.Uri, ChatMessageTypes.Image);\n+            }\n+\n+            return new ChatMessagePart(new ChatMessagePartFileLinkData(file.Uri.AbsoluteUri, mimeType));\n         }\n         \n         if (file.Bytes is not null)"
+  },
+  {
+   "filename": "src/LlmTornado.Tests/A2AFilePartUriTests.cs",
+   "status": "added",
+   "additions": 60,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,60 @@\n+using A2A;\n+using LlmTornado.A2A;\n+using LlmTornado.Chat;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class A2AFilePartUriTests\n+{\n+    private static ChatMessagePart Convert(string url, string? mimeType)\n+    {\n+        FilePart part = new() { File = new FileContent(new Uri(url)) { MimeType = mimeType } };\n+        return part.ToTornadoMessagePart()!;\n+    }\n+\n+    [Test]\n+    public void UriWithImageMimeType_IsImage()\n+    {\n+        ChatMessagePart part = Convert(\"https://example.com/a.png\", \"image/png\");\n+\n+        Assert.That(part.Type, Is.EqualTo(ChatMessageTypes.Image));\n+    }\n+\n+    [Test]\n+    public void UriWithoutMimeType_StaysImage()\n+    {\n+        ChatMessagePart part = Convert(\"https://example.com/a\", null);\n+\n+        Assert.That(part.Type, Is.EqualTo(ChatMessageTypes.Image));\n+    }\n+\n+    [Test]\n+    public void UriWithAudioMimeType_IsAudio()\n+    {\n+        ChatMessagePart part = Convert(\"https://example.com/a.mp3\", \"audio/mpeg\");\n+\n+        Assert.That(part.Type, Is.EqualTo(ChatMessageTypes.Audio));\n+        Assert.That(part.Audio, Is.Not.Null);\n+    }\n+\n+    [Test]\n+    public void UriWithVideoMimeType_IsVideo()\n+    {\n+        ChatMessagePart part = Convert(\"https://example.com/a.mp4\", \"video/mp4\");\n+\n+        Assert.That(part.Type, Is.EqualTo(ChatMessageTypes.Video));\n+        Assert.That(part.Video, Is.Not.Null);\n+    }\n+\n+    [Test]\n+    public void UriWithPdfMimeType_IsFileLinkNotImage()\n+    {\n+        ChatMessagePart part = Convert(\"https://example.com/a.pdf\", \"application/pdf\");\n+\n+        Assert.That(part.Type, Is.EqualTo(ChatMessageTypes.FileLink));\n+        Assert.That(part.Image, Is.Null);\n+        Assert.That(part.FileLinkData!.FileUri, Is.EqualTo(\"https://example.com/a.pdf\"));\n+        Assert.That(part.FileLinkData.MimeType, Is.EqualTo(\"application/pdf\"));\n+    }\n+}"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/A2AFilePartUriTests.cs"
+ ]
+}

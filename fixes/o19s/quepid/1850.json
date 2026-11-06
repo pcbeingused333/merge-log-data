@@ -1,0 +1,26 @@
+{
+ "repo": "o19s/quepid",
+ "number": 1850,
+ "url": "https://github.com/o19s/quepid/pull/1850",
+ "title": "Keep the typed query when text is pasted into the add-query box",
+ "merged_at": "2026-10-27T14:30:49Z",
+ "files": [
+  {
+   "filename": "app/javascript/controllers/add_query_controller.js",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -15,7 +15,8 @@ export default class extends Controller {\n   connect() {\n     this.queryCapabilities = getCoreCapabilities().queryCapabilities\n     this.detachPaste = attachTextPaste(this.inputTarget, (text) => {\n-      this.inputTarget.value = text.split(\"\\n\").join(\";\")\n+      const { selectionStart, selectionEnd } = this.inputTarget\n+      this.inputTarget.setRangeText(text.split(\"\\n\").join(\";\"), selectionStart, selectionEnd, \"end\")\n       this.render()\n     })\n     this.render()"
+  },
+  {
+   "filename": "test/javascript/controllers/add_query_controller.test.js",
+   "status": "modified",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -80,6 +80,51 @@ describe(\"add_query_controller\", () => {\n     controller.disconnect()\n   })\n \n+  function pasteInto(controller, text) {\n+    const event = new Event(\"paste\", { cancelable: true })\n+    Object.defineProperty(event, \"clipboardData\", {\n+      value: { getData: () => text }\n+    })\n+    controller.inputTarget.dispatchEvent(event)\n+    return event\n+  }\n+\n+  it(\"keeps the typed query when text is pasted at the end\", () => {\n+    const { controller } = controllerFor({ text: \"a b c\" })\n+    controller.connect()\n+    controller.inputTarget.setSelectionRange(5, 5)\n+\n+    const event = pasteInto(controller, \"one\\ntwo\")\n+\n+    expect(controller.inputTarget.value).toBe(\"a b cone;two\")\n+    expect(event.defaultPrevented).toBe(true)\n+    controller.disconnect()\n+  })\n+\n+  it(\"replaces only the selected text with the pasted text\", () => {\n+    const { controller } = controllerFor({ text: \"first second third\" })\n+    controller.connect()\n+    controller.inputTarget.setSelectionRange(6, 12)\n+\n+    pasteInto(controller, \"x\\ny\")\n+\n+    expect(controller.inputTarget.value).toBe(\"first x;y third\")\n+    controller.disconnect()\n+  })\n+\n+  it(\"moves the cursor after the pasted text and updates the submit label\", () => {\n+    const { controller } = controllerFor({ text: \"ab\" })\n+    controller.connect()\n+    controller.inputTarget.setSelectionRange(1, 1)\n+\n+    pasteInto(controller, \"x\\ny\")\n+\n+    expect(controller.inputTarget.selectionStart).toBe(5)\n+    expect(controller.inputTarget.selectionEnd).toBe(5)\n+    expect(controller.submitTarget.value).toBe(\"Add queries\")\n+    controller.disconnect()\n+  })\n+\n   it(\"refreshes capability state without clearing the typed query\", () => {\n     const { controller } = controllerFor({ text: \"unfinished query\" })\n     testCapabilities = {"
+  }
+ ],
+ "test_files": [
+  "test/javascript/controllers/add_query_controller.test.js"
+ ]
+}

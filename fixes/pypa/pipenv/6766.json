@@ -1,0 +1,33 @@
+{
+ "repo": "pypa/pipenv",
+ "number": 6766,
+ "url": "https://github.com/pypa/pipenv/pull/6766",
+ "title": "fix(outdated): interpolate the required version in the skipped-update note",
+ "merged_at": "2026-10-28T22:01:28Z",
+ "files": [
+  {
+   "filename": "news/6766.bugfix.rst",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+``pipenv outdated`` now shows the version that a dependent package requires in the \"Skipped Update\" message instead of the literal ``{rdeps['required']}``."
+  },
+  {
+   "filename": "pipenv/routines/outdated.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -105,7 +105,7 @@ def do_outdated(project, pypi_mirror=None, pre=False, clear=False):\n                 version = get_version(pipfile_section[name_in_pipfile])\n                 rdeps = reverse_deps.get(canonicalize_name(package))\n                 if isinstance(rdeps, Mapping) and \"required\" in rdeps:\n-                    required = \" {rdeps['required']} required\"\n+                    required = f\" {rdeps['required']} required\"\n                 if version:\n                     pipfile_version_text = f\" ({version} set in Pipfile)\"\n                 else:"
+  },
+  {
+   "filename": "tests/unit/test_outdated.py",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 1,
+   "patch": "@@ -1,5 +1,10 @@\n+from types import SimpleNamespace\n+from unittest import mock\n+\n+import pytest\n+\n from pipenv.patched.pip._vendor.packaging.version import Version\n-from pipenv.routines.outdated import _get_lockfile_entry_version\n+from pipenv.routines.outdated import _get_lockfile_entry_version, do_outdated\n \n \n def test_get_lockfile_entry_version_uses_version_key():\n@@ -20,3 +25,32 @@ def test_get_lockfile_entry_version_parses_sdist_file_path():\n \n def test_get_lockfile_entry_version_returns_none_without_resolved_version():\n     assert _get_lockfile_entry_version({\"file\": \"/tmp/packages/local-package\"}) is None\n+\n+\n+def test_skipped_update_message_names_the_required_version():\n+    project = mock.MagicMock()\n+    project.environment.get_installed_packages.return_value = [\n+        SimpleNamespace(name=\"requests\", version=\"2.0.0\")\n+    ]\n+    project.environment.get_outdated_packages.return_value = [\n+        SimpleNamespace(name=\"requests\", version=\"2.0.0\", latest_version=\"3.0.0\")\n+    ]\n+    project.environment.reverse_dependencies.return_value = {\n+        \"requests\": {\"required\": \">=1.0,<3\"}\n+    }\n+    project.pipfile.get_package_categories.return_value = [\"default\"]\n+    project.pipfile.get_package_name.return_value = \"requests\"\n+    project.pipfile.get_section.return_value = {\"requests\": \"==2.0.0\"}\n+    lockfile = {\"default\": {\"requests\": {\"version\": \"==2.0.0\"}}}\n+\n+    with mock.patch(\n+        \"pipenv.routines.outdated.do_lock\", return_value=lockfile\n+    ), mock.patch(\"pipenv.routines.outdated.err\") as err, mock.patch(\n+        \"pipenv.routines.outdated.console\"\n+    ):\n+        with pytest.raises(SystemExit):\n+            do_outdated(project)\n+\n+    message = err.print.call_args.args[0]\n+    assert \">=1.0,<3 required\" in message\n+    assert \"{rdeps\" not in message"
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_outdated.py"
+ ]
+}

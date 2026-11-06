@@ -1,0 +1,83 @@
+{
+ "repo": "GoDiao/dreamcoder",
+ "number": 197,
+ "url": "https://github.com/GoDiao/dreamcoder/pull/197",
+ "title": "fix(desktop): stage the dev sidecar and ripgrep like the packaged bin layout",
+ "merged_at": "2026-10-30T01:10:42Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -27,6 +27,7 @@ A second pre-release of the Electron desktop app. Windows has still not been tes\n - Tool calls that arrived after a reply fell back to a non-streaming request were missing from the conversation; they are now shown.\n - Read no longer rejects a text file when a model sends an empty page range.\n - A group of tool calls is no longer marked as failed when a failed call was followed by a successful call of the same tool; the failed call is still shown inside the group.\n+- Dev mode (`bun run electron:dev`) finds the bundled ripgrep, so Glob and Grep work without a system `rg` on `PATH`. `bun run build:sidecars` now writes `desktop/binaries/<target>/dreamcoder-sidecar` and `rg`, the same names as the packaged app; run it once more in an existing checkout and delete the old suffixed files in `desktop/binaries/` (#195).\n - Sessions with an effort level selected before a model now generate an AI title through the active provider instead of keeping the placeholder (#193).\n - When the AI title of a session cannot be generated, the server log now says why (session, provider, model and reason: upstream status and error excerpt, no text in reply, reply is not a title) instead of keeping the placeholder silently (#176).\n - **In-process teammates claim the team's tasks** (#163). Once the lead creates a team, its tasks are stored in the team's task list, but in-process teammates looked for them in a list named after the lead's session, so they never claimed one and the tasks stayed unowned. Teammates now read the same task list as the lead, both when they start and while they are idle."
+  },
+  {
+   "filename": "desktop/electron-builder.json",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 12,
+   "patch": "@@ -49,12 +49,8 @@\n     \"artifactName\": \"${productName}_${version}_aarch64.${ext}\",\n     \"extraResources\": [\n       {\n-        \"from\": \"binaries/dreamcoder-sidecar-aarch64-apple-darwin\",\n-        \"to\": \"bin/dreamcoder-sidecar\"\n-      },\n-      {\n-        \"from\": \"binaries/rg-aarch64-apple-darwin\",\n-        \"to\": \"bin/rg\"\n+        \"from\": \"binaries/aarch64-apple-darwin\",\n+        \"to\": \"bin\"\n       }\n     ]\n   },\n@@ -89,12 +85,8 @@\n     \"artifactName\": \"${productName}_${version}_x64-setup.${ext}\",\n     \"extraResources\": [\n       {\n-        \"from\": \"binaries/dreamcoder-sidecar-x86_64-pc-windows-msvc.exe\",\n-        \"to\": \"bin/dreamcoder-sidecar.exe\"\n-      },\n-      {\n-        \"from\": \"binaries/rg-x86_64-pc-windows-msvc.exe\",\n-        \"to\": \"bin/rg.exe\"\n+        \"from\": \"binaries/x86_64-pc-windows-msvc\",\n+        \"to\": \"bin\"\n       }\n     ]\n   },"
+  },
+  {
+   "filename": "desktop/electron/devSidecarPaths.test.ts",
+   "status": "added",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,25 @@\n+import { readFileSync } from 'node:fs'\n+import path from 'node:path'\n+import { describe, expect, it } from 'vitest'\n+import { devSidecarPaths } from './sidecar'\n+\n+describe('dev sidecar layout', () => {\n+  it('keeps the sidecar and ripgrep side by side, as in the packaged bin directory', () => {\n+    const paths = devSidecarPaths('/desktop', 'aarch64-apple-darwin', '')\n+    expect(paths.binary).toBe(path.join('/desktop', 'binaries', 'aarch64-apple-darwin', 'dreamcoder-sidecar'))\n+    expect(path.dirname(paths.binary)).toBe(paths.appRoot)\n+  })\n+\n+  it('adds the .exe suffix on Windows', () => {\n+    expect(path.basename(devSidecarPaths('/desktop', 'x86_64-pc-windows-msvc', '.exe').binary)).toBe('dreamcoder-sidecar.exe')\n+  })\n+\n+  it('packages each target directory as bin/', () => {\n+    const config = JSON.parse(readFileSync(path.resolve(import.meta.dirname, '..', 'electron-builder.json'), 'utf8'))\n+    const copies = [config.mac, config.win].flatMap((platform) => platform.extraResources)\n+    expect(copies).toEqual([\n+      { from: 'binaries/aarch64-apple-darwin', to: 'bin' },\n+      { from: 'binaries/x86_64-pc-windows-msvc', to: 'bin' },\n+    ])\n+  })\n+})"
+  },
+  {
+   "filename": "desktop/electron/main.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 4,
+   "patch": "@@ -39,7 +39,7 @@ import {\n } from './browser'\n import { isAllowedFrameNavigation } from './frameNavigation'\n import { writeSessionExport } from './sessionExport'\n-import { startSidecar, type SidecarPaths, type SidecarRuntime } from './sidecar'\n+import { devSidecarPaths, startSidecar, type SidecarPaths, type SidecarRuntime } from './sidecar'\n import {\n   MIN_WINDOW_HEIGHT,\n   MIN_WINDOW_WIDTH,\n@@ -117,11 +117,9 @@ function resolvePaths(): AppPaths {\n     }\n   }\n   const desktopRoot = path.resolve(app.getAppPath(), '..')\n-  const binDir = path.join(desktopRoot, 'binaries')\n   const dist = path.join(desktopRoot, 'dist')\n   return {\n-    binary: path.join(binDir, `dreamcoder-sidecar-${hostTriple()}${exe}`),\n-    appRoot: binDir,\n+    ...devSidecarPaths(desktopRoot, hostTriple(), exe),\n     h5DistDir: dist,\n     webDist: dist,\n     trayIcon: path.join(desktopRoot, 'electron', 'build', 'icons', 'tray.png'),"
+  },
+  {
+   "filename": "desktop/electron/sidecar.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -15,6 +15,11 @@ export type SidecarPaths = {\n   h5DistDir: string\n }\n \n+export function devSidecarPaths(desktopRoot: string, triple: string, exe: string): Pick<SidecarPaths, 'binary' | 'appRoot'> {\n+  const binDir = path.join(desktopRoot, 'binaries', triple)\n+  return { binary: path.join(binDir, `dreamcoder-sidecar${exe}`), appRoot: binDir }\n+}\n+\n export type SidecarRuntime = {\n   url: string\n   child: ChildProcess"
+  },
+  {
+   "filename": "desktop/scripts/build-sidecars.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -1,14 +1,14 @@\n import { mkdir } from 'node:fs/promises'\n import path from 'node:path'\n-import { hostRipgrepTarget, prepareRipgrep } from '../../scripts/prepare-ripgrep.js'\n+import { devBinariesDir, hostRipgrepTarget, prepareRipgrep } from '../../scripts/prepare-ripgrep.js'\n \n const desktopRoot = path.resolve(import.meta.dir, '..')\n const repoRoot = path.resolve(desktopRoot, '..')\n-const binariesDir = path.join(desktopRoot, 'binaries')\n \n const targetTriple =\n   process.env.DREAMCODER_TARGET_TRIPLE ||\n   hostRipgrepTarget()\n+const binariesDir = devBinariesDir(repoRoot, targetTriple)\n \n const bunTarget = mapTargetTripleToBun(targetTriple)\n \n@@ -28,7 +28,7 @@ await mkdir(binariesDir, { recursive: true })\n \n await compileExecutable({\n   entrypoint: path.join(desktopRoot, 'sidecars/dreamcoder-sidecar.ts'),\n-  outfileBase: path.join(binariesDir, `dreamcoder-sidecar-${targetTriple}`),\n+  outfileBase: path.join(binariesDir, 'dreamcoder-sidecar'),\n   productName: 'DreamCoder Sidecar',\n   bunTarget,\n })"
+  },
+  {
+   "filename": "docs/CONTRIBUTING_en.md",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 6,
+   "patch": "@@ -158,8 +158,8 @@ cd desktop && bun install\n bun run electron:install\n \n # Step 4: compile the sidecar binary\n-#   Produces desktop/binaries/dreamcoder-sidecar-<target>, which the main\n-#   process starts as the local server.\n+#   Produces desktop/binaries/<target>/dreamcoder-sidecar (plus rg next to it,\n+#   as in the packaged app), which the main process starts as the local server.\n bun run build:sidecars\n \n # Step 5: launch dev mode\n@@ -206,10 +206,10 @@ match the pinned binary hash. To update ripgrep, verify both hashes for every\n target and refresh `THIRD_PARTY_NOTICES.md` and the installer smoke-test version.\n \n Source runs read `vendor/ripgrep/<arch>-<platform>/rg` (`rg.exe` on Windows).\n-Builds also stage `desktop/binaries/rg-<target-triple>` (plus `.exe` on\n-Windows). The installers drop the target suffix: `rg` sits beside\n-`dreamcoder-sidecar` in `Resources/bin` on macOS and `resources\\bin` on\n-Windows. License notices are included as a resource. Both binary directories\n+Builds also stage `desktop/binaries/<target-triple>/rg` (plus `.exe` on\n+Windows), beside `dreamcoder-sidecar`. The installers copy that directory:\n+`rg` sits beside `dreamcoder-sidecar` in `Resources/bin` on macOS and\n+`resources\\bin` on Windows. License notices are included as a resource. Both binary directories\n are Git-ignored.\n \n Resolution is: `USE_BUILTIN_RIPGREP=0` forces system ripgrep; otherwise the"
+  },
+  {
+   "filename": "docs/CONTRIBUTING_zh.md",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -158,7 +158,7 @@ cd desktop && bun install\n bun run electron:install\n \n # Step 4: 编译 sidecar 二进制\n-#   生成 desktop/binaries/dreamcoder-sidecar-<target>，主进程启动它作为本地服务。\n+#   生成 desktop/binaries/<target>/dreamcoder-sidecar（rg 与它放在同一目录，和打包后的布局一致），主进程启动它作为本地服务。\n bun run build:sidecars\n \n # Step 5: 启动 dev 模式\n@@ -197,8 +197,8 @@ bun run electron:dev\n 两类校验值，并更新 `THIRD_PARTY_NOTICES.md` 及安装包冒烟测试中的版本。\n \n 源码运行读取 `vendor/ripgrep/<arch>-<platform>/rg`（Windows 为 `rg.exe`）。构建还会\n-生成 `desktop/binaries/rg-<target-triple>`（Windows 另带 `.exe`）。安装包里去掉 target\n-后缀：macOS 位于 `Resources/bin`，Windows 位于 `resources\\bin`，均与 sidecar 相邻。\n+生成 `desktop/binaries/<target-triple>/rg`（Windows 另带 `.exe`），与 sidecar 在同一目录。\n+安装包会复制该目录：macOS 位于 `Resources/bin`，Windows 位于 `resources\\bin`，均与 sidecar 相邻。\n 许可证作为资源随包分发。两个二进制目录均已被 Git 忽略。\n \n 查找顺序：`USE_BUILTIN_RIPGREP=0` 强制使用系统版本；否则依次查找可执行文件旁的版本、"
+  },
+  {
+   "filename": "scripts/prepare-ripgrep.test.ts",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'\n import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'\n import { tmpdir } from 'node:os'\n import path from 'node:path'\n-import { getRipgrepTarget, installRipgrep, RIPGREP_TARGETS, RIPGREP_VERSION, tarCommand } from './prepare-ripgrep.js'\n+import { devBinariesDir, getRipgrepTarget, installRipgrep, RIPGREP_TARGETS, RIPGREP_VERSION, tarCommand } from './prepare-ripgrep.js'\n \n const tempDirs: string[] = []\n \n@@ -43,6 +43,11 @@ describe('ripgrep preparation', () => {\n     expect(() => getRipgrepTarget('unknown')).toThrow('Unsupported ripgrep target')\n   })\n \n+  test('stages ripgrep like the packaged layout: one directory per target, plain rg name', () => {\n+    expect(devBinariesDir('/repo', 'aarch64-apple-darwin')).toBe(path.join('/repo', 'desktop', 'binaries', 'aarch64-apple-darwin'))\n+    expect(path.basename(devBinariesDir('/repo', 'x86_64-pc-windows-msvc'))).toBe('x86_64-pc-windows-msvc')\n+  })\n+\n   test('uses the system bsdtar on Windows so drive-letter paths and zip archives extract', () => {\n     expect(tarCommand('win32', { SystemRoot: 'D:\\\\Windows' })).toBe('D:\\\\Windows\\\\System32\\\\tar.exe')\n     expect(tarCommand('win32', {})).toBe('C:\\\\Windows\\\\System32\\\\tar.exe')"
+  },
+  {
+   "filename": "scripts/prepare-ripgrep.ts",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 2,
+   "patch": "@@ -122,14 +122,18 @@ export function hostRipgrepTarget(): string {\n   return host[0].replace('-unknown-linux-musl', '-unknown-linux-gnu')\n }\n \n+export function devBinariesDir(repoRoot: string, targetTriple: string): string {\n+  return path.join(repoRoot, 'desktop', 'binaries', targetTriple)\n+}\n+\n export async function prepareRipgrep(repoRoot: string, targetTriple: string): Promise<void> {\n   const target = getRipgrepTarget(targetTriple)\n   const extension = target.platform.endsWith('-win32') ? '.exe' : ''\n   const vendorPath = path.join(repoRoot, 'vendor', 'ripgrep', target.platform, `rg${extension}`)\n   await installRipgrep(target, vendorPath)\n-  const binaries = path.join(repoRoot, 'desktop', 'binaries')\n+  const binaries = devBinariesDir(repoRoot, targetTriple)\n   await mkdir(binaries, { recursive: true })\n-  const bundledPath = path.join(binaries, `rg-${targetTriple}${extension}`)\n+  const bundledPath = path.join(binaries, `rg${extension}`)\n   if (!await matchesChecksum(bundledPath, target.binarySha256)) {\n     await copyFile(vendorPath, bundledPath)\n   }"
+  }
+ ],
+ "test_files": [
+  "desktop/electron/devSidecarPaths.test.ts",
+  "scripts/prepare-ripgrep.test.ts"
+ ]
+}

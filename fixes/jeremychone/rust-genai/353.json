@@ -1,0 +1,61 @@
+{
+ "repo": "jeremychone/rust-genai",
+ "number": 353,
+ "url": "https://github.com/jeremychone/rust-genai/pull/353",
+ "title": "fix: list gemini-3.8-flash for Vertex instead of the retired gemini-2.5 models",
+ "merged_at": "2026-10-27T16:22:28Z",
+ "files": [
+  {
+   "filename": "README.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -198,7 +198,7 @@ You can force a specific adapter by using the `adapter_kind::model_name` syntax.\n - `nebius::Qwen/Qwen3-235B-A22B` (Forces **Nebius** adapter)\n - `aliyun::qwen-plus` (Forces **Aliyun** adapter)\n - `qwen_cloud::qwen-plus` (Forces **Qwen Cloud** adapter, managed by qwencloud.com and backed by the internal Aliyun-compatible service)\n-- `vertex::gemini-2.5-flash` (Forces **Google Vertex** adapter)\n+- `vertex::gemini-3.8-flash` (Forces **Google Vertex** adapter)\n - `gemini_ix::gemini-3.5-flash` (Forces **Gemini Interactions API** adapter)\n - `moonshot::moonshot-v1-8k` (Forces **Moonshot** adapter)\n - `baidu::ernie-4.0` (Forces **Baidu** adapter)"
+  },
+  {
+   "filename": "examples/c99-google-gcp.rs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -10,7 +10,7 @@ use tracing_subscriber::EnvFilter;\n \n // With the Vertex adapter, use the `vertex::` namespace prefix.\n // The adapter handles URL construction and publisher routing automatically.\n-const GEMINI_MODEL: &str = \"vertex::gemini-2.5-flash\";\n+const GEMINI_MODEL: &str = \"vertex::gemini-3.8-flash\";\n const CLAUDE_MODEL: &str = \"vertex::claude-sonnet-4-6\";\n \n /// This example shows how to use the Vertex AI adapter with an AuthResolver"
+  },
+  {
+   "filename": "src/adapter/adapter_kind.rs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -92,7 +92,7 @@ pub enum AdapterKind {\n \tOmlx,\n \n \t/// Google Vertex AI (Model Garden). Supports Gemini and Claude models via publishers/google and publishers/anthropic.\n-\t/// Uses namespace routing: `vertex::gemini-2.5-flash`, `vertex::claude-sonnet-4-6`\n+\t/// Uses namespace routing: `vertex::gemini-3.8-flash`, `vertex::claude-sonnet-4-6`\n \tVertex,\n \n \t/// GitHub Models inference API (multi-publisher gateway for OpenAI, Anthropic, and Google models).\n@@ -224,7 +224,7 @@ impl AdapterKind {\n \t/// - e.g., for together.ai `together::meta-llama/Llama-3-8b-chat-hf`\n \t/// - e.g., for nebius with `nebius::Qwen/Qwen3-235B-A22B`\n \t/// - e.g., for ZAI coding plan with `zai_coding::glm-4.6`\n-\t/// - e.g., for vertex with `vertex::gemini-2.5-flash` or `vertex::claude-sonnet-4-6`\n+\t/// - e.g., for vertex with `vertex::gemini-3.8-flash` or `vertex::claude-sonnet-4-6`\n \t///\n \t/// And all adapters can be force namspaced as well.\n \t///"
+  },
+  {
+   "filename": "src/adapter/adapters/vertex/adapter_impl.rs",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 28,
+   "patch": "@@ -83,9 +83,7 @@ impl Adapter for VertexAdapter {\n \t\t_web_client: &WebClient,\n \t) -> Result<Vec<String>> {\n \t\tOk(vec![\n-\t\t\t\"gemini-2.5-pro\".to_string(),\n-\t\t\t\"gemini-2.5-flash\".to_string(),\n-\t\t\t\"gemini-2.5-flash-lite\".to_string(),\n+\t\t\t\"gemini-3.8-flash\".to_string(),\n \t\t\t\"claude-sonnet-4-6\".to_string(),\n \t\t\t\"claude-opus-4-6\".to_string(),\n \t\t\t\"claude-haiku-4-5\".to_string(),\n@@ -299,30 +297,7 @@ impl VertexAdapter {\n // region:    --- Tests\n \n #[cfg(test)]\n-mod tests {\n-\tuse super::*;\n-\n-\tfn anthropic_url(service_type: ServiceType) -> String {\n-\t\tlet model = ModelIden::from_static(AdapterKind::Vertex, \"claude-sonnet-4-6\");\n-\t\tlet endpoint =\n-\t\t\tEndpoint::from_static(\"https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/\");\n-\t\tVertexAdapter::get_service_url(&model, service_type, endpoint).expect(\"service url\")\n-\t}\n-\n-\t#[test]\n-\tfn test_get_service_url_anthropic_chat_uses_raw_predict() {\n-\t\tassert!(\n-\t\t\tanthropic_url(ServiceType::Chat).ends_with(\"/publishers/anthropic/models/claude-sonnet-4-6:rawPredict\")\n-\t\t);\n-\t}\n-\n-\t#[test]\n-\tfn test_get_service_url_anthropic_stream_uses_stream_raw_predict() {\n-\t\tassert!(\n-\t\t\tanthropic_url(ServiceType::ChatStream)\n-\t\t\t\t.ends_with(\"/publishers/anthropic/models/claude-sonnet-4-6:streamRawPredict\")\n-\t\t);\n-\t}\n-}\n+#[path = \"adapter_impl_tests.rs\"]\n+mod tests;\n \n // endregion: --- Tests"
+  },
+  {
+   "filename": "src/adapter/adapters/vertex/adapter_impl_tests.rs",
+   "status": "added",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,49 @@\n+use super::VertexAdapter;\n+use crate::adapter::{Adapter, AdapterKind, ServiceType};\n+use crate::resolver::{AuthData, Endpoint};\n+use crate::ModelIden;\n+use crate::webc::WebClient;\n+\n+type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>;\n+\n+#[tokio::test]\n+async fn test_vertex_all_model_names_lists_no_retired_gemini() -> Result<()> {\n+\t// -- Exec\n+\tlet names = VertexAdapter::all_model_names(\n+\t\tAdapterKind::Vertex,\n+\t\tEndpoint::from_static(\"https://aiplatform.googleapis.com/\"),\n+\t\tAuthData::from_single(\"test-key\"),\n+\t\t&WebClient::from_reqwest_client(reqwest::Client::new()),\n+\t)\n+\t.await?;\n+\n+\t// -- Check\n+\t// Vertex retired gemini-2.5-pro, gemini-2.5-flash and gemini-2.5-flash-lite on 2026-10-20.\n+\tassert!(\n+\t\t!names.iter().any(|name| name.starts_with(\"gemini-2.5\")),\n+\t\t\"retired Gemini models listed: {names:?}\"\n+\t);\n+\tassert!(names.iter().any(|name| name == \"gemini-3.8-flash\"), \"{names:?}\");\n+\tassert!(names.iter().any(|name| name.starts_with(\"claude-\")), \"{names:?}\");\n+\n+\tOk(())\n+}\n+\n+fn anthropic_url(service_type: ServiceType) -> String {\n+\tlet model = ModelIden::from_static(AdapterKind::Vertex, \"claude-sonnet-4-6\");\n+\tlet endpoint = Endpoint::from_static(\"https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5/\");\n+\tVertexAdapter::get_service_url(&model, service_type, endpoint).expect(\"service url\")\n+}\n+\n+#[test]\n+fn test_get_service_url_anthropic_chat_uses_raw_predict() {\n+\tassert!(anthropic_url(ServiceType::Chat).ends_with(\"/publishers/anthropic/models/claude-sonnet-4-6:rawPredict\"));\n+}\n+\n+#[test]\n+fn test_get_service_url_anthropic_stream_uses_stream_raw_predict() {\n+\tassert!(\n+\t\tanthropic_url(ServiceType::ChatStream)\n+\t\t\t.ends_with(\"/publishers/anthropic/models/claude-sonnet-4-6:streamRawPredict\")\n+\t);\n+}"
+  },
+  {
+   "filename": "src/adapter/adapters/vertex/mod.rs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -5,7 +5,7 @@\n //!   - Gemini on Vertex: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference\n //!   - Claude on Vertex: https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude\n //!\n-//! Usage: namespace model names with `vertex::`, e.g. `vertex::gemini-2.5-flash` or `vertex::claude-sonnet-4-6`\n+//! Usage: namespace model names with `vertex::`, e.g. `vertex::gemini-3.8-flash` or `vertex::claude-sonnet-4-6`\n \n // region:    --- Modules\n "
+  },
+  {
+   "filename": "tests/tests_p_vertex.rs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -9,7 +9,7 @@ use serial_test::serial;\n // Env vars needed: VERTEX_PROJECT_ID, VERTEX_LOCATION, VERTEX_API_KEY (Bearer token)\n \n // -- Gemini on Vertex (publishers/google)\n-const MODEL_GEMINI: &str = \"vertex::gemini-2.5-flash\";\n+const MODEL_GEMINI: &str = \"vertex::gemini-3.8-flash\";\n \n // -- Claude on Vertex / Model Garden (publishers/anthropic)\n const MODEL_CLAUDE: &str = \"vertex::claude-sonnet-4-6\";\n@@ -166,7 +166,7 @@ async fn test_resolver_auth_ok() -> TestResult<()> {\n \n #[tokio::test]\n async fn test_list_models() -> TestResult<()> {\n-\tcommon_tests::common_test_list_models(AdapterKind::Vertex, \"gemini-2.5-flash\").await\n+\tcommon_tests::common_test_list_models(AdapterKind::Vertex, \"gemini-3.8-flash\").await\n }\n \n // endregion: --- List"
+  }
+ ],
+ "test_files": [
+  "tests/tests_p_vertex.rs"
+ ]
+}

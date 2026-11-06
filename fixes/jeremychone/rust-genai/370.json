@@ -1,0 +1,24 @@
+{
+ "repo": "jeremychone/rust-genai",
+ "number": 370,
+ "url": "https://github.com/jeremychone/rust-genai/pull/370",
+ "title": "fix(openai_resp): do not send stop or seed, the Responses API rejects them",
+ "merged_at": "2026-11-02T00:17:10Z",
+ "files": [
+  {
+   "filename": "src/adapter/adapters/openai_resp/adapter_impl.rs",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 3,
+   "patch": "@@ -260,8 +260,10 @@ impl Adapter for OpenAIRespAdapter {\n \t\t\tpayload.x_insert(\"temperature\", temperature)?;\n \t\t}\n \n+\t\t// The Responses API has no `stop` parameter; sending it is an HTTP 400.\n+\t\t// (Callers who know their backend accepts it can still set it with `extra_body`.)\n \t\tif !chat_options.stop_sequences().is_empty() {\n-\t\t\tpayload.x_insert(\"stop\", chat_options.stop_sequences())?;\n+\t\t\ttracing::warn!(\"stop sequences are not supported by the OpenAI Responses API and were not sent\");\n \t\t}\n \n \t\tif let Some(max_tokens) = chat_options.max_tokens() {\n@@ -270,8 +272,9 @@ impl Adapter for OpenAIRespAdapter {\n \t\tif let Some(top_p) = chat_options.top_p() {\n \t\t\tpayload.x_insert(\"top_p\", top_p)?;\n \t\t}\n-\t\tif let Some(seed) = chat_options.seed() {\n-\t\t\tpayload.x_insert(\"seed\", seed)?;\n+\t\t// Same for `seed`: the Responses API does not accept it.\n+\t\tif chat_options.seed().is_some() {\n+\t\t\ttracing::warn!(\"seed is not supported by the OpenAI Responses API and was not sent\");\n \t\t}\n \n \t\t// -- OpenAI prompt cache options"
+  },
+  {
+   "filename": "src/adapter/adapters/openai_resp/adapter_impl_tests.rs",
+   "status": "modified",
+   "additions": 40,
+   "deletions": 0,
+   "patch": "@@ -104,6 +104,46 @@ fn function_tool_strict_is_sent_only_when_set() -> Result<()> {\n \tOk(())\n }\n \n+#[test]\n+fn test_openai_resp_omits_stop_and_seed_the_responses_api_rejects() {\n+\tlet chat_options = ChatOptions::default()\n+\t\t.with_stop_sequences(vec![\"END\".to_string()])\n+\t\t.with_seed(42)\n+\t\t.with_top_p(0.3);\n+\tlet options_set = ChatOptionsSet::default().with_chat_options(Some(&chat_options));\n+\tlet target = ServiceTarget {\n+\t\tmodel: ModelIden::new(AdapterKind::OpenAIResp, \"gpt-5-mini\"),\n+\t\tauth: AuthData::from_single(\"test-key\"),\n+\t\tendpoint: OpenAIRespAdapter::default_endpoint(AdapterKind::OpenAIResp),\n+\t};\n+\n+\tlet web_req =\n+\t\tOpenAIRespAdapter::to_web_request_data(target, ServiceType::Chat, ChatRequest::from_user(\"hello\"), options_set)\n+\t\t\t.expect(\"to_web_request_data should succeed\");\n+\n+\t// The Responses API has no `stop` or `seed`; sending either is an HTTP 400.\n+\tassert!(web_req.payload.get(\"stop\").is_none());\n+\tassert!(web_req.payload.get(\"seed\").is_none());\n+\tassert_eq!(web_req.payload[\"top_p\"], 0.3);\n+}\n+\n+#[test]\n+fn test_openai_resp_extra_body_can_still_set_stop() {\n+\tlet chat_options = ChatOptions::default().with_extra_body(json!({\"stop\": [\"END\"]}));\n+\tlet options_set = ChatOptionsSet::default().with_chat_options(Some(&chat_options));\n+\tlet target = ServiceTarget {\n+\t\tmodel: ModelIden::new(AdapterKind::OpenAIResp, \"gpt-5-mini\"),\n+\t\tauth: AuthData::from_single(\"test-key\"),\n+\t\tendpoint: OpenAIRespAdapter::default_endpoint(AdapterKind::OpenAIResp),\n+\t};\n+\n+\tlet web_req =\n+\t\tOpenAIRespAdapter::to_web_request_data(target, ServiceType::Chat, ChatRequest::from_user(\"hello\"), options_set)\n+\t\t\t.expect(\"to_web_request_data should succeed\");\n+\n+\tassert_eq!(web_req.payload[\"stop\"][0], \"END\");\n+}\n+\n #[test]\n fn test_openai_resp_extra_body_merged_into_response_payload() {\n \tlet chat_options = ChatOptions::default()"
+  }
+ ],
+ "test_files": []
+}

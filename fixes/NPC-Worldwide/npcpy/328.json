@@ -1,0 +1,26 @@
+{
+ "repo": "NPC-Worldwide/npcpy",
+ "number": 328,
+ "url": "https://github.com/NPC-Worldwide/npcpy/pull/328",
+ "title": "fix(ollama): send max_tokens and max_completion_tokens as num_predict",
+ "merged_at": "2026-10-29T02:02:08Z",
+ "files": [
+  {
+   "filename": "npcpy/gen/response.py",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 2,
+   "patch": "@@ -548,15 +548,19 @@ def get_ollama_response(\n             \"temperature\",\n             \"top_p\",\n             \"top_k\",\n-            \"max_tokens\",\n-            \"max_completion_tokens\",\n             \"extra_headers\",\n             \"parallel_tool_calls\",\n             \"response_format\",\n             \"user\",\n         ]:\n             options[key] = value\n \n+    # Ollama only understands num_predict; max_tokens / max_completion_tokens\n+    # in options are ignored and the response would run without a limit.\n+    for key in (\"max_tokens\", \"max_completion_tokens\"):\n+        if kwargs.get(key) is not None:\n+            options[\"num_predict\"] = kwargs[key]\n+\n     result = {\n         \"response\": None,\n         \"messages\": messages.copy(),"
+  },
+  {
+   "filename": "tests/test_ollama_num_predict.py",
+   "status": "added",
+   "additions": 54,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,54 @@\n+\"\"\"max_tokens / max_completion_tokens must reach Ollama as options[\"num_predict\"].\"\"\"\n+import pytest\n+\n+from npcpy.gen import response as response_module\n+\n+\n+class _FakeClient:\n+    calls = []\n+\n+    def __init__(self, **kwargs):\n+        pass\n+\n+    def chat(self, **kwargs):\n+        type(self).calls.append(kwargs)\n+        return {\"message\": {\"role\": \"assistant\", \"content\": \"ok\"}}\n+\n+\n+@pytest.fixture\n+def fake_ollama(monkeypatch):\n+    _FakeClient.calls = []\n+\n+    class _FakeOllama:\n+        Client = _FakeClient\n+\n+    monkeypatch.setattr(response_module, \"ollama\", _FakeOllama)\n+    monkeypatch.setattr(response_module, \"HAS_OLLAMA\", True)\n+    return _FakeClient\n+\n+\n+def _options(fake, **kwargs):\n+    response_module.get_ollama_response(\n+        prompt=\"hi\", model=\"llama3.2:latest\", messages=[], **kwargs\n+    )\n+    return fake.calls[-1][\"options\"]\n+\n+\n+@pytest.mark.parametrize(\"key\", [\"max_tokens\", \"max_completion_tokens\"])\n+def test_token_limit_is_sent_as_num_predict(fake_ollama, key):\n+    options = _options(fake_ollama, **{key: 64})\n+\n+    assert options[\"num_predict\"] == 64\n+    assert key not in options\n+\n+\n+def test_other_options_are_unchanged(fake_ollama):\n+    options = _options(fake_ollama, temperature=0.2, top_k=5)\n+\n+    assert options[\"temperature\"] == 0.2\n+    assert options[\"top_k\"] == 5\n+    assert \"num_predict\" not in options\n+\n+\n+def test_unset_token_limit_adds_no_num_predict(fake_ollama):\n+    assert \"num_predict\" not in _options(fake_ollama, max_tokens=None)"
+  }
+ ],
+ "test_files": [
+  "tests/test_ollama_num_predict.py"
+ ]
+}

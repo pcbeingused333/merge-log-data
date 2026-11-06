@@ -1,0 +1,48 @@
+{
+ "repo": "tox-dev/tox",
+ "number": 4217,
+ "url": "https://github.com/tox-dev/tox/pull/4217",
+ "title": "🐛 fix(config): read a UTF-8 BOM in pylock.toml and the user config file",
+ "merged_at": "2026-10-29T02:01:46Z",
+ "files": [
+  {
+   "filename": "docs/changelog/4217.bugfix.rst",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+A ``pylock.toml`` or a tox user configuration file (``TOX_USER_CONFIG_FILE``) saved with a UTF-8 byte order mark, as\n+some Windows editors do, is now read instead of failing with a TOML decode error or being ignored with ``failed to read\n+config file``."
+  },
+  {
+   "filename": "src/tox/config/cli/ini.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -42,7 +42,7 @@ def __init__(self) -> None:\n \n     def _parse_config_file(self) -> None:\n         parser = ConfigParser(interpolation=None)\n-        with self.config_file.open(encoding=\"utf-8\") as file_handler:\n+        with self.config_file.open(encoding=\"utf-8-sig\") as file_handler:\n             parser.read_file(file_handler)\n         self.has_tox_section = parser.has_section(CORE.key)\n         if self.has_tox_section:"
+  },
+  {
+   "filename": "src/tox/tox_env/python/pylock.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 2,
+   "patch": "@@ -25,8 +25,7 @@ class Pylock:\n \n     def install_lines(self) -> list[str]:\n         \"\"\"Return pip requirement lines for the packages this environment locks.\"\"\"\n-        with self.path.open(\"rb\") as fh:\n-            data = tomllib.load(fh)\n+        data = tomllib.loads(self.path.read_text(encoding=\"utf-8-sig\"))\n         try:\n             parsed = PackagingPylock.from_dict(data)\n         except PylockValidationError as exc:"
+  },
+  {
+   "filename": "tests/config/cli/test_cli_ini.py",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -155,6 +155,15 @@ def test_cli_ini_is_utf8(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:\n     assert conf.get(\"a\", str) == (\"“Grüße”\", \"file\")\n \n \n+def test_cli_ini_with_utf8_bom(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:\n+    to = tmp_path / \"tox.ini\"\n+    to.write_bytes(b\"\\xef\\xbb\\xbf[tox]\\na = b\\n\")\n+    monkeypatch.setenv(\"TOX_USER_CONFIG_FILE\", str(to))\n+    conf = IniConfig()\n+    assert conf.has_config_file is True\n+    assert conf.get(\"a\", str) == (\"b\", \"file\")\n+\n+\n @pytest.mark.parametrize(\n     (\"conf_arg\", \"filename\", \"content\"),\n     ["
+  },
+  {
+   "filename": "tests/tox_env/python/test_pylock.py",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -601,3 +601,12 @@ def test_pylock_reinstall_on_resolution_env_change(tox_project: ToxProjectCreato\n \n     result_second.assert_success()\n     assert len(execute_calls.call_args_list) == 1\n+\n+\n+def test_pylock_install_lines_utf8_bom(tmp_path: Path) -> None:\n+    pylock = tmp_path / \"pylock.toml\"\n+    pylock.write_bytes(b\"\\xef\\xbb\\xbf\" + PYLOCK_TOML.encode(\"utf-8\"))\n+\n+    lines = Pylock(path=pylock).install_lines()\n+\n+    assert lines == [\"alpha==1.0.0 --hash=sha256:abc123\", \"beta==2.0.0 --hash=sha256:def456\"]"
+  }
+ ],
+ "test_files": [
+  "tests/config/cli/test_cli_ini.py",
+  "tests/tox_env/python/test_pylock.py"
+ ]
+}

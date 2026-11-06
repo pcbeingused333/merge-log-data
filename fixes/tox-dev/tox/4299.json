@@ -1,0 +1,54 @@
+{
+ "repo": "tox-dev/tox",
+ "number": 4299,
+ "url": "https://github.com/tox-dev/tox/pull/4299",
+ "title": "🐛 fix(config): honor package_root without package env",
+ "merged_at": "2026-10-30T17:43:58Z",
+ "files": [
+  {
+   "filename": "docs/changelog/+package-root-without-package-env.bugfix.rst",
+   "status": "added",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,2 @@\n+``pylock`` and ``dependency_groups`` now use ``package_root`` when a run has no package environment. They previously\n+used ``tox_root`` in that case."
+  },
+  {
+   "filename": "docs/reference/config.rst",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -686,6 +686,7 @@ the top level of ``tox.toml``. Placing these options in an environment section (\n     :version_added: 1.0\n \n      Indicates where the packaging root file exists (historically setup.py file or pyproject.toml now).\n+     tox also resolves :ref:`pylock` files and :ref:`dependency_groups` from this directory.\n \n .. conf::\n     :keys: labels"
+  },
+  {
+   "filename": "src/tox/config/sets.py",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 2,
+   "patch": "@@ -330,6 +330,13 @@ def register_config(self) -> None:\n             desc=\"the root directory (where the configuration file is found)\",\n         )\n         self.add_constant(\"tox_root_name\", \"name of the root directory\", self._root.name)\n+        self.add_config(\n+            keys=[\"package_root\", \"setupdir\"],\n+            of_type=Path,\n+            default=self._default_package_root,\n+            post_process=self._relative_to_tox_root,\n+            desc=\"indicates where the packaging root file exists (historically setup.py file or pyproject.toml now)\",\n+        )\n         self.add_constant(\"home\", \"the user's home directory\", Path.home)\n \n         self.add_config(\n@@ -361,6 +368,9 @@ def register_config(self) -> None:\n         )\n         self.add_constant(\"host_python\", \"the host python executable path\", sys.executable)\n \n+    def _default_package_root(self, _conf: Config, _env_name: str | None) -> Path:\n+        return self.get(\"tox_root\", Path)\n+\n     @override\n     def _on_duplicate_conf(self, key: str, definition: ConfigDefinition[V]) -> None:\n         pass  # core definitions may be defined multiple times as long as all their options match, first defined wins\n@@ -435,8 +445,8 @@ def __repr__(self) -> str:\n         return f\"{self.__class__.__name__}(name={self._env_name!r}, loaders={self.loaders!r})\"\n \n \n-__all__ = (\n+__all__ = [\n     \"ConfigSet\",\n     \"CoreConfigSet\",\n     \"EnvConfigSet\",\n-)\n+]"
+  },
+  {
+   "filename": "src/tox/tox_env/package.py",
+   "status": "modified",
+   "additions": 0,
+   "deletions": 7,
+   "patch": "@@ -77,13 +77,6 @@ def register_config(self) -> None:\n         file_lock_path = self.conf.get(\"env_dir\", Path) / \"file.lock\"\n         self._file_lock = FileLock(file_lock_path)\n         file_lock_path.parent.mkdir(parents=True, exist_ok=True)\n-        self.core.add_config(\n-            keys=[\"package_root\", \"setupdir\"],\n-            of_type=Path,\n-            default=self.core.get(\"tox_root\", Path),\n-            post_process=self._relative_to_tox_root,\n-            desc=\"indicates where the packaging root file exists (historically setup.py file or pyproject.toml now)\",\n-        )\n         self.conf.add_config(\n             keys=[\"package_root\", \"setupdir\"],\n             of_type=Path,"
+  },
+  {
+   "filename": "src/tox/tox_env/python/runner.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 10,
+   "patch": "@@ -168,20 +168,12 @@ def _install_dependency_groups(self) -> None:\n         groups = self.conf.get(\"dependency_groups\", set[str])\n         if not groups:\n             return\n-        try:\n-            root = self.core.get(\"package_root\", Path)\n-        except KeyError:\n-            root = self.core[\"tox_root\"]\n-        requirements = resolve_dependency_groups(root, groups)\n+        requirements = resolve_dependency_groups(self.core.get(\"package_root\", Path), groups)\n         self._install(list(requirements), PythonRun.__name__, \"dependency-groups\")\n \n     def _install_pylock(self) -> None:\n         pylock_path = self.conf.get(\"pylock\", str)\n-        try:\n-            root = self.core.get(\"package_root\", Path)\n-        except KeyError:\n-            root = self.core[\"tox_root\"]\n-        if not (path := root / pylock_path).exists():\n+        if not (path := self.core.get(\"package_root\", Path) / pylock_path).exists():\n             msg = f\"pylock file {pylock_path!r} not found at {path}\"\n             raise Fail(msg)\n         info = self.base_python"
+  },
+  {
+   "filename": "tests/tox_env/python/test_pylock.py",
+   "status": "modified",
+   "additions": 51,
+   "deletions": 16,
+   "patch": "@@ -2,15 +2,17 @@\n \n import sys\n from textwrap import dedent\n-from typing import TYPE_CHECKING\n+from typing import TYPE_CHECKING, Final\n \n import pytest\n \n from tox.tox_env.errors import Fail\n from tox.tox_env.python.pylock import Pylock\n \n if TYPE_CHECKING:\n+    from collections.abc import Sequence\n     from pathlib import Path\n+    from unittest.mock import MagicMock\n \n     from tox.pytest import ToxProject, ToxProjectCreator\n \n@@ -40,30 +42,63 @@\n \"\"\")\n \n \n-def test_pylock_install(tox_project: ToxProjectCreator) -> None:\n-    project = tox_project(\n+@pytest.mark.parametrize(\n+    \"files\",\n+    [\n+        pytest.param(\n+            {\n+                \"tox.toml\": '[env_run_base]\\nskip_install = true\\npylock = \"pylock.toml\"',\n+                \"pylock.toml\": PYLOCK_TOML,\n+            },\n+            id=\"tox-root\",\n+        ),\n+        pytest.param(\n+            {\n+                \"tox.toml\": 'package_root = \"sub\"\\n[env_run_base]\\nskip_install = true\\npylock = \"pylock.toml\"',\n+                \"sub\": {\"pylock.toml\": PYLOCK_TOML},\n+            },\n+            id=\"package-root\",\n+        ),\n+    ],\n+)\n+def test_pylock_install(tox_project: ToxProjectCreator, files: dict[str, str | dict[str, str]]) -> None:\n+    project: Final[ToxProject] = tox_project(files)\n+    execute_calls: Final[MagicMock] = project.patch_execute()\n+    project.run(\"r\", \"-e\", \"py\").assert_success()\n+\n+    req_file: Final[str] = str(project.path / \".tox\" / \"py\" / \"pylock.txt\")\n+    found_calls: Final[list[tuple[str, str, Sequence[str]]]] = [\n+        (call[0][0].conf.name, call[0][3].run_id, call[0][3].cmd) for call in execute_calls.call_args_list\n+    ]\n+    assert found_calls == [\n+        (\"py\", \"install_pylock\", [\"python\", \"-I\", \"-m\", \"pip\", \"install\", \"--no-deps\", \"-r\", req_file]),\n+    ]\n+    assert (\n+        project.path / \".tox\" / \"py\" / \"pylock.txt\"\n+    ).read_text() == \"alpha==1.0.0 --hash=sha256:abc123\\nbeta==2.0.0 --hash=sha256:def456\"\n+\n+\n+def test_dependency_groups_use_package_root_without_package_env(tox_project: ToxProjectCreator) -> None:\n+    project: Final[ToxProject] = tox_project(\n         {\n             \"tox.toml\": \"\"\"\n+            package_root = \"sub\"\n+\n             [env_run_base]\n             skip_install = true\n-            pylock = \"pylock.toml\"\n+            dependency_groups = [\"dev\"]\n             \"\"\",\n-            \"pylock.toml\": PYLOCK_TOML,\n+            \"sub\": {\"pyproject.toml\": '[dependency-groups]\\ndev = [\"six\"]\\n'},\n         },\n     )\n-    execute_calls = project.patch_execute()\n-    result = project.run(\"r\", \"-e\", \"py\")\n+    execute_calls: Final[MagicMock] = project.patch_execute()\n+    project.run(\"r\", \"-e\", \"py\").assert_success()\n \n-    result.assert_success()\n-\n-    req_file = str(project.path / \".tox\" / \"py\" / \"pylock.txt\")\n-    found_calls = [(i[0][0].conf.name, i[0][3].run_id, i[0][3].cmd) for i in execute_calls.call_args_list]\n-    assert found_calls == [\n-        (\"py\", \"install_pylock\", [\"python\", \"-I\", \"-m\", \"pip\", \"install\", \"--no-deps\", \"-r\", req_file]),\n+    found_calls: Final[list[tuple[str, str]]] = [\n+        (call[0][0].conf.name, call[0][3].run_id) for call in execute_calls.call_args_list\n     ]\n-    assert (\n-        project.path / \".tox\" / \"py\" / \"pylock.txt\"\n-    ).read_text() == \"alpha==1.0.0 --hash=sha256:abc123\\nbeta==2.0.0 --hash=sha256:def456\"\n+    assert found_calls == [(\"py\", \"install_dependency-groups\")]\n+    assert \"six\" in execute_calls.call_args_list[0][0][3].cmd\n \n \n def test_pylock_empty(tox_project: ToxProjectCreator) -> None:"
+  }
+ ],
+ "test_files": [
+  "tests/tox_env/python/test_pylock.py"
+ ]
+}

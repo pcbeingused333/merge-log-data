@@ -1,0 +1,54 @@
+{
+ "repo": "lich0821/ccNexus",
+ "number": 154,
+ "url": "https://github.com/lich0821/ccNexus/pull/154",
+ "title": "fix: count Gemini thoughtsTokenCount as output tokens",
+ "merged_at": "2026-10-27T10:08:57Z",
+ "files": [
+  {
+   "filename": "internal/transformer/convert/claude_gemini.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -290,7 +290,7 @@ func GeminiRespToClaude(geminiResp []byte) ([]byte, error) {\n \tvar inputTokens, outputTokens int\n \tif resp.UsageMetadata != nil {\n \t\tinputTokens = resp.UsageMetadata.PromptTokenCount\n-\t\toutputTokens = resp.UsageMetadata.CandidatesTokenCount\n+\t\toutputTokens = geminiOutputTokens(&resp)\n \t}\n \n \tclaudeResp := map[string]interface{}{"
+  },
+  {
+   "filename": "internal/transformer/convert/common.go",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 2,
+   "patch": "@@ -87,11 +87,20 @@ func syncGeminiUsageMetadata(resp *transformer.GeminiResponse, ctx *transformer.\n \tif resp.UsageMetadata.PromptTokenCount > 0 {\n \t\tctx.InputTokens = resp.UsageMetadata.PromptTokenCount\n \t}\n-\tif resp.UsageMetadata.CandidatesTokenCount > 0 {\n-\t\tctx.OutputTokens = resp.UsageMetadata.CandidatesTokenCount\n+\tif output := geminiOutputTokens(resp); output > 0 {\n+\t\tctx.OutputTokens = output\n \t}\n }\n \n+// geminiOutputTokens returns the billed output tokens: Gemini reports reasoning\n+// tokens in thoughtsTokenCount, outside candidatesTokenCount.\n+func geminiOutputTokens(resp *transformer.GeminiResponse) int {\n+\tif resp == nil || resp.UsageMetadata == nil {\n+\t\treturn 0\n+\t}\n+\treturn resp.UsageMetadata.CandidatesTokenCount + resp.UsageMetadata.ThoughtsTokenCount\n+}\n+\n func currentOpenAIUsage(ctx *transformer.StreamContext) map[string]interface{} {\n \tif ctx == nil || (ctx.InputTokens == 0 && ctx.OutputTokens == 0) {\n \t\treturn nil"
+  },
+  {
+   "filename": "internal/transformer/convert/gemini_thoughts_tokens_test.go",
+   "status": "added",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,45 @@\n+package convert\n+\n+import (\n+\t\"strings\"\n+\t\"testing\"\n+\n+\t\"github.com/lich0821/ccNexus/internal/transformer\"\n+)\n+\n+// Gemini reports reasoning tokens in thoughtsTokenCount, outside candidatesTokenCount,\n+// and bills them as output.\n+const geminiThinkingResp = `{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"4\"}]},\"finishReason\":\"STOP\"}],` +\n+\t`\"usageMetadata\":{\"promptTokenCount\":5,\"candidatesTokenCount\":3,\"thoughtsTokenCount\":7,\"totalTokenCount\":15}}`\n+\n+func TestGeminiRespToClaudeCountsThoughtTokensAsOutput(t *testing.T) {\n+\tout, err := GeminiRespToClaude([]byte(geminiThinkingResp))\n+\tif err != nil {\n+\t\tt.Fatalf(\"GeminiRespToClaude failed: %v\", err)\n+\t}\n+\n+\tassertContains(t, string(out), `\"output_tokens\":10`, \"Expected output_tokens to include the 7 thought tokens\")\n+}\n+\n+func TestGeminiRespToOpenAICountsThoughtTokensAsCompletion(t *testing.T) {\n+\tout, err := GeminiRespToOpenAI([]byte(geminiThinkingResp), \"gemini-3.8-flash\")\n+\tif err != nil {\n+\t\tt.Fatalf(\"GeminiRespToOpenAI failed: %v\", err)\n+\t}\n+\n+\tassertContains(t, string(out), `\"completion_tokens\":10`, \"Expected completion_tokens to include the 7 thought tokens\")\n+}\n+\n+func TestGeminiStreamToClaudeCountsThoughtTokensAsOutput(t *testing.T) {\n+\tctx := transformer.NewStreamContext()\n+\tctx.ModelName = \"gemini-3.8-flash\"\n+\n+\tout, err := GeminiStreamToClaude([]byte(\"data: \"+geminiThinkingResp+\"\\n\\n\"), ctx)\n+\tif err != nil {\n+\t\tt.Fatalf(\"GeminiStreamToClaude failed: %v\", err)\n+\t}\n+\n+\tif !strings.Contains(string(out), `\"output_tokens\":10`) {\n+\t\tt.Errorf(\"Expected output_tokens 10 (3 candidate + 7 thought) in the stream usage, got: %s\", out)\n+\t}\n+}"
+  },
+  {
+   "filename": "internal/transformer/convert/openai2_gemini.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -125,7 +125,7 @@ func GeminiRespToOpenAI2(geminiResp []byte) ([]byte, error) {\n \tif resp.UsageMetadata != nil {\n \t\tusage = map[string]interface{}{\n \t\t\t\"input_tokens\":  resp.UsageMetadata.PromptTokenCount,\n-\t\t\t\"output_tokens\": resp.UsageMetadata.CandidatesTokenCount,\n+\t\t\t\"output_tokens\": geminiOutputTokens(&resp),\n \t\t\t\"total_tokens\":  resp.UsageMetadata.TotalTokenCount,\n \t\t}\n \t}"
+  },
+  {
+   "filename": "internal/transformer/convert/openai_gemini.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -164,7 +164,7 @@ func GeminiRespToOpenAI(geminiResp []byte, model string) ([]byte, error) {\n \tif resp.UsageMetadata != nil {\n \t\tusage = map[string]interface{}{\n \t\t\t\"prompt_tokens\":     resp.UsageMetadata.PromptTokenCount,\n-\t\t\t\"completion_tokens\": resp.UsageMetadata.CandidatesTokenCount,\n+\t\t\t\"completion_tokens\": geminiOutputTokens(&resp),\n \t\t\t\"total_tokens\":      resp.UsageMetadata.TotalTokenCount,\n \t\t}\n \t}"
+  },
+  {
+   "filename": "internal/transformer/types.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -308,6 +308,7 @@ type GeminiResponse struct {\n \tUsageMetadata *struct {\n \t\tPromptTokenCount     int `json:\"promptTokenCount\"`\n \t\tCandidatesTokenCount int `json:\"candidatesTokenCount\"`\n+\t\tThoughtsTokenCount   int `json:\"thoughtsTokenCount\"`\n \t\tTotalTokenCount      int `json:\"totalTokenCount\"`\n \t} `json:\"usageMetadata,omitempty\"`\n }\n@@ -325,6 +326,7 @@ type GeminiStreamChunk struct {\n \tUsageMetadata *struct {\n \t\tPromptTokenCount     int `json:\"promptTokenCount\"`\n \t\tCandidatesTokenCount int `json:\"candidatesTokenCount\"`\n+\t\tThoughtsTokenCount   int `json:\"thoughtsTokenCount\"`\n \t\tTotalTokenCount      int `json:\"totalTokenCount\"`\n \t} `json:\"usageMetadata,omitempty\"`\n }"
+  }
+ ],
+ "test_files": [
+  "internal/transformer/convert/gemini_thoughts_tokens_test.go"
+ ]
+}

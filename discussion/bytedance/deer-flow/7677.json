@@ -1,0 +1,50 @@
+{
+ "repo": "bytedance/deer-flow",
+ "number": 7677,
+ "url": "https://github.com/bytedance/deer-flow/pull/7677",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-29T12:48:55Z",
+   "body": "Reviewed at be7023bb0b7bb4c1ac240ba44e5ed0d437eb18d1. The core mechanism checks out: renaming the injected parameter to `deerflow_runtime` still gets detected by ToolNode because `deerflow.tools.types.Runtime` is `ToolRuntime[dict, ThreadState]`, so `_get_all_injected_args` matches via the annotation origin even though the parameter is no longer literally named `runtime` (verified against the pinned langgraph 1.2.9 / langchain-mcp-adapters 0.2.2: with a dict args_schema the model's `runtime` argument survives while `deerflow_runtime` receives the ToolRuntime). Both new tests drive a real `ToolNode`, which is the right shape for this bug, and the direct-call test updates match the rename.\n\nOne regression to fix: `mcp/user_tools.py` is shared by more than the two wrappers this PR renamed; personal MCP tools on HTTP/SSE transports still carry the adapter's `runtime` parameter, so the ownership guard there now reads a key that is never present (inline comment).\n\nDoc follow-up: `backend/packages/harness/deerflow/mcp/AGENTS.md` (\"Reading the run context from an interceptor\") still states that LangGraph injects a `ToolRuntime` into \"any tool parameter named `runtime`, which covers both the pooled stdio wrapper and `langchain-mcp-adapters`' own HTTP/SSE tool\". That is no longer true for the pooled stdio wrapper and should be updated per the repo's AGENTS.md-in-the-same-change-set convention."
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-01T04:45:04Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "backend/packages/harness/deerflow/mcp/user_tools.py",
+   "created_at": "2026-10-29T12:48:55Z",
+   "body": "**important — the guard now misses the injected runtime for HTTP/SSE personal tools.**\n\nOnly the two wrappers this PR renamed expose `deerflow_runtime`. `_wrap_discovered_server_tools` calls `_make_session_pool_tool` for stdio only; HTTP/SSE tools are returned untouched, so a personal server configured as `type: http`/`sse` still carries `langchain_mcp_adapters`' coroutine signature:\n\n```python\nasync def call_tool(\n    runtime: Annotated[object | None, InjectedToolArg()] = None,\n    **arguments,\n) -> ...\n```\n\n`_guard` replaces `tool.coroutine`/`tool.func` but keeps that signature through `functools.wraps`, so `ToolNode` detects and injects the ToolRuntime under `runtime`, and `kwargs.get(\"deerflow_runtime\")` here is always `None` for those tools. (I reproduced this with the pinned langgraph 1.2.9: `_get_all_injected_args(guarded_http_tool).runtime == \"runtime\"`, while a guarded pooled-stdio tool reports `deerflow_runtime`.)\n\nConsequence: for personal HTTP/SSE tools `resolve_runtime_user_id(None)` silently falls through to the LangGraph auth key, then the ambient `_current_user` contextvar, then `DEFAULT_USER_ID` — dropping the `runtime.context[\"user_id\"]` / `server_info` channel that its own docstring calls \"the only source that survives boundaries where the contextvar may have been lost (background tasks scheduled outside the request task, worker pools that don't copy_context…)\". In such a context the owner's own call resolves to `default` and now raises `ToolException(\"This MCP connection belongs to another user\")`; in ordinary request contexts the ownership check is merely weakened to whatever the ambient context says. Previously `kwargs[\"runtime\"]` gave the guard the authoritative runtime user for exactly this transport.\n\nSuggested fix: determine the injected parameter name for this specific tool when building the wrapper (e.g. inspect the ToolRuntime-annotated parameter of `original`, or `_get_all_injected_args(tool).runtime` before `model_copy`) and read that key. Avoid a blind `kwargs.get(\"deerflow_runtime\") or kwargs.get(\"runtime\")` fallback: for stdio tools a business argument may legitimately be named `runtime`, which is the very bug this PR fixes. A test that runs a guarded tool through a real `ToolNode` (as the new tests do) would pin this for both transports."
+  }
+ ],
+ "comments": [
+  {
+   "role": "contributor",
+   "created_at": "2026-10-29T08:06:00Z",
+   "body": "I had opened #7676 for the same root cause and closed it in favour of this one —\nyours covers `user_tools.py` and the existing call sites, which mine did not.\n\nWhile investigating I verified the chain that makes the rename safe, in case it\nis useful for review (I could not run tests locally, so this is from reading the\ninstalled-source contracts rather than from execution):\n\n1. **Injection is annotation-driven, not name-driven.** LangGraph's\n   `ToolNode._get_all_injected_args` resolves injected parameters via\n   `get_type_hints` and stores the discovered *names*, so a renamed parameter\n   annotated `Runtime` is still injected.\n\n2. **The remote `args_schema` does not strip the extra key.**\n   `langchain-mcp-adapters` sets `args_schema` to the MCP `inputSchema`, which is\n   a JSON-schema **dict**, not a Pydantic model. In `langchain_core.tools.base`,\n   `_parse_input` returns dict input unchanged and `_to_args_and_kwargs` turns\n   every key into a keyword argument. (For a Pydantic schema the extra injected\n   key *would* be filtered out — worth keeping in mind if the adapter ever\n   switches to a model schema.)\n\n3. **`StructuredTool._arun` forwards kwargs directly to the coroutine**, so the\n   renamed parameter and `**arguments` are both bound correctly.\n\nOne thing to double-check when you can run the suite: `test_mcp_session_pool.py`\nhas calls like `coroutine(runtime=None, x=1)` that rely on the `get_config()`\nfallback. After the rename those need to pass `deerflow_runtime=None` instead,\notherwise `runtime` becomes a business argument and the fallback path is not\nexercised.\n"
+  },
+  {
+   "role": "none",
+   "created_at": "2026-10-30T00:59:14Z",
+   "body": "[![CLA assistant check](https://cla-assistant.io/pull/badge/signed)](https://cla-assistant.io/bytedance/deer-flow?pullRequest=7677) <br/>All committers have signed the CLA."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-30T01:00:38Z",
+   "body": "Thanks @willem-bd, both addressed in 2df12178:\n\n- **Guard on HTTP/SSE tools:** `_guard` now reads the injected runtime under the parameter name the wrapped coroutine actually has (`deerflow_runtime` for the pooled stdio wrapper, `runtime` for the adapter's HTTP/SSE tool), resolved once per tool from its signature. `test_personal_tool_guard_reads_the_injected_runtime_for_either_transport` drives the guarded tool through a real `ToolNode` for both parameter names, with no ambient user set, and checks that the owner's call goes through and another user's is rejected. With the guard still reading only `deerflow_runtime`, the `runtime` case fails.\n- **`mcp/AGENTS.md`:** the \"Reading the run context from an interceptor\" note now says the runtime is injected by its `ToolRuntime` annotation, which parameter name each wrapper uses, and that the personal-tool guard looks the name up per tool.\n\nDrafted with the assistance of an AI agent (Claude) working for the author.\n"
+  },
+  {
+   "role": "collaborator",
+   "created_at": "2026-10-30T01:01:28Z",
+   "body": "@pcbeingused333, please click the CLA button to sigin the CLA, otherwise we cannot merge your code.\r\n\r\n> [![CLA assistant check](https://camo.githubusercontent.com/e4fc4d4e5d6bdfcb46625b6accf4d22d7c18986382c24830cba828a372b072cd/68747470733a2f2f636c612d617373697374616e742e696f2f70756c6c2f62616467652f6e6f745f7369676e6564)](https://cla-assistant.io/bytedance/deer-flow?pullRequest=7677) Thank you for your submission! We really appreciate it. Like many open source projects, we ask that you sign our [Contributor License Agreement](https://cla-assistant.io/bytedance/deer-flow?pullRequest=7677) before we can accept your contribution.You have signed the CLA already but the status is still pending? Let us [recheck](https://cla-assistant.io/check/bytedance/deer-flow?pullRequest=7677) it.\r\n\r\n"
+  }
+ ]
+}

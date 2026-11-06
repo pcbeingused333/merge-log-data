@@ -1,0 +1,26 @@
+{
+ "repo": "NVIDIA/NeMo-Agent-Toolkit",
+ "number": 2486,
+ "url": "https://github.com/NVIDIA/NeMo-Agent-Toolkit/pull/2486",
+ "title": "fix(strands): report cacheReadInputTokens as cached_tokens in the profiler",
+ "merged_at": "2026-10-29T04:08:19Z",
+ "files": [
+  {
+   "filename": "packages/nvidia_nat_strands/src/nat/plugins/strands/callback_handler.py",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -606,10 +606,15 @@ def _extract_usage_from_event(self, ev: dict) -> dict[str, int] | None:\n             return None\n \n         try:\n-            return {\n+            result = {\n                 \"prompt_tokens\": int(usage.get(\"inputTokens\") or 0),\n                 \"completion_tokens\": int(usage.get(\"outputTokens\") or 0),\n                 \"total_tokens\": int(usage.get(\"totalTokens\") or 0),\n             }\n+            # Bedrock prompt caching reports cache reads under cacheReadInputTokens\n+            cache_read = usage.get(\"cacheReadInputTokens\")\n+            if cache_read is not None:\n+                result[\"cached_tokens\"] = int(cache_read)\n+            return result\n         except (ValueError, TypeError):\n             return None"
+  },
+  {
+   "filename": "packages/nvidia_nat_strands/tests/test_strands_callback_handler.py",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -319,6 +319,22 @@ def test_extract_usage_from_event_valid(self, handler):\n         expected = {\"prompt_tokens\": 10, \"completion_tokens\": 20, \"total_tokens\": 30}\n         assert result == expected\n \n+    def test_extract_usage_from_event_cache_read_tokens(self, handler):\n+        \"\"\"Bedrock prompt caching reports cacheReadInputTokens; it maps to cached_tokens.\"\"\"\n+        event = {\n+            \"metadata\": {\n+                \"usage\": {\n+                    \"inputTokens\": 10, \"outputTokens\": 20, \"totalTokens\": 130, \"cacheReadInputTokens\": 100\n+                }\n+            }\n+        }\n+\n+        # pylint: disable=protected-access\n+        result = handler._extract_usage_from_event(event)\n+\n+        expected = {\"prompt_tokens\": 10, \"completion_tokens\": 20, \"total_tokens\": 130, \"cached_tokens\": 100}\n+        assert result == expected\n+\n     def test_extract_usage_from_event_missing_metadata(self, handler):\n         \"\"\"Test _extract_usage_from_event without metadata.\"\"\"\n         event = {\"other_field\": \"value\"}"
+  }
+ ],
+ "test_files": [
+  "packages/nvidia_nat_strands/tests/test_strands_callback_handler.py"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "cloudposse/atmos",
+ "number": 3565,
+ "url": "https://github.com/cloudposse/atmos/pull/3565",
+ "title": "fix(ai): report cached prompt tokens for OpenAI-compatible providers",
+ "merged_at": "2026-10-29T16:48:14Z",
+ "files": [
+  {
+   "filename": "pkg/ai/agent/base/openaicompat/convert.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -93,8 +93,8 @@ func ParseOpenAIResponse(response *openai.ChatCompletion) (*types.Response, erro\n \t\t\tInputTokens:         response.Usage.PromptTokens,\n \t\t\tOutputTokens:        response.Usage.CompletionTokens,\n \t\t\tTotalTokens:         response.Usage.TotalTokens,\n-\t\t\tCacheReadTokens:     0,\n-\t\t\tCacheCreationTokens: 0,\n+\t\t\tCacheReadTokens:     response.Usage.PromptTokensDetails.CachedTokens,\n+\t\t\tCacheCreationTokens: 0, // The Chat Completions API does not report cache writes.\n \t\t}\n \t}\n "
+  },
+  {
+   "filename": "pkg/ai/agent/base/openaicompat/convert_test.go",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -174,6 +174,35 @@ func TestParseOpenAIResponse_StopFinishReason(t *testing.T) {\n \tassert.Equal(t, types.StopReasonEndTurn, result.StopReason)\n }\n \n+func TestParseOpenAIResponse_ReportsCachedPromptTokens(t *testing.T) {\n+\tresponse := &openai.ChatCompletion{\n+\t\tChoices: []openai.ChatCompletionChoice{\n+\t\t\t{\n+\t\t\t\tFinishReason: \"stop\",\n+\t\t\t\tMessage:      openai.ChatCompletionMessage{Content: \"Hello!\"},\n+\t\t\t},\n+\t\t},\n+\t\tUsage: openai.CompletionUsage{\n+\t\t\tPromptTokens:     100,\n+\t\t\tCompletionTokens: 20,\n+\t\t\tTotalTokens:      120,\n+\t\t\tPromptTokensDetails: openai.CompletionUsagePromptTokensDetails{\n+\t\t\t\tCachedTokens: 64,\n+\t\t\t},\n+\t\t},\n+\t}\n+\n+\tresult, err := ParseOpenAIResponse(response)\n+\n+\trequire.NoError(t, err)\n+\trequire.NotNil(t, result.Usage)\n+\tassert.Equal(t, int64(100), result.Usage.InputTokens)\n+\tassert.Equal(t, int64(20), result.Usage.OutputTokens)\n+\tassert.Equal(t, int64(120), result.Usage.TotalTokens)\n+\tassert.Equal(t, int64(64), result.Usage.CacheReadTokens)\n+\tassert.Equal(t, int64(0), result.Usage.CacheCreationTokens)\n+}\n+\n func TestParseOpenAIResponse_ToolCallsFinishReason(t *testing.T) {\n \tresponse := &openai.ChatCompletion{\n \t\tChoices: []openai.ChatCompletionChoice{"
+  }
+ ],
+ "test_files": [
+  "pkg/ai/agent/base/openaicompat/convert_test.go"
+ ]
+}

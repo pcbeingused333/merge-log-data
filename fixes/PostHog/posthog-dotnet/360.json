@@ -1,0 +1,33 @@
+{
+ "repo": "PostHog/posthog-dotnet",
+ "number": 360,
+ "url": "https://github.com/PostHog/posthog-dotnet/pull/360",
+ "title": "fix(ai): decode OpenAI streaming responses with a stateful UTF-8 decoder",
+ "merged_at": "2026-10-29T13:59:22Z",
+ "files": [
+  {
+   "filename": ".changeset/utf8-openai-stream-decoder.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+\"PostHog.AI\": patch\n+---\n+\n+Decode OpenAI streaming responses with a stateful UTF-8 decoder so non-ASCII characters (accents, emoji) that are split across two reads are no longer replaced with U+FFFD in `$ai_output_choices`."
+  },
+  {
+   "filename": "src/PostHog.AI/PostHogOpenAIHandler.cs",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -576,6 +576,8 @@ private sealed class TrackingStream : Stream\n         private readonly Action<string?, JsonNode?> _onComplete;\n         private readonly StringBuilder? _accumulatedContent;\n         private readonly StringBuilder _lineBuffer = new(capacity: 512);\n+        // Stateful so a multibyte character split across two reads is decoded once complete.\n+        private readonly Decoder _decoder = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetDecoder();\n         private JsonNode? _usage;\n         private bool _completed;\n \n@@ -655,10 +657,11 @@ private void ProcessChunk(byte[] buffer, int offset, int count)\n #pragma warning disable CA1031 // Do not catch general exception types\n             try\n             {\n-                var chunk = Encoding.UTF8.GetString(buffer, offset, count);\n+                var chars = new char[_decoder.GetCharCount(buffer, offset, count, flush: false)];\n+                var charCount = _decoder.GetChars(buffer, offset, count, chars, 0, flush: false);\n \n                 // Append chunk to line buffer\n-                _lineBuffer.Append(chunk);\n+                _lineBuffer.Append(chars, 0, charCount);\n \n                 // Convert to string once per ProcessChunk call to avoid O(n²) ToString() per iteration\n                 var bufferText = _lineBuffer.ToString();"
+  },
+  {
+   "filename": "tests/PostHog.AI.Tests/PostHogOpenAIHandlerTests.cs",
+   "status": "modified",
+   "additions": 89,
+   "deletions": 0,
+   "patch": "@@ -261,6 +261,77 @@ await writer.WriteAsync(\n             );\n     }\n \n+    [Fact]\n+    public async Task SendAsyncDecodesMultibyteCharactersSplitAcrossStreamReads()\n+    {\n+        // Arrange\n+        var requestBody = new\n+        {\n+            model = \"gpt-4\",\n+            messages = new[] { new { role = \"user\", content = \"Say hi\" } },\n+            stream = true,\n+        };\n+\n+        // Each read returns a single byte, so every multibyte character is split across reads.\n+        var sseBytes = new UTF8Encoding(false).GetBytes(\n+            \"data: {\\\"choices\\\": [{\\\"index\\\": 0, \\\"delta\\\": {\\\"content\\\": \\\"Café \\\"}}]}\\n\\n\"\n+                + \"data: {\\\"choices\\\": [{\\\"index\\\": 0, \\\"delta\\\": {\\\"content\\\": \\\"😀 ñ\\\"}}]}\\n\\n\"\n+                + \"data: [DONE]\\n\\n\"\n+        );\n+        var streamContent = new StreamContent(new OneByteAtATimeStream(sseBytes));\n+        streamContent.Headers.ContentType = new MediaTypeHeaderValue(\"text/event-stream\");\n+\n+        _innerHandler.Response = new HttpResponseMessage(HttpStatusCode.OK)\n+        {\n+            Content = streamContent,\n+        };\n+\n+        using var requestContent = new StringContent(\n+            JsonSerializer.Serialize(requestBody),\n+            Encoding.UTF8,\n+            \"application/json\"\n+        );\n+\n+        // Act\n+        HttpResponseMessage? response = null;\n+        try\n+        {\n+            response = await _client.PostAsync(\n+                new Uri(\"/v1/chat/completions\", UriKind.Relative),\n+                requestContent\n+            );\n+\n+            var resultStream = await response.Content.ReadAsStreamAsync();\n+            using (var reader = new StreamReader(resultStream))\n+            {\n+                await reader.ReadToEndAsync();\n+            }\n+        }\n+        finally\n+        {\n+            response?.Dispose();\n+        }\n+\n+        // Assert\n+        _postHogClient\n+            .Received(1)\n+            .Capture(\n+                Arg.Any<string>(),\n+                PostHogAIFieldNames.Generation,\n+                Arg.Is<Dictionary<string, object>>(props => VerifyMultibyteContent(props)),\n+                null,\n+                false,\n+                Arg.Any<DateTimeOffset?>()\n+            );\n+    }\n+\n+    private static bool VerifyMultibyteContent(Dictionary<string, object> props)\n+    {\n+        return props.TryGetValue(PostHogAIFieldNames.OutputChoices, out var choicesObj)\n+            && choicesObj is JsonArray choices\n+            && choices[0]?[\"message\"]?[\"content\"]?.ToString() == \"Café 😀 ñ\";\n+    }\n+\n     private static bool VerifyStreamingProps(Dictionary<string, object> props)\n     {\n         if (\n@@ -1132,6 +1203,24 @@ public void Dispose()\n         _postHogClient.Dispose();\n     }\n \n+    private sealed class OneByteAtATimeStream(byte[] bytes) : MemoryStream(bytes)\n+    {\n+        public override int Read(byte[] buffer, int offset, int count) =>\n+            base.Read(buffer, offset, Math.Min(count, 1));\n+\n+        public override Task<int> ReadAsync(\n+            byte[] buffer,\n+            int offset,\n+            int count,\n+            CancellationToken cancellationToken\n+        ) => base.ReadAsync(buffer, offset, Math.Min(count, 1), cancellationToken);\n+\n+        public override ValueTask<int> ReadAsync(\n+            Memory<byte> buffer,\n+            CancellationToken cancellationToken = default\n+        ) => base.ReadAsync(buffer[..Math.Min(buffer.Length, 1)], cancellationToken);\n+    }\n+\n     private sealed class MockHttpMessageHandler : HttpMessageHandler\n     {\n         public HttpResponseMessage Response { get; set; } = new(HttpStatusCode.OK);"
+  }
+ ],
+ "test_files": [
+  "tests/PostHog.AI.Tests/PostHogOpenAIHandlerTests.cs"
+ ]
+}

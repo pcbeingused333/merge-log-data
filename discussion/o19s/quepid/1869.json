@@ -1,0 +1,67 @@
+{
+ "repo": "o19s/quepid",
+ "number": 1869,
+ "url": "https://github.com/o19s/quepid/pull/1869",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "member",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-10-30T12:15:51Z",
+   "body": "can you relook at the json helper method name?  (maybe it doesn't go in json_helper.rb) and then this looks good.  some thoughts for the future."
+  },
+  {
+   "role": "member",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-02T18:35:40Z",
+   "body": "LGTM."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "member",
+   "path": "app/helpers/json_helper.rb",
+   "created_at": "2026-10-30T12:10:14Z",
+   "body": "since it might or might not be json, can we have a better more generic name?   having the variable be casulled json_data makes me assume it's json, but it's a string ;-)"
+  },
+  {
+   "role": "member",
+   "path": "app/javascript/utils/settings_catalog_runtime.js",
+   "created_at": "2026-10-30T12:12:34Z",
+   "body": "this is a great fix.   However, we need to figure out how to consolidate these property setting into the default `const defaultSettings`..  it's too easy to miss this \"other random place\" when adding a serach engine.     Maybe do in another PR?  \n"
+  },
+  {
+   "role": "member",
+   "path": "test/javascript/utils/settings_catalog_runtime.test.js",
+   "created_at": "2026-10-30T12:15:11Z",
+   "body": "this is fine....    but it does make me wonder, why does this method require `searchapi` ?   That seems annoying that passing in `qdrant` isn't enough?"
+  }
+ ],
+ "comments": [
+  {
+   "role": "member",
+   "created_at": "2026-10-30T12:17:31Z",
+   "body": "so, if Qdrant supports 10, or 50 or 100 or 1, but no pagination, that's fine.  We jsut dn't want the limit to be int he query, cause that's a \"internal to quepid\" thing, so let quepid just inject the limit.   Solr and ES for example don't expose that information, but get it injected intot the query.\r\n\r\nif someone DOES add a limit in the query, for solr and es at least it just override thigns I think..."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-30T15:17:34Z",
+   "body": "Thanks @epugh.\n\n- **Helper name:** renamed `format_json_for_display(json_data)` to `pretty_print_if_json(value)` (e5a626c), with the doc comment, the two views that call it and the tests updated. I left it in `json_helper.rb` for now since it sits next to `format_json` and falls back to it; happy to move it if you'd rather it live elsewhere.\n- **`defaultSettings` consolidation:** agreed that it is easy to miss that spot when adding an engine. I'll leave it out of this PR and handle it separately.\n- **`searchapi` in the test:** the second argument (the mapper id) is what picks the page, and the first one is only the fallback. I passed `\"searchapi\"` because that is the engine type the callers in `wizard_controller.js` and `tune_relevance_controller.js` pass together with the mapper id, so the test mirrors the real call. `troubleshootingWikiUrl(undefined, \"qdrant\")` returns the same URL.\n\nI haven't run the Rails suite for this rename; I only checked that no references to the old name remain and that the Ruby parses.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "member",
+   "created_at": "2026-11-02T12:40:04Z",
+   "body": "@pcbeingused333 can you review the changes I made and let me know what you think?"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-02T12:45:47Z",
+   "body": "Thanks for the cleanup, I went through the three commits (`format_for_display` rename, the early return before `JSON.parse`, and `format_json` for `custom_headers`) and they all look right to me:\n\n- The `lstrip.start_with?('{', '[')` guard keeps non-JSON values like `q=star wars` and `42` on the fast path with no exception. Blank and whitespace-only strings still come back unchanged, so `.presence || 'Not set'` in the test query view still works.\n- `custom_headers` is always a Hash after the `json_format` validator, so `format_json` is the correct helper there and matches the form partial.\n- The renamed helper tests still cover the JSON, non-JSON and Hash/nil cases.\n\nOne small leftover: the doc comment on `format_for_display` still says \"Mapper-based engines (Qdrant, Vespa) store custom headers as a JSON string\". After the third commit no caller passes `custom_headers` to it, so that sentence could go, leaving only the test-query case. Other than that, nothing to add. Happy for this to merge.\n\nThis comment was drafted with Claude Code; the review read the diff of those commits and did not run the test suite.\n"
+  },
+  {
+   "role": "member",
+   "created_at": "2026-11-02T18:32:58Z",
+   "body": "Thanks for the review! Fixed the stale comment: removed the \"Mapper-based engines (Qdrant, Vespa) store custom headers as a JSON string\" sentence from `format_for_display`'s doc comment since, as you noted, `custom_headers` no longer calls it after the third commit — only `test_query` does now."
+  }
+ ]
+}

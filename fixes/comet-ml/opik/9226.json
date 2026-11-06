@@ -1,0 +1,40 @@
+{
+ "repo": "comet-ml/opik",
+ "number": 9226,
+ "url": "https://github.com/comet-ml/opik/pull/9226",
+ "title": "[issue-9225] [BE] fix: exit non-zero when a database migration fails",
+ "merged_at": "2026-10-29T17:36:03Z",
+ "files": [
+  {
+   "filename": ".pre-commit-config.yaml",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -313,6 +313,19 @@ repos:\n         files: ^apps/opik-backend/(rebaseline_db_changelog|test_rebaseline_db_changelog)\\.sh$\n         pass_filenames: false\n \n+  # ---------------------------------------------------------------------------\n+  # Self-check: run_db_migrations.sh is the backend-migrations init container, so\n+  # its exit code decides whether the backend starts. Stubbed java, no JVM.\n+  # ---------------------------------------------------------------------------\n+  - repo: local\n+    hooks:\n+      - id: run-db-migrations-script-tests\n+        name: 🧪 run_db_migrations script tests\n+        entry: apps/opik-backend/test_run_db_migrations.sh\n+        language: system\n+        files: ^apps/opik-backend/(run_db_migrations|test_run_db_migrations)\\.sh$\n+        pass_filenames: false\n+\n   # ---------------------------------------------------------------------------\n   # Frontend (apps/opik-frontend) — eslint --fix on changed files; whole-project\n   # typecheck (tsc can't be per-file: path aliases + cross-file inference)."
+  },
+  {
+   "filename": "apps/opik-backend/run_db_migrations.sh",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 2,
+   "patch": "@@ -5,7 +5,16 @@ echo \"Running database migrations...\"\n echo \"Current directory is: $(pwd)\"\n echo \"OPIK_VERSION=$OPIK_VERSION\"\n \n-java -jar opik-backend-\"$OPIK_VERSION\".jar db migrate config.yml \\\n-  && java -jar opik-backend-\"$OPIK_VERSION\".jar dbAnalytics migrate config.yml\n+# The two migrations are independent: run both even if the first fails, then fail if either did.\n+# `|| status=$?` absorbs only these two exit codes, so `set -e` still guards the rest of the script.\n+state_status=0\n+analytics_status=0\n+java -jar opik-backend-\"$OPIK_VERSION\".jar db migrate config.yml || state_status=$?\n+java -jar opik-backend-\"$OPIK_VERSION\".jar dbAnalytics migrate config.yml || analytics_status=$?\n+\n+if [ \"$state_status\" -ne 0 ] || [ \"$analytics_status\" -ne 0 ]; then\n+  echo \"Database migrations failed (db migrate: exit $state_status, dbAnalytics migrate: exit $analytics_status)\" >&2\n+  exit 1\n+fi\n \n echo \"Database migrations completed successfully\""
+  },
+  {
+   "filename": "apps/opik-backend/test_run_db_migrations.sh",
+   "status": "added",
+   "additions": 72,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,72 @@\n+#!/usr/bin/env bash\n+# Tests for run_db_migrations.sh. Stubs `java` on PATH so the real script runs without a JVM or a\n+# database. Run from anywhere: apps/opik-backend/test_run_db_migrations.sh\n+#\n+# The script is the `backend-migrations` init container of the Helm chart and the first step of the\n+# docker-compose backend command, so its exit code decides whether the backend starts.\n+set -euo pipefail\n+\n+cd \"$(dirname \"$0\")\"\n+SCRIPT=\"$PWD/run_db_migrations.sh\"\n+\n+fails=0\n+pass() { echo \"  ok: $1\"; }\n+fail() {\n+\techo \"  FAIL: $1\"\n+\tshift\n+\tprintf '    %s\\n' \"$@\"\n+\tfails=$((fails + 1))\n+}\n+\n+stub_dir=\"$(mktemp -d)\"\n+trap 'rm -rf \"$stub_dir\"' EXIT\n+export PATH=\"$stub_dir:$PATH\"\n+export OPIK_VERSION=\"0.0.0-test\"\n+calls=\"$stub_dir/calls\"\n+\n+# `java -jar <jar> <command> config.yml`: records the command and exits with the code set for it\n+# in STATE_EXIT (db migrate) or ANALYTICS_EXIT (dbAnalytics migrate).\n+cat >\"$stub_dir/java\" <<'STUB'\n+#!/usr/bin/env bash\n+echo \"$3\" >>\"$CALLS_FILE\"\n+case \"$3\" in\n+db) exit \"${STATE_EXIT:-0}\" ;;\n+dbAnalytics) exit \"${ANALYTICS_EXIT:-0}\" ;;\n+esac\n+STUB\n+chmod +x \"$stub_dir/java\"\n+export CALLS_FILE=\"$calls\"\n+\n+# expect <name> <state-exit> <analytics-exit> <want-exit> <want-calls> <want-text>\n+expect() {\n+\tlocal name=\"$1\" state=\"$2\" analytics=\"$3\" want_exit=\"$4\" want_calls=\"$5\" want_text=\"$6\" out status\n+\t: >\"$calls\"\n+\tset +e\n+\tout=\"$(STATE_EXIT=\"$state\" ANALYTICS_EXIT=\"$analytics\" bash \"$SCRIPT\" 2>&1)\"\n+\tstatus=$?\n+\tset -e\n+\tif [[ \"$status\" != \"$want_exit\" ]]; then\n+\t\tfail \"$name\" \"expected exit $want_exit, got $status\" \"output: $out\"\n+\t\treturn\n+\tfi\n+\tif [[ \"$(tr '\\n' ' ' <\"$calls\")\" != \"$want_calls\" ]]; then\n+\t\tfail \"$name\" \"expected migrations run: $want_calls\" \"actual: $(tr '\\n' ' ' <\"$calls\")\"\n+\t\treturn\n+\tfi\n+\tif ! printf '%s' \"$out\" | grep -qF -- \"$want_text\"; then\n+\t\tfail \"$name\" \"expected output to contain: $want_text\" \"actual: $out\"\n+\t\treturn\n+\tfi\n+\tpass \"$name\"\n+}\n+\n+expect \"both migrations succeed\" 0 0 0 \"db dbAnalytics \" \"completed successfully\"\n+expect \"db migrate fails: exits non-zero, still runs dbAnalytics\" 1 0 1 \"db dbAnalytics \" \"db migrate: exit 1\"\n+expect \"dbAnalytics migrate fails: exits non-zero\" 0 3 1 \"db dbAnalytics \" \"dbAnalytics migrate: exit 3\"\n+expect \"both fail: exits non-zero\" 2 3 1 \"db dbAnalytics \" \"db migrate: exit 2, dbAnalytics migrate: exit 3\"\n+\n+if ((fails > 0)); then\n+\techo \"$fails failed\"\n+\texit 1\n+fi\n+echo \"all passed\""
+  },
+  {
+   "filename": "scripts/precommit-hook-descriptions.tsv",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -37,4 +37,5 @@ typecheck\tWhole-project tsc type check\n non-public FE plugins\tBlock non-public FE plugins\n wrapper smoke tests\tSelf-test the wrapper scripts\n rebaseline script tests\tSelf-test the changelog re-baseline script\n+run_db_migrations script tests\tSelf-test the migrations init-container exit code\n startup wait tests\tSelf-test opik.sh's container startup wait"
+  }
+ ],
+ "test_files": [
+  "apps/opik-backend/test_run_db_migrations.sh"
+ ]
+}

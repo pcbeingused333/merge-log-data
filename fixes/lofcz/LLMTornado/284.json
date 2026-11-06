@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 284,
+ "url": "https://github.com/lofcz/LLMTornado/pull/284",
+ "title": "fix(pgvector): Order query results by ascending distance",
+ "merged_at": "2026-10-28T14:32:39Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/VectorLogicalFilterTests.cs",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -63,6 +63,20 @@ public void PgVector_NestedLogicalOperators_KeepTheirGrouping()\n         Assert.That(sql, Does.StartWith(\"(((\").And.Contain(\" OR \").And.Contain(\") AND (\"));\n     }\n \n+    [TestCase(SimilarityMetric.Cosine)]\n+    [TestCase(SimilarityMetric.Euclidean)]\n+    [TestCase(SimilarityMetric.DotProduct)]\n+    [TestCase(SimilarityMetric.Manhattan)]\n+    public void PgVector_Query_OrdersByDistanceAscendingSoTheClosestRowsAreReturned(SimilarityMetric metric)\n+    {\n+        PgVectorCollectionClient client = new PgVectorCollectionClient(new PgVectorCollection(\"docs\", 3) { Metric = metric }, null!);\n+        MethodInfo method = typeof(PgVectorCollectionClient).GetMethod(\"BuildQuerySql\", BindingFlags.NonPublic | BindingFlags.Instance)!;\n+\n+        string sql = (string)method.Invoke(client, [\"public\", \"docs_vectors\", null])!;\n+\n+        Assert.That(sql, Does.Contain(\"ORDER BY distance asc\").And.Contain(\"LIMIT @limit\"));\n+    }\n+\n     private static bool FaissMatches(Dictionary<string, object> metadata, TornadoWhereOperator where)\n     {\n         // MatchesFilter does not touch the index, so skip the native FAISS setup."
+  },
+  {
+   "filename": "src/LlmTornado.VectorDatabases.PgVector/PgVectorCollectionClient.cs",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 9,
+   "patch": "@@ -76,14 +76,8 @@ string MetricOperator()\n         };\n     }\n     \n-    public async Task<List<PgVectorEntry>> QueryAsync(float[] queryEmbedding, int topK = 10, Dictionary<string, object>? whereMetadata = null)\n+    private string BuildQuerySql(string schema, string tableName, Dictionary<string, object>? whereMetadata)\n     {\n-        await using NpgsqlConnection connection = _client.CreateConnection();\n-        await connection.OpenAsync();\n-\n-        string schema = _client.GetSchema();\n-        string tableName = GetTableName();\n-        \n         StringBuilder queryBuilder = new StringBuilder();\n         queryBuilder.AppendLine($\"\"\"\n                              SELECT id, document, metadata, embedding, \n@@ -96,12 +90,21 @@ public async Task<List<PgVectorEntry>> QueryAsync(float[] queryEmbedding, int to\n             queryBuilder.AppendLine($\" WHERE {BuildMetadataFilter(whereMetadata)}\");\n         }\n \n+        // the operators return a distance, so the closest rows come first when ordering ascending\n         queryBuilder.AppendLine($\"\"\"\n-                                 ORDER BY distance desc\n+                                 ORDER BY distance asc\n                                  LIMIT @limit\n                                  \"\"\");\n \n-        string sql = queryBuilder.ToString();\n+        return queryBuilder.ToString();\n+    }\n+\n+    public async Task<List<PgVectorEntry>> QueryAsync(float[] queryEmbedding, int topK = 10, Dictionary<string, object>? whereMetadata = null)\n+    {\n+        await using NpgsqlConnection connection = _client.CreateConnection();\n+        await connection.OpenAsync();\n+\n+        string sql = BuildQuerySql(_client.GetSchema(), GetTableName(), whereMetadata);\n         await using NpgsqlCommand cmd = new NpgsqlCommand(sql, connection);\n         cmd.Parameters.AddWithValue(\"embedding\", $\"[{string.Join(\",\", queryEmbedding)}]\");\n         cmd.Parameters.AddWithValue(\"limit\", topK);"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/VectorLogicalFilterTests.cs"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "electerm/electerm",
+ "number": 4655,
+ "url": "https://github.com/electerm/electerm/pull/4655",
+ "title": "Fix AI parallel tool calls when the stream sends no index",
+ "merged_at": "2026-10-28T23:01:01Z",
+ "files": [
+  {
+   "filename": "src/app/lib/ai-format.js",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 2,
+   "patch": "@@ -504,6 +504,7 @@ function createStreamParser (format) {\n   const toolCalls = new Map()\n   let buffer = ''\n   let eventName = ''\n+  let lastChatIndex = -1\n \n   const getToolCall = (key, id) => {\n     let call = toolCalls.get(key)\n@@ -528,6 +529,18 @@ function createStreamParser (format) {\n     state.completed = true\n   }\n \n+  const getChatIndex = (tc) => {\n+    if (tc.index !== undefined) {\n+      lastChatIndex = tc.index\n+      return lastChatIndex\n+    }\n+    const last = toolCalls.get(`c:${lastChatIndex}`)\n+    if (lastChatIndex < 0 || (tc.id && last && last.id && tc.id !== last.id)) {\n+      lastChatIndex += 1\n+    }\n+    return lastChatIndex\n+  }\n+\n   const handleChatChunk = (data) => {\n     const choice = data.choices && data.choices[0]\n     if (!choice) {\n@@ -539,8 +552,7 @@ function createStreamParser (format) {\n     }\n     if (Array.isArray(delta.tool_calls)) {\n       for (const tc of delta.tool_calls) {\n-        const index = tc.index === undefined ? 0 : tc.index\n-        const call = getToolCall(`c:${index}`, tc.id)\n+        const call = getToolCall(`c:${getChatIndex(tc)}`, tc.id)\n         if (tc.function) {\n           if (tc.function.name) {\n             call.function.name += tc.function.name"
+  },
+  {
+   "filename": "src/test/unit-ci/ai-format.spec.js",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -537,6 +537,23 @@ describe('createStreamParser - openai chat', () => {\n     assert.equal(parser.toolCalls[0].function.arguments, '{\"cmd\":\"ls\"}')\n   })\n \n+  it('keeps parallel tool calls apart when the server sends no index', () => {\n+    const chunks = [\n+      'data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_1\",\"function\":{\"name\":\"run_command\",\"arguments\":\"{\\\\\"cmd\\\\\":\"}}]}}]}\\n\\n',\n+      'data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"function\":{\"arguments\":\"\\\\\"ls\\\\\"}\"}}]}}]}\\n\\n',\n+      'data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_2\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\\\"path\\\\\":\\\\\"a\\\\\"}\"}}]}}]}\\n\\n',\n+      'data: [DONE]\\n'\n+    ]\n+    const parser = runStream(FORMAT_OPENAI_CHAT, chunks)\n+    assert.equal(parser.toolCalls.length, 2)\n+    assert.equal(parser.toolCalls[0].id, 'call_1')\n+    assert.equal(parser.toolCalls[0].function.name, 'run_command')\n+    assert.equal(parser.toolCalls[0].function.arguments, '{\"cmd\":\"ls\"}')\n+    assert.equal(parser.toolCalls[1].id, 'call_2')\n+    assert.equal(parser.toolCalls[1].function.name, 'read_file')\n+    assert.equal(parser.toolCalls[1].function.arguments, '{\"path\":\"a\"}')\n+  })\n+\n   it('completes on finish_reason without [DONE]', () => {\n     const parser = runStream(FORMAT_OPENAI_CHAT, [\n       'data: {\"choices\":[{\"delta\":{\"content\":\"x\"},\"finish_reason\":\"stop\"}]}\\n'"
+  }
+ ],
+ "test_files": [
+  "src/test/unit-ci/ai-format.spec.js"
+ ]
+}

@@ -1,0 +1,34 @@
+{
+ "repo": "microsoft/semantic-kernel",
+ "number": 14677,
+ "url": "https://github.com/microsoft/semantic-kernel/pull/14677",
+ "title": "Python: Fix Mistral AI seed setting being rejected by the SDK",
+ "merged_at": "2026-11-02T13:48:31Z",
+ "files": [
+  {
+   "filename": "python/semantic_kernel/connectors/ai/mistral_ai/prompt_execution_settings/mistral_ai_prompt_execution_settings.py",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -56,3 +56,15 @@ class MistralAIChatPromptExecutionSettings(MistralAIPromptExecutionSettings):\n             \"on the function choice configuration.\",\n         ),\n     ] = None\n+\n+    def prepare_settings_dict(self, **kwargs) -> dict[str, Any]:\n+        \"\"\"Prepare the settings as a dictionary for sending to the AI service.\n+\n+        The Mistral SDK has no `seed` parameter, it takes `random_seed`, so `seed` is sent\n+        as `random_seed` unless that one is set explicitly.\n+        \"\"\"\n+        settings = super().prepare_settings_dict(**kwargs)\n+        seed = settings.pop(\"seed\", None)\n+        if seed is not None:\n+            settings.setdefault(\"random_seed\", seed)\n+        return settings"
+  },
+  {
+   "filename": "python/tests/unit/connectors/ai/mistral_ai/services/test_mistralai_chat_completion.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -385,7 +385,7 @@ async def test_with_different_execution_settings(kernel: Kernel, mock_mistral_ai\n         chat_history=chat_history, settings=settings, kernel=kernel, arguments=arguments\n     )\n     assert mock_mistral_ai_client_completion.chat.complete_async.call_args.kwargs[\"temperature\"] == 0.2\n-    assert mock_mistral_ai_client_completion.chat.complete_async.call_args.kwargs[\"seed\"] == 2\n+    assert mock_mistral_ai_client_completion.chat.complete_async.call_args.kwargs[\"random_seed\"] == 2\n \n \n async def test_with_different_execution_settings_stream(\n@@ -406,7 +406,7 @@ async def test_with_different_execution_settings_stream(\n     ):\n         continue\n     assert mock_mistral_ai_client_completion_stream.chat.stream_async.call_args.kwargs[\"temperature\"] == 0.2\n-    assert mock_mistral_ai_client_completion_stream.chat.stream_async.call_args.kwargs[\"seed\"] == 2\n+    assert mock_mistral_ai_client_completion_stream.chat.stream_async.call_args.kwargs[\"random_seed\"] == 2\n \n \n async def test_mistral_ai_chat_completion_get_chat_message_contents_success():"
+  },
+  {
+   "filename": "python/tests/unit/connectors/ai/mistral_ai/test_mistralai_request_settings.py",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -123,3 +123,18 @@ def test_create_options_with_function_choice_behavior():\n         },\n     )\n     assert settings.function_choice_behavior\n+\n+\n+def test_prepare_settings_dict_maps_seed_to_random_seed():\n+    # The Mistral SDK has no `seed` parameter, only `random_seed`\n+    settings = MistralAIChatPromptExecutionSettings(seed=42)\n+    options = settings.prepare_settings_dict()\n+    assert \"seed\" not in options\n+    assert options[\"random_seed\"] == 42\n+\n+\n+def test_prepare_settings_dict_keeps_explicit_random_seed():\n+    settings = MistralAIChatPromptExecutionSettings(seed=42, random_seed=7)\n+    options = settings.prepare_settings_dict()\n+    assert \"seed\" not in options\n+    assert options[\"random_seed\"] == 7"
+  }
+ ],
+ "test_files": [
+  "python/tests/unit/connectors/ai/mistral_ai/services/test_mistralai_chat_completion.py",
+  "python/tests/unit/connectors/ai/mistral_ai/test_mistralai_request_settings.py"
+ ]
+}

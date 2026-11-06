@@ -1,0 +1,41 @@
+{
+ "repo": "posit-dev/pointblank",
+ "number": 487,
+ "url": "https://github.com/posit-dev/pointblank/pull/487",
+ "title": "fix: treat NaN as missing in col_vals_not_in_set() on Polars and PyArrow",
+ "merged_at": "2026-10-27T16:17:07Z",
+ "files": [
+  {
+   "filename": "pointblank/_interrogation.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 2,
+   "patch": "@@ -1166,7 +1166,8 @@ def interrogate_isin(tbl: IntoFrame, column: str, set_values: Any) -> Any:\n         False\n     )\n     if can_be_null:\n-        base_expr = base_expr | nw.col(column).is_null()\n+        # `NaN` counts as missing too, as in the comparison methods\n+        base_expr = base_expr | _safe_is_nan_or_null_expr(nw_tbl, nw.col(column), column)\n \n     result_tbl = nw_tbl.with_columns(pb_is_good_=base_expr)\n     return result_tbl.to_native()\n@@ -1366,7 +1367,7 @@ def interrogate_notin(tbl: IntoFrame, column: str, set_values: Any, na_pass: boo\n     # Missing values fail unless `na_pass=True`; `is_in()` gives null for them on most backends\n     # (and False for NaN in pandas), so make the result a plain boolean\n     in_set = _is_in(column, set_values, nw_tbl.collect_schema()[column]).fill_null(False)\n-    is_null = nw.col(column).is_null()\n+    is_null = _safe_is_nan_or_null_expr(nw_tbl, nw.col(column), column)\n     result_tbl = nw_tbl.with_columns(pb_is_good_=(~in_set & ~is_null) | (is_null & na_pass))\n     return result_tbl.to_native()\n "
+  },
+  {
+   "filename": "pointblank/validate.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 9,
+   "patch": "@@ -9015,9 +9015,9 @@ def col_vals_in_set(\n         (a [`MissingSpec`](`pointblank.MissingSpec`) can also declare sentinel values, such as\n         `-99`, that pass as documented missing values).\n \n-        A `NaN` in a float column counts as missing on pandas, so it passes when `set=` contains\n-        `None`. Polars, DuckDB and other backends treat `NaN` as a regular value, so it passes only\n-        when `set=` contains `NaN`.\n+        A `NaN` in a float column counts as missing on every backend (as in comparison methods such\n+        as [`col_vals_gt()`](`pointblank.Validate.col_vals_gt`)), so it passes when `set=` contains\n+        `None`.\n \n         Preprocessing\n         -------------\n@@ -9367,12 +9367,8 @@ def col_vals_not_in_set(\n         also declare sentinel values, such as `-99`, that pass as documented missing values). As\n         missing values are handled with these options, `set=` can't contain `None`.\n \n-        A `NaN` in a float column counts as missing on pandas, so it fails unless `na_pass=True`.\n-        Polars, DuckDB and other backends treat `NaN` as a regular value, so it passes unless `set=`\n-        contains `NaN` (unlike comparison methods such as\n-        [`col_vals_gt()`](`pointblank.Validate.col_vals_gt`), which treat `NaN` as missing on every\n-        backend). To treat `NaN` as missing everywhere, convert it to null first, for example with\n-        `pre=lambda df: df.with_columns(pl.col(\"a\").fill_nan(None))` on a Polars table.\n+        A `NaN` in a float column counts as missing on every backend (as in comparison methods such\n+        as [`col_vals_gt()`](`pointblank.Validate.col_vals_gt`)), so it fails unless `na_pass=True`.\n \n         Preprocessing\n         -------------"
+  },
+  {
+   "filename": "tests/test_missing_nan_values.py",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 0,
+   "patch": "@@ -127,6 +127,27 @@ def test_missing_spec_checks_on_columns_that_cant_hold_nan(dtype) -> None:\n     ] == [(4, 0), (4, 0), (3, 1), (3, 1), (1, 0)]\n \n \n+# NaN is not a null in Polars, PyArrow and DuckDB, so the set methods have to treat it as missing on\n+# their own: it passes `col_vals_in_set()` only when `set=` contains `None`, and it passes\n+# `col_vals_not_in_set()` only with `na_pass=True`\n+@pytest.mark.parametrize(\"tbl_type\", TABLE_TYPES + [\"duckdb\", \"sqlite\"])\n+@pytest.mark.parametrize(\n+    \"method, set_values, kwargs, expected\",\n+    [\n+        (\"in_set\", [1.0], {}, (1, 2)),\n+        (\"in_set\", [1.0, None], {}, (2, 1)),\n+        (\"not_in_set\", [1.0], {}, (1, 2)),\n+        (\"not_in_set\", [1.0], {\"na_pass\": True}, (2, 1)),\n+    ],\n+    ids=[\"in_set\", \"in_set-none-in-set\", \"not_in_set\", \"not_in_set-na-pass\"],\n+)\n+def test_nan_is_missing_in_set_checks(tbl_type, method, set_values, kwargs, expected) -> None:\n+    validation = pb.Validate(_table(tbl_type, {\"x\": [1.0, 7.0, NAN]}))\n+    getattr(validation, f\"col_vals_{method}\")(\"x\", set_values, **kwargs)\n+\n+    assert _counts(validation.interrogate()) == expected\n+\n+\n # NaN is not a null in Polars, PyArrow and DuckDB, and it's greater than every number there, so\n # `col_vals_between()` and `col_vals_outside()` have to treat it as missing on their own, whether it's\n # the value or one of the bounds"
+  },
+  {
+   "filename": "tests/test_validate.py",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 14,
+   "patch": "@@ -4956,22 +4956,20 @@ def test_col_vals_not_in_set_missing_spec(tbl_type, null_is_missing, expected) -\n \n \n def test_col_vals_not_in_set_nan() -> None:\n-    # pandas treats `NaN` as missing (it fails unless `na_pass=True`); Polars treats it as a value\n+    # `NaN` counts as missing on every backend, so it fails unless `na_pass=True`\n     data = {\"a\": [1.0, float(\"nan\"), 2.0]}\n \n-    for na_pass, expected in [(False, (1, 2)), (True, (2, 1))]:\n-        validation = (\n-            Validate(pd.DataFrame(data))\n-            .col_vals_not_in_set(columns=\"a\", set=[1.0], na_pass=na_pass)\n-            .interrogate()\n-        )\n-        assert (\n-            validation.n_passed(i=1, scalar=True),\n-            validation.n_failed(i=1, scalar=True),\n-        ) == expected\n-\n-    validation = Validate(pl.DataFrame(data)).col_vals_not_in_set(columns=\"a\", set=[1.0])\n-    assert validation.interrogate().n_passed(i=1, scalar=True) == 2\n+    for tbl in [pd.DataFrame(data), pl.DataFrame(data)]:\n+        for na_pass, expected in [(False, (1, 2)), (True, (2, 1))]:\n+            validation = (\n+                Validate(tbl)\n+                .col_vals_not_in_set(columns=\"a\", set=[1.0], na_pass=na_pass)\n+                .interrogate()\n+            )\n+            assert (\n+                validation.n_passed(i=1, scalar=True),\n+                validation.n_failed(i=1, scalar=True),\n+            ) == expected\n \n \n def test_col_vals_not_in_set_none_in_set_raises() -> None:"
+  }
+ ],
+ "test_files": [
+  "tests/test_missing_nan_values.py",
+  "tests/test_validate.py"
+ ]
+}

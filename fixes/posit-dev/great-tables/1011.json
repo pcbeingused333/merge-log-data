@@ -1,0 +1,26 @@
+{
+ "repo": "posit-dev/great-tables",
+ "number": 1011,
+ "url": "https://github.com/posit-dev/great-tables/pull/1011",
+ "title": "fix: let columns= take a function with Polars data",
+ "merged_at": "2026-10-23T14:49:25Z",
+ "files": [
+  {
+   "filename": "great_tables/_tbl_data.py",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 5,
+   "patch": "@@ -526,7 +526,11 @@ def _(\n \n \n @eval_select.register\n-def _(data: PlDataFrame, expr: list[str] | PlSelectExpr, strict: bool = True) -> _NamePos:\n+def _(\n+    data: PlDataFrame,\n+    expr: list[str] | PlSelectExpr | Callable[[str], bool],\n+    strict: bool = True,\n+) -> _NamePos:\n     import polars as pl\n     import polars.selectors as cs\n     from polars import Expr\n@@ -557,11 +561,12 @@ def _(data: PlDataFrame, expr: list[str] | PlSelectExpr, strict: bool = True) ->\n             for sel in all_selectors\n             for col_name in cs.expand_selector(data, sel, **expand_opts)\n         ).as_list()\n-    else:\n-        if not isinstance(expr, (PlSelectExpr, Expr)):\n-            raise TypeError(f\"Unsupported selection expr type: {type(expr)}\")\n-\n+    elif isinstance(expr, (PlSelectExpr, Expr)):\n         final_columns = cs.expand_selector(data, expr, **expand_opts)\n+    elif callable(expr):\n+        final_columns = [col for col in data.columns if expr(col)]\n+    else:\n+        raise TypeError(f\"Unsupported selection expr type: {type(expr)}\")\n \n     col_pos = {k: ii for ii, k in enumerate(data.columns)}\n "
+  },
+  {
+   "filename": "tests/test_tbl_data.py",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 7,
+   "patch": "@@ -340,17 +340,27 @@ def test_eval_select_with_callable(df: DataFrameLike):\n     def expr(col):\n         return col == \"col2\"\n \n-    if isinstance(df, pl.DataFrame):\n-        # Polars does not support callable expressions\n-        with pytest.raises(TypeError) as exc_info:\n-            eval_select(df, expr)\n-        assert \"Unsupported selection expr type:\" in str(exc_info.value.args[0])\n-        return\n-\n     sel = eval_select(df, expr)\n     assert sel == [(\"col2\", 1)]\n \n \n+def test_polars_columns_callable_in_public_api():\n+    df = pl.DataFrame({\"x1\": [1.5], \"x2\": [2.5], \"z\": [\"a\"]})\n+\n+    html = GT(df).fmt_number(columns=lambda col: col.startswith(\"x\")).as_raw_html()\n+\n+    assert \">1.50<\" in html\n+    assert \">2.50<\" in html\n+    assert \">a<\" in html\n+\n+\n+def test_polars_columns_callable_keeps_selectors_working():\n+    df = pl.DataFrame({\"x1\": [1.5], \"z\": [\"a\"]})\n+\n+    assert eval_select(df, pl.selectors.numeric()) == [(\"x1\", 0)]\n+    assert eval_select(df, pl.col(\"z\")) == [(\"z\", 1)]\n+\n+\n @pytest.mark.parametrize(\n     \"expr\",\n     ["
+  }
+ ],
+ "test_files": [
+  "tests/test_tbl_data.py"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 295,
+ "url": "https://github.com/lofcz/LLMTornado/pull/295",
+ "title": "fix(xai): format search parameter dates as yyyy-MM-dd",
+ "merged_at": "2026-10-30T16:01:10Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/XAiSearchParametersDateTests.cs",
+   "status": "added",
+   "additions": 64,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,64 @@\n+using System.Globalization;\n+using LlmTornado.Chat;\n+using LlmTornado.Chat.Models;\n+using LlmTornado.Chat.Vendors.XAi;\n+using LlmTornado.Code;\n+using Newtonsoft.Json.Linq;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class XAiSearchParametersDateTests\n+{\n+    private static JObject SerializeSearchParameters(DateTime? from, DateTime? to)\n+    {\n+        TornadoApi api = new TornadoApi(\"test-key\");\n+        ChatRequest request = new ChatRequest\n+        {\n+            Model = ChatModel.XAi.Grok3.V3,\n+            Messages = [new ChatMessage(ChatMessageRoles.User, \"Hello\")],\n+            VendorExtensions = new ChatRequestVendorExtensions\n+            {\n+                XAi = new ChatRequestVendorXAiExtensions\n+                {\n+                    SearchParameters = new ChatRequestVendorXAiExtensionsSearchParameters\n+                    {\n+                        FromDate = from,\n+                        ToDate = to\n+                    }\n+                }\n+            }\n+        };\n+\n+        TornadoRequestContent serialized = request.Serialize(api.GetProvider(LLmProviders.XAi));\n+        return (JObject)JObject.Parse(serialized.Body.ToString()!)[\"search_parameters\"]!;\n+    }\n+\n+    [Test]\n+    public void SearchParameters_SerializeDatesAsIsoDates()\n+    {\n+        JObject search = SerializeSearchParameters(new DateTime(2026, 3, 7), new DateTime(2026, 10, 29));\n+\n+        Assert.That(search[\"from_date\"]?.ToString(), Is.EqualTo(\"2026-03-07\"));\n+        Assert.That(search[\"to_date\"]?.ToString(), Is.EqualTo(\"2026-10-29\"));\n+    }\n+\n+    [Test]\n+    public void SearchParameters_SerializeDatesIndependentOfCurrentCulture()\n+    {\n+        CultureInfo previous = CultureInfo.CurrentCulture;\n+\n+        try\n+        {\n+            // Thai Buddhist calendar would render 2026 as 2569 under a culture-sensitive format.\n+            CultureInfo.CurrentCulture = new CultureInfo(\"th-TH\");\n+            JObject search = SerializeSearchParameters(new DateTime(2026, 3, 7), null);\n+\n+            Assert.That(search[\"from_date\"]?.ToString(), Is.EqualTo(\"2026-03-07\"));\n+        }\n+        finally\n+        {\n+            CultureInfo.CurrentCulture = previous;\n+        }\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/Vendors/XAi/VendorXAiChatRequestData.cs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -54,8 +54,8 @@ public VendorXAiChatRequest(ChatRequest request, IEndpointProvider provider)\n             {\n                 ExtendedRequest.SearchParameters = new VendorXAiChatRequestDataSearchParameters\n                 {\n-                    FromDate = extensions.SearchParameters.FromDate?.ToString(\"YYYY-MM-DD\"),\n-                    ToDate = extensions.SearchParameters.ToDate?.ToString(\"YYYY-MM-DD\"),\n+                    FromDate = extensions.SearchParameters.FromDate?.ToString(\"yyyy-MM-dd\", CultureInfo.InvariantCulture),\n+                    ToDate = extensions.SearchParameters.ToDate?.ToString(\"yyyy-MM-dd\", CultureInfo.InvariantCulture),\n                     Mode = extensions.SearchParameters.Mode switch\n                     {\n                         ChatRequestVendorXAiExtensionsSearchParametersModes.Auto => \"auto\","
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/XAiSearchParametersDateTests.cs"
+ ]
+}

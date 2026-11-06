@@ -1,0 +1,31 @@
+{
+ "repo": "jeremychone/rust-genai",
+ "number": 362,
+ "url": "https://github.com/jeremychone/rust-genai/pull/362",
+ "title": "fix(ollama): send a JSON-schema response format as Ollama's format param",
+ "merged_at": "2026-10-29T09:47:24Z",
+ "files": [
+  {
+   "filename": "src/adapter/adapters/ollama/adapter_impl.rs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 4,
+   "patch": "@@ -106,10 +106,8 @@ impl Adapter for OllamaAdapter {\n \t\tpayload.x_insert(\"messages\", messages)?;\n \n \t\tif let Some(format) = chat_options.response_format() {\n-\t\t\t// Note: Ollama's API uses \"format\": \"json\" for its JSON mode, so we set that if the chat options specify json mode.\n-\t\t\tif matches!(format, crate::chat::ChatResponseFormat::JsonMode) {\n-\t\t\t\tpayload.x_insert(\"format\", \"json\")?;\n-\t\t\t}\n+\t\t\t// Ollama's API takes \"format\": \"json\" for JSON mode, or a JSON Schema for structured output.\n+\t\t\tpayload.x_insert(\"format\", Self::response_format_to_format(format))?;\n \t\t}\n \n \t\t// -- Reasoning (`think`)"
+  },
+  {
+   "filename": "src/adapter/adapters/ollama/adapter_shared.rs",
+   "status": "modified",
+   "additions": 76,
+   "deletions": 1,
+   "patch": "@@ -3,7 +3,9 @@\n use super::OllamaAdapter;\n use crate::Headers;\n use crate::adapter::AdapterKind;\n-use crate::chat::{Binary, BinarySource, ChatRequest, ContentPart, PromptTokensDetails, Tool, ToolName, Usage};\n+use crate::chat::{\n+\tBinary, BinarySource, ChatRequest, ChatResponseFormat, ContentPart, PromptTokensDetails, Tool, ToolName, Usage,\n+};\n use crate::resolver::Endpoint;\n use crate::webc::WebClient;\n use crate::{Error, Result};\n@@ -12,6 +14,16 @@ use value_ext::JsonValueExt;\n \n /// Support functions for other adapters that share Ollama APIs\n impl OllamaAdapter {\n+\t/// The value of Ollama's top-level `format` param for a response format: `\"json\"` for JSON mode,\n+\t/// or the JSON Schema itself for structured output.\n+\t/// See <https://docs.ollama.com/capabilities/structured-outputs>\n+\tpub(in crate::adapter::adapters) fn response_format_to_format(format: &ChatResponseFormat) -> Value {\n+\t\tmatch format {\n+\t\t\tChatResponseFormat::JsonMode => json!(\"json\"),\n+\t\t\tChatResponseFormat::JsonSpec(spec) => spec.schema.clone(),\n+\t\t}\n+\t}\n+\n \tpub(in crate::adapter::adapters) async fn list_model_names(\n \t\tadapter_kind: AdapterKind,\n \t\tendpoint: Endpoint,\n@@ -254,6 +266,69 @@ mod tests {\n \t\t\t\"cached count 0 must not produce details\"\n \t\t);\n \t}\n+\n+\t#[test]\n+\tfn test_response_format_to_format() {\n+\t\tuse crate::chat::JsonSpec;\n+\n+\t\t// -- Setup & Fixtures\n+\t\tlet schema = json!({\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\"}}, \"required\": [\"city\"]});\n+\n+\t\t// -- Exec & Check\n+\t\tassert_eq!(\n+\t\t\tOllamaAdapter::response_format_to_format(&ChatResponseFormat::JsonMode),\n+\t\t\tjson!(\"json\")\n+\t\t);\n+\t\tassert_eq!(\n+\t\t\tOllamaAdapter::response_format_to_format(&ChatResponseFormat::JsonSpec(JsonSpec::new(\n+\t\t\t\t\"place\",\n+\t\t\t\tschema.clone()\n+\t\t\t))),\n+\t\t\tschema\n+\t\t);\n+\t}\n+\n+\t#[test]\n+\tfn test_json_spec_is_sent_as_format_by_both_ollama_adapters() -> Result<()> {\n+\t\tuse crate::ModelIden;\n+\t\tuse crate::ServiceTarget;\n+\t\tuse crate::adapter::adapters::ollama_cloud::OllamaCloudAdapter;\n+\t\tuse crate::adapter::{Adapter, AdapterKind, ServiceType};\n+\t\tuse crate::chat::{ChatMessage, ChatOptions, ChatOptionsSet, JsonSpec};\n+\t\tuse crate::resolver::AuthData;\n+\n+\t\t// -- Setup & Fixtures\n+\t\tlet schema = json!({\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\"}}, \"required\": [\"city\"]});\n+\t\tlet chat_options = ChatOptions::default().with_response_format(JsonSpec::new(\"place\", schema.clone()));\n+\t\tlet req = || ChatRequest::new(vec![ChatMessage::user(\"Where is Cairo?\")]);\n+\n+\t\t// -- Exec & Check\n+\t\tlet local = OllamaAdapter::to_web_request_data(\n+\t\t\tServiceTarget {\n+\t\t\t\tendpoint: OllamaAdapter::default_endpoint(AdapterKind::Ollama),\n+\t\t\t\tauth: AuthData::from_single(\"unused\"),\n+\t\t\t\tmodel: ModelIden::new(AdapterKind::Ollama, \"fixture-model\"),\n+\t\t\t},\n+\t\t\tServiceType::Chat,\n+\t\t\treq(),\n+\t\t\tChatOptionsSet::default().with_chat_options(Some(&chat_options)),\n+\t\t)?;\n+\t\tassert_eq!(local.payload[\"format\"], schema);\n+\n+\t\tlet cloud = OllamaCloudAdapter::to_web_request_data(\n+\t\t\tServiceTarget {\n+\t\t\t\tendpoint: OllamaCloudAdapter::default_endpoint(AdapterKind::OllamaCloud),\n+\t\t\t\tauth: AuthData::from_single(\"test-key\"),\n+\t\t\t\tmodel: ModelIden::new(AdapterKind::OllamaCloud, \"fixture-model\"),\n+\t\t\t},\n+\t\t\tServiceType::Chat,\n+\t\t\treq(),\n+\t\t\tChatOptionsSet::default().with_chat_options(Some(&chat_options)),\n+\t\t)?;\n+\t\tassert_eq!(cloud.payload[\"format\"], schema);\n+\n+\t\tOk(())\n+\t}\n }\n \n // End of Tests"
+  },
+  {
+   "filename": "src/adapter/adapters/ollama_cloud/adapter_impl.rs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 4,
+   "patch": "@@ -95,10 +95,8 @@ impl Adapter for OllamaCloudAdapter {\n \t\t// -- Messages (after tools)\n \t\tpayload.x_insert(\"messages\", messages)?;\n \n-\t\tif let Some(format) = chat_options.response_format()\n-\t\t\t&& matches!(format, crate::chat::ChatResponseFormat::JsonMode)\n-\t\t{\n-\t\t\tpayload.x_insert(\"format\", \"json\")?;\n+\t\tif let Some(format) = chat_options.response_format() {\n+\t\t\tpayload.x_insert(\"format\", OllamaAdapter::response_format_to_format(format))?;\n \t\t}\n \n \t\tlet mut headers = Headers::default();"
+  }
+ ],
+ "test_files": []
+}

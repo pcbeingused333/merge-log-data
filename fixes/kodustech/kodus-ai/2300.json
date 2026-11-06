@@ -1,0 +1,33 @@
+{
+ "repo": "kodustech/kodus-ai",
+ "number": 2300,
+ "url": "https://github.com/kodustech/kodus-ai/pull/2300",
+ "title": "fix(review): drop prose-recovered findings that name no changed file",
+ "merged_at": "2026-10-31T20:18:23Z",
+ "files": [
+  {
+   "filename": "libs/code-review/infrastructure/agents/core/core-agent-loop.adapter.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -377,6 +377,7 @@ export async function runAgentLoopViaCore(\n                     input.telemetryMetadata?.organizationId,\n                     input.usageRunName,\n                     input.previousDecisions,\n+                    input.changedFiles?.map((f) => f.filename),\n                 ),\n         },\n         { prompt: input.userPrompt },"
+  },
+  {
+   "filename": "libs/code-review/infrastructure/agents/core/finder.agent.spec.ts",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -732,6 +732,42 @@ describe('recoverFindingsFromProse — request assembly (the LLM.run boundary)',\n         expect((spy.mock.calls[0][0] as any).user).toContain('Id: round-a');\n     });\n \n+    // #2291: prose that names no path made the recoverer write\n+    // relevantFile \"unknown\"; the findings went through verify and were then\n+    // dropped as PATH_MISMATCH.\n+    it('lists the changed files and drops recovered findings that name none of them', async () => {\n+        const unknown = { ...validFinding, relevantFile: 'unknown' };\n+        const missing = { ...validFinding, relevantFile: '' };\n+        const other = { ...validFinding, relevantFile: 'src/not-changed.ts' };\n+        const spy = jest.spyOn(LLM, 'run').mockResolvedValue({\n+            suggestions: [unknown, missing, other, validFinding],\n+        } as any);\n+\n+        const out = await recoverFindingsFromProse(\n+            prose,\n+            undefined,\n+            'org-9',\n+            undefined,\n+            undefined,\n+            ['src/a.ts', 'src/b.ts'],\n+        );\n+\n+        expect(out).toEqual([validFinding]);\n+        const user = (spy.mock.calls[0][0] as any).user as string;\n+        expect(user).toContain('src/a.ts');\n+        expect(user).toContain('src/b.ts');\n+    });\n+\n+    it('keeps every recovered finding when the changed files are not given', async () => {\n+        const unknown = { ...validFinding, relevantFile: 'unknown' };\n+        jest.spyOn(LLM, 'run').mockResolvedValue({\n+            suggestions: [unknown, validFinding],\n+        } as any);\n+        await expect(\n+            recoverFindingsFromProse(prose, undefined, 'org-9'),\n+        ).resolves.toEqual([unknown, validFinding]);\n+    });\n+\n     it('keeps the recovery schema unchanged when there is no earlier history', async () => {\n         const spy = jest\n             .spyOn(LLM, 'run')"
+  },
+  {
+   "filename": "libs/code-review/infrastructure/agents/core/finder.agent.ts",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 1,
+   "patch": "@@ -625,6 +625,7 @@ export async function recoverFindingsFromProse(\n     organizationId: string | undefined,\n     usageRunName?: string,\n     previousDecisions?: readonly PrDecisionRecord[],\n+    changedFiles?: readonly string[],\n ): Promise<FinderSuggestion[]> {\n     if (!looksLikeFindings(prose)) return [];\n     try {\n@@ -664,6 +665,9 @@ export async function recoverFindingsFromProse(\n                 'invent findings; only extract what is explicitly ' +\n                 `described. oneSentenceSummary: ${TITLE_PROMPT_SPEC}.` +\n                 `\\n\\nRespond with a JSON object.\\n\\nANALYSIS:\\n${prose}` +\n+                (changedFiles?.length\n+                    ? `\\n\\nCHANGED FILES (relevantFile must be exactly one of these paths):\\n${changedFiles.join('\\n')}`\n+                    : '') +\n                 (previousDecisions?.length\n                     ? `\\n\\n${formatPreviousDecisions(previousDecisions)}\\nPreserve the earlier suggestion's Id in revisesSuggestionId when the analysis revises it. Do not invent a relationship absent from the analysis; omit the field for unrelated findings.`\n                     : ''),\n@@ -672,7 +676,15 @@ export async function recoverFindingsFromProse(\n                 : 'code-review-recovery',\n             organizationId,\n         });\n-        return (result.suggestions as unknown as FinderSuggestion[]) ?? [];\n+        const recovered =\n+            (result.suggestions as unknown as FinderSuggestion[]) ?? [];\n+        if (!changedFiles?.length) return recovered;\n+        // Prose that names no path leaves the recoverer writing \"unknown\".\n+        // Such a finding would be verified and then dropped at path mapping.\n+        const changed = new Set(changedFiles.map(normalizePath));\n+        return recovered.filter((f) =>\n+            changed.has(normalizePath(f.relevantFile)),\n+        );\n     } catch {\n         // Best-effort: recovery must never break the review.\n         return [];"
+  }
+ ],
+ "test_files": [
+  "libs/code-review/infrastructure/agents/core/finder.agent.spec.ts"
+ ]
+}

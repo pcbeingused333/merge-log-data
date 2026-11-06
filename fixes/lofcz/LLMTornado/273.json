@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 273,
+ "url": "https://github.com/lofcz/LLMTornado/pull/273",
+ "title": "Report cached prompt tokens as ChatUsage.CacheReadTokens",
+ "merged_at": "2026-10-24T01:35:05Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/OpenAiStreamUsageTests.cs",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -45,6 +45,36 @@ public async Task InboundStream_TrailingUsageChunk_IsReported()\n         Assert.That(chunks.Last().Usage?.TotalTokens, Is.EqualTo(5));\n     }\n \n+    [Test]\n+    public async Task InboundStream_CachedPromptTokens_AreReportedAsCacheReadTokens()\n+    {\n+        List<ChatResult> chunks = await Stream(\"\"\"\n+            data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-x\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hi\"}}]}\n+\n+            data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-x\",\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":2,\"total_tokens\":102,\"prompt_tokens_details\":{\"cached_tokens\":64}}}\n+\n+            data: [DONE]\n+\n+\n+            \"\"\");\n+\n+        ChatUsage? usage = chunks.Last().Usage;\n+        Assert.That(usage?.PromptTokenDetails?.CachedTokens, Is.EqualTo(64));\n+        Assert.That(usage?.CacheReadTokens, Is.EqualTo(64));\n+    }\n+\n+    [Test]\n+    public void CacheReadTokens_ExplicitValue_WinsOverPromptTokenDetails()\n+    {\n+        ChatUsage usage = new ChatUsage(LLmProviders.OpenAi)\n+        {\n+            PromptTokenDetails = new ChatPromptTokenDetails { CachedTokens = 64 },\n+            CacheReadTokens = 10\n+        };\n+\n+        Assert.That(usage.CacheReadTokens, Is.EqualTo(10));\n+    }\n+\n     private static async Task<List<ChatResult>> Stream(string sse)\n     {\n         OpenAiEndpointProvider provider = new OpenAiEndpointProvider(LLmProviders.OpenAi);"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/ChatResult.cs",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 2,
+   "patch": "@@ -453,10 +453,16 @@ public class ChatUsage : Usage\n \tpublic int? CacheCreationTokens { get; set; }\n \t\n \t/// <summary>\n-\t///\t\tNumber of tokens read from cache.\n+\t///\t\tNumber of tokens read from cache. Falls back to <see cref=\"PromptTokenDetails\"/> cached tokens, which OpenAI and OpenAI-compatible providers report.\n \t/// </summary>\n \t[JsonIgnore]\n-\tpublic int? CacheReadTokens { get; set; }\n+\tpublic int? CacheReadTokens\n+\t{\n+\t\tget => cacheReadTokens ?? PromptTokenDetails?.CachedTokens;\n+\t\tset => cacheReadTokens = value;\n+\t}\n+\n+\tprivate int? cacheReadTokens;\n \t\n \t/// <summary>\n \t/// Native usage object returned by the vendor. Provided for Anthropic, Cohere, Google, and Perplexity."
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/OpenAiStreamUsageTests.cs"
+ ]
+}

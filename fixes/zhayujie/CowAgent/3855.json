@@ -1,0 +1,26 @@
+{
+ "repo": "zhayujie/CowAgent",
+ "number": 3855,
+ "url": "https://github.com/zhayujie/CowAgent/pull/3855",
+ "title": "fix(gemini): map the sync response usageMetadata to the OpenAI usage shape",
+ "merged_at": "2026-10-29T12:27:51Z",
+ "files": [
+  {
+   "filename": "models/gemini/google_gemini_bot.py",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 1,
+   "patch": "@@ -33,6 +33,20 @@ def _completion_tokens(usage_meta: dict) -> int:\n     return (usage_meta.get(\"candidatesTokenCount\") or 0) + (usage_meta.get(\"thoughtsTokenCount\") or 0)\n \n \n+def _openai_usage(usage_meta) -> dict:\n+    \"\"\"Map a Gemini usageMetadata to the OpenAI usage shape the agent reads.\n+\n+    Returns {} when Gemini reported none, so the caller falls back to estimating.\n+    \"\"\"\n+    if not isinstance(usage_meta, dict) or not usage_meta:\n+        return {}\n+    return {\n+        \"prompt_tokens\": usage_meta.get(\"promptTokenCount\", 0),\n+        \"completion_tokens\": _completion_tokens(usage_meta),\n+        \"total_tokens\": usage_meta.get(\"totalTokenCount\", 0),\n+    }\n+\n+\n # OpenAI对话模型API (可用)\n class GoogleGeminiBot(Bot):\n \n@@ -675,7 +689,7 @@ def _handle_gemini_rest_sync_response(self, response, model_name):\n                     \"message\": message_dict,\n                     \"finish_reason\": \"tool_calls\" if tool_calls else \"stop\"\n                 }],\n-                \"usage\": data.get(\"usageMetadata\", {}),\n+                \"usage\": _openai_usage(data.get(\"usageMetadata\")),\n                 \"safety_ratings\": safety_ratings\n             }\n             "
+  },
+  {
+   "filename": "tests/test_gemini_usage_thoughts_tokens.py",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -70,3 +70,28 @@ def test_missing_thinking_tokens_leave_the_answer_count_unchanged():\n \n     assert _completion_tokens({\"candidatesTokenCount\": 10}) == 10\n     assert _completion_tokens({}) == 0\n+\n+\n+class _SyncResponse:\n+    status_code = 200\n+    text = \"\"\n+\n+    def __init__(self, usage):\n+        self._body = {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"hi\"}]}, \"finishReason\": \"STOP\"}]}\n+        if usage is not None:\n+            self._body[\"usageMetadata\"] = usage\n+\n+    def json(self):\n+        return self._body\n+\n+\n+def test_sync_response_maps_usage_to_the_openai_shape():\n+    result = _bot()._handle_gemini_rest_sync_response(_SyncResponse(USAGE), \"gemini-2.5-flash\")\n+\n+    assert result[\"usage\"] == {\"prompt_tokens\": 31, \"completion_tokens\": 50, \"total_tokens\": 81}\n+\n+\n+def test_sync_response_without_usage_metadata_keeps_the_usage_empty():\n+    result = _bot()._handle_gemini_rest_sync_response(_SyncResponse(None), \"gemini-2.5-flash\")\n+\n+    assert result[\"usage\"] == {}"
+  }
+ ],
+ "test_files": [
+  "tests/test_gemini_usage_thoughts_tokens.py"
+ ]
+}

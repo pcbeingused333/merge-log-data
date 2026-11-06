@@ -1,0 +1,46 @@
+{
+ "repo": "umami-software/umami",
+ "number": 4712,
+ "url": "https://github.com/umami-software/umami/pull/4712",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-29T01:40:22Z",
+   "body": ""
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-29T19:46:58Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "src/queries/prisma/link.ts",
+   "created_at": "2026-10-29T01:40:21Z",
+   "body": "<a href=\"#\"><img alt=\"P1\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9\" align=\"top\"></a> **Deleted items can return**\n\nIf `DATABASE_REPLICA_URL` is set and the replica lags, deleting the Redis key lets the next request to `/q/[slug]` or `/p/[slug]` read the old row and cache it for another 24 hours. Deleted items can keep being served, and edited links can keep redirecting to the old address. Make cache refills after a write read current data, and prevent removed slugs from being cached again. Apply this to both helpers.\n\n**Knowledge Base Used:** [Database layer](https://app.greptile.com/personal-org-19816/-/custom-context/knowledge-base/umami-software/umami/-/docs/database-layer.md)"
+  },
+  {
+   "role": "bot",
+   "path": "src/queries/prisma/link.ts",
+   "created_at": "2026-10-29T01:40:21Z",
+   "body": "<a href=\"#\"><img alt=\"P1\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9\" align=\"top\"></a> **Old short URLs survive**\n\nIf the configured replica lags an earlier rename, `getLink` can return the wrong previous slug. For example, if the primary and cache contain slug B but the replica still has A, renaming the link to C deletes only A and C. The cached B remains usable for up to 24 hours. `updatePixel` has the same problem. Read the previous slug from the primary together with the update, so the removed key matches the row being changed.\n\n**Knowledge Base Used:** [Database layer](https://app.greptile.com/personal-org-19816/-/custom-context/knowledge-base/umami-software/umami/-/docs/database-layer.md)"
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-10-29T01:37:49Z",
+   "body": "@pcbeingused333 is attempting to deploy a commit to the **Umami Software** Team on [Vercel](https://vercel.com).\n\nA member of the Team first needs to [authorize it](https://vercel.com/git/authorize?team=Umami%20Software&slug=umami-software&teamId=team_Sqt08Qg3t08WpLJLvVmRIg4P&type=github&job=%7B%22headInfo%22%3A%7B%22sha%22%3A%229e73f45565d577cc8366319a127c9180566121d5%22%7D%2C%22id%22%3A%22QmPtVZHLaYp3PYRU2imcXKZafxzjEk1tBCkVv2PFdxbvVB%22%2C%22org%22%3A%22umami-software%22%2C%22prId%22%3A4712%2C%22repo%22%3A%22umami%22%7D).\n\n"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-29T01:40:18Z",
+   "body": "<!-- greptile_summary -->\n\n<h2><a href=\"https://app.greptile.com/api/retrigger?id=90257117\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://greptile-static-assets.s3.amazonaws.com/badges/RetriggerDark.svg?v=2\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://greptile-static-assets.s3.amazonaws.com/badges/Retrigger.svg?v=2\"><img alt=\"Retrigger\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/Retrigger.svg?v=2\" align=\"right\"></picture></a><a href=\"https://app.greptile.com/personal-org-19816/github/umami-software/umami/-/pull/4712?utm_source=greptile_review&amp;utm_medium=github&amp;utm_campaign=view_in_greptile\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://greptile-static-assets.s3.amazonaws.com/badges/ViewInGreptileDark.svg?v=2\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://greptile-static-assets.s3.amazonaws.com/badges/ViewInGreptile.svg?v=2\"><img alt=\"View in Greptile\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/ViewInGreptile.svg?v=2\" align=\"right\"></picture></a>Confidence Score: 3/5</h2>\n\n**[Medium impact]** The changes affect short\\-link and pixel requests when Redis is enabled\\.\n\nFix the two replica-related cache gaps before merging.\n\n<h2>Findings</h2>\n\n1. <img alt=\"P1\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9\" align=\"top\">&nbsp;**Deleted items can return** <a href=\"https://github.com/umami-software/umami/pull/4712#discussion_r4407870183\">▶</a>\n2. <img alt=\"P1\" src=\"https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9\" align=\"top\">&nbsp;**Old short URLs survive** <a href=\"https://github.com/umami-software/umami/pull/4712#discussion_r4407870187\">▶</a>\n\n<h3>Summary</h3>\n\nThis PR removes cached links and pixels after updates and deletes.\n- Link changes clear the Redis entries for their slugs.\n- Pixel changes clear the Redis entries for their slugs.\n\n<details open><summary><h3>Diagram</h3></summary>\n\n```mermaid\nsequenceDiagram\n  participant Admin\n  participant Primary\n  participant Redis\n  participant Visitor\n  participant Replica\n  Admin->>Primary: Update or delete item\n  Primary-->>Admin: Write succeeds\n  Admin->>Redis: Delete slug key\n  Visitor->>Redis: Request slug\n  Redis-->>Visitor: Cache miss\n  Visitor->>Replica: Find slug\n  Replica-->>Visitor: Old row before replication catches up\n  Visitor->>Redis: Cache old row for 24 hours\n```\n</details>\n\n<!-- greptile_confidence_score:3 -->\n\n<sub>Reviews (1) · Last reviewed commit: [\"fix: drop the Redis cache of a link or p...\"](https://github.com/umami-software/umami/commit/9e73f45565d577cc8366319a127c9180566121d5) · [Reviewed by Greptile](https://www.greptile.com/?utm_source=greptile_review&utm_medium=github&utm_campaign=review_public&utm_content=umami-software/umami)</sub>"
+  }
+ ]
+}

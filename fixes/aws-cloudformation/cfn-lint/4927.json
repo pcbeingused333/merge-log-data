@@ -1,0 +1,26 @@
+{
+ "repo": "aws-cloudformation/cfn-lint",
+ "number": 4927,
+ "url": "https://github.com/aws-cloudformation/cfn-lint/pull/4927",
+ "title": "fix(E3530): accept sts root and federated-user principals",
+ "merged_at": "2026-10-31T16:08:20Z",
+ "files": [
+  {
+   "filename": "src/cfnlint/data/schemas/other/iam/policy.json",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -30,7 +30,7 @@\n      \"pattern\": \"^arn:(aws|aws-cn|aws-us-gov):iam::\\\\d{12}:(?:root|user|group|role)\"\n     },\n     {\n-     \"pattern\": \"^arn:(aws|aws-cn|aws-us-gov):sts::\\\\d{12}:assumed-role\"\n+     \"pattern\": \"^arn:(aws|aws-cn|aws-us-gov):sts::\\\\d{12}:(?:assumed-role|root|federated-user)\"\n     },\n     {\n      \"pattern\": \"^arn:(aws|aws-cn|aws-us-gov):iam::cloudfront:user/.+$\""
+  },
+  {
+   "filename": "test/unit/rules/resources/iam/test_trust_policy.py",
+   "status": "modified",
+   "additions": 67,
+   "deletions": 0,
+   "patch": "@@ -247,6 +247,73 @@ def test_no_resource_required(self):\n             f\"Trust policies should not require Resource, got: {err_messages}\",\n         )\n \n+    def test_sts_root_and_federated_user_principals(self):\n+        \"\"\"Test sts root and federated-user principals, which IAM accepts\"\"\"\n+        validator = CfnTemplateValidator({}).evolve(\n+            context=Context(\n+                functions=FUNCTIONS,\n+                path=Path(\n+                    cfn_path=deque([\"Resources\", \"AWS::IAM::Role\", \"Properties\"])\n+                ),\n+            )\n+        )\n+\n+        for principal in (\n+            \"arn:aws:sts::123456789012:root\",\n+            \"arn:aws-cn:sts::123456789012:federated-user/example\",\n+            \"arn:aws-us-gov:sts::123456789012:federated-user/example\",\n+        ):\n+            with self.subTest(principal=principal):\n+                policy = {\n+                    \"Version\": \"2012-10-17\",\n+                    \"Statement\": [\n+                        {\n+                            \"Effect\": \"Allow\",\n+                            \"Action\": \"sts:AssumeRole\",\n+                            \"Principal\": {\"AWS\": principal},\n+                        }\n+                    ],\n+                }\n+\n+                errs = list(\n+                    self.rule.validate(\n+                        validator=validator,\n+                        policy=policy,\n+                        schema={},\n+                        policy_type=None,\n+                    )\n+                )\n+                self.assertListEqual(errs, [])\n+\n+    def test_unsupported_sts_principal(self):\n+        \"\"\"Test that an unsupported sts principal is caught\"\"\"\n+        validator = CfnTemplateValidator({}).evolve(\n+            context=Context(\n+                functions=FUNCTIONS,\n+                path=Path(\n+                    cfn_path=deque([\"Resources\", \"AWS::IAM::Role\", \"Properties\"])\n+                ),\n+            )\n+        )\n+\n+        policy = {\n+            \"Version\": \"2012-10-17\",\n+            \"Statement\": [\n+                {\n+                    \"Effect\": \"Allow\",\n+                    \"Action\": \"sts:AssumeRole\",\n+                    \"Principal\": {\"AWS\": \"arn:aws:sts::123456789012:user/example\"},\n+                }\n+            ],\n+        }\n+\n+        errs = list(\n+            self.rule.validate(\n+                validator=validator, policy=policy, schema={}, policy_type=None\n+            )\n+        )\n+        self.assertTrue(errs)\n+\n     def test_assumed_role_principal(self):\n         \"\"\"Test a valid assumed role principal\"\"\"\n         validator = CfnTemplateValidator({}).evolve("
+  }
+ ],
+ "test_files": [
+  "test/unit/rules/resources/iam/test_trust_policy.py"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 288,
+ "url": "https://github.com/lofcz/LLMTornado/pull/288",
+ "title": "fix(files): map ListQuery.After/Before to after_id/before_id for Anthropic",
+ "merged_at": "2026-10-28T14:34:06Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/AnthropicFilesListQueryTests.cs",
+   "status": "added",
+   "additions": 50,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,50 @@\n+using LlmTornado.Code;\n+using LlmTornado.Common;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class AnthropicFilesListQueryTests\n+{\n+    [Test]\n+    public void ToQueryParams_Anthropic_MapsAfterToAfterId()\n+    {\n+        Dictionary<string, object>? parameters = new ListQuery(limit: 5, after: \"file_011\").ToQueryParams(LLmProviders.Anthropic);\n+\n+        Assert.Multiple(() =>\n+        {\n+            Assert.That(parameters, Is.Not.Null);\n+            Assert.That(parameters![\"after_id\"], Is.EqualTo(\"file_011\"));\n+            Assert.That(parameters.ContainsKey(\"before_id\"), Is.False);\n+            Assert.That(parameters[\"limit\"], Is.EqualTo(5));\n+        });\n+    }\n+\n+    [Test]\n+    public void ToQueryParams_Anthropic_MapsBeforeToBeforeId()\n+    {\n+        Dictionary<string, object>? parameters = new ListQuery(before: \"file_022\").ToQueryParams(LLmProviders.Anthropic);\n+\n+        Assert.Multiple(() =>\n+        {\n+            Assert.That(parameters![\"before_id\"], Is.EqualTo(\"file_022\"));\n+            Assert.That(parameters.ContainsKey(\"after_id\"), Is.False);\n+        });\n+    }\n+\n+    [Test]\n+    public void ToQueryParams_Anthropic_PageTokenStillWorksAsAfterId()\n+    {\n+        Dictionary<string, object>? parameters = new ListQuery { PageToken = \"file_033\" }.ToQueryParams(LLmProviders.Anthropic);\n+\n+        Assert.That(parameters![\"after_id\"], Is.EqualTo(\"file_033\"));\n+    }\n+\n+    [Test]\n+    public void ToQueryParams_Anthropic_AfterWinsOverPageToken()\n+    {\n+        Dictionary<string, object>? parameters = new ListQuery(after: \"file_011\") { PageToken = \"file_033\" }.ToQueryParams(LLmProviders.Anthropic);\n+\n+        Assert.That(parameters![\"after_id\"], Is.EqualTo(\"file_011\"));\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Common/ListQuery.cs",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 2,
+   "patch": "@@ -139,9 +139,16 @@ public ListQuery(int? limit = null, SortOrder order = SortOrder.Descending, stri\n                     parameters[\"limit\"] = query.Limit.Value.Clamp(1, 1_000); // https://docs.anthropic.com/en/api/files-list#parameter-limit\n                 }\n             \n-                if (query.PageToken is not null)\n+                string? afterId = !string.IsNullOrEmpty(query.After) ? query.After : query.PageToken;\n+\n+                if (!string.IsNullOrEmpty(afterId))\n+                {\n+                    parameters[\"after_id\"] = afterId;\n+                }\n+\n+                if (!string.IsNullOrEmpty(query.Before))\n                 {\n-                    parameters[\"after_id\"] = query.PageToken;\n+                    parameters[\"before_id\"] = query.Before;\n                 }\n \n                 return parameters;"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/AnthropicFilesListQueryTests.cs"
+ ]
+}

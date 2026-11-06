@@ -1,0 +1,38 @@
+{
+ "repo": "reticlehq/reticle",
+ "number": 1918,
+ "url": "https://github.com/reticlehq/reticle/pull/1918",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-10-27T01:29:03Z",
+   "body": "Thank you. The root cause is right, the fix is in the shared function, and the tests fail without it. The tag check before the `.then` read is correct: a real Next.js `params` Promise is found by its tag, so its keys are never read.\n\nOne change is needed before merge, because of how wide the change is.\n\n**`sanitize` is not only the console path.** `sanitizeWithReport` also serializes store state for state reads (`commands/commands.ts`) and the network event stream (`observers/net-detail/network-event-stream.ts`). So after this PR, a store field that holds a DOM node, a Promise or **any object with a `then` method** reads as a string such as `[Promise]`. That is good for nodes and promises. But a thenable can be ordinary app data, for example a query builder object kept in a store. Its fields now disappear, and nothing tells the caller.\n\nRule 11 in `AGENTS.md` says that a lossy transform on a path an agent reads must declare its loss. `sanitizeWithReport` already reports `droppedItems` and `truncatedValues`. Please:\n\n1. Count each summary that `opaqueSummary` returns, for example in `truncatedValues` or in a new counter that the report note names. Then a state read that hit a summary comes back with `truncation` set.\n2. Add a test: `sanitizeWithReport({ a: Promise.resolve(1) })` returns a `truncation` report.\n3. Say in the PR body and in the `.changes` entry that state reads change too, not only console capture.\n\nNot required: you did not try this on a Next.js 16 app. If you can, a short note in the PR with the console output before and after would make the claim complete."
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-06T02:03:43Z",
+   "body": "Thank you. The truncation report closes the rule-11 gap, and CI is green. Merging."
+  }
+ ],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-10-27T01:26:12Z",
+   "body": "Thanks for your first pull request to Reticle! A maintainer aims to review within two days. Before then, `pnpm verify` locally catches most of what CI will, and [CONTRIBUTING.md](https://github.com/reticlehq/reticle/blob/main/CONTRIBUTING.md) explains the rest. If CI does not start, a maintainer needs to approve it for first-time contributors; that is normal."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-28T00:25:06Z",
+   "body": "Thanks, that is a good catch. Done in the new commit: `opaqueSummary` hits now increment `truncatedValues`, so a state or network read that met a node, window or thenable returns a `truncation` report; `sanitizeWithReport({ a: Promise.resolve(1) })` is covered by a test (plus a test that plain data reports nothing). The PR body and the `.changes` entry now say that state reads change too, not only console capture. Not tried on a Next.js 16 app.\n\nThis reply and the change were prepared with AI assistance (Claude Code).\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-05T03:02:05Z",
+   "body": "Hi, friendly ping: the feedback here should be addressed in the latest push. Let me know if anything else is needed. Thanks!"
+  }
+ ]
+}

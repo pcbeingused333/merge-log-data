@@ -1,0 +1,31 @@
+{
+ "repo": "jeremychone/rust-genai",
+ "number": 371,
+ "url": "https://github.com/jeremychone/rust-genai/pull/371",
+ "title": "fix(anthropic): omit sampling params on models that reject them",
+ "merged_at": "2026-11-02T00:32:03Z",
+ "files": [
+  {
+   "filename": "src/adapter/adapters/anthropic/adapter_shared.rs",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 2,
+   "patch": "@@ -585,8 +585,14 @@ impl AnthropicAdapter {\n \t\t\tpayload.x_insert(\"output_config\", Value::Object(output_config))?;\n \t\t}\n \n+\t\t// Some models only accept default sampling values and answer `temperature` / `top_p` with a 400.\n+\t\t// (`extra_body` can still set them.)\n \t\tif let Some(temperature) = options_set.temperature() {\n-\t\t\tpayload.x_insert(\"temperature\", temperature)?;\n+\t\t\tif capabilities.supports_sampling_params {\n+\t\t\t\tpayload.x_insert(\"temperature\", temperature)?;\n+\t\t\t} else {\n+\t\t\t\ttracing::warn!(\"temperature is not supported by '{model_name}' and was not sent\");\n+\t\t\t}\n \t\t}\n \n \t\tif !options_set.stop_sequences().is_empty() {\n@@ -597,7 +603,11 @@ impl AnthropicAdapter {\n \t\tpayload.x_insert(\"max_tokens\", max_tokens)?; // required for Anthropic\n \n \t\tif let Some(top_p) = options_set.top_p() {\n-\t\t\tpayload.x_insert(\"top_p\", top_p)?;\n+\t\t\tif capabilities.supports_sampling_params {\n+\t\t\t\tpayload.x_insert(\"top_p\", top_p)?;\n+\t\t\t} else {\n+\t\t\t\ttracing::warn!(\"top_p is not supported by '{model_name}' and was not sent\");\n+\t\t\t}\n \t\t}\n \n \t\tif let Some(extra_body) = options_set.extra_body() {"
+  },
+  {
+   "filename": "src/adapter/adapters/anthropic/adapter_shared_tests.rs",
+   "status": "modified",
+   "additions": 52,
+   "deletions": 0,
+   "patch": "@@ -12,6 +12,58 @@ use crate::resolver::AuthData;\n use crate::webc::WebResponse;\n use reqwest::StatusCode;\n \n+fn anthropic_payload(model: &str, chat_options: ChatOptions) -> Value {\n+\tlet target = ServiceTarget {\n+\t\tendpoint: AnthropicAdapter::default_endpoint(AdapterKind::Anthropic),\n+\t\tauth: AuthData::from_single(\"test-key\"),\n+\t\tmodel: ModelIden::new(AdapterKind::Anthropic, model),\n+\t};\n+\tlet options_set = ChatOptionsSet::default().with_chat_options(Some(&chat_options));\n+\tAnthropicAdapter::to_web_request_data(target, ServiceType::Chat, ChatRequest::from_user(\"hello\"), options_set)\n+\t\t.expect(\"to_web_request_data should succeed\")\n+\t\t.payload\n+}\n+\n+/// Claude Opus 4.7+, Sonnet 5.x, Fable and Mythos only accept the default sampling values,\n+/// and answer any `temperature` or `top_p` with an HTTP 400.\n+#[test]\n+fn test_anthropic_sampling_params_are_omitted_for_models_that_reject_them() {\n+\tfor model in [\n+\t\t\"claude-opus-4-7\",\n+\t\t\"claude-opus-5-5\",\n+\t\t\"claude-sonnet-5-5\",\n+\t\t\"claude-fable-5-1\",\n+\t\t\"claude-mythos-5-1\",\n+\t] {\n+\t\tlet payload = anthropic_payload(model, ChatOptions::default().with_temperature(0.5).with_top_p(0.9));\n+\t\tassert!(payload.get(\"temperature\").is_none(), \"temperature sent to {model}\");\n+\t\tassert!(payload.get(\"top_p\").is_none(), \"top_p sent to {model}\");\n+\t}\n+}\n+\n+#[test]\n+fn test_anthropic_sampling_params_are_kept_for_models_that_accept_them() {\n+\tfor model in [\n+\t\t\"claude-opus-4-6\",\n+\t\t\"claude-sonnet-4-6\",\n+\t\t\"claude-haiku-4-5\",\n+\t\t\"claude-3-5-sonnet-latest\",\n+\t] {\n+\t\tlet payload = anthropic_payload(model, ChatOptions::default().with_temperature(0.5).with_top_p(0.9));\n+\t\tassert_eq!(payload[\"temperature\"], 0.5, \"temperature for {model}\");\n+\t\tassert_eq!(payload[\"top_p\"], 0.9, \"top_p for {model}\");\n+\t}\n+}\n+\n+#[test]\n+fn test_anthropic_extra_body_can_still_set_sampling_params() {\n+\tlet payload = anthropic_payload(\n+\t\t\"claude-opus-5-5\",\n+\t\tChatOptions::default().with_extra_body(json!({\"temperature\": 1.0})),\n+\t);\n+\tassert_eq!(payload[\"temperature\"], 1.0);\n+}\n+\n /// Regression guard: when both `reasoning_effort` and `JsonSpec` response format are set\n /// on a model that uses the `output_config` effort API (e.g. `claude-sonnet-4-6`), both\n /// `effort` and `format` must appear inside the same `output_config` JSON object."
+  },
+  {
+   "filename": "src/adapter/adapters/anthropic/ant_model.rs",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -26,6 +26,8 @@ pub(super) struct AnthropicModelCapabilities {\n \tpub supports_adaptive_thinking: bool,\n \tpub thinking_enabled_by_default: bool,\n \tpub supports_legacy_budget_thinking: bool,\n+\t/// `false` when the model only accepts default sampling values (no `temperature` or `top_p`).\n+\tpub supports_sampling_params: bool,\n \tpub max_tokens: AnthropicMaxTokens,\n }\n \n@@ -112,6 +114,7 @@ impl<'a> AnthropicModel<'a> {\n \t\t\tsupports_adaptive_thinking,\n \t\t\tthinking_enabled_by_default: self.thinking_enabled_by_default(),\n \t\t\tsupports_legacy_budget_thinking: !supports_adaptive_thinking,\n+\t\t\tsupports_sampling_params: self.supports_sampling_params(),\n \t\t\tmax_tokens: self.max_tokens(),\n \t\t}\n \t}\n@@ -210,6 +213,16 @@ impl<'a> AnthropicModel<'a> {\n \t\t}\n \t}\n \n+\tfn supports_sampling_params(&self) -> bool {\n+\t\tmatch self.family {\n+\t\t\tAnthropicModelFamily::Opus => self.version().is_none_or(|version| version < (4, 7)),\n+\t\t\tAnthropicModelFamily::Sonnet => self.version().is_none_or(|version| version < (5, 0)),\n+\t\t\tAnthropicModelFamily::Fable | AnthropicModelFamily::Mythos => false,\n+\t\t\tAnthropicModelFamily::Haiku => !self.is_haiku_5_or_later(),\n+\t\t\tAnthropicModelFamily::Unknown => true,\n+\t\t}\n+\t}\n+\n \tfn thinking_enabled_by_default(&self) -> bool {\n \t\tmatch self.family {\n \t\t\tAnthropicModelFamily::Opus | AnthropicModelFamily::Sonnet => {"
+  }
+ ],
+ "test_files": []
+}

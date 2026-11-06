@@ -1,0 +1,26 @@
+{
+ "repo": "DEEIX-AI/DEEIX-Chat",
+ "number": 904,
+ "url": "https://github.com/DEEIX-AI/DEEIX-Chat/pull/904",
+ "title": "fix: count Gemini toolUsePromptTokenCount as input tokens",
+ "merged_at": "2026-10-31T09:07:35Z",
+ "files": [
+  {
+   "filename": "backend/internal/infra/llm/gemini.go",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 3,
+   "patch": "@@ -13,7 +13,7 @@ package llm\n //   - 图片使用 inlineData.data (base64) + mimeType 格式\n //   - system 提示通过顶层 systemInstruction 字段传递\n //   - 流式端点为 :streamGenerateContent?alt=sse，每个 SSE data 都是完整的 GenerateContentResponse 片段\n-//   - token 统计在 usageMetadata（promptTokenCount / candidatesTokenCount / cachedContentTokenCount / thoughtsTokenCount）\n+//   - token 统计在 usageMetadata（promptTokenCount / toolUsePromptTokenCount / candidatesTokenCount / cachedContentTokenCount / thoughtsTokenCount）\n \n import (\n \t\"bufio\"\n@@ -826,10 +826,14 @@ func extractGeminiReasoning(parsed map[string]any) *portllm.ReasoningOutput {\n \n // parseGeminiUsage 解析 usageMetadata。\n func parseGeminiUsage(parsed map[string]any) portllm.Usage {\n-\ttotalInputTokens := getInt64FromPath(parsed, \"usageMetadata\", \"promptTokenCount\")\n+\t// toolUsePromptTokenCount 是 url_context / google_search 等内置工具结果回灌给模型的 token，\n+\t// 与 promptTokenCount 分开上报，计入 totalTokenCount，并按输入计费。\n+\t// cachedContentTokenCount 只覆盖 prompt 部分，因此先对 prompt 扣减缓存再加工具 token。\n+\tpromptTokens := getInt64FromPath(parsed, \"usageMetadata\", \"promptTokenCount\")\n+\ttoolUsePromptTokens := getInt64FromPath(parsed, \"usageMetadata\", \"toolUsePromptTokenCount\")\n \tcacheReadTokens := getInt64FromPath(parsed, \"usageMetadata\", \"cachedContentTokenCount\")\n \treturn portllm.Usage{\n-\t\tInputTokens:     nonCachedInputTokens(totalInputTokens, cacheReadTokens),\n+\t\tInputTokens:     nonCachedInputTokens(promptTokens, cacheReadTokens) + max(toolUsePromptTokens, 0),\n \t\tOutputTokens:    getInt64FromPath(parsed, \"usageMetadata\", \"candidatesTokenCount\"),\n \t\tCacheReadTokens: cacheReadTokens,\n \t\tReasoningTokens: getInt64FromPath(parsed, \"usageMetadata\", \"thoughtsTokenCount\"),"
+  },
+  {
+   "filename": "backend/internal/infra/llm/usage_test.go",
+   "status": "modified",
+   "additions": 65,
+   "deletions": 0,
+   "patch": "@@ -3,6 +3,7 @@ package llm\n import (\n \t\"encoding/json\"\n \t\"reflect\"\n+\t\"strings\"\n \t\"testing\"\n \n \tportllm \"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm\"\n@@ -378,6 +379,70 @@ func TestParseGoogleGenerateContentUsage(t *testing.T) {\n \t}`)\n }\n \n+func TestParseGoogleGenerateContentUsageCountsToolUsePromptTokensAsInput(t *testing.T) {\n+\tpayload := mustDecodeObject(t, `{\n+\t\t\"usageMetadata\": {\n+\t\t\t\"promptTokenCount\": 31,\n+\t\t\t\"candidatesTokenCount\": 73,\n+\t\t\t\"thoughtsTokenCount\": 77,\n+\t\t\t\"toolUsePromptTokenCount\": 50,\n+\t\t\t\"totalTokenCount\": 231\n+\t\t}\n+\t}`)\n+\n+\tusage := parseGeminiUsage(payload)\n+\tif usage.InputTokens != 81 || usage.OutputTokens != 73 || usage.ReasoningTokens != 77 {\n+\t\tt.Fatalf(\"expected tool-use prompt tokens to count as input, got %+v\", usage)\n+\t}\n+}\n+\n+func TestParseGoogleGenerateContentUsageToolUseTokensAreNotCached(t *testing.T) {\n+\tpayload := mustDecodeObject(t, `{\n+\t\t\"usageMetadata\": {\n+\t\t\t\"promptTokenCount\": 100,\n+\t\t\t\"cachedContentTokenCount\": 40,\n+\t\t\t\"toolUsePromptTokenCount\": 25\n+\t\t}\n+\t}`)\n+\n+\tusage := parseGeminiUsage(payload)\n+\tif usage.InputTokens != 85 || usage.CacheReadTokens != 40 {\n+\t\tt.Fatalf(\"expected 60 prompt + 25 tool-use non-cached input and 40 cached, got %+v\", usage)\n+\t}\n+}\n+\n+func TestParseGoogleGenerateContentUsageCacheClampKeepsToolUseTokens(t *testing.T) {\n+\tpayload := mustDecodeObject(t, `{\n+\t\t\"usageMetadata\": {\n+\t\t\t\"promptTokenCount\": 100,\n+\t\t\t\"cachedContentTokenCount\": 120,\n+\t\t\t\"toolUsePromptTokenCount\": 25\n+\t\t}\n+\t}`)\n+\n+\tusage := parseGeminiUsage(payload)\n+\tif usage.InputTokens != 25 || usage.CacheReadTokens != 120 {\n+\t\tt.Fatalf(\"expected cache clamp to keep 25 tool-use input tokens, got %+v\", usage)\n+\t}\n+}\n+\n+func TestConsumeGeminiStreamCountsToolUsePromptTokensAsInput(t *testing.T) {\n+\tstream := strings.Join([]string{\n+\t\t`data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hello\"}],\"role\":\"model\"}}]}`,\n+\t\t``,\n+\t\t`data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\" world\"}],\"role\":\"model\"}}],\"usageMetadata\":{\"promptTokenCount\":31,\"candidatesTokenCount\":12,\"toolUsePromptTokenCount\":50}}`,\n+\t\t``,\n+\t}, \"\\n\")\n+\n+\tresult := &portllm.GenerateOutput{}\n+\tif err := consumeGeminiStream(strings.NewReader(stream), result, nil); err != nil {\n+\t\tt.Fatalf(\"consume stream: %v\", err)\n+\t}\n+\tif result.Usage.InputTokens != 81 || result.Usage.OutputTokens != 12 {\n+\t\tt.Fatalf(\"expected streamed tool-use prompt tokens to count as input, got %+v\", result.Usage)\n+\t}\n+}\n+\n func TestNonCachedInputTokensNeverNegative(t *testing.T) {\n \tif got := nonCachedInputTokens(12, 20); got != 0 {\n \t\tt.Fatalf(\"expected non-cached input tokens to clamp at zero, got %d\", got)"
+  }
+ ],
+ "test_files": [
+  "backend/internal/infra/llm/usage_test.go"
+ ]
+}

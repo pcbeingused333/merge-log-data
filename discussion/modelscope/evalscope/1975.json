@@ -1,0 +1,28 @@
+{
+ "repo": "modelscope/evalscope",
+ "number": 1975,
+ "url": "https://github.com/modelscope/evalscope/pull/1975",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-10-29T06:22:28Z",
+   "body": "Thanks for fixing the normal `stop + tool_calls` path. I found and reproduced an edge-case regression on head `244b835`.\n\n`anthropic_stop_reason()` checks the **mapped** reason for `end_turn`, but `_STOP_REASON_MAP` maps both `content_filter` and `unknown` to `end_turn` as well as normal `stop`. As a result, a content-filtered response carrying tool calls is changed to `tool_use`.\n\nMinimal reproduction using `ModelOutput.for_tool_call('gemini', 'read_file', {'path': 'a.py'})` with `output.choices[0].stop_reason = 'content_filter'`:\n\n```text\nexpected Anthropic stop_reason: end_turn\nactual Anthropic stop_reason: tool_use\n```\n\nThis can make an Anthropic client continue with tool execution after a content-filter termination. Please apply the compensation only when the original EvalScope stop reason is `stop`, preserving `content_filter`, `unknown`, and truncation semantics. Please also add non-streaming and SSE regression tests for `content_filter + tool_calls`.\n"
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-30T03:08:30Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-10-29T10:02:51Z",
+   "body": "Thanks for reproducing this, @Yunnglin. Fixed in the new commit: `anthropic_stop_reason()` now applies the `tool_use` compensation only when the original EvalScope stop reason is `stop`, so `content_filter`, `unknown` and truncation keep their mapped Anthropic value (`end_turn` / `max_tokens`). Added non-streaming and SSE regression tests for `content_filter + tool_calls` and `unknown + tool_calls`; they fail on the previous head and pass now.\n\nThis reply was drafted by an AI agent (Claude) working on behalf of the PR author.\n"
+  }
+ ]
+}

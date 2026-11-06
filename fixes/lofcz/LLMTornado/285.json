@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 285,
+ "url": "https://github.com/lofcz/LLMTornado/pull/285",
+ "title": "fix(mcp): send the bare token as the Anthropic MCP authorization_token",
+ "merged_at": "2026-10-28T14:33:01Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Mcp/Adapter.cs",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 1,
+   "patch": "@@ -20,13 +20,30 @@ private static string ToBase64(ReadOnlyMemory<byte> data)\n #endif\n     }\n     \n+    /// <summary>\n+    /// The MCP connector takes the bare OAuth token and adds the \"Bearer\" scheme itself,\n+    /// so a full \"Bearer xxx\" header value has to be reduced to \"xxx\".\n+    /// </summary>\n+    private static string? ToAuthorizationToken(string? headerValue)\n+    {\n+        if (string.IsNullOrWhiteSpace(headerValue))\n+        {\n+            return null;\n+        }\n+\n+        string value = headerValue.Trim();\n+        const string scheme = \"Bearer \";\n+\n+        return value.StartsWith(scheme, StringComparison.OrdinalIgnoreCase) ? value.Substring(scheme.Length).TrimStart() : value;\n+    }\n+\n     public static AnthropicMcpServer ToAnthropicMcpServerAsync(this MCPServer client)\n     {\n         AnthropicMcpServer server = new AnthropicMcpServer\n         {\n             Name = client.ServerLabel,\n             Url = client.ServerUrl,\n-            AuthorizationToken = client.AdditionalConnectionHeaders?.FirstOrDefault(key => key.Key.ToLower().Contains(\"auth\")).Value ?? string.Empty,\n+            AuthorizationToken = ToAuthorizationToken(client.AdditionalConnectionHeaders?.FirstOrDefault(key => key.Key.ToLower().Contains(\"auth\")).Value),\n             Configuration = new AnthropicMcpConfiguration\n             {\n                 Enabled = true,"
+  },
+  {
+   "filename": "src/LlmTornado.Tests/AnthropicMcpAuthorizationTokenTests.cs",
+   "status": "added",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,45 @@\n+using LlmTornado.Chat.Vendors.Anthropic;\n+using LlmTornado.Mcp;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class AnthropicMcpAuthorizationTokenTests\n+{\n+    private static AnthropicMcpServer Convert(Dictionary<string, string>? headers) =>\n+        new MCPServer(\"docs\", \"https://mcp.example.com/mcp\", additionalConnectionHeaders: headers).ToAnthropicMcpServerAsync();\n+\n+    [Test]\n+    public void ToAnthropicMcpServer_BearerHeader_SendsTheBareToken()\n+    {\n+        AnthropicMcpServer server = Convert(new Dictionary<string, string> { [\"Authorization\"] = \"Bearer secret-token\" });\n+\n+        Assert.That(server.AuthorizationToken, Is.EqualTo(\"secret-token\"));\n+    }\n+\n+    [Test]\n+    public void ToAnthropicMcpServer_BearerSchemeIsCaseInsensitive()\n+    {\n+        AnthropicMcpServer server = Convert(new Dictionary<string, string> { [\"authorization\"] = \"bearer secret-token\" });\n+\n+        Assert.That(server.AuthorizationToken, Is.EqualTo(\"secret-token\"));\n+    }\n+\n+    [Test]\n+    public void ToAnthropicMcpServer_HeaderWithoutScheme_IsKeptAsIs()\n+    {\n+        AnthropicMcpServer server = Convert(new Dictionary<string, string> { [\"X-Auth-Token\"] = \"secret-token\" });\n+\n+        Assert.That(server.AuthorizationToken, Is.EqualTo(\"secret-token\"));\n+    }\n+\n+    [Test]\n+    public void ToAnthropicMcpServer_WithoutAuthHeader_LeavesTheTokenUnset()\n+    {\n+        Assert.Multiple(() =>\n+        {\n+            Assert.That(Convert(null).AuthorizationToken, Is.Null);\n+            Assert.That(Convert(new Dictionary<string, string> { [\"X-Trace\"] = \"1\" }).AuthorizationToken, Is.Null);\n+        });\n+    }\n+}"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/AnthropicMcpAuthorizationTokenTests.cs"
+ ]
+}

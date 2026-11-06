@@ -1,0 +1,26 @@
+{
+ "repo": "Tencent/WeKnora",
+ "number": 4862,
+ "url": "https://github.com/Tencent/WeKnora/pull/4862",
+ "title": "fix(vlm): treat an Ollama reply that stopped on length as truncated",
+ "merged_at": "2026-10-30T11:11:19Z",
+ "files": [
+  {
+   "filename": "internal/models/vlm/ollama.go",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -68,14 +68,20 @@ func (v *OllamaVLM) PredictWithOptions(\n \t}\n \tlogger.Infof(ctx, \"[VLM] Calling Ollama API, model=%s, numImages=%d, totalImageSize=%d\", v.modelName, len(images), totalImageSize)\n \n-\tvar result string\n+\tvar result, doneReason string\n \terr := v.ollamaService.Chat(ctx, chatReq, func(resp ollamaapi.ChatResponse) error {\n \t\tresult = resp.Message.Content\n+\t\tdoneReason = resp.DoneReason\n \t\treturn nil\n \t})\n \tif err != nil {\n \t\treturn \"\", fmt.Errorf(\"Ollama VLM request: %w\", err)\n \t}\n+\tif doneReason == \"length\" {\n+\t\t// Same contract as RemoteAPIVLM: a cut-off answer is incomplete and must\n+\t\t// not be indexed as successful OCR or caption text.\n+\t\treturn \"\", fmt.Errorf(\"%w (done_reason=length)\", ErrTruncatedCompletion)\n+\t}\n \n \tlogger.Infof(ctx, \"[VLM] Ollama response received, len=%d\", len(result))\n \treturn result, nil"
+  },
+  {
+   "filename": "internal/models/vlm/ollama_test.go",
+   "status": "modified",
+   "additions": 48,
+   "deletions": 0,
+   "patch": "@@ -3,6 +3,7 @@ package vlm\n import (\n \t\"context\"\n \t\"encoding/json\"\n+\t\"errors\"\n \t\"net/http\"\n \t\"net/http/httptest\"\n \t\"testing\"\n@@ -64,3 +65,50 @@ func TestOllamaPredictThinkingRequest(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+// A reply the model stopped because it ran out of tokens or context is\n+// incomplete: it must surface as ErrTruncatedCompletion, like the remote VLM.\n+func TestOllamaPredictRejectsTruncatedReply(t *testing.T) {\n+\tfor _, tc := range []struct {\n+\t\tname       string\n+\t\tdoneReason string\n+\t\twantErr    bool\n+\t}{\n+\t\t{\"length\", \"length\", true},\n+\t\t{\"stop\", \"stop\", false},\n+\t\t{\"absent\", \"\", false},\n+\t} {\n+\t\tt.Run(tc.name, func(t *testing.T) {\n+\t\t\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\t\t\tif r.Method == http.MethodHead {\n+\t\t\t\t\tw.WriteHeader(http.StatusOK)\n+\t\t\t\t\treturn\n+\t\t\t\t}\n+\t\t\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t\t\tbody := map[string]any{\n+\t\t\t\t\t\"message\": map[string]any{\"role\": \"assistant\", \"content\": \"cut-off caption\"},\n+\t\t\t\t\t\"done\":    true,\n+\t\t\t\t}\n+\t\t\t\tif tc.doneReason != \"\" {\n+\t\t\t\t\tbody[\"done_reason\"] = tc.doneReason\n+\t\t\t\t}\n+\t\t\t\t_ = json.NewEncoder(w).Encode(body)\n+\t\t\t}))\n+\t\t\tdefer server.Close()\n+\t\t\tt.Setenv(\"OLLAMA_BASE_URL\", server.URL)\n+\t\t\tservice, err := ollama.GetOllamaService()\n+\t\t\trequire.NoError(t, err)\n+\t\t\tmodel, err := NewOllamaVLM(&Config{ModelName: \"test\"}, service)\n+\t\t\trequire.NoError(t, err)\n+\n+\t\t\tresult, err := model.Predict(context.Background(), nil, \"describe\")\n+\t\t\tif tc.wantErr {\n+\t\t\t\trequire.True(t, errors.Is(err, ErrTruncatedCompletion), \"got %v\", err)\n+\t\t\t\trequire.Empty(t, result)\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t\trequire.NoError(t, err)\n+\t\t\trequire.Equal(t, \"cut-off caption\", result)\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/models/vlm/ollama_test.go"
+ ]
+}

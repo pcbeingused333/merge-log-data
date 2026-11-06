@@ -1,0 +1,20 @@
+{
+ "repo": "o19s/quepid",
+ "number": 1850,
+ "url": "https://github.com/o19s/quepid/pull/1850",
+ "state": "merged",
+ "reviews": [],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "member",
+   "created_at": "2026-10-27T14:19:40Z",
+   "body": "Reviewed this — the fix itself is correct: swapping the full `input.value = text` overwrite for `setRangeText(..., selectionStart, selectionEnd, \"end\")` is the right API, it only replaces the current selection, and the target (`<input type=\"text\">` in `_queries.html.erb`) fully supports it. No functional issues found.\n\nOne thing worth a look: the new test `\"moves the cursor after the pasted text and updates the submit label\"` asserts `selectionStart`/`selectionEnd` === `5` after pasting `\"x\\ny\"` at position 1 in `\"ab\"`. Per the HTML spec, `setRangeText(replacement, start, end, \"end\")` should land the cursor at `start + replacement.length` = `1 + 3` = **4** (right after the pasted `\"x;y\"`, before the trailing `\"b\"`).\n\nI verified this diverges from spec because of a bug in `happy-dom` (the vitest DOM environment here, v21.0.4 — currently the latest release): `HTMLInputElement.setRangeText` computes `newEnd = start + this.value.length` (length of the whole *post-replacement* value) instead of `start + replacement.length`, which happens to clamp to `5` in this case. I couldn't find this filed upstream (`capricorn86/happy-dom`), and there's no newer happy-dom version to pick up — 21.0.4 is latest.\n\nSo this isn't a regression in the app, and it doesn't block merging — the shipped behavior is correct in real browsers. But the test's hardcoded `5` only passes because it mirrors the mock DOM's bug rather than verifying the actual \"cursor right after the pasted text\" behavior described in the PR. Worth changing that assertion to `4` (or asserting position relative to the replacement's end rather than a hardcoded absolute index) so the test doesn't silently start failing if happy-dom ever fixes this, and so it actually checks what it claims to check."
+  },
+  {
+   "role": "member",
+   "created_at": "2026-10-27T14:31:00Z",
+   "body": "Thanks for the fix"
+  }
+ ]
+}

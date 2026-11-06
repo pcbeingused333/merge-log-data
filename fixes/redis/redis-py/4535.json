@@ -1,0 +1,26 @@
+{
+ "repo": "redis/redis-py",
+ "number": 4535,
+ "url": "https://github.com/redis/redis-py/pull/4535",
+ "title": "Drop the keys option before running response callbacks in async cluster transactions",
+ "merged_at": "2026-10-30T13:12:57Z",
+ "files": [
+  {
+   "filename": "redis/asyncio/cluster.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -4465,6 +4465,9 @@ async def _execute_transaction(\n             if not isinstance(r, Exception):\n                 command_name = cmd.args[0]\n                 if command_name in self._pipe.cluster_client.response_callbacks:\n+                    # The keys option is only for the client cache and is\n+                    # not an option of the callbacks\n+                    cmd.kwargs.pop(\"keys\", None)\n                     r = self._pipe.cluster_client.response_callbacks[command_name](\n                         r, **cmd.kwargs\n                     )"
+  },
+  {
+   "filename": "tests/test_asyncio/test_cluster_transaction.py",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -44,6 +44,15 @@ async def test_pipeline_is_true(self, r) -> None:\n         async with r.pipeline(transaction=True) as pipe:\n             assert pipe\n \n+    @pytest.mark.onlycluster\n+    async def test_transaction_applies_response_callbacks(self, r) -> None:\n+        async with r.pipeline(transaction=True) as pipe:\n+            pipe.hset(\"{foo}hash\", mapping={\"a\": \"1\", \"b\": \"2\"})\n+            pipe.hgetall(\"{foo}hash\")\n+            result = await pipe.execute()\n+\n+        assert result == [2, {b\"a\": b\"1\", b\"b\": b\"2\"}]\n+\n     @pytest.mark.onlycluster\n     async def test_pipeline_empty_transaction(self, r):\n         await r.set(\"a\", 0)"
+  }
+ ],
+ "test_files": [
+  "tests/test_asyncio/test_cluster_transaction.py"
+ ]
+}

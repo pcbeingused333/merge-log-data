@@ -1,0 +1,33 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 269,
+ "url": "https://github.com/lofcz/LLMTornado/pull/269",
+ "title": "Report Cohere's STOP_SEQUENCE as the StopSequence finish reason",
+ "merged_at": "2026-10-22T23:49:43Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/CohereFinishReasonTests.cs",
+   "status": "added",
+   "additions": 58,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,58 @@\n+using System.IO;\n+using System.Text;\n+using LlmTornado.Chat;\n+using LlmTornado.Chat.Vendors.Cohere;\n+using LlmTornado.Code;\n+using LlmTornado.Code.Vendor;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class CohereFinishReasonTests\n+{\n+    [Test]\n+    public async Task InboundStream_ReportsAStopSequenceFinishReason()\n+    {\n+        const string sse = \"\"\"\n+            data: {\"type\":\"content-delta\",\"index\":0,\"delta\":{\"message\":{\"content\":{\"text\":\"Hi\"}}}}\n+\n+            data: {\"type\":\"message-end\",\"delta\":{\"finish_reason\":\"STOP_SEQUENCE\",\"usage\":{\"billed_units\":{\"input_tokens\":12,\"output_tokens\":3},\"tokens\":{\"input_tokens\":12,\"output_tokens\":3}}}}\n+\n+\n+            \"\"\";\n+\n+        CohereEndpointProvider provider = new CohereEndpointProvider();\n+        StreamReader reader = new StreamReader(new MemoryStream(Encoding.UTF8.GetBytes(sse)));\n+        ChatRequest request = new ChatRequest\n+        {\n+            Stream = true,\n+            Messages = [new ChatMessage(ChatMessageRoles.User, \"test\")]\n+        };\n+\n+        ChatResult? finish = null;\n+        await foreach (ChatResult? chunk in provider.InboundStream(reader, request, null))\n+        {\n+            if (chunk?.StreamInternalKind is ChatResultStreamInternalKinds.FinishData)\n+            {\n+                finish = chunk;\n+            }\n+        }\n+\n+        Assert.That(finish, Is.Not.Null);\n+        Assert.That(finish!.Choices![0].FinishReason, Is.EqualTo(ChatMessageFinishReasons.StopSequence));\n+    }\n+\n+    [Test]\n+    public void Deserialize_ReportsAStopSequenceFinishReason()\n+    {\n+        const string json = \"\"\"\n+            {\"id\":\"c1\",\"finish_reason\":\"STOP_SEQUENCE\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Hi\"}]},\n+             \"usage\":{\"billed_units\":{\"input_tokens\":12,\"output_tokens\":3},\"tokens\":{\"input_tokens\":12,\"output_tokens\":3}}}\n+            \"\"\";\n+\n+        ChatResult? result = VendorCohereChatResult.Deserialize(json);\n+\n+        Assert.That(result, Is.Not.Null);\n+        Assert.That(result!.Choices![0].FinishReason, Is.EqualTo(ChatMessageFinishReasons.StopSequence));\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/Vendors/Cohere/VendorCohereChatResult.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -240,7 +240,7 @@ public override ChatResult ToChatResult(string? postData, object? chatRequest)\n                 FinishReason = FinishReason switch\n                 {\n                     VendorCohereChatFinishReason.Complete => ChatMessageFinishReasons.EndTurn,\n-                    VendorCohereChatFinishReason.StopSequence => ChatMessageFinishReasons.EndTurn,\n+                    VendorCohereChatFinishReason.StopSequence => ChatMessageFinishReasons.StopSequence,\n                     VendorCohereChatFinishReason.MaxTokens => ChatMessageFinishReasons.Length,\n                     VendorCohereChatFinishReason.ToolCall => ChatMessageFinishReasons.ToolCalls,\n                     VendorCohereChatFinishReason.Error => ChatMessageFinishReasons.Error,"
+  },
+  {
+   "filename": "src/LlmTornado/Vendor/Cohere/CohereEndpointProvider.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -409,7 +409,7 @@ await eventHandler.FunctionCallDeltaHandler.Invoke(new FunctionCallStreamUpdate\n                             finishReason = messageEndEvent.Delta.FinishReason.Value switch\n                             {\n                                 VendorCohereChatFinishReason.Complete => ChatMessageFinishReasons.EndTurn,\n-                                VendorCohereChatFinishReason.StopSequence => ChatMessageFinishReasons.EndTurn,\n+                                VendorCohereChatFinishReason.StopSequence => ChatMessageFinishReasons.StopSequence,\n                                 VendorCohereChatFinishReason.MaxTokens => ChatMessageFinishReasons.Length,\n                                 VendorCohereChatFinishReason.ToolCall => ChatMessageFinishReasons.ToolCalls,\n                                 VendorCohereChatFinishReason.Error => ChatMessageFinishReasons.Error,"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/CohereFinishReasonTests.cs"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 283,
+ "url": "https://github.com/lofcz/LLMTornado/pull/283",
+ "title": "fix: implement LocalDocumentStore.DeleteDocument",
+ "merged_at": "2026-10-28T08:58:09Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/VectorDB/LocalDocumentStoreDeleteTests.cs",
+   "status": "added",
+   "additions": 43,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,43 @@\n+using System.IO;\n+using LlmTornado.VectorDatabases;\n+\n+namespace LlmTornado.Tests.VectorDB;\n+\n+[TestFixture]\n+public class LocalDocumentStoreDeleteTests\n+{\n+    private string directory = null!;\n+\n+    [SetUp]\n+    public void SetUp()\n+    {\n+        directory = Path.Combine(Path.GetTempPath(), $\"tornado-delete-{Guid.NewGuid():N}\");\n+        Directory.CreateDirectory(directory);\n+    }\n+\n+    [TearDown]\n+    public void TearDown()\n+    {\n+        Directory.Delete(directory, true);\n+    }\n+\n+    [Test]\n+    public void LocalDocumentStore_DeleteDocument_RemovesOnlyThatDocument()\n+    {\n+        LocalDocumentStore store = new LocalDocumentStore(directory, \"docs\");\n+        store.SetDocument(new Document(\"a\", \"first\"));\n+        store.SetDocument(new Document(\"b\", \"second\"));\n+\n+        store.DeleteDocument(\"a\");\n+\n+        Assert.That(store.GetAllDocuments().Select(d => d.Id), Is.EqualTo(new[] { \"b\" }));\n+    }\n+\n+    [Test]\n+    public void LocalDocumentStore_DeleteDocument_UnknownId_Throws()\n+    {\n+        LocalDocumentStore store = new LocalDocumentStore(directory, \"docs\");\n+\n+        Assert.Throws<KeyNotFoundException>(() => store.DeleteDocument(\"missing\"));\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado.VectorDatabases/Document/LocalDocumentStore.cs",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -31,7 +31,13 @@ public void SetCollection(string collectionName)\n \n     public void DeleteDocument(string id)\n     {\n-        throw new NotImplementedException();\n+        var filePath = Path.Combine(_collectionFilePath, $\"{id}.json\");\n+        if (!File.Exists(filePath))\n+        {\n+            throw new KeyNotFoundException($\"Document with id {id} not found.\");\n+        }\n+\n+        File.Delete(filePath);\n     }\n \n     public IEnumerable<Document> GetAllDocuments()"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/VectorDB/LocalDocumentStoreDeleteTests.cs"
+ ]
+}

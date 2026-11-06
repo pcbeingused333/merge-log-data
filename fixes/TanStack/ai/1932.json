@@ -1,0 +1,57 @@
+{
+ "repo": "TanStack/ai",
+ "number": 1932,
+ "url": "https://github.com/TanStack/ai/pull/1932",
+ "title": "fix(ai-ollama): keep parallel same-name tool calls apart when ids are missing",
+ "merged_at": "2026-10-30T05:11:43Z",
+ "files": [
+  {
+   "filename": ".changeset/ollama-parallel-tool-call-ids.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@tanstack/ai-ollama': patch\n+---\n+\n+Keep parallel calls to the same tool apart when Ollama sends no tool-call id. The fallback id was `<name>_<Date.now()>`, so two calls to one tool in the same millisecond shared an id and the second call was merged into the first instead of running. The fallback id is now unique per call."
+  },
+  {
+   "filename": "packages/ai-ollama/src/adapters/text.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -329,11 +329,11 @@ export class OllamaTextAdapter<TModel extends string> extends BaseTextAdapter<\n \n       const handleToolCall = (toolCall: ToolCall): Array<AdapterYieldChunk> => {\n         const actualToolCall = toolCall as ToolCall & {\n-          id: string\n-          function: { index: number }\n+          id?: string\n+          function: { index?: number }\n         }\n         const toolCallId =\n-          actualToolCall.id || `${actualToolCall.function.name}_${Date.now()}`\n+          actualToolCall.id || generateId(actualToolCall.function.name)\n         const events: Array<AdapterYieldChunk> = []\n \n         // Emit TOOL_CALL_START if not already emitted for this tool call"
+  },
+  {
+   "filename": "packages/ai-ollama/tests/text-adapter.test.ts",
+   "status": "modified",
+   "additions": 41,
+   "deletions": 1,
+   "patch": "@@ -54,6 +54,7 @@ beforeEach(() => {\n \n afterEach(() => {\n   vi.unstubAllEnvs()\n+  vi.restoreAllMocks()\n })\n \n describe('OllamaTextAdapter construction', () => {\n@@ -277,7 +278,46 @@ describe('OllamaTextAdapter.chatStream (tool calls)', () => {\n     const startChunk = chunks.find((c) => c.type === 'TOOL_CALL_START') as\n       | { toolCallId: string; toolCallName: string }\n       | undefined\n-    expect(startChunk!.toolCallId).toMatch(/^search_\\d+/)\n+    expect(startChunk!.toolCallId).toMatch(/^search-\\d+-/)\n+  })\n+\n+  it('keeps two parallel calls to the same tool apart when Ollama omits ids', async () => {\n+    // Same millisecond for both calls: the old `name_Date.now()` id collided here\n+    vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000)\n+    chatMock.mockResolvedValueOnce(\n+      asyncIterable([\n+        {\n+          message: {\n+            role: 'assistant',\n+            content: '',\n+            tool_calls: [\n+              { function: { name: 'search', arguments: { q: 'cats' } } },\n+              { function: { name: 'search', arguments: { q: 'dogs' } } },\n+            ],\n+          },\n+          done: true,\n+          done_reason: 'stop',\n+        },\n+      ]),\n+    )\n+\n+    const chunks = await collectStream(\n+      createOllamaChat('llama3.2').chatStream({\n+        threadId: 'thread-1',\n+        logger: testLogger,\n+        model: 'llama3.2',\n+        messages: [{ role: 'user', content: 'find cats and dogs' }],\n+        tools: [searchTool],\n+      }),\n+    )\n+\n+    const startIds = chunks.flatMap((c) =>\n+      c.type === 'TOOL_CALL_START' ? [c.toolCallId] : [],\n+    )\n+    const ends = chunks.flatMap((c) => (c.type === 'TOOL_CALL_END' ? [c] : []))\n+    expect(new Set(startIds).size).toBe(2)\n+    expect(ends.map((e) => e.toolCallId)).toEqual(startIds)\n+    expect(ends.map((e) => e.args)).toEqual(['{\"q\":\"cats\"}', '{\"q\":\"dogs\"}'])\n   })\n \n   async function toolCallEnd(args: unknown) {"
+  },
+  {
+   "filename": "testing/e2e/fixtures/tool-calling/parallel-same-tool.json",
+   "status": "added",
+   "additions": 31,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,31 @@\n+{\n+  \"fixtures\": [\n+    {\n+      \"match\": {\n+        \"userMessage\": \"[parallel-same] compare guitars 1 and 2, then 3 and 4\",\n+        \"sequenceIndex\": 0\n+      },\n+      \"response\": {\n+        \"toolCalls\": [\n+          {\n+            \"name\": \"compareGuitars\",\n+            \"arguments\": \"{\\\"guitarIds\\\":[1,2]}\"\n+          },\n+          {\n+            \"name\": \"compareGuitars\",\n+            \"arguments\": \"{\\\"guitarIds\\\":[3,4]}\"\n+          }\n+        ]\n+      }\n+    },\n+    {\n+      \"match\": {\n+        \"userMessage\": \"[parallel-same] compare guitars 1 and 2, then 3 and 4\",\n+        \"sequenceIndex\": 1\n+      },\n+      \"response\": {\n+        \"content\": \"Both comparisons are done. The Stratocaster is the cheapest of the first pair.\"\n+      }\n+    }\n+  ]\n+}"
+  },
+  {
+   "filename": "testing/e2e/src/lib/feature-support.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -154,6 +154,7 @@ export const matrix: Record<Feature, Set<Provider>> = {\n     'cloudflare',\n     'neon',\n     'neon-anthropic',\n+    'ollama',\n   ]),\n   // Gemini excluded: approval flow timing issues with Gemini's streaming format\n   // Vertex uses the same Gemini stream, so it is excluded for the same reason."
+  },
+  {
+   "filename": "testing/e2e/tests/parallel-tool-calls.spec.ts",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -33,5 +33,29 @@ for (const provider of providersFor('parallel-tool-calls')) {\n       // Wait for text response after tool execution\n       await waitForAssistantText(page, 'Stratocaster')\n     })\n+\n+    // Ollama sends no tool-call ids, so this guards the fallback id\n+    test('keeps parallel calls to the same tool apart', async ({\n+      page,\n+      testId,\n+      aimockPort,\n+    }) => {\n+      await page.goto(\n+        featureUrl(provider, 'parallel-tool-calls', testId, aimockPort),\n+      )\n+\n+      await sendMessage(\n+        page,\n+        '[parallel-same] compare guitars 1 and 2, then 3 and 4',\n+      )\n+      await waitForResponse(page)\n+\n+      const toolNames = (await getToolCalls(page)).map((t) => t.name)\n+      expect(\n+        toolNames.filter((name) => name === 'compareGuitars'),\n+      ).toHaveLength(2)\n+\n+      await waitForAssistantText(page, 'Both comparisons are done')\n+    })\n   })\n }"
+  }
+ ],
+ "test_files": [
+  "packages/ai-ollama/tests/text-adapter.test.ts",
+  "testing/e2e/fixtures/tool-calling/parallel-same-tool.json",
+  "testing/e2e/src/lib/feature-support.ts",
+  "testing/e2e/tests/parallel-tool-calls.spec.ts"
+ ]
+}

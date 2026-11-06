@@ -1,0 +1,26 @@
+{
+ "repo": "posit-dev/pointblank",
+ "number": 483,
+ "url": "https://github.com/posit-dev/pointblank/pull/483",
+ "title": "fix: let col_vals_str_len() check Categorical and Enum columns on Polars",
+ "merged_at": "2026-10-23T14:31:22Z",
+ "files": [
+  {
+   "filename": "pointblank/_interrogation.py",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 2,
+   "patch": "@@ -1272,6 +1272,19 @@ def interrogate_regex(\n     return result_tbl.to_native()\n \n \n+def _string_expr(nw_tbl: Any, column: str) -> nw.Expr:\n+    \"\"\"\n+    The column as an expression that the `.str` methods can be used on.\n+\n+    Polars has no string methods for Categorical and Enum columns (nor pandas for pyarrow\n+    dictionary columns), so those are cast to strings. Narwhals < 2.27 casts a missing value in a\n+    pandas `category` column to the string \"nan\", so missing values are kept missing.\n+    \"\"\"\n+    if nw_tbl.collect_schema()[column] not in (nw.Categorical, nw.Enum):\n+        return nw.col(column)\n+    return nw.when(~nw.col(column).is_null()).then(nw.col(column).cast(nw.String))\n+\n+\n def interrogate_str_len(tbl: IntoFrame, column: str, values: dict, na_pass: bool) -> Any:\n     \"\"\"String length interrogation.\"\"\"\n \n@@ -1281,6 +1294,8 @@ def interrogate_str_len(tbl: IntoFrame, column: str, values: dict, na_pass: bool\n     nw_tbl = nw.from_native(tbl)\n     assert isinstance(nw_tbl, (nw.DataFrame, nw.LazyFrame))\n \n+    column_expr = _string_expr(nw_tbl, column)\n+\n     result_tbl = nw_tbl.with_columns(\n         pb_is_good_1=nw.col(column).is_null() & na_pass,\n         pb_is_good_2=nw.lit(True),\n@@ -1289,12 +1304,12 @@ def interrogate_str_len(tbl: IntoFrame, column: str, values: dict, na_pass: bool\n \n     if min_val is not None:\n         result_tbl = result_tbl.with_columns(\n-            pb_is_good_2=(nw.col(column).str.len_chars() >= min_val).fill_null(False)\n+            pb_is_good_2=(column_expr.str.len_chars() >= min_val).fill_null(False)\n         )\n \n     if max_val is not None:\n         result_tbl = result_tbl.with_columns(\n-            pb_is_good_3=(nw.col(column).str.len_chars() <= max_val).fill_null(False)\n+            pb_is_good_3=(column_expr.str.len_chars() <= max_val).fill_null(False)\n         )\n \n     result_tbl = result_tbl.with_columns("
+  },
+  {
+   "filename": "tests/test_str_len_categorical_columns.py",
+   "status": "added",
+   "additions": 75,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,75 @@\n+import narwhals as nw\n+import pandas as pd\n+import polars as pl\n+import pyarrow as pa\n+import pytest\n+\n+from pointblank import Validate\n+from pointblank._interrogation import _string_expr\n+\n+VALUES = [\"ab\", None, \"abc\", \"\", \"abcd\"]\n+\n+\n+def _table(tbl_type: str):\n+    if tbl_type == \"polars_str\":\n+        return pl.DataFrame({\"s\": VALUES})\n+    if tbl_type == \"polars_categorical\":\n+        return pl.DataFrame({\"s\": VALUES}, schema={\"s\": pl.Categorical})\n+    if tbl_type == \"polars_enum\":\n+        return pl.DataFrame({\"s\": VALUES}, schema={\"s\": pl.Enum([\"ab\", \"abc\", \"\", \"abcd\"])})\n+    if tbl_type == \"polars_lazy_enum\":\n+        return pl.LazyFrame({\"s\": VALUES}, schema={\"s\": pl.Enum([\"ab\", \"abc\", \"\", \"abcd\"])})\n+    if tbl_type == \"pandas_category\":\n+        return pd.DataFrame({\"s\": pd.Categorical(VALUES)})\n+    if tbl_type == \"pandas_pyarrow_dictionary\":\n+        return pd.DataFrame({\"s\": pd.Categorical(VALUES)}).astype(\n+            {\"s\": pd.ArrowDtype(pa.dictionary(pa.int32(), pa.string()))}\n+        )\n+    raise ValueError(tbl_type)\n+\n+\n+@pytest.mark.parametrize(\n+    \"tbl_type\",\n+    [\n+        \"polars_str\",\n+        \"polars_categorical\",\n+        \"polars_enum\",\n+        \"polars_lazy_enum\",\n+        \"pandas_category\",\n+        \"pandas_pyarrow_dictionary\",\n+    ],\n+)\n+@pytest.mark.parametrize(\n+    \"kwargs, na_pass, expected\",\n+    [\n+        ({\"min_val\": 2}, False, (3, 2)),\n+        ({\"max_val\": 3}, False, (3, 2)),\n+        ({\"min_val\": 2, \"max_val\": 3}, True, (3, 2)),\n+    ],\n+)\n+def test_col_vals_str_len_on_categorical_columns(tbl_type, kwargs, na_pass, expected) -> None:\n+    validation = (\n+        Validate(_table(tbl_type))\n+        .col_vals_str_len(columns=\"s\", na_pass=na_pass, **kwargs)\n+        .interrogate()\n+    )\n+\n+    assert (\n+        validation.n_passed(i=1, scalar=True),\n+        validation.n_failed(i=1, scalar=True),\n+    ) == expected\n+\n+\n+@pytest.mark.parametrize(\n+    \"tbl_type\",\n+    [\"polars_categorical\", \"polars_lazy_enum\", \"pandas_category\", \"pandas_pyarrow_dictionary\"],\n+)\n+def test_string_expr_keeps_missing_values_missing(tbl_type) -> None:\n+    # Narwhals < 2.27 casts a missing value in a pandas `category` column to the string \"nan\"\n+    nw_tbl = nw.from_native(_table(tbl_type))\n+    result = nw_tbl.select(s=_string_expr(nw_tbl, \"s\"), is_null=_string_expr(nw_tbl, \"s\").is_null())\n+    if isinstance(result, nw.LazyFrame):\n+        result = result.collect()\n+\n+    assert result[\"is_null\"].to_list() == [False, True, False, False, False]\n+    assert result[\"s\"].dtype == nw.String"
+  }
+ ],
+ "test_files": [
+  "tests/test_str_len_categorical_columns.py"
+ ]
+}

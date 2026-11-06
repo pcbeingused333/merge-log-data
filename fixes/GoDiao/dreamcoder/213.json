@@ -1,0 +1,47 @@
+{
+ "repo": "GoDiao/dreamcoder",
+ "number": 213,
+ "url": "https://github.com/GoDiao/dreamcoder/pull/213",
+ "title": "fix(swarm): stop deleting teams and task lists when the CLI process exits",
+ "merged_at": "2026-10-30T02:50:29Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -8,6 +8,7 @@ All notable changes to DreamCoder will be documented in this file.\n \n - Dev mode (`bun run electron:dev`) finds the bundled ripgrep, so Glob and Grep work without a system `rg` on `PATH`. `bun run build:sidecars` now writes `desktop/binaries/<target>/dreamcoder-sidecar` and `rg`, the same names as the packaged app; run it once more in an existing checkout and delete the old suffixed files in `desktop/binaries/` (#195). Thanks @pcbeingused333.\n - A forced tool (`tool_choice` of type `tool`) from an Anthropic client is now sent to OpenAI Responses providers in the Responses shape (`{ type: 'function', name }`), so the request no longer fails with a 400 (#212). Thanks @pcbeingused333.\n+- Stopping or restarting a lead session no longer deletes its team and task list (#199). Teams are removed only by `TeamDelete`, not when the CLI process exits (Stop, `/clear`, restart, app quit). Thanks @pcbeingused333.\n \n ## [0.8.0-beta.2] — 2026-10-29\n "
+  },
+  {
+   "filename": "src/bootstrap/state.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 5,
+   "patch": "@@ -141,11 +141,7 @@ type State = {\n   // SessionCronTask below (not importing from cronTasks.ts keeps\n   // bootstrap a leaf of the import DAG).\n   sessionCronTasks: SessionCronTask[]\n-  // Teams created this session via TeamCreate. cleanupSessionTeams()\n-  // removes these on gracefulShutdown so subagent-created teams don't\n-  // persist on disk forever (gh-32730). TeamDelete removes entries to\n-  // avoid double-cleanup. Lives here (not teamHelpers.ts) so\n-  // resetStateForTests() clears it between tests.\n+  // Lives here (not teamHelpers.ts) so resetStateForTests() clears it between tests.\n   sessionCreatedTeams: Set<string>\n   // Session-only trust flag for home directory (not persisted to disk)\n   // When running from home dir, trust dialog is shown but not saved to disk."
+  },
+  {
+   "filename": "src/entrypoints/init.teamCleanup.test.ts",
+   "status": "added",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,49 @@\n+import { afterEach, beforeEach, describe, expect, it } from 'bun:test'\n+import * as fs from 'node:fs/promises'\n+import * as os from 'node:os'\n+import * as path from 'node:path'\n+import { getSessionCreatedTeams } from '../bootstrap/state.js'\n+import { runCleanupFunctions } from '../utils/cleanupRegistry.js'\n+import { init } from './init.js'\n+\n+const configDirAtLoad = process.env.DREAMCODER_CONFIG_DIR\n+const apiKeyAtLoad = process.env.ANTHROPIC_API_KEY\n+let tmpDir: string\n+\n+const exists = (p: string) =>\n+  fs.access(p).then(\n+    () => true,\n+    () => false,\n+  )\n+\n+beforeEach(async () => {\n+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'team-shutdown-'))\n+  process.env.DREAMCODER_CONFIG_DIR = tmpDir\n+  process.env.ANTHROPIC_API_KEY = 'test-key'\n+})\n+\n+afterEach(async () => {\n+  getSessionCreatedTeams().clear()\n+  process.env.DREAMCODER_CONFIG_DIR = configDirAtLoad\n+  if (apiKeyAtLoad === undefined) delete process.env.ANTHROPIC_API_KEY\n+  else process.env.ANTHROPIC_API_KEY = apiKeyAtLoad\n+  await fs.rm(tmpDir, { recursive: true, force: true })\n+})\n+\n+describe('shutdown', () => {\n+  it('keeps a session team and its task list on disk', async () => {\n+    const teamDir = path.join(tmpDir, 'teams', 'crew')\n+    const taskDir = path.join(tmpDir, 'tasks', 'crew')\n+    await fs.mkdir(teamDir, { recursive: true })\n+    await fs.mkdir(taskDir, { recursive: true })\n+    await fs.writeFile(path.join(teamDir, 'config.json'), JSON.stringify({ name: 'crew', members: [] }))\n+    await fs.writeFile(path.join(taskDir, '1.json'), '{}')\n+    getSessionCreatedTeams().add('crew')\n+\n+    await init()\n+    await runCleanupFunctions()\n+\n+    expect(await exists(path.join(teamDir, 'config.json'))).toBe(true)\n+    expect(await exists(path.join(taskDir, '1.json'))).toBe(true)\n+  })\n+})"
+  },
+  {
+   "filename": "src/entrypoints/init.ts",
+   "status": "modified",
+   "additions": 0,
+   "deletions": 11,
+   "patch": "@@ -188,17 +188,6 @@ export const init = memoize(async (): Promise<void> => {\n     // Register LSP manager cleanup (initialization happens in main.tsx after --plugin-dir is processed)\n     registerCleanup(shutdownLspServerManager)\n \n-    // gh-32730: teams created by subagents (or main agent without\n-    // explicit TeamDelete) were left on disk forever. Register cleanup\n-    // for all teams created this session. Lazy import: swarm code is\n-    // behind feature gate and most sessions never create teams.\n-    registerCleanup(async () => {\n-      const { cleanupSessionTeams } = await import(\n-        '../utils/swarm/teamHelpers.js'\n-      )\n-      await cleanupSessionTeams()\n-    })\n-\n     // Initialize scratchpad directory if enabled\n     if (isScratchpadEnabled()) {\n       const scratchpadStart = Date.now()"
+  },
+  {
+   "filename": "src/utils/swarm/teamHelpers.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 2,
+   "patch": "@@ -591,7 +591,7 @@ async function destroyWorktree(worktreePath: string): Promise<void> {\n }\n \n /**\n- * Mark a team as created this session so it gets cleaned up on exit.\n+ * Mark a team as created this session.\n  * Call this right after the initial writeTeamFile. TeamDelete should\n  * call unregisterTeamForSessionCleanup to prevent double-cleanup.\n  * Backing Set lives in bootstrap/state.ts so resetStateForTests()\n@@ -611,7 +611,6 @@ export function unregisterTeamForSessionCleanup(teamName: string): void {\n \n /**\n  * Clean up all teams created this session that weren't explicitly deleted.\n- * Registered with gracefulShutdown from init.ts.\n  */\n export async function cleanupSessionTeams(): Promise<void> {\n   const sessionCreatedTeams = getSessionCreatedTeams()"
+  }
+ ],
+ "test_files": [
+  "src/entrypoints/init.teamCleanup.test.ts"
+ ]
+}

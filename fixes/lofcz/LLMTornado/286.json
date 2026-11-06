@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 286,
+ "url": "https://github.com/lofcz/LLMTornado/pull/286",
+ "title": "fix(faiss): reload persisted collections instead of resetting them",
+ "merged_at": "2026-10-28T14:33:23Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/VectorDB/FaissPersistenceTests.cs",
+   "status": "added",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,35 @@\n+using System.Reflection;\n+using LlmTornado.VectorDatabases.Faiss;\n+\n+namespace LlmTornado.Tests.VectorDB;\n+\n+[TestFixture]\n+public class FaissPersistenceTests\n+{\n+    [Test]\n+    public void MetadataFile_ReloadsNextIdAndEntries()\n+    {\n+        // The shape SaveIndex writes.\n+        Dictionary<string, object> written = new()\n+        {\n+            [\"nextId\"] = 2L,\n+            [\"entries\"] = new Dictionary<long, FaissEntry>\n+            {\n+                [0] = new(\"a\", \"first\", new Dictionary<string, object> { [\"k\"] = \"v\" }),\n+                [1] = new(\"b\", \"second\")\n+            }\n+        };\n+        string json = System.Text.Json.JsonSerializer.Serialize(written, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });\n+\n+        MethodInfo read = typeof(FaissCollectionClient).GetMethod(\"ReadMetadata\", BindingFlags.NonPublic | BindingFlags.Static)!;\n+        object? loaded = read.Invoke(null, [json]);\n+\n+        Assert.That(loaded, Is.Not.Null);\n+        Type type = loaded!.GetType();\n+        Assert.That(type.GetProperty(\"NextId\")!.GetValue(loaded), Is.EqualTo(2L));\n+        Dictionary<long, FaissEntry> entries = (Dictionary<long, FaissEntry>)type.GetProperty(\"Entries\")!.GetValue(loaded)!;\n+        Assert.That(entries.Keys, Is.EquivalentTo(new long[] { 0, 1 }));\n+        Assert.That(entries[0].Id, Is.EqualTo(\"a\"));\n+        Assert.That(entries[1].Document, Is.EqualTo(\"second\"));\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado.VectorDatabases.Faiss/FaissCollectionClient.cs",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 14,
+   "patch": "@@ -1,4 +1,5 @@\n using System.Text.Json;\n+using System.Text.Json.Serialization;\n \n namespace LlmTornado.VectorDatabases.Faiss;\n \n@@ -41,23 +42,15 @@ private void LoadIndex()\n                 {\n                     // Load metadata\n                     string json = File.ReadAllText(metadataFile);\n-                    var data = JsonSerializer.Deserialize<Dictionary<string, object>>(json);\n-                    \n+                    var data = ReadMetadata(json);\n+\n                     if (data != null)\n                     {\n-                        if (data.TryGetValue(\"nextId\", out var nextIdObj))\n-                        {\n-                            _nextId = Convert.ToInt64(nextIdObj);\n-                        }\n-                        \n-                        if (data.TryGetValue(\"entries\", out var entriesObj))\n+                        _nextId = data.NextId;\n+\n+                        if (data.Entries != null)\n                         {\n-                            var entriesJson = JsonSerializer.Serialize(entriesObj);\n-                            var entries = JsonSerializer.Deserialize<Dictionary<long, FaissEntry>>(entriesJson);\n-                            if (entries != null)\n-                            {\n-                                _metadata = entries;\n-                            }\n+                            _metadata = data.Entries;\n                         }\n                     }\n \n@@ -77,6 +70,24 @@ private void LoadIndex()\n         }\n     }\n \n+    /// <summary>\n+    /// Reads the metadata file written by <see cref=\"SaveIndex\"/>. Deserialized into a typed shape: an object-typed\n+    /// dictionary yields <see cref=\"JsonElement\"/> values, which Convert.ToInt64 cannot convert.\n+    /// </summary>\n+    private static FaissMetadataFile? ReadMetadata(string json)\n+    {\n+        return JsonSerializer.Deserialize<FaissMetadataFile>(json);\n+    }\n+\n+    private sealed class FaissMetadataFile\n+    {\n+        [JsonPropertyName(\"nextId\")]\n+        public long NextId { get; set; }\n+\n+        [JsonPropertyName(\"entries\")]\n+        public Dictionary<long, FaissEntry>? Entries { get; set; }\n+    }\n+\n     private void InitializeNewIndex()\n     {\n         // Create a FAISS index with IDMap2 for managing custom IDs"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/VectorDB/FaissPersistenceTests.cs"
+ ]
+}

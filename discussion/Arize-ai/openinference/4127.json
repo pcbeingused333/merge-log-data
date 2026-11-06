@@ -1,0 +1,46 @@
+{
+ "repo": "Arize-ai/openinference",
+ "number": 4127,
+ "url": "https://github.com/Arize-ai/openinference/pull/4127",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-31T03:34:18Z",
+   "body": "## Factory review of cec898e: Approve\n\nThe fix does what it claims, all checks pass, the added tests fail without it, and there are no blocking findings.\n\n| Criterion | Result | Notes |\n|---|---|---|\n| Fit | Pass | does what it claims |\n| Checks | Pass | openai `test`, `type:check`, `lint`, `fmt:check` |\n| Tests | Pass | both new cases fail without the source change |\n| Blocking findings | 0 | none |\n| Non-blocking findings | 2 | changeset omits non-streamed status change `js/.changeset/openai-responses-incomplete-stream.md:5`; status message unasserted `test/openai.responses.test.ts:385` |\n| Risk | Low | backwards compatibility: non-streamed failed responses now end with ERROR, not OK |\n| Review depth | Focused | small instrumentor fix, no public API or core change |\n\n<details><summary>Details</summary>\n\n**Intent:** Fixes #4125. Responses API streams that end with `response.incomplete` or `response.failed` should record output and token usage as `response.completed` streams do. The span status should follow the response, streamed or not: `failed` gives ERROR with the error message, `incomplete` gives OK.\n**Fit:** `consumeResponseStreamEvents` (`responsesAttributes.ts:260-262`) now keeps the response from all three terminal events. The shared `recordSpan` (`instrumentation.ts:559-563`) sets ERROR plus `error?.message` for `status: \"failed\"` and OK otherwise. That makes non-streamed failed responses ERROR where they were OK before, which the PR body states. A changeset is included. Nothing extra.\n**Verified:** At cec898e, `pnpm --filter @arizeai/openinference-instrumentation-openai test` passed 100/100 and `type:check` was clean. `pnpm run lint` and `pnpm run fmt:check` were clean. With both source files reverted to the merge base, both new `it.each` cases failed. The incomplete case got ERROR where OK was expected. The failed case had no `output.value`. With only `instrumentation.ts` reverted, the `response.failed` case failed on span status. So each source change is needed by a test. Against the openai SDK source (`core/streaming.js`), a `response.failed` SSE event is not thrown by the SDK: it throws only on an `error` event or a top-level `data.error`, and here the error is under `data.response.error`. The event therefore reaches the tee'd stream that the instrumentation consumes.\n**Not verified:** No live OpenAI API run; the tests use a synthetic `Stream` that skips SSE parsing. Node 22 in the sandbox, while CI runs Node 20.\n**Findings without a diff line:** none\n**Risk:** side effects low, performance none, backwards compatibility low, from the JS reviewer.\n\nGraded against the [review criteria](https://github.com/Arize-ai/openinference/blob/main/factory/agents/pr-reviewer.md#verdict).\n\n</details>"
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-31T23:48:25Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "js/.changeset/openai-responses-incomplete-stream.md",
+   "created_at": "2026-10-31T03:34:04Z",
+   "body": "**What's wrong:** The changeset only describes streams. It also says \"A failed response still sets an error status\", but that is new behavior for non-streamed responses.\n\n**Evidence:** `recordSpan` (`src/instrumentation.ts:545-565`) handles streamed and non-streamed results alike. Before this PR, a non-streamed response with `status: \"failed\"` ended with status OK. It now ends with ERROR and `result.error?.message`. The PR body says this, but the changelog entry that users read does not.\n\n**Fix:** Add a sentence such as \"Non-streamed responses with `status: \\\"failed\\\"` now also end the span with an error status and the response's error message.\"\n\n**Non-blocking**"
+  },
+  {
+   "role": "bot",
+   "path": "js/packages/openinference-instrumentation-openai/test/openai.responses.test.ts",
+   "created_at": "2026-10-31T03:34:06Z",
+   "body": "**What's wrong:** The `response.failed` case checks `status.code` but not `status.message`. The PR says the ERROR status now carries the error message, and nothing tests that.\n\n**Evidence:** If `message: result.error?.message` is removed from `src/instrumentation.ts:561`, this test still passes, because the mock's `error.message` (`\"The model failed\"`, line 330) is never checked against the span.\n\n**Fix:** Add `spanMessage: \"The model failed\"` to the failed row and `spanMessage: undefined` to the incomplete row of the `it.each`, then assert `expect(spans[0].status.message).toBe(spanMessage)`.\n\n**Non-blocking**"
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-10-31T03:30:13Z",
+   "body": "The factory started a **review** of cec898ead4 (session [`sesn_014xvBXvCPR3Q6kUcCHM5wcw`](https://platform.claude.com/workspaces/wrkspc_01P7k888EhFQdCHm2iyi4ThZ/sessions/sesn_014xvBXvCPR3Q6kUcCHM5wcw)). It reports back here when the session ends."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-31T03:35:19Z",
+   "body": "The factory recommends **Approve** for cec898ead4. [Read the review](https://github.com/Arize-ai/openinference/pull/4127#pullrequestreview-5720936470)."
+  }
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "k8sgpt-ai/k8sgpt",
+ "number": 1871,
+ "url": "https://github.com/k8sgpt-ai/k8sgpt/pull/1871",
+ "title": "fix: retry the Anthropic request without sampling parameters when the model rejects them",
+ "merged_at": "2026-10-30T07:14:11Z",
+ "files": [
+  {
+   "filename": "pkg/ai/anthropic.go",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -113,6 +113,12 @@ func (c *AnthropicClient) GetCompletion(ctx context.Context, prompt string) (str\n \n \tvar textBlocks []string\n \tmessage, err := c.client.Messages.New(ctx, params)\n+\tif err != nil && anthropicRejectsSamplingParams(err) {\n+\t\t// Newer Claude models only accept the default sampling values: retry once without them.\n+\t\tvar unset anthropic.MessageNewParams\n+\t\tparams.Temperature, params.TopP, params.TopK = unset.Temperature, unset.TopP, unset.TopK\n+\t\tmessage, err = c.client.Messages.New(ctx, params)\n+\t}\n \tif err != nil {\n \t\treturn \"\", err\n \t}\n@@ -130,6 +136,17 @@ func (c *AnthropicClient) GetCompletion(ctx context.Context, prompt string) (str\n \treturn strings.Join(textBlocks, \"\\n\"), nil\n }\n \n+// anthropicRejectsSamplingParams reports whether err is Anthropic's 400 for a temperature, top_p or\n+// top_k the model does not accept (newer Claude models take only the default sampling).\n+func anthropicRejectsSamplingParams(err error) bool {\n+\tvar apiErr *anthropic.Error\n+\tif !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest {\n+\t\treturn false\n+\t}\n+\tmsg := apiErr.Error()\n+\treturn strings.Contains(msg, \"temperature\") || strings.Contains(msg, \"top_p\") || strings.Contains(msg, \"top_k\")\n+}\n+\n func (c *AnthropicClient) GetName() string {\n \treturn anthropicClientName\n }"
+  },
+  {
+   "filename": "pkg/ai/anthropic_test.go",
+   "status": "modified",
+   "additions": 65,
+   "deletions": 0,
+   "patch": "@@ -176,3 +176,68 @@ func TestAnthropicClientReturnsStructuredErrors(t *testing.T) {\n \trequire.Error(t, err)\n \tassert.Contains(t, err.Error(), \"bad prompt\")\n }\n+\n+func TestAnthropicClientRetriesWithoutSamplingParamsOn400(t *testing.T) {\n+\tvar bodies []map[string]any\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tvar body map[string]any\n+\t\trequire.NoError(t, json.NewDecoder(r.Body).Decode(&body))\n+\t\tbodies = append(bodies, body)\n+\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\tif len(bodies) == 1 {\n+\t\t\tw.WriteHeader(http.StatusBadRequest)\n+\t\t\t_, err := w.Write([]byte(`{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"` + \"`temperature`\" + ` is not supported for this model.\"}}`))\n+\t\t\trequire.NoError(t, err)\n+\t\t\treturn\n+\t\t}\n+\t\t_, err := w.Write([]byte(`{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}`))\n+\t\trequire.NoError(t, err)\n+\t}))\n+\tdefer server.Close()\n+\n+\tclient := &AnthropicClient{}\n+\trequire.NoError(t, client.Configure(&anthropicMockConfig{\n+\t\tbaseURL:     server.URL,\n+\t\tpassword:    \"test-token\",\n+\t\tmodel:       \"claude-test\",\n+\t\ttemperature: 0.7,\n+\t\ttopK:        40,\n+\t\tmaxTokens:   512,\n+\t}))\n+\n+\tcompletion, err := client.GetCompletion(context.Background(), \"hello cluster\")\n+\trequire.NoError(t, err)\n+\tassert.Equal(t, \"ok\", completion)\n+\trequire.Len(t, bodies, 2)\n+\tassert.Contains(t, bodies[0], \"temperature\")\n+\tassert.Contains(t, bodies[0], \"top_k\")\n+\tassert.NotContains(t, bodies[1], \"temperature\")\n+\tassert.NotContains(t, bodies[1], \"top_p\")\n+\tassert.NotContains(t, bodies[1], \"top_k\")\n+}\n+\n+func TestAnthropicClientDoesNotRetryOtherErrors(t *testing.T) {\n+\tcalls := 0\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tcalls++\n+\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\tw.WriteHeader(http.StatusBadRequest)\n+\t\t_, err := w.Write([]byte(`{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"max_tokens is too large\"}}`))\n+\t\trequire.NoError(t, err)\n+\t}))\n+\tdefer server.Close()\n+\n+\tclient := &AnthropicClient{}\n+\trequire.NoError(t, client.Configure(&anthropicMockConfig{\n+\t\tbaseURL:     server.URL,\n+\t\tpassword:    \"test-token\",\n+\t\tmodel:       \"claude-test\",\n+\t\ttemperature: 0.7,\n+\t\tmaxTokens:   512,\n+\t}))\n+\n+\t_, err := client.GetCompletion(context.Background(), \"hello cluster\")\n+\trequire.Error(t, err)\n+\tassert.Contains(t, err.Error(), \"max_tokens is too large\")\n+\tassert.Equal(t, 1, calls)\n+}"
+  }
+ ],
+ "test_files": [
+  "pkg/ai/anthropic_test.go"
+ ]
+}

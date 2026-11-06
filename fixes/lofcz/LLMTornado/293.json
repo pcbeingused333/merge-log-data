@@ -1,0 +1,40 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 293,
+ "url": "https://github.com/lofcz/LLMTornado/pull/293",
+ "title": "fix(images): drop response_format and input_fidelity from gpt-image edit requests",
+ "merged_at": "2026-10-28T14:36:01Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/ImageEditResponseFormatTests.cs",
+   "status": "modified",
+   "additions": 46,
+   "deletions": 1,
+   "patch": "@@ -26,13 +26,58 @@ public async Task MultipartEdit_SendsTheResponseFormatOpenAiAccepts(TornadoImage\n             UrlResolver = (_, _, _) => $\"http://127.0.0.1:{server.Port}/v1/{{0}}{{1}}\"\n         });\n \n-        await api.ImageEdit.EditImage(new ImageEditRequest(new TornadoInputFile(\"iVBORw0KGgo=\", \"image/png\"), \"Add a hat\", responseFormat: format, model: ImageModel.OpenAi.Gpt.V1Mini));\n+        await api.ImageEdit.EditImage(new ImageEditRequest(new TornadoInputFile(\"iVBORw0KGgo=\", \"image/png\"), \"Add a hat\", responseFormat: format, model: new ImageModel(\"dall-e-2\", LLmProviders.OpenAi)));\n \n         Match match = Regex.Match(server.RequestBodies.Single(), \"name=\\\"?response_format\\\"?\\\\r?\\\\n\\\\r?\\\\n(\\\\w+)\");\n         Assert.That(match.Success, Is.True);\n         Assert.That(match.Groups[1].Value, Is.EqualTo(expected));\n     }\n \n+    [TestCase(false)]\n+    [TestCase(true)]\n+    public async Task Edit_OmitsResponseFormatAndInputFidelityForGptImage2(bool useJsonBody)\n+    {\n+        using FakeServer server = new FakeServer(Reply);\n+        TornadoApi api = CreateApi(server);\n+\n+        await api.ImageEdit.EditImage(new ImageEditRequest(new TornadoInputFile(\"iVBORw0KGgo=\", \"image/png\"), \"Add a hat\", responseFormat: TornadoImageResponseFormats.Base64, model: ImageModel.OpenAi.Gpt.V2)\n+        {\n+            InputFidelity = TornadoImageInputFidelity.High,\n+            UseJsonBody = useJsonBody,\n+            ImageReferences = useJsonBody ? [new ImageEditReference { Type = ImageEditReferenceType.ImageUrl, ImageUrl = \"https://example.com/a.png\" }] : null\n+        });\n+\n+        string body = server.RequestBodies.Single();\n+        Assert.That(body, Does.Contain(\"gpt-image-2\"));\n+        Assert.That(body, Does.Not.Contain(\"response_format\"));\n+        Assert.That(body, Does.Not.Contain(\"input_fidelity\"));\n+    }\n+\n+    [Test]\n+    public async Task MultipartEdit_OmitsResponseFormatButKeepsInputFidelityForGptImage1()\n+    {\n+        using FakeServer server = new FakeServer(Reply);\n+        TornadoApi api = CreateApi(server);\n+\n+        await api.ImageEdit.EditImage(new ImageEditRequest(new TornadoInputFile(\"iVBORw0KGgo=\", \"image/png\"), \"Add a hat\", responseFormat: TornadoImageResponseFormats.Base64, model: ImageModel.OpenAi.Gpt.V1)\n+        {\n+            InputFidelity = TornadoImageInputFidelity.High\n+        });\n+\n+        string body = server.RequestBodies.Single();\n+        Assert.That(body, Does.Not.Contain(\"response_format\"));\n+        Assert.That(body, Does.Contain(\"input_fidelity\"));\n+    }\n+\n+    private static TornadoApi CreateApi(FakeServer server)\n+    {\n+        return new TornadoApi(new OpenAiEndpointProvider(LLmProviders.OpenAi)\n+        {\n+            Auth = new ProviderAuthentication(LLmProviders.OpenAi, \"test-key\"),\n+            UrlResolver = (_, _, _) => $\"http://127.0.0.1:{server.Port}/v1/{{0}}{{1}}\"\n+        });\n+    }\n+\n     private sealed class FakeServer : IDisposable\n     {\n         private readonly HttpListener listener = new HttpListener();"
+  },
+  {
+   "filename": "src/LlmTornado/Images/GptImageModelHelper.cs",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 5,
+   "patch": "@@ -49,20 +49,31 @@ public static ImageGenerationRequest SanitizeGenerationRequest(ImageGenerationRe\n \t}\n \n \t/// <summary>\n-\t/// Applies gpt-image-2 rules: input_fidelity must be omitted (high fidelity is automatic).\n+\t/// Applies gpt-image edit rules: response_format must be omitted (the API always returns base64),\n+\t/// and for gpt-image-2 input_fidelity must be omitted too (high fidelity is automatic).\n \t/// Transparent backgrounds are supported as of August 20, 2026.\n \t/// </summary>\n \tpublic static ImageEditRequest SanitizeEditRequest(ImageEditRequest request)\n \t{\n-\t\tif (!IsGptImage2Model(request.Model) || request.InputFidelity is null)\n+\t\tbool dropResponseFormat = IsGptImageModel(request.Model) && request.ResponseFormat is not null;\n+\t\tbool dropInputFidelity = IsGptImage2Model(request.Model) && request.InputFidelity is not null;\n+\n+\t\tif (!dropResponseFormat && !dropInputFidelity)\n \t\t{\n \t\t\treturn request;\n \t\t}\n \n-\t\tImageEditRequest clone = new ImageEditRequest(request)\n+\t\tImageEditRequest clone = new ImageEditRequest(request);\n+\n+\t\tif (dropResponseFormat)\n \t\t{\n-\t\t\tInputFidelity = null\n-\t\t};\n+\t\t\tclone.ResponseFormat = null;\n+\t\t}\n+\n+\t\tif (dropInputFidelity)\n+\t\t{\n+\t\t\tclone.InputFidelity = null;\n+\t\t}\n \n \t\treturn clone;\n \t}"
+  },
+  {
+   "filename": "src/LlmTornado/Images/ImageEditEndpoint.cs",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -38,6 +38,11 @@ internal ImageEditEndpoint(TornadoApi api) : base(api)\n     public async Task<ImageGenerationResult?> EditImage(ImageEditRequest request)\n     {\n         IEndpointProvider provider = Api.GetProvider(request.Model ?? ImageModelOpenAiGpt.Default);\n+\n+        if (provider.Provider == LLmProviders.OpenAi)\n+        {\n+            request = GptImageModelHelper.SanitizeEditRequest(request);\n+        }\n         \n         // xAI uses JSON body instead of multipart form\n         if (provider.Provider is LLmProviders.XAi or LLmProviders.Google)"
+  },
+  {
+   "filename": "src/LlmTornado/Images/ImageEditRequest.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -252,7 +252,7 @@ public TornadoRequestContent Serialize(IEndpointProvider provider)\n \t{\n         { LLmProviders.Google, (x, y) => JsonConvert.SerializeObject(new Vendors.Google.VendorGoogleGeminiImageRequest(x, y), EndpointBase.NullSettings) },\n \t\t{ LLmProviders.XAi, (x, y) => JsonConvert.SerializeObject(new VendorXAiImageEditRequest(x, y), EndpointBase.NullSettings) },\n-\t\t{ LLmProviders.OpenAi, (x, y) => JsonConvert.SerializeObject(new VendorOpenAiImageEditJsonRequest(x), EndpointBase.NullSettings) }\n+\t\t{ LLmProviders.OpenAi, (x, y) => JsonConvert.SerializeObject(new VendorOpenAiImageEditJsonRequest(GptImageModelHelper.SanitizeEditRequest(x)), EndpointBase.NullSettings) }\n \t}.ToFrozenDictionary();\n }\n "
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/ImageEditResponseFormatTests.cs"
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "pypa/pipenv",
+ "number": 6764,
+ "url": "https://github.com/pypa/pipenv/pull/6764",
+ "title": "fix(install): decode requirements.txt like pip when importing with -r",
+ "merged_at": "2026-10-28T22:05:01Z",
+ "files": [
+  {
+   "filename": "news/6764.bugfix.rst",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+``pipenv install -r`` now reads the requirements file the way pip does (UTF-8/UTF-16 BOMs and PEP 263 coding comments) instead of the locale encoding when it looks for ``-i``, ``--extra-index-url`` and ``--trusted-host`` lines."
+  },
+  {
+   "filename": "pipenv/utils/dependencies.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -1770,8 +1770,11 @@ def import_requirements(\n     # Default path, if none is provided.\n     if r is None:\n         r = project.pipfile.requirements_location\n-    with open(r) as f:\n-        contents = f.read()\n+    # Decode the file like pip does (BOMs, UTF-16 and coding cookies), not with the locale encoding\n+    from pipenv.patched.pip._internal.req.req_file import _decode_req_file\n+\n+    with open(r, \"rb\") as f:\n+        contents = _decode_req_file(f.read(), str(r))\n     if categories is None:\n         categories = []\n "
+  },
+  {
+   "filename": "tests/unit/test_import_requirements_encoding.py",
+   "status": "added",
+   "additions": 32,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,32 @@\n+\"\"\"``pipenv install -r`` decodes the requirements file the way pip does.\"\"\"\n+\n+from unittest import mock\n+\n+import pytest\n+\n+from pipenv.utils.dependencies import import_requirements\n+\n+CONTENT = \"# dépendances\\n-i https://private.example/simple\\nrequests==2.31.0\\n\"\n+\n+\n+@pytest.mark.parametrize(\n+    \"data\",\n+    [\n+        pytest.param(CONTENT.encode(\"utf-16\"), id=\"utf-16-bom\"),\n+        pytest.param(b\"\\xef\\xbb\\xbf-i https://private.example/simple\\nrequests==2.31.0\\n\", id=\"utf-8-bom\"),\n+        pytest.param(CONTENT.encode(\"latin-1\").replace(b\"# d\", b\"# coding: latin-1\\n# d\", 1), id=\"coding-cookie\"),\n+    ],\n+)\n+def test_import_requirements_decodes_like_pip(tmp_path, data):\n+    requirements = tmp_path / \"requirements.txt\"\n+    requirements.write_bytes(data)\n+    project = mock.MagicMock()\n+\n+    with mock.patch(\n+        \"pipenv.utils.dependencies.add_index_to_pipfile_with_trust_check\", return_value=\"private\"\n+    ) as add_index:\n+        import_requirements(project, r=str(requirements))\n+\n+    assert add_index.call_args.args[1] == \"https://private.example/simple\"\n+    packages = project.pipfile.add_packages_batch.call_args.args[0]\n+    assert [string for _, string in packages] == [\"requests==2.31.0\"]"
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_import_requirements_encoding.py"
+ ]
+}

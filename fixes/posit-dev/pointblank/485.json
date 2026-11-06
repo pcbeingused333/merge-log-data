@@ -1,0 +1,26 @@
+{
+ "repo": "posit-dev/pointblank",
+ "number": 485,
+ "url": "https://github.com/posit-dev/pointblank/pull/485",
+ "title": "fix: treat NaN as missing in col_vals_between() on Polars and PyArrow",
+ "merged_at": "2026-10-27T14:15:06Z",
+ "files": [
+  {
+   "filename": "pointblank/_interrogation.py",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 7,
+   "patch": "@@ -898,12 +898,16 @@ def interrogate_between(\n     high_val = _safe_modify_datetime_compare_val(nw_tbl, column, high_val)\n \n     result_tbl = nw_tbl.with_columns(\n-        pb_is_good_1=nw.col(column).is_null(),  # val is Null in Column\n-        pb_is_good_2=(  # lb is Null in Column\n-            nw.col(low.name).is_null() if isinstance(low, Column) else nw.lit(False)\n+        pb_is_good_1=_safe_is_nan_or_null_expr(nw_tbl, nw.col(column), column),  # val is missing\n+        pb_is_good_2=(  # lb is missing in Column\n+            _safe_is_nan_or_null_expr(nw_tbl, nw.col(low.name), low.name)\n+            if isinstance(low, Column)\n+            else nw.lit(False)\n         ),\n-        pb_is_good_3=(  # ub is Null in Column\n-            nw.col(high.name).is_null() if isinstance(high, Column) else nw.lit(False)\n+        pb_is_good_3=(  # ub is missing in Column\n+            _safe_is_nan_or_null_expr(nw_tbl, nw.col(high.name), high.name)\n+            if isinstance(high, Column)\n+            else nw.lit(False)\n         ),\n         pb_is_good_4=nw.lit(na_pass),  # Pass if any Null in lb, val, or ub\n     )\n@@ -920,15 +924,15 @@ def interrogate_between(\n \n     result_tbl = result_tbl.with_columns(\n         pb_is_good_5=(\n-            nw.when(nw.col(\"pb_is_good_5\").is_null())\n+            nw.when(nw.col(\"pb_is_good_5\").is_null() | nw.col(\"pb_is_good_1\"))\n             .then(nw.lit(False))\n             .otherwise(nw.col(\"pb_is_good_5\"))\n         )\n     )\n \n     result_tbl = result_tbl.with_columns(\n         pb_is_good_6=(\n-            nw.when(nw.col(\"pb_is_good_6\").is_null())\n+            nw.when(nw.col(\"pb_is_good_6\").is_null() | nw.col(\"pb_is_good_1\"))\n             .then(nw.lit(False))\n             .otherwise(nw.col(\"pb_is_good_6\"))\n         )"
+  },
+  {
+   "filename": "tests/test_missing_nan_values.py",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -117,3 +117,15 @@ def test_missing_spec_checks_on_columns_that_cant_hold_nan(dtype) -> None:\n         (validation.n_passed(i=i, scalar=True), validation.n_failed(i=i, scalar=True))\n         for i in range(1, 6)\n     ] == [(4, 0), (4, 0), (3, 1), (3, 1), (1, 0)]\n+\n+\n+# NaN is not a null in Polars and PyArrow, so col_vals_between() has to check it on its own.\n+@pytest.mark.parametrize(\"tbl_type\", TABLE_TYPES)\n+@pytest.mark.parametrize(\"na_pass\", [False, True])\n+def test_nan_is_missing_in_col_vals_between(tbl_type, na_pass) -> None:\n+    tbl = _table(tbl_type, {\"n\": [1.0, 7.0, NAN]})\n+\n+    validation = pb.Validate(tbl).col_vals_between(\"n\", 0, 5, na_pass=na_pass).interrogate()\n+\n+    # one of the two real values passes and the other fails; the NaN follows na_pass=\n+    assert _counts(validation) == ((2, 1) if na_pass else (1, 2))"
+  }
+ ],
+ "test_files": [
+  "tests/test_missing_nan_values.py"
+ ]
+}

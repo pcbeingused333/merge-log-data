@@ -1,0 +1,52 @@
+{
+ "repo": "lancedb/lancedb",
+ "number": 4737,
+ "url": "https://github.com/lancedb/lancedb/pull/4737",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-29T10:12:03Z",
+   "body": "## Claude Code Review\n\nThis pull request is from a fork — automated review is disabled. A repository maintainer can comment `@claude review` to run a one-time review."
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-29T10:21:25Z",
+   "body": "✅ **Gate recommendation: approve.**\n\nUsing the explicit `dim` fixes schema creation for OpenAI-compatible model names while preserving the existing model defaults and request behavior. The embedding and trust tests passed, along with a local insert/reopen/search probe using a fake provider.\n\n**Documentation:** Add `dim=<model dimension>` to the [compatible-server example](https://github.com/lancedb/lancedb/blob/1f0840ebf05f0d598415a94935ef5fdcfee73d6a/python/python/lancedb/embeddings/openai.py#L35) and clarify that unrecognized model names require `dim` in the [parameter table](https://github.com/lancedb/lancedb/blob/1f0840ebf05f0d598415a94935ef5fdcfee73d6a/docs/web/integrations/embedding/openai.mdx#L13)."
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-29T17:10:09Z",
+   "body": "Reviewed `python/python/lancedb/embeddings/openai.py` (`_ndims`) and the new tests in `python/python/tests/test_embeddings.py`.\n\nThe fallback placement looks right: the three known OpenAI models keep their existing branches, so an unknown name with `dim` set no longer raises, and `generate_embeddings` already sends `dimensions=self.dim` for every model other than `text-embedding-ada-002`, so `ndims()` now matches what is requested from the server.\n\nTwo things worth pinning down:\n\n- The comment on the new branch says it is for a model \"served behind an OpenAI-compatible `base_url`\", but the code does not check `base_url`. An unknown name with `dim` set and no `base_url` is now also accepted, so a typo'd OpenAI model name combined with a stray `dim` would silently pass instead of raising the old \"Unknown model name\" error. Is restricting this branch to when `base_url` is set intended, or is accepting any unknown name with `dim` the goal?\n- `elif self.dim:` treats `dim=0` as missing (it falls through to the clearer error, which is good) but accepts a negative `dim` as truthy, which would return a negative `ndims()`. Is `dim` validated to be positive upstream in `TextEmbeddingFunction`, or would a `dim > 0` guard belong here?\n\nThe tests cover both the happy path (nomic-embed-text with dim=768 returns 768) and the no-dim error, and since they only call `ndims()` they do not need a live Ollama server. A test for the typo/no-`base_url` case above would pin down which of those two behaviors is intended."
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-30T00:52:18Z",
+   "body": "⚠️ **Gate recommendation: approve with a non-blocking risk.**\n\nUsing the explicit `dim` fixes schema creation for unlisted model names while preserving the known OpenAI model branches and request behavior. The example and parameter table now document the dimension requirement, addressing the earlier documentation suggestion.\n\nAs [the author clarified](https://github.com/lancedb/lancedb/pull/4737#issuecomment-6512157396), accepting unlisted names independently of `base_url` is intentional. The author accepts that a misspelled model name with `dim` can pass schema creation and fail on the first embedding call; that delayed validation remains a non-blocking risk."
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-01T00:32:17Z",
+   "body": "⚠️ **Gate recommendation: approve with a non-blocking risk.**\n\nUsing `dim` for unlisted model names fixes schema creation while preserving the existing OpenAI model behavior and request payload. The expanded tests cover schema widths with and without `base_url`, plus the known models’ defaults and overrides. The documentation explains the dimension requirement.\n\nThe trade-off [accepted by the author](https://github.com/lancedb/lancedb/pull/4737#issuecomment-6512157396) remains: a misspelled model name with `dim` can pass schema creation and fail on the first embedding call."
+  },
+  {
+   "role": "member",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-01T00:49:33Z",
+   "body": "Approved after exact-head validation and successful applicable CI."
+  }
+ ],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-10-30T00:50:47Z",
+   "body": "Thanks both. Pushed a docs-only commit for the gatekeeper's note: the compatible-server example now passes `dim`, and the parameter table says that names outside `model_names()` need it.\n\n@SIDDARTHAREDDY8 on your two questions:\n\n- Accepting any unlisted name with `dim` is intended. OpenAI-compatible servers are not always reached through `base_url` (an `OPENAI_BASE_URL` env var or a proxy works too), so tying the branch to `base_url` would reject valid setups. The comment on that branch now says \"any name not listed above\" instead of implying a `base_url` check. A misspelled OpenAI name with `dim` set does pass now, and the server will then reject the model name on the first embedding call.\n- `dim` is not validated as positive upstream, and this PR does not add a check. A negative value was already passed straight through as `dimensions=` for the listed models before this change. I can add a `dim > 0` check in a follow-up if the maintainers want one.\n\nThis reply was drafted with Claude Code.\n"
+  }
+ ]
+}

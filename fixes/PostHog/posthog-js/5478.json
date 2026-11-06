@@ -1,0 +1,63 @@
+{
+ "repo": "PostHog/posthog-js",
+ "number": 5478,
+ "url": "https://github.com/PostHog/posthog-js/pull/5478",
+ "title": "fix(ai): capture an error event when a streaming OpenAI call fails before the stream opens",
+ "merged_at": "2026-10-29T12:57:11Z",
+ "files": [
+  {
+   "filename": ".changeset/ai-openai-stream-connect-error.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@posthog/ai': patch\n+---\n+\n+Capture an `$ai_generation` error event when an OpenAI, Azure OpenAI or Anthropic call with `stream: true` fails before the stream opens (for example a 401, 429 or invalid model). Before, only the non-streaming call captured those errors."
+  },
+  {
+   "filename": "packages/ai/src/anthropic/index.ts",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 1,
+   "patch": "@@ -347,7 +347,24 @@ export class WrappedMessages extends AnthropicOriginal.Messages {\n         return value\n       })\n \n-      return preserveProviderPromise(parentPromise, wrappedPromise, {\n+      const capturedPromise = wrappedPromise.catch(async (error: any) => {\n+        await captureAiGeneration(this.phClient, {\n+          ...posthogParams,\n+          model: anthropicParams.model,\n+          provider: 'anthropic',\n+          input: this.formatInputForPostHog(anthropicParams, posthogParams.privacyMode),\n+          output: [],\n+          latency: (Date.now() - startTime) / 1000,\n+          baseURL: this.baseURL,\n+          modelParameters: getModelParams(body),\n+          httpStatus: error?.status ? error.status : 500,\n+          usage: {},\n+          error: error,\n+        })\n+        throw error\n+      })\n+\n+      return preserveProviderPromise(parentPromise, capturedPromise, {\n         requestIdHeader: 'request-id',\n         workspaceIdHeader: 'anthropic-workspace-id',\n       })"
+  },
+  {
+   "filename": "packages/ai/src/openai/azure.ts",
+   "status": "modified",
+   "additions": 40,
+   "deletions": 2,
+   "patch": "@@ -191,7 +191,26 @@ export class WrappedCompletions extends AzureOpenAI.Chat.Completions {\n         return value\n       })\n \n-      return preserveProviderPromise(parentPromise, wrappedPromise)\n+      const capturedPromise = wrappedPromise.catch(async (error: unknown) => {\n+        await captureAiGeneration(\n+          this.phClient,\n+          buildChatErrorOptions(\n+            {\n+              client: this.phClient,\n+              provider: 'azure',\n+              baseURL: this.baseURL,\n+              params: openAIParams,\n+              monitoring: posthogParams,\n+              modelParametersSource: body,\n+            },\n+            error,\n+            { latency: (Date.now() - startTime) / 1000 }\n+          )\n+        )\n+        throw error\n+      })\n+\n+      return preserveProviderPromise(parentPromise, capturedPromise)\n     } else {\n       const wrappedPromise = parentPromise.then(\n         async (result) => {\n@@ -415,7 +434,26 @@ export class WrappedResponses extends AzureOpenAI.Responses {\n         return value\n       })\n \n-      return preserveProviderPromise(parentPromise, wrappedPromise)\n+      const capturedPromise = wrappedPromise.catch(async (error: unknown) => {\n+        await captureAiGeneration(\n+          this.phClient,\n+          buildResponsesErrorOptions(\n+            {\n+              client: this.phClient,\n+              provider: 'azure',\n+              baseURL: this.baseURL,\n+              params: openAIParams,\n+              monitoring: posthogParams,\n+              modelParametersSource: body,\n+            },\n+            error,\n+            { latency: (Date.now() - startTime) / 1000 }\n+          )\n+        )\n+        throw error\n+      })\n+\n+      return preserveProviderPromise(parentPromise, capturedPromise)\n     } else {\n       const wrappedPromise = parentPromise.then(\n         async (result) => {"
+  },
+  {
+   "filename": "packages/ai/src/openai/index.ts",
+   "status": "modified",
+   "additions": 40,
+   "deletions": 2,
+   "patch": "@@ -201,7 +201,26 @@ export class WrappedCompletions extends Completions {\n         return value\n       })\n \n-      return preserveProviderPromise(parentPromise, wrappedPromise)\n+      const capturedPromise = wrappedPromise.catch(async (error: unknown) => {\n+        await captureAiGeneration(\n+          this.phClient,\n+          buildChatErrorOptions(\n+            {\n+              client: this.phClient,\n+              provider: 'openai',\n+              baseURL: this.baseURL,\n+              params: openAIParams,\n+              monitoring: posthogParams,\n+              modelParametersSource: body,\n+            },\n+            error,\n+            { latency: (Date.now() - startTime) / 1000 }\n+          )\n+        )\n+        throw error\n+      })\n+\n+      return preserveProviderPromise(parentPromise, capturedPromise)\n     } else {\n       const wrappedPromise = parentPromise.then(\n         async (result) => {\n@@ -425,7 +444,26 @@ export class WrappedResponses extends Responses {\n         return value\n       })\n \n-      return preserveProviderPromise(parentPromise, wrappedPromise)\n+      const capturedPromise = wrappedPromise.catch(async (error: unknown) => {\n+        await captureAiGeneration(\n+          this.phClient,\n+          buildResponsesErrorOptions(\n+            {\n+              client: this.phClient,\n+              provider: 'openai',\n+              baseURL: this.baseURL,\n+              params: openAIParams,\n+              monitoring: posthogParams,\n+              modelParametersSource: body,\n+            },\n+            error,\n+            { latency: (Date.now() - startTime) / 1000 }\n+          )\n+        )\n+        throw error\n+      })\n+\n+      return preserveProviderPromise(parentPromise, capturedPromise)\n     } else {\n       const wrappedPromise = parentPromise.then(\n         async (result) => {"
+  },
+  {
+   "filename": "packages/ai/tests/anthropic.test.ts",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -1072,6 +1072,30 @@ describe('PostHogAnthropic', () => {\n   })\n \n   describe('Error Handling', () => {\n+    test('streaming requests capture an error event when the request fails before the stream opens', async () => {\n+      const apiError = new Error('Invalid API key') as Error & { status: number }\n+      apiError.status = 401\n+\n+      const MessagesMock = AnthropicOriginal.Messages as vi.MockedClass<typeof AnthropicOriginal.Messages>\n+      ;(MessagesMock.prototype.create as unknown as vi.Mock) = vi.fn().mockRejectedValue(apiError)\n+\n+      await expect(\n+        client.messages.create({\n+          model: 'claude-3-opus-20240229',\n+          messages: [{ role: 'user', content: 'Hello' }],\n+          max_tokens: 100,\n+          stream: true,\n+          posthogDistinctId: 'test-user-123',\n+        })\n+      ).rejects.toBe(apiError)\n+\n+      const captureMock = mockPostHogClient.capture as vi.Mock\n+      expect(captureMock).toHaveBeenCalledTimes(1)\n+      const { properties } = captureMock.mock.calls[0][0]\n+      expect(properties['$ai_http_status']).toBe(401)\n+      expect(properties['$ai_is_error']).toBe(true)\n+    })\n+\n     conditionalTest('should handle API errors', async () => {\n       const apiError = new Error('API Error') as Error & { status: number }\n       apiError.status = 429"
+  },
+  {
+   "filename": "packages/ai/tests/azure-openai.test.ts",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 0,
+   "patch": "@@ -742,6 +742,27 @@ describe('PostHogAzureOpenAI - Embeddings test suite', () => {\n       expect(properties['$ai_output_choices']).toBeNull()\n     })\n \n+    test('streaming chat completions capture an error event when the request fails before the stream opens', async () => {\n+      const ChatMock: any = openaiModule.Chat\n+      const providerError = Object.assign(new Error('Access denied'), { status: 401 })\n+      ;(ChatMock.Completions as any).prototype.create = vi.fn().mockRejectedValue(providerError)\n+\n+      await expect(\n+        client.chat.completions.create({\n+          model: 'gpt-4',\n+          messages: [{ role: 'user', content: 'Hello' }],\n+          stream: true,\n+          posthogDistinctId: 'stream-user',\n+        })\n+      ).rejects.toBe(providerError)\n+\n+      expect(mockPostHogClient.capture).toHaveBeenCalledTimes(1)\n+      const [captureArgs] = (mockPostHogClient.capture as vi.Mock).mock.calls\n+      const { properties } = captureArgs[0]\n+      expect(properties['$ai_http_status']).toBe(401)\n+      expect(properties['$ai_is_error']).toBe(true)\n+    })\n+\n     test('embeddings error handling', async () => {\n       const EmbeddingsMock: any = openaiModule.Embeddings || class MockEmbeddings {}\n       const testError = new Error('API Error') as Error & { status: number }"
+  },
+  {
+   "filename": "packages/ai/tests/openai.test.ts",
+   "status": "modified",
+   "additions": 44,
+   "deletions": 0,
+   "patch": "@@ -677,6 +677,50 @@ describe('PostHogOpenAI - Jest test suite', () => {\n     expect(mockPostHogClient.captureImmediate).toHaveBeenCalledTimes(1)\n   })\n \n+  test('streaming chat completions capture an error event when the request fails before the stream opens', async () => {\n+    const providerError = Object.assign(new Error('Incorrect API key'), { status: 401 })\n+    const ChatMock: any = openaiModule.Chat\n+    ;(ChatMock.Completions as any).prototype.create = vi.fn().mockRejectedValue(providerError)\n+\n+    await expect(\n+      client.chat.completions.create({\n+        model: 'gpt-4',\n+        messages: [{ role: 'user', content: 'Hello' }],\n+        stream: true,\n+        posthogDistinctId: 'stream-user',\n+      })\n+    ).rejects.toBe(providerError)\n+\n+    expect(mockPostHogClient.capture).toHaveBeenCalledTimes(1)\n+    const [captureArgs] = (mockPostHogClient.capture as vi.Mock).mock.calls\n+    const { distinctId, properties } = captureArgs[0]\n+    expect(distinctId).toBe('stream-user')\n+    expect(properties['$ai_http_status']).toBe(401)\n+    expect(properties['$ai_is_error']).toBe(true)\n+    expect(properties['$ai_error']).toContain('401')\n+  })\n+\n+  test('streaming responses capture an error event when the request fails before the stream opens', async () => {\n+    const providerError = Object.assign(new Error('Rate limit reached'), { status: 429 })\n+    const ResponsesMock: any = openaiModule.Responses\n+    ResponsesMock.prototype.create = vi.fn().mockRejectedValue(providerError)\n+\n+    await expect(\n+      client.responses.create({\n+        model: 'gpt-4o',\n+        input: 'Hello',\n+        stream: true,\n+        posthogDistinctId: 'stream-user',\n+      })\n+    ).rejects.toBe(providerError)\n+\n+    expect(mockPostHogClient.capture).toHaveBeenCalledTimes(1)\n+    const [captureArgs] = (mockPostHogClient.capture as vi.Mock).mock.calls\n+    const { properties } = captureArgs[0]\n+    expect(properties['$ai_http_status']).toBe(429)\n+    expect(properties['$ai_is_error']).toBe(true)\n+  })\n+\n   conditionalTest('groups', async () => {\n     await client.chat.completions.create({\n       model: 'gpt-4',"
+  }
+ ],
+ "test_files": [
+  "packages/ai/tests/anthropic.test.ts",
+  "packages/ai/tests/azure-openai.test.ts",
+  "packages/ai/tests/openai.test.ts"
+ ]
+}

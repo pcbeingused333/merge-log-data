@@ -1,0 +1,33 @@
+{
+ "repo": "fim-ai/fim-one",
+ "number": 53,
+ "url": "https://github.com/fim-ai/fim-one/pull/53",
+ "title": "fix(model): keep streamed tool calls apart when the endpoint omits their index",
+ "merged_at": "2026-10-29T05:27:31Z",
+ "files": [
+  {
+   "filename": "docs/changelog.mdx",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -12,6 +12,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions corresp\n \n ### Fixed\n \n+- **Streaming tool calls from endpoints that omit the call index no longer fail or merge.** Gemini's OpenAI-compatible endpoint sends parallel tool calls without `index`, which crashed the stream with a `TypeError` or overwrote one call with the next.\n - **Portal math, graphs, and the development server use patched libraries.** Known issues in KaTeX, Lodash, and the local dev server are closed. Bot accounts are no longer recorded as contributors.\n - **More library updates for the portal and the API.** Form uploads, the API framework, SQL formatting, HTML parsing, database migrations, image processing, and the portal's translation library are on releases that close known vulnerabilities.\n - **Security updates for the portal and the API.** The portal's Next.js release and HTML sanitizer, and the API's image, token, HTTP, and MCP libraries, are on versions that close known vulnerabilities."
+  },
+  {
+   "filename": "src/fim_one/core/model/openai_compatible.py",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -749,6 +749,13 @@ async def _iterate() -> AsyncIterator[StreamChunk]:\n                 if delta.tool_calls:\n                     for tc_delta in delta.tool_calls:\n                         raw_idx = tc_delta.index\n+                        # Some OpenAI-compatible endpoints (e.g. Gemini)\n+                        # omit the index.  Treat that like a provider that\n+                        # reuses index 0, so the boundary detection below\n+                        # splits their calls instead of failing on a None key.\n+                        index_missing = raw_idx is None\n+                        if raw_idx is None:\n+                            raw_idx = 0\n                         # Redirect through any active remap (handles\n                         # providers that reuse index=0 for every call).\n                         idx = index_remap.get(raw_idx, raw_idx)\n@@ -769,6 +776,11 @@ async def _iterate() -> AsyncIterator[StreamChunk]:\n                                 is_boundary = True\n                             if tc_name and existing.name and tc_name != existing.name:\n                                 is_boundary = True\n+                            # Without an index, a delta that names a function\n+                            # starts a new call (continuations carry no name),\n+                            # even when it repeats the previous tool's name.\n+                            if index_missing and tc_name and existing.name:\n+                                is_boundary = True\n                             if is_boundary:\n                                 new_idx = max(pending_tool_calls.keys()) + 1\n                                 pending_tool_calls[new_idx] = _PartialToolCall()"
+  },
+  {
+   "filename": "tests/test_stream_tool_call_aggregation.py",
+   "status": "modified",
+   "additions": 55,
+   "deletions": 2,
+   "patch": "@@ -36,7 +36,7 @@ class _FakeFunction:\n \n @dataclass\n class _FakeToolCallDelta:\n-    index: int = 0\n+    index: int | None = 0\n     id: str | None = None\n     function: _FakeFunction | None = None\n \n@@ -62,7 +62,7 @@ class _FakeChunk:\n \n def _tc_chunk(\n     *,\n-    index: int = 0,\n+    index: int | None = 0,\n     tc_id: str | None = None,\n     name: str | None = None,\n     arguments: str | None = None,\n@@ -293,6 +293,59 @@ async def test_single_tool_call_no_collision(self) -> None:\n         assert tool_calls[0].arguments == {\"query\": \"hello world\"}\n \n \n+class TestStreamToolCallsWithoutIndex:\n+    \"\"\"Providers whose OpenAI-compatible endpoint omits ``index`` (e.g. Gemini).\"\"\"\n+\n+    @pytest.mark.asyncio\n+    async def test_parallel_calls_with_distinct_ids_stay_separate(self) -> None:\n+        chunks = [\n+            _tc_chunk(\n+                index=None, tc_id=\"call_a\", name=\"get_weather\", arguments='{\"city\": \"Paris\"}'\n+            ),\n+            _tc_chunk(index=None, tc_id=\"call_b\", name=\"get_time\", arguments='{\"tz\": \"UTC\"}'),\n+            _finish_chunk(),\n+        ]\n+        result = await _run_stream(chunks)\n+\n+        tool_calls = next(c for c in result if c.tool_calls).tool_calls\n+        assert tool_calls is not None\n+        assert [(t.id, t.name, t.arguments) for t in tool_calls] == [\n+            (\"call_a\", \"get_weather\", {\"city\": \"Paris\"}),\n+            (\"call_b\", \"get_time\", {\"tz\": \"UTC\"}),\n+        ]\n+\n+    @pytest.mark.asyncio\n+    async def test_same_tool_twice_without_ids_stays_separate(self) -> None:\n+        \"\"\"A new name-bearing delta starts a new call, even for the same tool.\"\"\"\n+        chunks = [\n+            _tc_chunk(index=None, name=\"get_weather\", arguments='{\"city\": \"Paris\"}'),\n+            _tc_chunk(index=None, name=\"get_weather\", arguments='{\"city\": \"Rome\"}'),\n+            _finish_chunk(),\n+        ]\n+        result = await _run_stream(chunks)\n+\n+        tool_calls = next(c for c in result if c.tool_calls).tool_calls\n+        assert tool_calls is not None\n+        assert [t.arguments for t in tool_calls] == [{\"city\": \"Paris\"}, {\"city\": \"Rome\"}]\n+\n+    @pytest.mark.asyncio\n+    async def test_argument_only_deltas_continue_the_latest_call(self) -> None:\n+        chunks = [\n+            _tc_chunk(index=None, tc_id=\"call_a\", name=\"get_weather\", arguments='{\"city\": '),\n+            _tc_chunk(index=None, arguments='\"Paris\"}'),\n+            _tc_chunk(index=None, tc_id=\"call_b\", name=\"get_time\", arguments=\"{}\"),\n+            _finish_chunk(),\n+        ]\n+        result = await _run_stream(chunks)\n+\n+        tool_calls = next(c for c in result if c.tool_calls).tool_calls\n+        assert tool_calls is not None\n+        assert [(t.name, t.arguments) for t in tool_calls] == [\n+            (\"get_weather\", {\"city\": \"Paris\"}),\n+            (\"get_time\", {}),\n+        ]\n+\n+\n class TestPartialToolCallDirect:\n     \"\"\"Unit tests for the _PartialToolCall accumulator.\"\"\"\n "
+  }
+ ],
+ "test_files": [
+  "tests/test_stream_tool_call_aggregation.py"
+ ]
+}

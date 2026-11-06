@@ -1,0 +1,45 @@
+{
+ "repo": "jeremychone/rust-genai",
+ "number": 358,
+ "url": "https://github.com/jeremychone/rust-genai/pull/358",
+ "title": "fix(openai_resp): map incomplete_details.reason to the stop reason",
+ "merged_at": "2026-10-28T18:18:18Z",
+ "files": [
+  {
+   "filename": "src/adapter/adapters/openai_resp/adapter_impl.rs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -309,6 +309,7 @@ impl Adapter for OpenAIRespAdapter {\n \t\tlet captured_raw_body = options_set.capture_raw_body().unwrap_or_default().then(|| body.clone());\n \n \t\tlet resp: RespResponse = serde_json::from_value(body)?;\n+\t\tlet stop_reason = StopReason::from(resp.stop_reason_raw());\n \n \t\t// -- Capture the provider_model_iden\n \t\tlet provider_model_iden = model_iden.from_name(&resp.model);\n@@ -343,7 +344,7 @@ impl Adapter for OpenAIRespAdapter {\n \t\t\treasoning_content,\n \t\t\tmodel_iden,\n \t\t\tprovider_model_iden,\n-\t\t\tstop_reason: Some(StopReason::from(resp.status)),\n+\t\t\tstop_reason: Some(stop_reason),\n \t\t\tusage,\n \t\t\tcaptured_raw_body,\n \t\t\tresponse_id: Some(resp.id),"
+  },
+  {
+   "filename": "src/adapter/adapters/openai_resp/adapter_impl_tests.rs",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -558,3 +558,30 @@ fn test_openai_resp_into_openai_request_parts_does_not_duplicate_mirrored_though\n \n \tOk(())\n }\n+\n+#[test]\n+fn test_openai_resp_to_chat_response_incomplete_reason_sets_stop_reason() -> Result<()> {\n+\tfor (reason, expect_max_tokens) in [(\"max_output_tokens\", true), (\"content_filter\", false)] {\n+\t\tlet model_iden = ModelIden::new(AdapterKind::OpenAIResp, \"gpt-5.4-mini\");\n+\t\tlet web_response = WebResponse {\n+\t\t\tstatus: reqwest::StatusCode::OK,\n+\t\t\tbody: json!({\n+\t\t\t\t\"id\": \"resp_123\",\n+\t\t\t\t\"status\": \"incomplete\",\n+\t\t\t\t\"incomplete_details\": {\"reason\": reason},\n+\t\t\t\t\"model\": \"gpt-5.4-mini-2026-03-17\",\n+\t\t\t\t\"output\": []\n+\t\t\t}),\n+\t\t};\n+\n+\t\tlet response = OpenAIRespAdapter::to_chat_response(model_iden, web_response, ChatOptionsSet::default())?;\n+\n+\t\tmatch response.stop_reason {\n+\t\t\tSome(StopReason::MaxTokens(_)) if expect_max_tokens => (),\n+\t\t\tSome(StopReason::ContentFilter(_)) if !expect_max_tokens => (),\n+\t\t\tother => panic!(\"unexpected stop reason for `{reason}`: {other:?}\"),\n+\t\t}\n+\t}\n+\n+\tOk(())\n+}"
+  },
+  {
+   "filename": "src/adapter/adapters/openai_resp/resp_types/resp_response.rs",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -16,6 +16,9 @@ pub struct RespResponse {\n \t/// The status of the response generation. One of completed, failed, in_progress, cancelled, queued, or incomplete.\n \tpub status: String,\n \n+\t/// Why the response is `incomplete`: `{reason: \"max_output_tokens\" | \"content_filter\"}`.\n+\tpub incomplete_details: Option<Value>,\n+\n \t/// {code: String, message: string}\n \tpub error: Option<Value>,\n \n@@ -37,3 +40,20 @@ pub struct RespResponse {\n \n \tpub usage: Option<RespUsage>,\n }\n+\n+impl RespResponse {\n+\t/// The provider stop reason: for an `incomplete` response, the reason it was cut short\n+\t/// (`max_output_tokens`, `content_filter`) when given, otherwise the response status.\n+\tpub fn stop_reason_raw(&self) -> String {\n+\t\tif self.status == \"incomplete\"\n+\t\t\t&& let Some(reason) = self\n+\t\t\t\t.incomplete_details\n+\t\t\t\t.as_ref()\n+\t\t\t\t.and_then(|details| details.get(\"reason\"))\n+\t\t\t\t.and_then(Value::as_str)\n+\t\t{\n+\t\t\treturn reason.to_string();\n+\t\t}\n+\t\tself.status.clone()\n+\t}\n+}"
+  },
+  {
+   "filename": "src/adapter/adapters/openai_resp/streamer.rs",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 2,
+   "patch": "@@ -331,7 +331,7 @@ impl futures::Stream for OpenAIRespStreamer {\n \n \t\t\t\t\t\tRespStreamEvent::ResponseCompleted { response } => {\n \t\t\t\t\t\t\tself.done = true;\n-\t\t\t\t\t\t\tself.captured_data.stop_reason = Some(response.status.clone());\n+\t\t\t\t\t\t\tself.captured_data.stop_reason = Some(response.stop_reason_raw());\n \n \t\t\t\t\t\t\tif self.options.capture_usage {\n \t\t\t\t\t\t\t\tself.captured_data.usage = response.usage.map(Into::into);\n@@ -390,7 +390,7 @@ impl futures::Stream for OpenAIRespStreamer {\n \n \t\t\t\t\t\tRespStreamEvent::ResponseIncomplete { response } => {\n \t\t\t\t\t\t\tself.done = true;\n-\t\t\t\t\t\t\tself.captured_data.stop_reason = Some(response.status.clone());\n+\t\t\t\t\t\t\tself.captured_data.stop_reason = Some(response.stop_reason_raw());\n \t\t\t\t\t\t\t// A response cut short (e.g., by `max_output_tokens`) keeps the tool\n \t\t\t\t\t\t\t// calls it streamed, a truncated call with its arguments as far as\n \t\t\t\t\t\t\t// they got (left as a string when they do not parse).\n@@ -501,4 +501,32 @@ mod tests {\n \t\t));\n \t\tOk(())\n \t}\n+\n+\t#[test]\n+\tfn incomplete_event_carries_the_reason_the_response_was_cut_short() -> Result<()> {\n+\t\t// -- Setup & Fixtures\n+\t\tlet json_val = serde_json::json!({\n+\t\t\t\"type\": \"response.incomplete\",\n+\t\t\t\"response\": {\n+\t\t\t\t\"id\": \"resp_1\",\n+\t\t\t\t\"status\": \"incomplete\",\n+\t\t\t\t\"incomplete_details\": {\"reason\": \"content_filter\"},\n+\t\t\t\t\"model\": \"gpt-5\",\n+\t\t\t\t\"output\": []\n+\t\t\t}\n+\t\t});\n+\n+\t\t// -- Exec\n+\t\tlet event: RespStreamEvent = serde_json::from_value(json_val)?;\n+\n+\t\t// -- Check\n+\t\tlet RespStreamEvent::ResponseIncomplete { response } = event else {\n+\t\t\tpanic!(\"should be a response.incomplete event\");\n+\t\t};\n+\t\tassert!(matches!(\n+\t\t\tStopReason::from(response.stop_reason_raw()),\n+\t\t\tStopReason::ContentFilter(_)\n+\t\t));\n+\t\tOk(())\n+\t}\n }"
+  },
+  {
+   "filename": "src/chat/chat_response.rs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -13,7 +13,7 @@ use crate::chat::{ChatMessage, ChatStream, MessageContent, ToolCall, Usage};\n /// | StopReason      | Provider strings                                                         |\n /// |-----------------|--------------------------------------------------------------------------|\n /// | `Completed`     | `stop`, `end_turn`, `STOP`, `COMPLETE`, `completed`                      |\n-/// | `MaxTokens`     | `length`, `max_tokens`, `MAX_TOKENS`, `incomplete`, `model_context_window_exceeded`, `model_length` |\n+/// | `MaxTokens`     | `length`, `max_tokens`, `MAX_TOKENS`, `incomplete`, `max_output_tokens`, `model_context_window_exceeded`, `model_length` |\n /// | `ToolCall`      | `tool_calls`, `tool_use`, `function_call`                                |\n /// | `ContentFilter` | `content_filter`, `refusal`, `SAFETY`, `RECITATION`, `BLOCKLIST`, …      |\n /// | `StopSequence`  | `stop_sequence`, `STOP_SEQUENCE`                                         |\n@@ -45,6 +45,7 @@ impl From<String> for StopReason {\n \t\t\t| \"max_tokens\"\n \t\t\t| \"MAX_TOKENS\"\n \t\t\t| \"incomplete\"\n+\t\t\t| \"max_output_tokens\"\n \t\t\t| \"model_context_window_exceeded\"\n \t\t\t| \"model_length\" => Self::MaxTokens(reason),\n "
+  }
+ ],
+ "test_files": []
+}

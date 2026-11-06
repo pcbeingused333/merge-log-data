@@ -1,0 +1,26 @@
+{
+ "repo": "sligter/LandPPT",
+ "number": 140,
+ "url": "https://github.com/sligter/LandPPT/pull/140",
+ "title": "fix(config): stop the image config reload from failing on an undefined variable",
+ "merged_at": "2026-10-29T02:59:26Z",
+ "files": [
+  {
+   "filename": "src/landppt/services/config_service.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 28,
+   "patch": "@@ -383,36 +383,9 @@ def _reload_image_config(self):\n         try:\n             from ..services.image.config.image_config import image_config\n \n-            # 重新加载环境变量配置\n+            # 重新加载环境变量配置 (also reads the Gemini/OpenAI image settings from the config service)\n             image_config._load_env_config()\n \n-\n-            # 更新Gemini图片生成配置\n-            gemini_updates = {}\n-            if 'gemini_image_api_key' in current_config and current_config['gemini_image_api_key']:\n-                gemini_updates['api_key'] = current_config['gemini_image_api_key']\n-            if 'gemini_image_api_base' in current_config and current_config['gemini_image_api_base']:\n-                gemini_updates['api_base'] = current_config['gemini_image_api_base']\n-            if 'gemini_image_model' in current_config and current_config['gemini_image_model']:\n-                gemini_updates['model'] = current_config['gemini_image_model']\n-\n-            if gemini_updates:\n-                image_config.update_config({'gemini': gemini_updates})\n-\n-            # 更新OpenAI图片生成配置\n-            openai_image_updates = {}\n-            if 'openai_image_api_key' in current_config and current_config['openai_image_api_key']:\n-                openai_image_updates['api_key'] = current_config['openai_image_api_key']\n-            if 'openai_image_api_base' in current_config and current_config['openai_image_api_base']:\n-                openai_image_updates['api_base'] = current_config['openai_image_api_base']\n-            if 'openai_image_model' in current_config and current_config['openai_image_model']:\n-                openai_image_updates['model'] = current_config['openai_image_model']\n-            if 'openai_image_quality' in current_config and current_config['openai_image_quality']:\n-                openai_image_updates['default_quality'] = current_config['openai_image_quality']\n-\n-            if openai_image_updates:\n-                image_config.update_config({'openai_image': openai_image_updates})\n-\n             logger.info(\"Image service configuration reloaded\")\n         except Exception as e:\n             logger.error(f\"Failed to reload image service configuration: {e}\")"
+  },
+  {
+   "filename": "tests/test_image_config_reload.py",
+   "status": "added",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,22 @@\n+import logging\n+\n+from landppt.services.config_service import ConfigService\n+from landppt.services.image.config.image_config import image_config\n+\n+\n+def test_reload_image_config_applies_saved_settings_without_error(tmp_path, monkeypatch, caplog):\n+    monkeypatch.chdir(tmp_path)\n+    service = ConfigService(str(tmp_path / \".env\"))\n+    monkeypatch.setenv(\"OPENAI_IMAGE_API_KEY\", \"new-key\")\n+    monkeypatch.setenv(\"OPENAI_IMAGE_MODEL\", \"new-model\")\n+    monkeypatch.setenv(\"OPENAI_IMAGE_QUALITY\", \"high\")\n+    monkeypatch.setenv(\"GEMINI_IMAGE_MODEL\", \"new-gemini-model\")\n+\n+    with caplog.at_level(logging.ERROR):\n+        service._reload_image_config()\n+\n+    assert image_config._config[\"openai_image\"][\"api_key\"] == \"new-key\"\n+    assert image_config._config[\"openai_image\"][\"model\"] == \"new-model\"\n+    assert image_config._config[\"openai_image\"][\"default_quality\"] == \"high\"\n+    assert image_config._config[\"gemini\"][\"model\"] == \"new-gemini-model\"\n+    assert [r.message for r in caplog.records if r.levelno >= logging.ERROR] == []"
+  }
+ ],
+ "test_files": [
+  "tests/test_image_config_reload.py"
+ ]
+}

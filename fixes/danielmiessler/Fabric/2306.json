@@ -1,0 +1,33 @@
+{
+ "repo": "danielmiessler/Fabric",
+ "number": 2306,
+ "url": "https://github.com/danielmiessler/Fabric/pull/2306",
+ "title": "fix(anthropic): don't send thinking.type=disabled to models that reject it",
+ "merged_at": "2026-10-23T17:43:09Z",
+ "files": [
+  {
+   "filename": "cmd/generate_changelog/incoming/2306.txt",
+   "status": "added",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,4 @@\n+### PR [#2306](https://github.com/danielmiessler/Fabric/pull/2306) by [pcbeingused333](https://github.com/pcbeingused333): fix(anthropic): don't send thinking.type=disabled to models that reject it\n+\n+- Fixed an Anthropic provider issue where `--thinking=off` sent `thinking.type=disabled` to models that reject it (Opus 5.5, Sonnet 5.5, Fable 5/5.1, and the Mythos models), causing 400 errors.\n+- Replaced the unsupported setting with `thinking.type=between_tools` for Sonnet 5.5 and adaptive thinking at low effort for models that cannot disable thinking entirely."
+  },
+  {
+   "filename": "internal/plugins/ai/anthropic/anthropic.go",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 0,
+   "patch": "@@ -78,6 +78,22 @@ var adaptiveThinkingPrefixes = []string{\n \t\"claude-mythos-5\",\n }\n \n+// These models reject `thinking.type=disabled`, so thinking can't be turned\n+// off. Claude Sonnet 5.5's lowest setting is `thinking.type=between_tools`.\n+// The others get adaptive thinking at the lowest effort.\n+var thinkingDisabledRejectedPrefixes = []string{\n+\t\"claude-opus-5-5\",\n+\t\"claude-sonnet-5-5\",\n+\t\"claude-fable-5\",\n+\t\"claude-mythos\",\n+}\n+\n+func modelRejectsDisabledThinking(model string) bool {\n+\treturn slices.ContainsFunc(thinkingDisabledRejectedPrefixes, func(prefix string) bool {\n+\t\treturn strings.HasPrefix(model, prefix)\n+\t})\n+}\n+\n func modelUsesAdaptiveThinking(model string) bool {\n \treturn slices.ContainsFunc(adaptiveThinkingPrefixes, func(prefix string) bool {\n \t\treturn strings.HasPrefix(model, prefix)\n@@ -226,6 +242,13 @@ func parseThinking(level domain.ThinkingLevel, model string) (\n \n \tswitch domain.ThinkingLevel(lower) {\n \tcase domain.ThinkingOff:\n+\t\tif modelRejectsDisabledThinking(model) {\n+\t\t\tif strings.HasPrefix(model, \"claude-sonnet-5-5\") {\n+\t\t\t\tbetweenTools := anthropic.NewThinkingConfigBetweenToolsParam()\n+\t\t\t\treturn anthropic.ThinkingConfigParamUnion{OfBetweenTools: &betweenTools}, \"\", true\n+\t\t\t}\n+\t\t\treturn adaptiveThinking, anthropic.OutputConfigEffortLow, true\n+\t\t}\n \t\tdisabled := anthropic.NewThinkingConfigDisabledParam()\n \t\treturn anthropic.ThinkingConfigParamUnion{OfDisabled: &disabled}, \"\", true\n \tcase domain.ThinkingLow, domain.ThinkingMedium, domain.ThinkingHigh:"
+  },
+  {
+   "filename": "internal/plugins/ai/anthropic/anthropic_test.go",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 0,
+   "patch": "@@ -488,6 +488,27 @@ func TestParseThinking_OffIsDisabledOnBothGenerations(t *testing.T) {\n \t}\n }\n \n+func TestParseThinking_OffOnModelsThatRejectDisabledThinking(t *testing.T) {\n+\tthinking, effort, ok := parseThinking(domain.ThinkingOff, \"claude-sonnet-5-5\")\n+\tif !ok || thinking.OfBetweenTools == nil || thinking.OfDisabled != nil || effort != \"\" {\n+\t\tt.Errorf(\"claude-sonnet-5-5: expected between_tools with no effort, got %+v effort=%q ok=%v\", thinking, effort, ok)\n+\t}\n+\tfor _, model := range []string{\"claude-opus-5-5\", \"claude-fable-5-1\", \"claude-fable-5\", \"claude-mythos-5-1\", \"claude-mythos-preview\"} {\n+\t\tthinking, effort, ok := parseThinking(domain.ThinkingOff, model)\n+\t\tif !ok || thinking.OfAdaptive == nil || thinking.OfDisabled != nil {\n+\t\t\tt.Errorf(\"model %s: expected adaptive thinking instead of disabled, got %+v ok=%v\", model, thinking, ok)\n+\t\t}\n+\t\tif effort != anthropic.OutputConfigEffortLow {\n+\t\t\tt.Errorf(\"model %s: expected low effort, got %q\", model, effort)\n+\t\t}\n+\t}\n+\tfor _, model := range []string{\"claude-opus-5\", \"claude-sonnet-5\", \"claude-haiku-5-5\", \"claude-opus-4-8\"} {\n+\t\tif thinking, _, _ := parseThinking(domain.ThinkingOff, model); thinking.OfDisabled == nil {\n+\t\t\tt.Errorf(\"model %s: expected thinking to stay disabled\", model)\n+\t\t}\n+\t}\n+}\n+\n func TestParseThinking_NumericBudgetBucketsToEffortOnAdaptiveModel(t *testing.T) {\n \tfor _, tc := range []struct {\n \t\ttokens string"
+  }
+ ],
+ "test_files": [
+  "internal/plugins/ai/anthropic/anthropic_test.go"
+ ]
+}

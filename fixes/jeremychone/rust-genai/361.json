@@ -1,0 +1,24 @@
+{
+ "repo": "jeremychone/rust-genai",
+ "number": 361,
+ "url": "https://github.com/jeremychone/rust-genai/pull/361",
+ "title": "fix(anthropic): send text parts of a tool message after its tool_result blocks",
+ "merged_at": "2026-10-29T09:36:22Z",
+ "files": [
+  {
+   "filename": "src/adapter/adapters/anthropic/adapter_shared.rs",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -385,6 +385,9 @@ impl AnthropicAdapter {\n \t\t\t\t// Tool responses are represented as user tool_result items in Anthropic.\n \t\t\t\tChatRole::Tool => {\n \t\t\t\t\tlet mut values: Vec<Value> = Vec::new();\n+\t\t\t\t\t// Text rides in the same user message, after the tool_result blocks (Anthropic\n+\t\t\t\t\t// requires tool_result blocks to come first in the content array).\n+\t\t\t\t\tlet mut text_values: Vec<Value> = Vec::new();\n \t\t\t\t\tfor part in msg.content {\n \t\t\t\t\t\tmatch part {\n \t\t\t\t\t\t\tContentPart::ToolResponse(tool_response) => {\n@@ -394,10 +397,12 @@ impl AnthropicAdapter {\n \t\t\t\t\t\t\t\t\t\"tool_use_id\": tool_response.call_id,\n \t\t\t\t\t\t\t\t}));\n \t\t\t\t\t\t\t}\n+\t\t\t\t\t\t\tContentPart::Text(text) => text_values.push(json!({\"type\": \"text\", \"text\": text})),\n \t\t\t\t\t\t\tContentPart::Custom(custom_part) => values.push(custom_part.data),\n \t\t\t\t\t\t\t_ => {}\n \t\t\t\t\t\t}\n \t\t\t\t\t}\n+\t\t\t\t\tvalues.extend(text_values);\n \t\t\t\t\tif !values.is_empty() {\n \t\t\t\t\t\tlet values = apply_cache_control_to_parts(cache_control.as_ref(), values);\n \t\t\t\t\t\tmessages.push(json!({\"role\": \"user\", \"content\": values}));"
+  },
+  {
+   "filename": "src/adapter/adapters/anthropic/adapter_shared_tests.rs",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -1088,3 +1088,37 @@ fn test_non_stream_usage_zero_thinking_tokens_is_none() -> Result<()> {\n \n \tOk(())\n }\n+\n+/// A text part on a tool message goes out as a text block after the tool_result blocks, in the\n+/// same user message, instead of being dropped.\n+#[test]\n+fn test_tool_message_text_part_serializes_after_tool_result() {\n+\tlet tool_message = ChatMessage::tool(MessageContent::from_parts(vec![\n+\t\tContentPart::Text(\"Use the result above.\".to_string()),\n+\t\tContentPart::ToolResponse(ToolResponse::new(\"call-1\", \"25 C and clear\")),\n+\t]));\n+\tlet req = ChatRequest::new(vec![ChatMessage::user(\"Weather in Cairo?\"), tool_message]);\n+\tlet target = ServiceTarget {\n+\t\tendpoint: AnthropicAdapter::default_endpoint(AdapterKind::Anthropic),\n+\t\tauth: AuthData::from_single(\"test-key\"),\n+\t\tmodel: ModelIden::new(AdapterKind::Anthropic, \"fixture-model\"),\n+\t};\n+\n+\tlet web_req = AnthropicAdapter::to_web_request_data(\n+\t\ttarget,\n+\t\tServiceType::Chat,\n+\t\treq,\n+\t\tChatOptionsSet::default().with_chat_options(None),\n+\t)\n+\t.expect(\"to_web_request_data should succeed\");\n+\n+\tlet message = &web_req.payload[\"messages\"][1];\n+\tassert_eq!(message[\"role\"], \"user\");\n+\tassert_eq!(\n+\t\tmessage[\"content\"],\n+\t\tjson!([\n+\t\t\t{\"type\": \"tool_result\", \"content\": \"25 C and clear\", \"tool_use_id\": \"call-1\"},\n+\t\t\t{\"type\": \"text\", \"text\": \"Use the result above.\"},\n+\t\t])\n+\t);\n+}"
+  }
+ ],
+ "test_files": []
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "i-am-bee/beeai-framework",
+ "number": 1874,
+ "url": "https://github.com/i-am-bee/beeai-framework/pull/1874",
+ "title": "fix(adapters): price cached prompt tokens at the cache rate",
+ "merged_at": "2026-10-29T11:02:17Z",
+ "files": [
+  {
+   "filename": "python/beeai_framework/adapters/litellm/chat.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -351,6 +351,7 @@ def _transform_output(self, chunk: ModelResponse | ModelResponseStream) -> ChatM\n                     custom_llm_provider=self._litellm_provider_id,\n                     prompt_tokens=usage.prompt_tokens,\n                     completion_tokens=usage.completion_tokens,\n+                    usage_object=usage,\n                 )\n                 cost = ChatModelCost(\n                     prompt_tokens_usd=prompt_tokens_cost_usd,"
+  },
+  {
+   "filename": "python/tests/backend/providers/test_litellm_chat.py",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 0,
+   "patch": "@@ -5,6 +5,7 @@\n from types import SimpleNamespace\n from typing import Any, cast\n \n+import litellm\n import pytest\n from litellm import ModelResponse as LiteLLMModelResponse\n from litellm import ModelResponseStream\n@@ -13,6 +14,7 @@\n     Choices,\n     Delta,\n     Message,\n+    PromptTokensDetailsWrapper,\n     StreamingChoices,\n     Usage,\n )\n@@ -185,6 +187,27 @@ def test_local_estimate_used_without_proxy_cost(\n \n         assert result.cost.total_cost_usd == pytest.approx(0.03)\n \n+    @pytest.mark.unit\n+    def test_local_estimate_prices_cached_prompt_tokens_at_the_cache_rate(self, model: _TestLiteLLMChatModel) -> None:\n+        prices = litellm.model_cost[\"gpt-4o\"]\n+        response = LiteLLMModelResponse(\n+            id=\"chatcmpl-cached\",\n+            model=\"gpt-4o\",\n+            choices=[Choices(finish_reason=\"stop\", index=0, message=Message(content=\"hello\", role=\"assistant\"))],\n+            usage=Usage(\n+                prompt_tokens=1000,\n+                completion_tokens=10,\n+                total_tokens=1010,\n+                prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=800),\n+            ),\n+        )\n+\n+        result = model._transform_output(response)\n+\n+        expected_prompt_cost = 200 * prices[\"input_cost_per_token\"] + 800 * prices[\"cache_read_input_token_cost\"]\n+        assert result.cost.prompt_tokens_usd == pytest.approx(expected_prompt_cost)\n+        assert result.cost.completion_tokens_cost_usd == pytest.approx(10 * prices[\"output_cost_per_token\"])\n+\n     @pytest.mark.unit\n     def test_content_only(self, model: _TestLiteLLMChatModel) -> None:\n         response = LiteLLMModelResponse("
+  }
+ ],
+ "test_files": [
+  "python/tests/backend/providers/test_litellm_chat.py"
+ ]
+}

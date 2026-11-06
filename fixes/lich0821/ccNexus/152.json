@@ -1,0 +1,26 @@
+{
+ "repo": "lich0821/ccNexus",
+ "number": 152,
+ "url": "https://github.com/lich0821/ccNexus/pull/152",
+ "title": "fix: send OpenAI developer and list-content system messages as Gemini systemInstruction",
+ "merged_at": "2026-10-27T10:08:29Z",
+ "files": [
+  {
+   "filename": "internal/transformer/convert/openai_gemini.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 3,
+   "patch": "@@ -23,9 +23,11 @@ func OpenAIReqToGemini(openaiReq []byte, model string) ([]byte, error) {\n \ttoolCallIDToName := make(map[string]string) // Map tool_call_id to function name\n \n \tfor _, msg := range req.Messages {\n-\t\tif msg.Role == \"system\" {\n-\t\t\tif content, ok := msg.Content.(string); ok {\n-\t\t\t\tsystemInstruction += content + \"\\n\"\n+\t\t// Gemini only takes user and model turns in contents; instructions (OpenAI's\n+\t\t// \"developer\" role included, with a string or a list of text parts) go to systemInstruction.\n+\t\tif msg.Role == \"system\" || msg.Role == \"developer\" {\n+\t\t\tif text := extractSystemText(msg.Content); text != \"\" {\n+\t\t\t\tsystemInstruction += text + \"\\n\"\n \t\t\t}\n \t\t\tcontinue\n \t\t}"
+  },
+  {
+   "filename": "internal/transformer/convert/openai_gemini_system_test.go",
+   "status": "added",
+   "additions": 92,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,92 @@\n+package convert\n+\n+import (\n+\t\"encoding/json\"\n+\t\"testing\"\n+)\n+\n+func openAIReqToGeminiBody(t *testing.T, req string) map[string]interface{} {\n+\tt.Helper()\n+\tout, err := OpenAIReqToGemini([]byte(req), \"gemini-test\")\n+\tif err != nil {\n+\t\tt.Fatalf(\"OpenAIReqToGemini failed: %v\", err)\n+\t}\n+\tvar body map[string]interface{}\n+\tif err := json.Unmarshal(out, &body); err != nil {\n+\t\tt.Fatalf(\"converted request is not JSON: %v\", err)\n+\t}\n+\treturn body\n+}\n+\n+func systemInstructionText(t *testing.T, body map[string]interface{}) string {\n+\tt.Helper()\n+\tsi, ok := body[\"systemInstruction\"].(map[string]interface{})\n+\tif !ok {\n+\t\tt.Fatalf(\"expected a systemInstruction, got %v\", body[\"systemInstruction\"])\n+\t}\n+\tparts, _ := si[\"parts\"].([]interface{})\n+\tif len(parts) != 1 {\n+\t\tt.Fatalf(\"expected one systemInstruction part, got %v\", parts)\n+\t}\n+\treturn parts[0].(map[string]interface{})[\"text\"].(string)\n+}\n+\n+// Gemini only accepts the roles user and model in contents.\n+func assertOnlyGeminiRoles(t *testing.T, body map[string]interface{}) {\n+\tt.Helper()\n+\tcontents, _ := body[\"contents\"].([]interface{})\n+\tfor _, c := range contents {\n+\t\trole := c.(map[string]interface{})[\"role\"]\n+\t\tif role != \"user\" && role != \"model\" {\n+\t\t\tt.Errorf(\"Gemini contents carry the unsupported role %v\", role)\n+\t\t}\n+\t}\n+}\n+\n+func TestOpenAIReqToGeminiDeveloperMessageBecomesSystemInstruction(t *testing.T) {\n+\tbody := openAIReqToGeminiBody(t, `{\n+\t\t\"model\": \"gpt-test\",\n+\t\t\"messages\": [\n+\t\t\t{\"role\": \"developer\", \"content\": \"Answer in French.\"},\n+\t\t\t{\"role\": \"user\", \"content\": \"hi\"}\n+\t\t]\n+\t}`)\n+\n+\tif got := systemInstructionText(t, body); got != \"Answer in French.\" {\n+\t\tt.Errorf(\"expected the developer message as systemInstruction, got %q\", got)\n+\t}\n+\tassertOnlyGeminiRoles(t, body)\n+\tif contents := body[\"contents\"].([]interface{}); len(contents) != 1 {\n+\t\tt.Errorf(\"expected only the user message in contents, got %v\", contents)\n+\t}\n+}\n+\n+func TestOpenAIReqToGeminiSystemMessageWithContentPartsIsKept(t *testing.T) {\n+\tbody := openAIReqToGeminiBody(t, `{\n+\t\t\"model\": \"gpt-test\",\n+\t\t\"messages\": [\n+\t\t\t{\"role\": \"system\", \"content\": [{\"type\": \"text\", \"text\": \"Be brief.\"}, {\"type\": \"text\", \"text\": \"No emojis.\"}]},\n+\t\t\t{\"role\": \"user\", \"content\": \"hi\"}\n+\t\t]\n+\t}`)\n+\n+\tif got := systemInstructionText(t, body); got != \"Be brief.\\nNo emojis.\" {\n+\t\tt.Errorf(\"expected the system parts joined, got %q\", got)\n+\t}\n+\tassertOnlyGeminiRoles(t, body)\n+}\n+\n+func TestOpenAIReqToGeminiJoinsSystemAndDeveloperMessages(t *testing.T) {\n+\tbody := openAIReqToGeminiBody(t, `{\n+\t\t\"model\": \"gpt-test\",\n+\t\t\"messages\": [\n+\t\t\t{\"role\": \"system\", \"content\": \"Be brief.\"},\n+\t\t\t{\"role\": \"developer\", \"content\": [{\"type\": \"text\", \"text\": \"No emojis.\"}]},\n+\t\t\t{\"role\": \"user\", \"content\": \"hi\"}\n+\t\t]\n+\t}`)\n+\n+\tif got := systemInstructionText(t, body); got != \"Be brief.\\nNo emojis.\" {\n+\t\tt.Errorf(\"expected both instructions in order, got %q\", got)\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/transformer/convert/openai_gemini_system_test.go"
+ ]
+}

@@ -1,0 +1,40 @@
+{
+ "repo": "GoDiao/dreamcoder",
+ "number": 203,
+ "url": "https://github.com/GoDiao/dreamcoder/pull/203",
+ "title": "fix(server): request usage for streamed openai_chat proxy calls",
+ "merged_at": "2026-10-29T12:44:07Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -17,6 +17,7 @@ All notable changes to DreamCoder will be documented in this file.\n - Sessions with an effort level selected before a model now generate an AI title through the active provider instead of keeping the placeholder (#193).\n - When the AI title of a session cannot be generated, the server log now says why (session, provider, model and reason: upstream status and error excerpt, no text in reply, reply is not a title) instead of keeping the placeholder silently (#176).\n - **In-process teammates claim the team's tasks** (#163). Once the lead creates a team, its tasks are stored in the team's task list, but in-process teammates looked for them in a list named after the lead's session, so they never claimed one and the tasks stayed unowned. Teammates now read the same task list as the lead, both when they start and while they are idle.\n+- Streamed replies from providers using the OpenAI Chat Completions format show their token usage and cost instead of 0 (#203). The request now asks for usage with `stream_options`, which backends such as Qwen (DashScope) and vLLM need before they report it.\n \n ## [0.8.0-beta.1] — 2026-10-26\n "
+  },
+  {
+   "filename": "src/server/__tests__/proxy-transform.test.ts",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -18,6 +18,13 @@ describe('anthropicToOpenaiChat', () => {\n     expect(result.messages).toEqual([{ role: 'user', content: 'Hello' }])\n   })\n \n+  test('streaming requests ask for token usage', () => {\n+    const base: AnthropicRequest = { model: 'gpt-4', max_tokens: 100, messages: [{ role: 'user', content: 'Hi' }] }\n+    expect(anthropicToOpenaiChat({ ...base, stream: true }).stream_options).toEqual({ include_usage: true })\n+    expect(anthropicToOpenaiChat(base).stream_options).toBeUndefined()\n+    expect(anthropicToOpenaiChat({ ...base, stream: false }).stream_options).toBeUndefined()\n+  })\n+\n   test('system prompt string', () => {\n     const req: AnthropicRequest = {\n       model: 'gpt-4',"
+  },
+  {
+   "filename": "src/server/proxy/transform/anthropicToOpenaiChat.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -35,6 +35,8 @@ export function anthropicToOpenaiChat(\n     stream: body.stream,\n   }\n \n+  if (body.stream) result.stream_options = { include_usage: true }\n+\n   if (body.temperature !== undefined) result.temperature = body.temperature\n   if (body.top_p !== undefined) result.top_p = body.top_p\n "
+  },
+  {
+   "filename": "src/server/proxy/transform/types.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -38,6 +38,7 @@ export type OpenAIChatRequest = {\n   top_p?: number\n   stop?: string | string[]\n   stream?: boolean\n+  stream_options?: { include_usage: boolean }\n   tools?: OpenAITool[]\n   tool_choice?: unknown\n   reasoning_effort?: 'low' | 'medium' | 'high'"
+  }
+ ],
+ "test_files": [
+  "src/server/__tests__/proxy-transform.test.ts"
+ ]
+}

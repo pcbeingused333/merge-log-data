@@ -1,0 +1,47 @@
+{
+ "repo": "PostHog/posthog-python",
+ "number": 1143,
+ "url": "https://github.com/PostHog/posthog-python/pull/1143",
+ "title": "fix(ai): capture an $ai_embedding event when an OpenAI embeddings call fails",
+ "merged_at": "2026-10-29T11:51:53Z",
+ "files": [
+  {
+   "filename": ".sampo/changesets/openai-embeddings-error.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+pypi/posthog: patch\n+---\n+\n+Capture an `$ai_embedding` event with `$ai_is_error` and `$ai_error` when an OpenAI `embeddings.create()` call fails, in the sync and async wrappers. Before, a failed embeddings call left no event."
+  },
+  {
+   "filename": "posthog/ai/openai/_embeddings.py",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 2,
+   "patch": "@@ -1,6 +1,12 @@\n from typing import Any, Dict, Optional\n \n-from ..utils import _capture_ai_event, finalize_ai_content, with_privacy_mode\n+from ..utils import (\n+    _capture_ai_event,\n+    _format_ai_error,\n+    _get_http_status,\n+    finalize_ai_content,\n+    with_privacy_mode,\n+)\n \n \n def _capture_embedding_event(\n@@ -15,6 +21,7 @@ def _capture_embedding_event(\n     properties: Optional[Dict[str, Any]],\n     privacy_mode: bool,\n     groups: Optional[Dict[str, Any]],\n+    error: Optional[BaseException] = None,\n ) -> None:\n     \"\"\"Build and capture telemetry shared by sync and async embedding wrappers.\"\"\"\n     usage = getattr(response, \"usage\", None)\n@@ -28,14 +35,22 @@ def _capture_embedding_event(\n             privacy_mode,\n             finalize_ai_content(request_kwargs.get(\"input\"), posthog_client),\n         ),\n-        \"$ai_http_status\": 200,\n+        \"$ai_http_status\": _get_http_status(error) if error is not None else 200,\n         # Omitted when the provider never reported a count: absent means\n         # unknown, 0 is a report of nothing.\n         **({\"$ai_input_tokens\": input_tokens} if input_tokens is not None else {}),\n         \"$ai_latency\": latency,\n         \"$ai_trace_id\": trace_id,\n         \"$ai_base_url\": str(base_url),\n         **(properties or {}),\n+        **(\n+            {\n+                \"$ai_is_error\": True,\n+                \"$ai_error\": _format_ai_error(posthog_client, privacy_mode, error),\n+            }\n+            if error is not None\n+            else {}\n+        ),\n     }\n \n     if distinct_id is None:"
+  },
+  {
+   "filename": "posthog/ai/openai/openai.py",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 1,
+   "patch": "@@ -498,7 +498,23 @@ def create(\n         )\n \n         start_time = time.time()\n-        response = self._original.create(**kwargs)\n+        try:\n+            response = self._original.create(**kwargs)\n+        except Exception as exc:\n+            _capture_embedding_event(\n+                posthog_client=self._client._ph_client,\n+                base_url=self._client.base_url,\n+                response=None,\n+                request_kwargs=kwargs,\n+                latency=time.time() - start_time,\n+                distinct_id=posthog_distinct_id,\n+                trace_id=posthog_trace_id,\n+                properties=posthog_properties,\n+                privacy_mode=posthog_privacy_mode,\n+                groups=posthog_groups,\n+                error=exc,\n+            )\n+            raise\n         end_time = time.time()\n \n         _capture_embedding_event("
+  },
+  {
+   "filename": "posthog/ai/openai/openai_async.py",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 1,
+   "patch": "@@ -502,7 +502,23 @@ async def create(\n         )\n \n         start_time = time.time()\n-        response = await self._original.create(**kwargs)\n+        try:\n+            response = await self._original.create(**kwargs)\n+        except Exception as exc:\n+            _capture_embedding_event(\n+                posthog_client=self._client._ph_client,\n+                base_url=self._client.base_url,\n+                response=None,\n+                request_kwargs=kwargs,\n+                latency=time.time() - start_time,\n+                distinct_id=posthog_distinct_id,\n+                trace_id=posthog_trace_id,\n+                properties=posthog_properties,\n+                privacy_mode=posthog_privacy_mode,\n+                groups=posthog_groups,\n+                error=exc,\n+            )\n+            raise\n         end_time = time.time()\n \n         _capture_embedding_event("
+  },
+  {
+   "filename": "posthog/test/ai/openai/test_openai.py",
+   "status": "modified",
+   "additions": 50,
+   "deletions": 0,
+   "patch": "@@ -488,6 +488,33 @@ def mock_create(self, **kwargs):\n         assert stream_options == {\"foo\": \"bar\"}\n \n \n+def test_embeddings_error(mock_client):\n+    with patch(\n+        \"openai.resources.embeddings.Embeddings.create\",\n+        side_effect=Exception(\"Test error\"),\n+    ):\n+        client = OpenAI(api_key=\"test-key\", posthog_client=mock_client)\n+        with pytest.raises(Exception, match=\"Test error\"):\n+            client.embeddings.create(\n+                model=\"text-embedding-3-small\",\n+                input=\"Hello world\",\n+                posthog_distinct_id=\"test-id\",\n+            )\n+\n+    assert mock_client.capture.call_count == 1\n+\n+    call_args = mock_client.capture.call_args[1]\n+    props = call_args[\"properties\"]\n+    assert call_args[\"distinct_id\"] == \"test-id\"\n+    assert call_args[\"event\"] == \"$ai_embedding\"\n+    assert props[\"$ai_model\"] == \"text-embedding-3-small\"\n+    assert props[\"$ai_input\"] == \"Hello world\"\n+    assert props[\"$ai_is_error\"] is True\n+    assert props[\"$ai_error\"] == \"Test error\"\n+    assert props[\"$ai_http_status\"] == 0\n+    assert \"$ai_input_tokens\" not in props\n+\n+\n def test_groups(mock_client, mock_openai_response):\n     with patch(\n         \"openai.resources.chat.completions.Completions.create\",\n@@ -1449,6 +1476,29 @@ async def chunk_iterable():\n     assert isinstance(props[\"$ai_latency\"], float)\n \n \n+@pytest.mark.asyncio\n+async def test_async_embeddings_error(mock_client):\n+    mock_create = AsyncMock(side_effect=Exception(\"Test error\"))\n+\n+    with patch(\"openai.resources.embeddings.AsyncEmbeddings.create\", new=mock_create):\n+        client = AsyncOpenAI(api_key=\"test-key\", posthog_client=mock_client)\n+        with pytest.raises(Exception, match=\"Test error\"):\n+            await client.embeddings.create(\n+                model=\"text-embedding-3-small\",\n+                input=\"Hello world\",\n+                posthog_distinct_id=\"test-id\",\n+            )\n+\n+    assert mock_client.capture.call_count == 1\n+\n+    call_args = mock_client.capture.call_args[1]\n+    props = call_args[\"properties\"]\n+    assert call_args[\"event\"] == \"$ai_embedding\"\n+    assert props[\"$ai_is_error\"] is True\n+    assert props[\"$ai_error\"] == \"Test error\"\n+    assert props[\"$ai_http_status\"] == 0\n+\n+\n @pytest.mark.asyncio\n @pytest.mark.parametrize(\"stream_options\", [None, NOT_GIVEN, {\"foo\": \"bar\"}])\n async def test_async_streaming_stream_options_are_not_mutated("
+  }
+ ],
+ "test_files": [
+  "posthog/test/ai/openai/test_openai.py"
+ ]
+}

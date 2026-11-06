@@ -1,0 +1,54 @@
+{
+ "repo": "mozilla-ai/any-llm",
+ "number": 1575,
+ "url": "https://github.com/mozilla-ai/any-llm/pull/1575",
+ "title": "fix: map max_completion_tokens for Anthropic, Gemini, Bedrock and Mistral",
+ "merged_at": "2026-11-04T23:02:56Z",
+ "files": [
+  {
+   "filename": "src/any_llm/providers/anthropic/utils.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -35,6 +35,7 @@\n from any_llm.types.model import Model\n from any_llm.utils.messages_compat import sampling_params_in_extra_body\n from any_llm.utils.structured_output import get_json_schema, is_structured_output_type\n+from any_llm.utils.token_limit import resolve_output_token_limit\n \n DEFAULT_MAX_TOKENS = 8192\n _ANTHROPIC_CONTENT_FILTER_REFUSAL = \"Response blocked by Anthropic content filtering.\"\n@@ -722,6 +723,7 @@ def _convert_params(params: CompletionParams, **kwargs: Any) -> dict[str, Any]:\n \n     if params.response_format:\n         result_kwargs[\"output_config\"] = _convert_response_format(params.response_format, provider_name)\n+    params.max_tokens = resolve_output_token_limit(params)\n     if params.max_tokens is None:\n         logger.warning(f\"max_tokens is required for Anthropic, setting to {DEFAULT_MAX_TOKENS}\")\n         params.max_tokens = DEFAULT_MAX_TOKENS\n@@ -770,6 +772,7 @@ def _convert_params(params: CompletionParams, **kwargs: Any) -> dict[str, Any]:\n             exclude={\n                 \"model_id\",\n                 \"messages\",\n+                \"max_completion_tokens\",\n                 \"reasoning_effort\",\n                 \"response_format\",\n                 \"parallel_tool_calls\","
+  },
+  {
+   "filename": "src/any_llm/providers/bedrock/utils.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 2,
+   "patch": "@@ -26,6 +26,7 @@\n     Usage,\n )\n from any_llm.utils.structured_output import get_json_schema, is_structured_output_type\n+from any_llm.utils.token_limit import resolve_output_token_limit\n \n INFERENCE_PARAMETERS = [\"maxTokens\", \"temperature\", \"topP\", \"stopSequences\"]\n \n@@ -242,8 +243,9 @@ def _convert_params(params: CompletionParams, kwargs: dict[str, Any]) -> dict[st\n         )\n \n     inference_config: dict[str, Any] = {}\n-    if params.max_tokens:\n-        inference_config[\"maxTokens\"] = params.max_tokens\n+    max_tokens = resolve_output_token_limit(params)\n+    if max_tokens:\n+        inference_config[\"maxTokens\"] = max_tokens\n     if params.temperature is not None:\n         inference_config[\"temperature\"] = params.temperature\n     if params.top_p is not None:"
+  },
+  {
+   "filename": "src/any_llm/providers/gemini/base.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -25,6 +25,7 @@\n from any_llm.utils.aio import aclose_quietly\n from any_llm.utils.embedding import apply_encoding_format, pop_encoding_format\n from any_llm.utils.structured_output import get_json_schema, is_structured_output_type\n+from any_llm.utils.token_limit import resolve_output_token_limit\n \n MISSING_PACKAGES_ERROR = None\n try:\n@@ -275,7 +276,7 @@ def _convert_completion_params(params: CompletionParams, **kwargs: Any) -> dict[\n                 option_name: option_value\n                 for option_name, option_value in (\n                     (\"frequency_penalty\", params.frequency_penalty),\n-                    (\"max_output_tokens\", params.max_tokens),\n+                    (\"max_output_tokens\", resolve_output_token_limit(params)),\n                     (\"presence_penalty\", params.presence_penalty),\n                     (\"seed\", params.seed),\n                     (\"service_tier\", params.service_tier),"
+  },
+  {
+   "filename": "src/any_llm/providers/mistral/mistral.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n \n from any_llm.any_llm import AnyLLM\n from any_llm.utils.structured_output import get_json_schema, is_structured_output_type\n+from any_llm.utils.token_limit import resolve_output_token_limit\n \n MISSING_PACKAGES_ERROR = None\n try:\n@@ -94,6 +95,12 @@ def _convert_completion_params(params: CompletionParams, **kwargs: Any) -> dict[\n         )\n         converted_params[\"messages\"] = _patch_messages(params.messages)\n \n+        # Mistral names the output limit max_tokens and does not accept max_completion_tokens.\n+        converted_params.pop(\"max_completion_tokens\", None)\n+        max_tokens = resolve_output_token_limit(params)\n+        if max_tokens is not None:\n+            converted_params[\"max_tokens\"] = max_tokens\n+\n         if params.response_format is not None:\n             if isinstance(params.response_format, type) and issubclass(params.response_format, BaseModel):\n                 converted_params[\"response_format\"] = response_format_from_pydantic_model(params.response_format)"
+  },
+  {
+   "filename": "src/any_llm/utils/token_limit.py",
+   "status": "added",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,22 @@\n+import logging\n+\n+from any_llm.types.completion import CompletionParams\n+\n+logger = logging.getLogger(__name__)\n+\n+\n+def resolve_output_token_limit(params: CompletionParams) -> int | None:\n+    \"\"\"Return the output token limit for providers that name it themselves.\n+\n+    ``max_completion_tokens`` is the OpenAI name for the limit and supersedes ``max_tokens``, so it\n+    wins when both are set, as it does for the OpenAI-compatible providers.\n+    \"\"\"\n+    if params.max_completion_tokens is None:\n+        return params.max_tokens\n+    if params.max_tokens is not None and params.max_tokens != params.max_completion_tokens:\n+        logger.warning(\n+            \"Ignoring max_tokens (%s) in favor of max_completion_tokens (%s).\",\n+            params.max_tokens,\n+            params.max_completion_tokens,\n+        )\n+    return params.max_completion_tokens"
+  },
+  {
+   "filename": "tests/unit/providers/test_max_completion_tokens.py",
+   "status": "added",
+   "additions": 94,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,94 @@\n+\"\"\"`max_completion_tokens` is the OpenAI name for the output limit; providers with their own field must honor it.\"\"\"\n+\n+import logging\n+from typing import Any\n+\n+import pytest\n+\n+from any_llm.types.completion import CompletionParams\n+from any_llm.utils.token_limit import resolve_output_token_limit\n+\n+\n+def _params(max_tokens: int | None = None, max_completion_tokens: int | None = None) -> CompletionParams:\n+    return CompletionParams(\n+        model_id=\"model\",\n+        messages=[{\"role\": \"user\", \"content\": \"Hello\"}],\n+        max_tokens=max_tokens,\n+        max_completion_tokens=max_completion_tokens,\n+    )\n+\n+\n+def _anthropic(params: CompletionParams) -> Any:\n+    pytest.importorskip(\"anthropic\")\n+    from any_llm.providers.anthropic.utils import _convert_params\n+\n+    converted = _convert_params(params, provider_name=\"anthropic\")\n+    assert \"max_completion_tokens\" not in converted\n+    return converted[\"max_tokens\"]\n+\n+\n+def _gemini(params: CompletionParams) -> Any:\n+    pytest.importorskip(\"google.genai\")\n+    from any_llm.providers.gemini.gemini import GeminiProvider\n+\n+    return GeminiProvider._convert_completion_params(params, provider_name=\"gemini\")[\"config\"].max_output_tokens\n+\n+\n+def _bedrock(params: CompletionParams) -> Any:\n+    pytest.importorskip(\"boto3\")\n+    from any_llm.providers.bedrock.bedrock import BedrockProvider\n+\n+    return BedrockProvider._convert_completion_params(params).get(\"inferenceConfig\", {}).get(\"maxTokens\")\n+\n+\n+def _mistral(params: CompletionParams) -> Any:\n+    pytest.importorskip(\"mistralai\")\n+    from any_llm.providers.mistral.mistral import MistralProvider\n+\n+    converted = MistralProvider._convert_completion_params(params)\n+    assert \"max_completion_tokens\" not in converted\n+    return converted.get(\"max_tokens\")\n+\n+\n+PROVIDERS = [\n+    pytest.param(_anthropic, id=\"anthropic\"),\n+    pytest.param(_gemini, id=\"gemini\"),\n+    pytest.param(_bedrock, id=\"bedrock\"),\n+    pytest.param(_mistral, id=\"mistral\"),\n+]\n+\n+\n+@pytest.mark.parametrize(\"convert\", PROVIDERS)\n+def test_max_completion_tokens_sets_the_output_limit(convert: Any) -> None:\n+    assert convert(_params(max_completion_tokens=500)) == 500\n+\n+\n+@pytest.mark.parametrize(\"convert\", PROVIDERS)\n+def test_max_tokens_still_sets_the_output_limit(convert: Any) -> None:\n+    assert convert(_params(max_tokens=300)) == 300\n+\n+\n+@pytest.mark.parametrize(\"convert\", PROVIDERS)\n+def test_max_completion_tokens_wins_over_max_tokens(convert: Any, caplog: pytest.LogCaptureFixture) -> None:\n+    with caplog.at_level(logging.WARNING):\n+        assert convert(_params(max_tokens=300, max_completion_tokens=500)) == 500\n+    assert \"Ignoring max_tokens (300) in favor of max_completion_tokens (500)\" in caplog.text\n+\n+\n+@pytest.mark.parametrize(\"convert\", PROVIDERS)\n+def test_equal_limits_do_not_warn(convert: Any, caplog: pytest.LogCaptureFixture) -> None:\n+    with caplog.at_level(logging.WARNING):\n+        assert convert(_params(max_tokens=400, max_completion_tokens=400)) == 400\n+    assert \"Ignoring max_tokens\" not in caplog.text\n+\n+\n+@pytest.mark.parametrize(\n+    \"convert\",\n+    [pytest.param(_gemini, id=\"gemini\"), pytest.param(_bedrock, id=\"bedrock\"), pytest.param(_mistral, id=\"mistral\")],\n+)\n+def test_no_limit_sends_no_limit(convert: Any) -> None:\n+    assert convert(_params()) is None\n+\n+\n+def test_resolve_output_token_limit_without_limits_returns_none() -> None:\n+    assert resolve_output_token_limit(_params()) is None"
+  }
+ ],
+ "test_files": [
+  "tests/unit/providers/test_max_completion_tokens.py"
+ ]
+}

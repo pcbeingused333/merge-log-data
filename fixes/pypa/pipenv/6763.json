@@ -1,0 +1,33 @@
+{
+ "repo": "pypa/pipenv",
+ "number": 6763,
+ "url": "https://github.com/pypa/pipenv/pull/6763",
+ "title": "fix(audit): exit non-zero when pip-audit cannot be run",
+ "merged_at": "2026-10-28T22:04:37Z",
+ "files": [
+  {
+   "filename": "news/6763.bugfix.rst",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+``pipenv audit`` now exits with status 1 instead of 0 when ``pip-audit`` could not be installed, was declined, or is still missing after installing, so CI no longer treats an audit that never ran as a pass."
+  },
+  {
+   "filename": "pipenv/routines/audit.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 2,
+   "patch": "@@ -192,15 +192,16 @@ def do_audit(  # noqa: PLR0913\n     if not is_pip_audit_installed(project, system=system):\n         if not install_pip_audit(project, system=system):\n             console.print(\"[yellow]Vulnerability audit aborted.[/yellow]\")\n-            return\n+            # Nothing was audited: a non-zero exit keeps CI from reading it as a pass.\n+            sys.exit(1)\n \n         # Check again after installation\n         if not is_pip_audit_installed(project, system=system):\n             err.print(\n                 \"[red]pip-audit installation was reported successful but module not found. \"\n                 \"Please try again or install manually with 'pip install pip-audit'[/red]\"\n             )\n-            return\n+            sys.exit(1)\n \n     # Build options for pip-audit\n     options = build_audit_options("
+  },
+  {
+   "filename": "tests/unit/test_audit_routine.py",
+   "status": "added",
+   "additions": 47,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,47 @@\n+\"\"\"Tests for the exit status of ``pipenv.routines.audit.do_audit``.\"\"\"\n+\n+from __future__ import annotations\n+\n+from unittest import mock\n+\n+import pytest\n+\n+from pipenv.routines import audit\n+\n+\n+@pytest.fixture\n+def audit_project():\n+    proj = mock.MagicMock()\n+    proj.s.is_quiet.return_value = True\n+    return proj\n+\n+\n+def test_audit_exits_non_zero_when_pip_audit_is_not_installed(\n+    monkeypatch, audit_project\n+):\n+    monkeypatch.setattr(audit, \"is_pip_audit_installed\", lambda *a, **kw: False)\n+    monkeypatch.setattr(audit, \"install_pip_audit\", lambda *a, **kw: False)\n+    run = mock.MagicMock()\n+    monkeypatch.setattr(audit.subprocess, \"run\", run)\n+\n+    with pytest.raises(SystemExit) as exc:\n+        audit.do_audit(audit_project, system=True, quiet=True)\n+\n+    assert exc.value.code == 1\n+    run.assert_not_called()\n+\n+\n+def test_audit_exits_non_zero_when_pip_audit_is_missing_after_install(\n+    monkeypatch, audit_project\n+):\n+    # Not found before the install, still not found after it \"succeeded\".\n+    monkeypatch.setattr(audit, \"is_pip_audit_installed\", lambda *a, **kw: False)\n+    monkeypatch.setattr(audit, \"install_pip_audit\", lambda *a, **kw: True)\n+    run = mock.MagicMock()\n+    monkeypatch.setattr(audit.subprocess, \"run\", run)\n+\n+    with pytest.raises(SystemExit) as exc:\n+        audit.do_audit(audit_project, system=True, quiet=True)\n+\n+    assert exc.value.code == 1\n+    run.assert_not_called()"
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_audit_routine.py"
+ ]
+}

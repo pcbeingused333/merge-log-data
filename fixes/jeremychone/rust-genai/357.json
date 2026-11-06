@@ -1,0 +1,24 @@
+{
+ "repo": "jeremychone/rust-genai",
+ "number": 357,
+ "url": "https://github.com/jeremychone/rust-genai/pull/357",
+ "title": "fix(bedrock): count cache tokens in prompt_tokens",
+ "merged_at": "2026-10-28T16:16:36Z",
+ "files": [
+  {
+   "filename": "src/adapter/adapters/bedrock/converse.rs",
+   "status": "modified",
+   "additions": 42,
+   "deletions": 1,
+   "patch": "@@ -219,6 +219,12 @@ pub(super) fn parse_usage(mut usage_value: Value) -> Usage {\n \tlet cache_read: Option<i32> = usage_value.x_take(\"cacheReadInputTokens\").ok();\n \tlet cache_write: Option<i32> = usage_value.x_take(\"cacheWriteInputTokens\").ok();\n \n+\t// Converse reports `inputTokens` net of the cache tokens, and `totalTokens` includes them. As for the\n+\t// Anthropic adapter, `prompt_tokens` is the whole prompt: input + cache read + cache write.\n+\tlet prompt_tokens = input_tokens\n+\t\t.saturating_add(cache_read.unwrap_or(0))\n+\t\t.saturating_add(cache_write.unwrap_or(0));\n+\n \tlet prompt_tokens_details = if cache_read.is_some() || cache_write.is_some() {\n \t\tSome(crate::chat::PromptTokensDetails {\n \t\t\tcache_creation_tokens: cache_write,\n@@ -231,7 +237,7 @@ pub(super) fn parse_usage(mut usage_value: Value) -> Usage {\n \t};\n \n \tUsage {\n-\t\tprompt_tokens: Some(input_tokens),\n+\t\tprompt_tokens: Some(prompt_tokens),\n \t\tprompt_tokens_details,\n \t\tcompletion_tokens: Some(output_tokens),\n \t\tcompletion_tokens_details: None,\n@@ -642,6 +648,41 @@ mod tests {\n \tuse crate::adapter::AdapterKind;\n \tuse crate::chat::{ChatMessage, ChatOptions};\n \n+\t#[test]\n+\tfn parse_usage_counts_cache_tokens_in_prompt_tokens() -> Result<()> {\n+\t\t// -- Setup & Fixtures\n+\t\t// Converse reports `inputTokens` net of the cache tokens; `totalTokens` includes them.\n+\t\tlet usage_value = serde_json::json!({\n+\t\t\t\"inputTokens\": 10,\n+\t\t\t\"outputTokens\": 5,\n+\t\t\t\"totalTokens\": 25,\n+\t\t\t\"cacheReadInputTokens\": 7,\n+\t\t\t\"cacheWriteInputTokens\": 3\n+\t\t});\n+\n+\t\t// -- Exec\n+\t\tlet usage = parse_usage(usage_value);\n+\n+\t\t// -- Check\n+\t\tassert_eq!(usage.prompt_tokens, Some(20));\n+\t\tassert_eq!(usage.completion_tokens, Some(5));\n+\t\tassert_eq!(usage.total_tokens, Some(25));\n+\t\tlet details = usage.prompt_tokens_details.as_ref().ok_or(\"Should have cache details\")?;\n+\t\tassert_eq!(details.cached_tokens, Some(7));\n+\t\tassert_eq!(details.cache_creation_tokens, Some(3));\n+\n+\t\tOk(())\n+\t}\n+\n+\t#[test]\n+\tfn parse_usage_without_cache_keeps_input_tokens() {\n+\t\tlet usage = parse_usage(serde_json::json!({\"inputTokens\": 10, \"outputTokens\": 5, \"totalTokens\": 15}));\n+\n+\t\tassert_eq!(usage.prompt_tokens, Some(10));\n+\t\tassert_eq!(usage.total_tokens, Some(15));\n+\t\tassert!(usage.prompt_tokens_details.is_none());\n+\t}\n+\n \tfn payload_for(model: &str, chat_req: ChatRequest, options: &ChatOptions) -> Result<Value> {\n \t\tlet model_iden = ModelIden::new(AdapterKind::BedrockApi, model);\n \t\tlet options_set = ChatOptionsSet::default().with_chat_options(Some(options));"
+  },
+  {
+   "filename": "src/adapter/adapters/bedrock/streamer.rs",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -706,7 +706,7 @@ mod tests {\n \t\tbytes.extend(build_frame(\"messageStop\", br#\"{\"stopReason\":\"end_turn\"}\"#));\n \t\tbytes.extend(build_frame(\n \t\t\t\"metadata\",\n-\t\t\tbr#\"{\"usage\":{\"inputTokens\":10,\"outputTokens\":5,\"totalTokens\":15,\"cacheReadInputTokens\":7,\"cacheWriteInputTokens\":3},\"metrics\":{\"latencyMs\":1}}\"#,\n+\t\t\tbr#\"{\"usage\":{\"inputTokens\":10,\"outputTokens\":5,\"totalTokens\":25,\"cacheReadInputTokens\":7,\"cacheWriteInputTokens\":3},\"metrics\":{\"latencyMs\":1}}\"#,\n \t\t));\n \t\tlet inner: Pin<Box<dyn Stream<Item = _> + Send>> =\n \t\t\tBox::pin(futures::stream::iter(vec![Ok(bytes::Bytes::from(bytes))]));\n@@ -731,9 +731,9 @@ mod tests {\n \t\tassert!(matches!(events.last(), Some(Ok(InterStreamEvent::End(_)))));\n \t\tassert_eq!(end.captured_stop_reason, Some(StopReason::from(\"end_turn\".to_string())));\n \t\tlet usage = end.captured_usage.as_ref().ok_or(\"Should have usage\")?;\n-\t\tassert_eq!(usage.prompt_tokens, Some(10));\n+\t\tassert_eq!(usage.prompt_tokens, Some(20));\n \t\tassert_eq!(usage.completion_tokens, Some(5));\n-\t\tassert_eq!(usage.total_tokens, Some(15));\n+\t\tassert_eq!(usage.total_tokens, Some(25));\n \t\tlet details = usage.prompt_tokens_details.as_ref().ok_or(\"Should have cache details\")?;\n \t\tassert_eq!(details.cached_tokens, Some(7));\n \t\tassert_eq!(details.cache_creation_tokens, Some(3));"
+  }
+ ],
+ "test_files": []
+}

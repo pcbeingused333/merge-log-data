@@ -1,0 +1,62 @@
+{
+ "repo": "MemMachine/MemMachine",
+ "number": 1865,
+ "url": "https://github.com/MemMachine/MemMachine/pull/1865",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-28T20:15:27Z",
+   "body": "Thanks for the change. Why not gpt-6-luna? Also please see the note. I think the test is not necessary."
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-29T18:17:47Z",
+   "body": "Thanks. Several other OpenAI models in the repo retire on the same schedule: `gpt-5-mini` on 2026-12-11, and `gpt-4o`, `gpt-4o-mini`, `gpt-4.1` and `gpt-4.1-mini` on 2027-01-14. The deprecations page maps the latter group to `gpt-6-luna`. Could this PR switch every non-benchmark use to `gpt-6-luna`? No need to map models by tier.\r\n\r\n- Helm: `deployments/helm/values.yaml:119`, `deployments/helm/README.md:316,512`\r\n- Installers: `packages/server/src/memmachine_server/installation/utilities.py:41`, `memmachine-compose.sh:193-194,217,1238`\r\n- Config API spec: `packages/common/src/memmachine_common/api/config_spec.py:335,356`\r\n- Sample configs: `sample_configs/configuration.event.yml:109`, `sample_configs/episodic_memory_config.{cpu,gpu,nebula}.sample`\r\n- Docs: `docs/install_guide/install_guide.mdx:176,293`, `docs/open_source/configuration.mdx:491,516,540`, `docs/install_guide/cloud_deploy/aws_cloudformation.mdx:532`\r\n- LiteLLM examples (`openai/gpt-4o`): `packages/server/src/memmachine_server/common/language_model/litellm_language_model.py:40,68`, `packages/server/src/memmachine_server/common/configuration/language_model_conf.py:118`\r\n- OpenAI integration-test model: `packages/server/server_tests/memmachine_server/conftest.py:109`\r\n- Examples: `examples/simple_chatbot` (`app.py:19`, `llm.py:53`, `model_config.py`), `examples/v1/frontend` (`llm.py:18`, `model_config.py:2`), `examples/v1/crm/slack_server.py:288`. On those OpenAI calls, please drop the custom `temperature` and max-token settings, including the temperature gate in `simple_chatbot/llm.py:131-133`. In `simple_chatbot/model_config.py`, list each model once.\r\n\r\nPlease leave these unchanged:\r\n- `evaluation/`: the judge and answer models stay fixed so results remain comparable with earlier runs.\r\n- `memmachine.py:261`: the `\"gpt-4.1\"` there is a resource id, not a model name. It's tracked in #1873.\r\n- Unit-test fixtures that never call the API, `text-embedding-3-small`, and non-OpenAI models.\r\n\r\n---\r\n\r\n🤖 Written by [Claude Code](https://claude.com/claude-code) (Claude Opus 5.5) on behalf of @edwinyyyu.\r\n"
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-30T17:47:50Z",
+   "body": "Thanks for the updates. Please update the PR title and description to match the extended scope. Or a maintainer will do it for you before merging.\n\nFile changes LGTM."
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-30T20:46:13Z",
+   "body": "Approving at d01384c7.\n\nChecked at this head:\n\n- Outside `evaluation/`, the only retiring OpenAI model names left are unit-test fixtures and mocks that never reach the API, plus the `\"gpt-4.1\"` resource id in `memmachine.py` (#1873), which matches the scope Edwin set.\n- Neither OpenAI client sends `temperature`, a max-token setting or `reasoning_effort` (the Responses params carry `reasoning_effort` but never pass it), so `gpt-6-luna` gets the same request shape the old defaults did.\n- The new defaults reach the config that actually runs: the configure wizard reads `DEFAULT_OPENAI_MODEL`, `memmachine-compose.sh` writes `llm_model` into the generated config (prompt default and the unknown-provider fallback), and the Helm configmap renders `memmachine.model.model_path`.\n\nThe red checks are not from this change: all four `test-install` jobs fail downloading the installer's JDK (HTTP 404), which #1864 fixes, and `build-docs (24)` fails on an npm 404 for `@mintlify/prebuild` (`build-docs (22)` passes).\n"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "packages/server/server_tests/memmachine_server/common/configuration/test_language_model_conf.py",
+   "created_at": "2026-10-28T20:10:15Z",
+   "body": "This test is only effective as long as gpt-5.6-luna itself is not retired.\n\nThere is nothing that this test adds that cannot be determined by reading the implementation. So this just fixes the implementation in place without verifying some behavioral contract.\n\nIf we wanted to update the model to gpt-6-luna or something else, this would require changes to multiple files."
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-10-29T00:56:19Z",
+   "body": "Thanks for the review. Switched the defaults to `gpt-6-luna`: it is the current Luna-tier model and the one the deprecations page points the GPT-4-series retirements to, while `gpt-5.6-luna` is only listed there as the direct `gpt-5-nano` replacement. Removed the test, as it only pinned the implementation. Updated in the same places: both config defaults, the two docstrings and test_resource_manager. Pushed as a new commit on the branch (no force-push).\n\nDrafted with the assistance of an AI agent (Claude) working for the author.\n"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-30T00:47:36Z",
+   "body": "<!-- mintlify-fork-preview-approval -->\n### Preview approval required\n\nThis pull request comes from a fork, so Mintlify won't build a preview until someone with write access approves commit `d01384c`.\n\n[Approve preview](https://github.com/MemMachine/MemMachine/pull/1865/checks?check_run_id=123823697462)"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-30T00:47:59Z",
+   "body": "Done in d01384c, pushed as a new commit on the branch. Every non-benchmark use now points to `gpt-6-luna`:\n\n- Helm values and README, installer defaults and `memmachine-compose.sh`, the config API spec defaults, sample configs, and the docs pages you listed.\n- LiteLLM examples (`openai/gpt-6-luna`) and the integration-test model in `conftest.py`.\n- Examples: `simple_chatbot` and `v1/frontend` now default to `gpt-6-luna`; the OpenAI calls no longer set `temperature` or max-token settings (the temperature gate in `simple_chatbot/llm.py` is removed), and `simple_chatbot/model_config.py` lists the model once.\n\nLeft unchanged as requested: `evaluation/`, the `\"gpt-4.1\"` resource id in `memmachine.py:261` (tracked in #1873), unit-test fixtures that never call the API, and `text-embedding-3-small`. The config, resource-manager and config-router tests pass (72).\n\nDrafted with the assistance of an AI agent (Claude) working for the author.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-30T18:40:58Z",
+   "body": "Thanks for the review. Updated the PR title and description to cover the extended scope (all non-benchmark retiring OpenAI models → `gpt-6-luna`).\n\nDrafted with the assistance of an AI agent (Claude) working for the author.\n"
+  }
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "maximhq/bifrost",
+ "number": 9260,
+ "url": "https://github.com/maximhq/bifrost/pull/9260",
+ "title": "fix(transports): return a JSON 404 for unmatched /api paths instead of the dashboard shell",
+ "merged_at": "2026-11-02T20:08:13Z",
+ "files": [
+  {
+   "filename": "transports/bifrost-http/handlers/ui.go",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 3,
+   "patch": "@@ -74,12 +74,20 @@ func (h *UIHandler) RegisterRoutes(router *router.Router, middlewares ...schemas\n \n // serveDashboard serves the dashboard UI.\n func (h *UIHandler) serveDashboard(ctx *fasthttp.RequestCtx) {\n-\tif IsDevMode() && h.serveDevDashboard(ctx) {\n+\t// Get the request path\n+\trequestPath := string(ctx.Path())\n+\n+\t// An /api path that reached this catch-all has no handler (for example the\n+\t// logging plugin is not loaded). Answer with a JSON 404 rather than the SPA\n+\t// shell, which clients would parse as HTML.\n+\tif requestPath == \"/api\" || strings.HasPrefix(requestPath, \"/api/\") {\n+\t\tSendError(ctx, fasthttp.StatusNotFound, \"Route not found: \"+requestPath)\n \t\treturn\n \t}\n \n-\t// Get the request path\n-\trequestPath := string(ctx.Path())\n+\tif IsDevMode() && h.serveDevDashboard(ctx) {\n+\t\treturn\n+\t}\n \n \t// Clean the path to prevent directory traversal\n \tcleanPath := path.Clean(requestPath)"
+  },
+  {
+   "filename": "transports/bifrost-http/handlers/ui_test.go",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 0,
+   "patch": "@@ -173,3 +173,24 @@ func BenchmarkUIHandler_ServeShell(b *testing.B) {\n \t\t})\n \t}\n }\n+\n+func TestServeDashboardAPIPathsReturnJSONNotFound(t *testing.T) {\n+\th := NewUIHandler(uiTestFS(), nil, \"\")\n+\n+\tfor _, path := range []string{\"/api\", \"/api/logs\", \"/api/logs/stats\", \"/api/mcp-logs/anything\"} {\n+\t\tctx := serveUITest(h, path)\n+\n+\t\tassert.Equal(t, fasthttp.StatusNotFound, ctx.Response.StatusCode(), path)\n+\t\tassert.True(t, strings.HasPrefix(string(ctx.Response.Header.ContentType()), \"application/json\"), path)\n+\t\tassert.Contains(t, string(ctx.Response.Body()), \"Route not found: \"+path, path)\n+\t}\n+}\n+\n+func TestServeDashboardKeepsNonAPIPathsOnTheSPAPath(t *testing.T) {\n+\th := NewUIHandler(uiTestFS(), nil, \"\")\n+\n+\tfor _, path := range []string{\"/apiary\", \"/dashboard/api-keys\"} {\n+\t\tbody := string(serveUITest(h, path).Response.Body())\n+\t\tassert.NotContains(t, body, \"Route not found\", path)\n+\t}\n+}"
+  },
+  {
+   "filename": "transports/changelog.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -38,6 +38,7 @@\n \n ## 🐞 Fixed\n \n+- **Unmatched `/api` paths return a JSON 404** - A GET request to an `/api` path with no handler, for example `/api/logs` while the logging plugin is not loaded, was answered with the dashboard's `index.html` and a 200 status, which API clients could not tell apart from a real response. It now returns the same JSON 404 as other unknown routes. Requests with other methods are unchanged and may still receive the router's 405 response.\n - **Startup No Longer Fails on a New Key's Unknown Grant** - A virtual key added in config.json whose `agent_grants` (or `relay_grants`) named an agent or relay that is not stored failed the whole governance sync, and Bifrost exited at startup. That grant is now skipped with a warning and the key is created, as an existing key's update already did. Agent grants in config.json belong on the agent (`agents[].virtual_key_ids`): agents load after virtual keys, so a key cannot grant an agent declared in the same file on its first start\n - **Anthropic Sonnet 5.5 Passthrough** - Native Sonnet 5.5 requests forward the caller's reasoning and sampling settings on both the typed and raw paths (thanks [@valentinyanakiev](https://github.com/valentinyanakiev)!)\n - **Anthropic message_delta** - Streaming `message_delta` frames keep their required `delta` object and report only the usage the upstream sent (thanks [@valentinyanakiev](https://github.com/valentinyanakiev)!)"
+  }
+ ],
+ "test_files": [
+  "transports/bifrost-http/handlers/ui_test.go"
+ ]
+}

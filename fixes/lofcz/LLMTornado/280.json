@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 280,
+ "url": "https://github.com/lofcz/LLMTornado/pull/280",
+ "title": "Apply NotEqual and NotIn filters in the Qdrant database",
+ "merged_at": "2026-10-28T08:56:08Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/QdrantFilterTests.cs",
+   "status": "added",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,49 @@\n+using System.Reflection;\n+using LlmTornado.VectorDatabases;\n+using LlmTornado.VectorDatabases.Qdrant;\n+using Qdrant.Client.Grpc;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class QdrantFilterTests\n+{\n+    [Test]\n+    public void NotEqual_BecomesAMustNotCondition()\n+    {\n+        Filter filter = Convert(TornadoWhereOperator.NotEqual(\"category\", \"spam\"));\n+\n+        Assert.That(filter.Must, Has.Count.EqualTo(1));\n+        Filter negated = filter.Must[0].Filter;\n+        Assert.That(negated.MustNot, Has.Count.EqualTo(1));\n+        Assert.That(negated.MustNot[0].Field.Key, Is.EqualTo(\"category\"));\n+        Assert.That(negated.MustNot[0].Field.Match.Keyword, Is.EqualTo(\"spam\"));\n+    }\n+\n+    [Test]\n+    public void NotIn_BecomesAMustNotCondition()\n+    {\n+        Filter filter = Convert(TornadoWhereOperator.NotIn(\"category\", \"spam\", \"ads\"));\n+\n+        Assert.That(filter.Must, Has.Count.EqualTo(1));\n+        Filter negated = filter.Must[0].Filter;\n+        Assert.That(negated.MustNot, Has.Count.EqualTo(1));\n+        Assert.That(negated.MustNot[0].Field.Match.Keywords.Strings, Is.EqualTo(new[] { \"spam\", \"ads\" }));\n+    }\n+\n+    [Test]\n+    public void NotEqual_CombinedWithAnotherClause_KeepsBoth()\n+    {\n+        Filter filter = Convert(TornadoWhereOperator.Equal(\"lang\", \"en\") & TornadoWhereOperator.NotEqual(\"category\", \"spam\"));\n+\n+        Assert.That(filter.Must, Has.Count.EqualTo(2));\n+        Assert.That(filter.Must[0].Field.Key, Is.EqualTo(\"lang\"));\n+        Assert.That(filter.Must[1].Filter.MustNot[0].Field.Key, Is.EqualTo(\"category\"));\n+    }\n+\n+    private static Filter Convert(TornadoWhereOperator where)\n+    {\n+        MethodInfo method = typeof(QdrantVectorDatabase).GetMethod(\"ConvertToQdrantFilter\", BindingFlags.NonPublic | BindingFlags.Static)!;\n+        return (Filter)method.Invoke(null, [where])!;\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado.VectorDatabases.Qdrant/QdrantVectorDatabase.cs",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 1,
+   "patch": "@@ -454,7 +454,7 @@ private static List<Condition> ConvertDictionaryToConditions(Dictionary<string,\n                             condition = CreateMatchCondition(kvp.Key, op.Value);\n                             break;\n                         case \"$ne\":\n-                            // For not-equal, we'll skip it for now as it requires must_not logic\n+                            condition = Negate(CreateMatchCondition(kvp.Key, op.Value));\n                             break;\n                         case \"$gt\":\n                             condition = Range(kvp.Key, new QdrantRange\n@@ -492,6 +492,17 @@ private static List<Condition> ConvertDictionaryToConditions(Dictionary<string,\n                                 };\n                             }\n                             break;\n+                        case \"$nin\":\n+                            if (op.Value is object[] { Length: > 0 } excluded)\n+                            {\n+                                condition = excluded[0] switch\n+                                {\n+                                    string => Negate(Match(kvp.Key, excluded.Select(v => v.ToString() ?? string.Empty).ToList())),\n+                                    int or long => Negate(Match(kvp.Key, excluded.Select(Convert.ToInt64).ToList())),\n+                                    _ => condition\n+                                };\n+                            }\n+                            break;\n                     }\n \n                     if (condition != null)\n@@ -505,6 +516,16 @@ private static List<Condition> ConvertDictionaryToConditions(Dictionary<string,\n         return conditions;\n     }\n \n+    /// <summary>\n+    /// Wraps a condition so it must not hold. Nested, so it also works inside should (OR) clauses.\n+    /// </summary>\n+    private static Condition Negate(Condition condition)\n+    {\n+        Filter filter = new Filter();\n+        filter.MustNot.Add(condition);\n+        return Conditions.Filter(filter);\n+    }\n+\n     /// <summary>\n     /// Creates a Match condition based on the value type.\n     /// </summary>"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/QdrantFilterTests.cs"
+ ]
+}

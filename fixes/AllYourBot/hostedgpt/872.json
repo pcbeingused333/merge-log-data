@@ -1,0 +1,26 @@
+{
+ "repo": "AllYourBot/hostedgpt",
+ "number": 872,
+ "url": "https://github.com/AllYourBot/hostedgpt/pull/872",
+ "title": "Fix historical weather reporting the day's high as its low",
+ "merged_at": "2026-10-29T10:49:04Z",
+ "files": [
+  {
+   "filename": "app/services/toolbox/open_meteo.rb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -158,12 +158,12 @@ def get_historical_weather(city_s:, state_province_or_region_s:, country_s:  nil\n \n         temp_high: day[:temperature_2m_max],\n         temp_high_feels_like: day[:apparent_temperature_max],\n-        temp_low: day[:temperature_2m_max],\n+        temp_low: day[:temperature_2m_min],\n         temp_low_feels_like: day[:apparent_temperature_min],\n \n         temp_high_formatted: format(day[:temperature_2m_max], degrees_unit),\n         temp_high_feels_like_formatted: format(day[:apparent_temperature_max], degrees_unit),\n-        temp_low_formatted: format(day[:temperature_2m_max], degrees_unit),\n+        temp_low_formatted: format(day[:temperature_2m_min], degrees_unit),\n         temp_low_feels_like_formatted: format(day[:apparent_temperature_min], degrees_unit),\n \n         precipitation: day[:precipitation_sum],"
+  },
+  {
+   "filename": "test/services/toolbox/open_meteo_test.rb",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -46,6 +46,23 @@ class Toolbox::OpenMeteoTest < ActiveSupport::TestCase\n     end\n   end\n \n+  test \"get_historical_weather reports the day's minimum as the low\" do\n+    stub_get_response(:get_location, status: 200, response: locations_data) do\n+      stub_get_response(:get_historical_weather, status: 200, response: historical_data) do\n+        result = @open_meteo.get_historical_weather(\n+          city_s: \"Austin\",\n+          state_province_or_region_s: \"Texas\",\n+          date_span_begin_s: \"2020-01-01\",\n+          date_span_end_s: \"2020-01-02\",\n+        )\n+\n+        assert_equal [ 50.0, 52.0 ], result.map { |day| day[:temp_high] }\n+        assert_equal [ 31.0, 33.0 ], result.map { |day| day[:temp_low] }\n+        assert_equal [ \"31 degrees fahrenheit\", \"33 degrees fahrenheit\" ], result.map { |day| day[:temp_low_formatted] }\n+      end\n+    end\n+  end\n+\n   private\n \n   def stub_weather_api(&block)\n@@ -63,6 +80,23 @@ def locations_data\n     }\n   end\n \n+  def historical_data\n+    {\n+      daily_units: { temperature_2m_max: \"°F\", precipitation_sum: \"inch\" },\n+      daily: {\n+        time: [ \"2020-01-01\", \"2020-01-02\" ],\n+        weather_code: [ 3, 2 ],\n+        temperature_2m_max: [ 50.0, 52.0 ],\n+        temperature_2m_min: [ 31.0, 33.0 ],\n+        apparent_temperature_max: [ 49.0, 51.0 ],\n+        apparent_temperature_min: [ 28.0, 30.0 ],\n+        precipitation_sum: [ 0.1, 0.0 ],\n+        rain_sum: [ 0.1, 0.0 ],\n+        snowfall_sum: [ 0.0, 0.0 ],\n+      }\n+    }\n+  end\n+\n   def forecast_data\n     {\n       current_units: { temperature_2m: \"°F\", precipitation: \"inch\" },"
+  }
+ ],
+ "test_files": [
+  "test/services/toolbox/open_meteo_test.rb"
+ ]
+}

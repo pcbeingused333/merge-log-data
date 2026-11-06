@@ -1,0 +1,26 @@
+{
+ "repo": "i-am-bee/beeai-framework",
+ "number": 1878,
+ "url": "https://github.com/i-am-bee/beeai-framework/pull/1878",
+ "title": "fix(python): don't send the implicit temperature=0 to Anthropic next to top_p or reasoning_effort",
+ "merged_at": "2026-10-29T11:07:30Z",
+ "files": [
+  {
+   "filename": "python/beeai_framework/adapters/anthropic/backend/chat.py",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -2,6 +2,7 @@\n # SPDX-License-Identifier: Apache-2.0\n \n import os\n+from typing import Any\n \n from dotenv import load_dotenv\n from typing_extensions import Unpack\n@@ -10,6 +11,7 @@\n from beeai_framework.adapters.litellm.chat import LiteLLMChatModel\n from beeai_framework.backend.chat import ChatModelKwargs\n from beeai_framework.backend.constants import ProviderName\n+from beeai_framework.backend.types import ChatModelInput, ChatModelParameters\n from beeai_framework.logger import Logger\n \n logger = Logger(__name__)\n@@ -42,3 +44,23 @@ def __init__(\n         self._settings[\"extra_headers\"] = utils.parse_extra_headers(\n             self._settings.get(\"extra_headers\"), os.getenv(\"ANTHROPIC_API_HEADERS\")\n         )\n+\n+    @classmethod\n+    def get_default_parameters(cls) -> ChatModelParameters:\n+        # Leaves `temperature` unset, so `_transform_input` can tell the implicit 0 from a chosen one\n+        return ChatModelParameters()\n+\n+    def _transform_input(self, input: ChatModelInput) -> dict[str, Any]:\n+        params = super()._transform_input(input)\n+\n+        # `temperature` defaults to 0 for every provider, but Anthropic rejects it next to\n+        # `top_p` and requires 1 when thinking is on. Only a value nobody asked for is dropped.\n+        temperature_is_explicit = (\n+            \"temperature\" in input.model_fields_set\n+            or \"temperature\" in self.parameters.model_fields_set\n+            or \"temperature\" in self._settings\n+        )\n+        if not temperature_is_explicit and any(key in params for key in (\"top_p\", \"reasoning_effort\", \"thinking\")):\n+            params.pop(\"temperature\", None)\n+\n+        return params"
+  },
+  {
+   "filename": "python/tests/backend/providers/test_litellm_chat.py",
+   "status": "modified",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -17,6 +17,7 @@\n     Usage,\n )\n \n+from beeai_framework.adapters.anthropic.backend.chat import AnthropicChatModel\n from beeai_framework.adapters.litellm.chat import (\n     _DEFAULT_TIMEOUT_FALLBACK,\n     DEFAULT_REQUEST_TIMEOUT_SECONDS,\n@@ -641,3 +642,51 @@ def test_nan_falls_back(self, monkeypatch: pytest.MonkeyPatch) -> None:\n     def test_inf_falls_back(self, monkeypatch: pytest.MonkeyPatch) -> None:\n         monkeypatch.setenv(\"BEEAI_DEFAULT_REQUEST_TIMEOUT\", \"inf\")\n         assert _parse_timeout_env() == _DEFAULT_TIMEOUT_FALLBACK\n+\n+\n+class TestAnthropicImplicitTemperature:\n+    \"\"\"The implicit `temperature=0` must not turn a valid Anthropic request into a 400.\"\"\"\n+\n+    @staticmethod\n+    async def _captured_request(**run_kwargs: Any) -> dict[str, Any]:\n+        captured: dict[str, Any] = {}\n+        monkeypatch = pytest.MonkeyPatch()\n+        monkeypatch.setattr(\n+            \"beeai_framework.adapters.litellm.chat.acompletion\",\n+            TestStopSequences._capturing_acompletion(captured),\n+        )\n+        try:\n+            await AnthropicChatModel(\"claude-sonnet-4-6\", api_key=\"test\").run([UserMessage(\"hi\")], **run_kwargs)\n+        finally:\n+            monkeypatch.undo()\n+        return captured\n+\n+    @pytest.mark.unit\n+    @pytest.mark.asyncio\n+    async def test_reasoning_effort_drops_the_implicit_temperature(self) -> None:\n+        captured = await self._captured_request(reasoning_effort=\"low\")\n+\n+        assert \"temperature\" not in captured\n+        assert captured[\"reasoning_effort\"] == \"low\"\n+\n+    @pytest.mark.unit\n+    @pytest.mark.asyncio\n+    async def test_top_p_drops_the_implicit_temperature(self) -> None:\n+        captured = await self._captured_request(top_p=0.9)\n+\n+        assert \"temperature\" not in captured\n+        assert captured[\"top_p\"] == 0.9\n+\n+    @pytest.mark.unit\n+    @pytest.mark.asyncio\n+    async def test_explicit_temperature_is_kept(self) -> None:\n+        captured = await self._captured_request(temperature=0.3, top_p=0.9)\n+\n+        assert captured[\"temperature\"] == 0.3\n+\n+    @pytest.mark.unit\n+    @pytest.mark.asyncio\n+    async def test_temperature_is_still_sent_by_default(self) -> None:\n+        captured = await self._captured_request()\n+\n+        assert captured[\"temperature\"] == 0"
+  }
+ ],
+ "test_files": [
+  "python/tests/backend/providers/test_litellm_chat.py"
+ ]
+}

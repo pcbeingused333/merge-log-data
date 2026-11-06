@@ -1,0 +1,20 @@
+{
+ "repo": "sligter/LandPPT",
+ "number": 138,
+ "url": "https://github.com/sligter/LandPPT/pull/138",
+ "state": "merged",
+ "reviews": [],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "owner",
+   "created_at": "2026-10-29T03:01:14Z",
+   "body": "Thanks for working on this! The existing provider tests passed in my review. There is one behavior I'd like us to preserve before merging: sampling settings when reasoning is explicitly disabled on a model that supports them.\n\nFor example, with:\n\n```python\n{\n    \"model\": \"gpt-6-luna\",\n    \"enable_reasoning\": True,\n    \"reasoning_effort\": \"none\",\n    \"temperature\": 0.2,\n    \"top_p\": 0.6,\n}\n```\n\nBoth request builders currently omit `temperature` and `top_p`, even though the outgoing request explicitly sets reasoning to `none`. This silently changes an existing user's sampling settings to the API defaults. The [official parameter guidance](https://developers.openai.com/api/docs/guides/latest-model#update-api-and-model-parameters) makes the restriction conditional on reasoning effort being other than `none` for these models.\n\nI noticed the description explicitly defers this case, but LandPPT already exposes the `none` option, so could you include it in this fix? Please make the filtering account for both model capabilities and the effective reasoning effort, preserving sampling settings where supported while keeping them omitted for models/modes that reject them.\n\nCould you also add regression coverage for both Chat Completions and Responses with explicit `none`, alongside the existing reasoning-enabled cases? I checked GPT-5.1 and GPT-6 Luna across both builders: all four explicit-`none` cases passed on the PR's base revision and failed on this head. These were offline request-construction tests; no live API calls were made.\n\nHappy to take another look once that's updated. Thanks!\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-29T06:17:32Z",
+   "body": "Thanks for the detailed check. Pushed a commit that makes the filter depend on both the model and the effective effort: with `reasoning_effort: none` sent, `temperature`/`top_p` are kept for the models that have that effort (`gpt-5.1`, `gpt-5.6-*`, `gpt-6-sol`/`luna`, `gpt-6.1-terra`), and still omitted for `gpt-5`, `gpt-5-mini`, the o-series, the `-codex`/`-pro` variants, `gpt-6-astra` and `gpt-6.1-sol`, which do not support `none`. When no effort is sent the model's default applies, so `gpt-5.1` (default `none`) keeps the settings and the others (default `medium`) omit them. Regression tests cover explicit `none` in both the Chat Completions and Responses builders, next to the existing reasoning-enabled cases; they fail on the previous head and pass now. Offline request-construction tests only, no live API calls.\n\n"
+  }
+ ]
+}

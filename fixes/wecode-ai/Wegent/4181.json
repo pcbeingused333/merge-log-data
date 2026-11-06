@@ -1,0 +1,61 @@
+{
+ "repo": "wecode-ai/Wegent",
+ "number": 4181,
+ "url": "https://github.com/wecode-ai/Wegent/pull/4181",
+ "title": "fix(deep-research): use deep-research-preview-04-2026 as the default agent",
+ "merged_at": "2026-10-30T12:04:41Z",
+ "files": [
+  {
+   "filename": "backend-rs/src/background_jobs/video/create_research.rs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -22,7 +22,7 @@ pub(super) async fn execute(state: &AppState, request: &ExecutionRequest) -> Res\n         .map(str::to_owned)\n         .unwrap_or_else(|| request.prompt.to_string());\n     let create_endpoint = endpoint(model, None)?;\n-    let response=http(model,brz_http::Method::POST,create_endpoint,30)?.json(&json!({\"background\":true,\"stream\":false,\"agent\":model[\"model_id\"].as_str().unwrap_or(\"deep-research-pro-preview-12-2025\"),\"input\":input})).send().await?;\n+    let response=http(model,brz_http::Method::POST,create_endpoint,30)?.json(&json!({\"background\":true,\"stream\":false,\"agent\":model[\"model_id\"].as_str().unwrap_or(\"deep-research-preview-04-2026\"),\"input\":input})).send().await?;\n     let created = body(response).await?;\n     let id = created[\"id\"]\n         .as_str()"
+  },
+  {
+   "filename": "backend/app/api/endpoints/deep_research.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -66,7 +66,7 @@ class DeepResearchCreateRequest(BaseModel):\n     )\n     input: str = Field(..., description=\"Research query\")\n     agent: str = Field(\n-        \"deep-research-pro-preview-12-2025\", description=\"Agent model to use\"\n+        \"deep-research-preview-04-2026\", description=\"Agent model to use\"\n     )\n     metadata: Optional[DeepResearchMetadata] = Field(\n         None, description=\"Optional metadata\""
+  },
+  {
+   "filename": "backend/app/services/execution/agents/research_agent.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -36,7 +36,7 @@\n POLL_INTERVAL_SECONDS = 5\n MAX_POLL_COUNT = 720  # 1 hour at 5s intervals\n DEFAULT_GEMINI_BASE_URL = \"https://generativelanguage.googleapis.com\"\n-DEFAULT_DEEP_RESEARCH_AGENT = \"deep-research-pro-preview-12-2025\"\n+DEFAULT_DEEP_RESEARCH_AGENT = \"deep-research-preview-04-2026\"\n THOUGHT_STREAM_TIMEOUT = 30.0  # seconds, timeout per read for thinking progress\n REPORT_STREAM_TIMEOUT = 300.0  # seconds, timeout per read for final report\n "
+  },
+  {
+   "filename": "backend/app/services/model_connection_service.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -175,7 +175,7 @@ def _test_llm_connection(\n         # Build test payload following the Gemini Interaction API format\n         payload = {\n             \"background\": True,\n-            \"agent\": model_id,  # e.g., \"deep-research-pro-preview-12-2025\"\n+            \"agent\": model_id,  # e.g., \"deep-research-preview-04-2026\"\n             \"input\": \"hello\",\n         }\n "
+  },
+  {
+   "filename": "frontend/src/features/settings/components/ModelEditDialog.tsx",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -290,8 +290,8 @@ const GEMINI_MODEL_OPTIONS = [\n \n const GEMINI_DEEP_RESEARCH_MODEL_OPTIONS = [\n   {\n-    value: 'deep-research-pro-preview-12-2025',\n-    label: 'deep-research-pro-preview-12-2025 (Recommended)',\n+    value: 'deep-research-preview-04-2026',\n+    label: 'deep-research-preview-04-2026 (Recommended)',\n   },\n   { value: 'custom', label: 'Custom...' },\n ]"
+  },
+  {
+   "filename": "shared/clients/gemini_interaction.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -68,7 +68,7 @@ def _get_headers(self) -> dict[str, str]:\n     async def create_interaction(\n         self,\n         input_text: str,\n-        agent: str = \"deep-research-pro-preview-12-2025\",\n+        agent: str = \"deep-research-preview-04-2026\",\n     ) -> dict[str, Any]:\n         \"\"\"Create a new research interaction (non-streaming).\n "
+  },
+  {
+   "filename": "shared/tests/test_gemini_interaction_default_agent.py",
+   "status": "added",
+   "additions": 39,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,39 @@\n+# SPDX-FileCopyrightText: 2025 Weibo, Inc.\n+#\n+# SPDX-License-Identifier: Apache-2.0\n+\n+import httpx\n+import pytest\n+\n+from shared.clients.gemini_interaction import GeminiInteractionClient\n+\n+# deep-research-pro-preview-12-2025 is scheduled to shut down on 2026-10-23.\n+RETIRED_AGENT = \"deep-research-pro-preview-12-2025\"\n+CURRENT_AGENT = \"deep-research-preview-04-2026\"\n+\n+\n+@pytest.mark.asyncio\n+async def test_create_interaction_defaults_to_the_current_deep_research_agent(\n+    monkeypatch: pytest.MonkeyPatch,\n+) -> None:\n+    sent: dict = {}\n+\n+    async def fake_post(self, url, json=None, headers=None, **kwargs):\n+        sent[\"url\"] = url\n+        sent[\"json\"] = json\n+        return httpx.Response(\n+            200,\n+            json={\"id\": \"interaction-1\", \"status\": \"in_progress\"},\n+            request=httpx.Request(\"POST\", url),\n+        )\n+\n+    monkeypatch.setattr(httpx.AsyncClient, \"post\", fake_post)\n+\n+    client = GeminiInteractionClient(base_url=\"https://example.test\", api_key=\"key\")\n+    result = await client.create_interaction(\"What is new in quantum computing?\")\n+\n+    assert result[\"id\"] == \"interaction-1\"\n+    assert sent[\"url\"] == \"https://example.test/v1beta/interactions\"\n+    assert sent[\"json\"][\"agent\"] == CURRENT_AGENT\n+    assert sent[\"json\"][\"agent\"] != RETIRED_AGENT\n+    assert sent[\"json\"][\"background\"] is True"
+  }
+ ],
+ "test_files": [
+  "shared/tests/test_gemini_interaction_default_agent.py"
+ ]
+}

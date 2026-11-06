@@ -1,0 +1,25 @@
+{
+ "repo": "pypa/pipenv",
+ "number": 6758,
+ "url": "https://github.com/pypa/pipenv/pull/6758",
+ "state": "merged",
+ "reviews": [],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "member",
+   "created_at": "2026-10-28T16:48:50Z",
+   "body": "each custom dependency group should be its own group name, not just lumped to develop -- this is the whole categories thing -- sounds like there is a bug here, but I am not sure yet this is the correct fix."
+  },
+  {
+   "role": "member",
+   "created_at": "2026-10-28T22:06:57Z",
+   "body": "Thanks for this. The `requires-python` mapping looks good, but the group classification makes an existing misclassification worse.\n\nWhen a package is in both `default` and `develop` with different markers, `PylockFile.from_lockfile` folds the two into one entry through `_merge_develop_marker`, which writes:\n\n```\n(python_version < '3.11') or ('lint' in dependency_groups)\n```\n\nWith this change the regex finds `'lint'`, sees that it isn't in `default-groups`, and puts the package in `develop` only. It drops out of `default`, so a production install from the converted lock misses a runtime dependency. The old `\"dev\"`/`\"test\"` substring check already had this problem for those two group names; this extends it to every custom group.\n\nRather than checking which group names appear in the marker, could you classify by whether the package can be installed?\n\n- `default`: the package survives narrowing with `dependency_groups = default_groups`\n- `develop`: the package survives narrowing with all groups\n\nPipfile.lock already repeats shared packages in both sections, so a package that qualifies for both should go in both. A test with a shared package whose default marker differs from its dev marker would cover the case above.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-29T01:16:35Z",
+   "body": "Thanks, that makes sense. The group-name check is replaced by the installability test you described. Each package marker is evaluated twice, once with only `default-groups` and once with all groups:\n\n- `default`: the package installs with the default groups only.\n- `develop`: the marker names a non-default group and the package installs with all groups.\n- both, when both hold, as Pipfile.lock does for shared packages.\n\nA package whose marker is false under every group in the target environment stays in the section its groups point to, with its marker, so it is left out at install time exactly as before. Packages without a `dependency_groups` clause stay in `default` only, so plain runtime dependencies are not duplicated into `develop`, matching what `pipenv lock` writes.\n\nNew tests cover your case: a shared package with `(python_version < '3.11') or ('lint' in dependency_groups)` lands in both sections on 3.10 and in `develop` only on 3.12, plus an environment-excluded package. The 75 pylock unit tests pass.\n\nOn the earlier point about categories: mapping each custom group to its own Pipfile category instead of `develop` would be a larger change to the converter and to the install path, so this PR keeps the two-section model. That can be a follow-up if it is the direction you want.\n\nThis comment was prepared with Claude Code.\n\n"
+  }
+ ]
+}

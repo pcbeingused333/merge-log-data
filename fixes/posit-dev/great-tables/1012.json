@@ -1,0 +1,26 @@
+{
+ "repo": "posit-dev/great-tables",
+ "number": 1012,
+ "url": "https://github.com/posit-dev/great-tables/pull/1012",
+ "title": "fix: show a NaN in a formatted PyArrow float column instead of raising ArrowTypeError",
+ "merged_at": "2026-10-23T17:10:20Z",
+ "files": [
+  {
+   "filename": "great_tables/_tbl_data.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -1,5 +1,6 @@\n from __future__ import annotations\n \n+import math\n import numbers\n import re\n import warnings\n@@ -347,8 +348,14 @@ def _(data: PyArrowTable, column: str, values: dict[int, Any]) -> PyArrowTable:\n         return data\n \n     colindex = data.column_names.index(column)\n+    column_type = data.schema.field(colindex).type\n+    is_string = pa.types.is_string(column_type) or pa.types.is_large_string(column_type)\n     pylist = data.column(column).to_pylist()\n     for row, value in values.items():\n+        if is_string and isinstance(value, float) and math.isnan(value):\n+            # A formatter passes a NaN through unchanged, and pa.array() cannot mix it with strings.\n+            # Show it as polars does.\n+            value = \"NaN\"\n         pylist[row] = value\n     return data.set_column(colindex, column, pa.array(pylist))\n "
+  },
+  {
+   "filename": "tests/test_tbl_data.py",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 1,
+   "patch": "@@ -305,7 +305,7 @@ def test_set_cells_offset_index(offset_index_df: pd.DataFrame, values: dict[int,\n     assert_frame_equal(_set_cells(create_empty_frame(offset_index_df), \"col2\", values), expected)\n \n \n-@pytest.mark.parametrize(\"value\", [5, 1.5, True, math.nan])\n+@pytest.mark.parametrize(\"value\", [5, 1.5, True])\n def test_set_cells_non_strings_as_set_cell(df: DataFrameLike, value):\n     # Values that aren't strings are set as `_set_cell()` sets them, which differs by backend\n     # (polars casts them to strings, pandas raises for most and PyArrow infers a new dtype)\n@@ -995,3 +995,25 @@ def test_cast_frame_to_string_pandas_nullable_missing(dtype: str, expected: list\n     res = cast_frame_to_string(df)\n \n     assert to_list(res[\"x\"]) == expected\n+\n+\n+@pytest.mark.parametrize(\n+    \"fmt\", [\"fmt_number\", \"fmt_integer\", \"fmt_percent\", \"fmt_scientific\", \"fmt_currency\"]\n+)\n+def test_pyarrow_nan_in_formatted_float_column(fmt: str):\n+    \"\"\"A NaN (not null) in a float column used to raise ArrowTypeError when the formatter output was set.\"\"\"\n+    gt = GT(pa.table({\"x\": pa.array([1.0, float(\"nan\"), 2.5])}))\n+\n+    html = getattr(gt, fmt)(\"x\").as_raw_html()\n+\n+    # the NaN is shown as polars shows it, and the other cells are still formatted\n+    assert \">NaN<\" in html\n+    assert html.count(\"NaN\") == 1\n+\n+\n+def test_pyarrow_set_cells_nan_in_a_string_column():\n+    data = pa.table({\"x\": pa.array([\"a\", \"b\", \"c\"])})\n+\n+    res = _set_cells(data, \"x\", {0: \"1.00\", 1: float(\"nan\"), 2: None})\n+\n+    assert res.column(\"x\").to_pylist() == [\"1.00\", \"NaN\", None]"
+  }
+ ],
+ "test_files": [
+  "tests/test_tbl_data.py"
+ ]
+}

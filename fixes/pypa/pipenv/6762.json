@@ -1,0 +1,33 @@
+{
+ "repo": "pypa/pipenv",
+ "number": 6762,
+ "url": "https://github.com/pypa/pipenv/pull/6762",
+ "title": "fix(uninstall): exit non-zero when pip uninstall fails",
+ "merged_at": "2026-10-29T05:01:55Z",
+ "files": [
+  {
+   "filename": "news/6762.bugfix.rst",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+``pipenv uninstall`` now exits with a non-zero status when ``pip uninstall`` fails for a package."
+  },
+  {
+   "filename": "pipenv/routines/uninstall.py",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 3,
+   "patch": "@@ -24,6 +24,10 @@ def _uninstall_from_environment(project: Project, package, system=False):\n     # Execute the uninstall command for the package\n     with project.environment.activated() as is_active:\n         if not is_active:\n+            console.print(\n+                f\"No virtualenv found; {package} was removed from the Pipfile but not uninstalled.\",\n+                style=\"yellow\",\n+            )\n             return False\n \n         console.print(f\"Uninstalling {package}...\", style=\"bold green\")\n@@ -82,6 +86,7 @@ def do_uninstall(project: Project, ctx: RoutineContext):\n         categories = [\"default\"]\n \n     lockfile_content = project.lockfile.content\n+    failure = False\n \n     if all_dev:\n         console.print(\n@@ -90,7 +95,8 @@ def do_uninstall(project: Project, ctx: RoutineContext):\n         )\n         # Uninstall all dev-packages from environment\n         for package in project.pipfile.get_section(\"dev-packages\"):\n-            _uninstall_from_environment(project, package, system=system)\n+            if not _uninstall_from_environment(project, package, system=system):\n+                failure = True\n         # Remove the package from the Pipfile\n         if project.pipfile.reset_category(category=\"dev-packages\"):\n             console.print(\"Removed [dev-packages] from Pipfile.\")\n@@ -171,9 +177,9 @@ def do_uninstall(project: Project, ctx: RoutineContext):\n     project.lockfile.write(lockfile_content)\n \n     # Perform uninstallation of packages and dependencies\n-    failure = False\n     for package in package_args:\n-        _uninstall_from_environment(project, package, system=system)\n+        if not _uninstall_from_environment(project, package, system=system):\n+            failure = True\n \n     if lock:\n         # Build a lock-only ctx carrying the target env + pre flag from"
+  },
+  {
+   "filename": "tests/unit/test_uninstall_exit_code.py",
+   "status": "added",
+   "additions": 66,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,66 @@\n+\"\"\"``pipenv uninstall`` exits non-zero when ``pip uninstall`` fails.\"\"\"\n+\n+from unittest import mock\n+\n+import pytest\n+\n+from pipenv.routines.context import RoutineContext\n+from pipenv.routines.uninstall import _uninstall_from_environment, do_uninstall\n+\n+\n+def _project():\n+    project = mock.MagicMock()\n+    project.lockfile.content = {\"default\": {}, \"develop\": {\"pytest\": {}}}\n+    project.lockfile.meta.return_value = {}\n+    project.pipfile.generate_entry.return_value = (\"requests\", \"requests\", {\"version\": \"*\"})\n+    project.pipfile.remove_package.return_value = True\n+    project.pipfile.get_section.return_value = {\"pytest\": \"*\"}\n+    return project\n+\n+\n+@pytest.fixture(autouse=True)\n+def _patch_resolution(monkeypatch):\n+    monkeypatch.setattr(\"pipenv.routines.uninstall.venv_resolve_deps\", mock.MagicMock(return_value={}))\n+    monkeypatch.setattr(\n+        \"pipenv.routines.uninstall.expansive_install_req_from_line\",\n+        mock.MagicMock(return_value=(mock.MagicMock(), None)),\n+    )\n+\n+\n+@pytest.mark.parametrize(\"succeeded, expected_code\", [(True, 0), (False, 1)])\n+def test_uninstall_package_exit_code(monkeypatch, succeeded, expected_code):\n+    monkeypatch.setattr(\n+        \"pipenv.routines.uninstall._uninstall_from_environment\",\n+        mock.MagicMock(return_value=succeeded),\n+    )\n+\n+    with mock.patch(\"pipenv.routines.uninstall.sys.exit\") as exit_mock:\n+        do_uninstall(_project(), RoutineContext.from_cli(packages=(\"requests\",)))\n+\n+    exit_mock.assert_called_once_with(expected_code)\n+\n+\n+@pytest.mark.parametrize(\"succeeded, expected_code\", [(True, 0), (False, 1)])\n+def test_uninstall_all_dev_exit_code(monkeypatch, succeeded, expected_code):\n+    monkeypatch.setattr(\n+        \"pipenv.routines.uninstall._uninstall_from_environment\",\n+        mock.MagicMock(return_value=succeeded),\n+    )\n+\n+    with mock.patch(\"pipenv.routines.uninstall.sys.exit\") as exit_mock:\n+        do_uninstall(_project(), RoutineContext.from_cli(all_dev=True))\n+\n+    exit_mock.assert_called_once_with(expected_code)\n+\n+\n+def test_uninstall_without_virtualenv_explains_the_failure():\n+    project = mock.MagicMock()\n+    project.environment.activated.return_value.__enter__.return_value = False\n+\n+    with mock.patch(\"pipenv.routines.uninstall.console.print\") as print_mock:\n+        assert _uninstall_from_environment(project, \"requests\") is False\n+\n+    print_mock.assert_called_once()\n+    message = print_mock.call_args.args[0]\n+    assert \"No virtualenv found\" in message\n+    assert \"requests\" in message"
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_uninstall_exit_code.py"
+ ]
+}

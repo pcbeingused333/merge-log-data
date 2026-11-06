@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 267,
+ "url": "https://github.com/lofcz/LLMTornado/pull/267",
+ "title": "OpenAI streams: keep the length and content_filter finish reasons of a stream with tool calls",
+ "merged_at": "2026-10-22T23:48:31Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/OpenAiStreamToolCallsFinishReasonTests.cs",
+   "status": "added",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,49 @@\n+using System.IO;\n+using System.Text;\n+using LlmTornado.Chat;\n+using LlmTornado.ChatFunctions;\n+using LlmTornado.Code;\n+using LlmTornado.Code.Vendor;\n+using LlmTornado.Common;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class OpenAiStreamToolCallsFinishReasonTests\n+{\n+    [TestCase(\"tool_calls\", ChatMessageFinishReasons.ToolCalls)]\n+    [TestCase(\"stop\", ChatMessageFinishReasons.ToolCalls)]\n+    [TestCase(\"length\", ChatMessageFinishReasons.Length)]\n+    [TestCase(\"content_filter\", ChatMessageFinishReasons.ContentFilter)]\n+    public async Task InboundStream_ToolCallsKeepTheLengthAndContentFilterFinishReasons(string finishReason, ChatMessageFinishReasons expected)\n+    {\n+        // The arguments of a call cut off by max_tokens are truncated JSON, so the stream must not report it as a normal tool call.\n+        string sse = \"\"\"\n+            data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-5.6-terra\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\"}}]},\"finish_reason\":null}]}\n+\n+            data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-5.6-terra\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"__REASON__\"}]}\n+\n+            data: [DONE]\n+\n+\n+            \"\"\".Replace(\"__REASON__\", finishReason);\n+\n+        OpenAiEndpointProvider provider = new OpenAiEndpointProvider(LLmProviders.OpenAi);\n+        StreamReader reader = new StreamReader(new MemoryStream(Encoding.UTF8.GetBytes(sse)));\n+        ChatRequest request = new ChatRequest\n+        {\n+            Stream = true,\n+            Messages = [new ChatMessage(ChatMessageRoles.User, \"weather in Paris?\")],\n+            Tools = [new Tool(new ToolFunction(\"get_weather\", \"Weather of a city\"))]\n+        };\n+\n+        ChatResult? last = null;\n+        await foreach (ChatResult? chunk in provider.InboundStream(reader, request, null))\n+        {\n+            last = chunk;\n+        }\n+\n+        Assert.That(last?.Choices?[0].Delta?.ToolCalls, Has.Count.EqualTo(1));\n+        Assert.That(last!.Choices![0].FinishReason, Is.EqualTo(expected));\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Vendor/OpenAi/OpenAiEndpointProvider.cs",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -618,7 +618,10 @@ await eventHandler.FunctionCallDeltaHandler.Invoke(new FunctionCallStreamUpdate\n \n             if (toolsAccumulator.Choices is not null)\n             {\n-                toolsAccumulator.Choices[0].FinishReason = ChatMessageFinishReasons.ToolCalls;\n+                // a stream cut off by the token limit or the content filter has truncated arguments, which must not be reported as a normal tool call\n+                toolsAccumulator.Choices[0].FinishReason = finishReason is ChatMessageFinishReasons.Length or ChatMessageFinishReasons.ContentFilter\n+                    ? finishReason\n+                    : ChatMessageFinishReasons.ToolCalls;\n             }\n \n             toolsAccumulator.Usage = usage;"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/OpenAiStreamToolCallsFinishReasonTests.cs"
+ ]
+}

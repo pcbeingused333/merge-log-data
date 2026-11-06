@@ -1,0 +1,33 @@
+{
+ "repo": "TanStack/ai",
+ "number": 1925,
+ "url": "https://github.com/TanStack/ai/pull/1925",
+ "title": "fix(ai-mistral): keep parallel tool calls with the same index apart",
+ "merged_at": "2026-11-02T13:09:48Z",
+ "files": [
+  {
+   "filename": ".changeset/mistral-parallel-tool-calls-index.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@tanstack/ai-mistral': patch\n+---\n+\n+Parallel tool calls that arrive whole with the same `index` (the Mistral SDK fills a missing `index` with 0) are no longer merged into one call with a combined name and invalid JSON arguments. A tool call delta whose id differs from the one already in its slot now starts a new call."
+  },
+  {
+   "filename": "packages/ai-mistral/src/adapters/text.ts",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 1,
+   "patch": "@@ -656,7 +656,24 @@ export class MistralTextAdapter<\n \n         if (deltaToolCalls) {\n           for (const [i, toolCallDelta] of deltaToolCalls.entries()) {\n-            const index = toolCallDelta.index ?? i\n+            let index = toolCallDelta.index ?? i\n+            // Mistral can send each parallel call whole with the same `index`\n+            // (the SDK fills a missing one with 0), so an id that differs from\n+            // the one already in the slot starts a new call. A repeated id goes\n+            // back to its own slot.\n+            if (toolCallDelta.id) {\n+              const occupant = toolCallsInProgress.get(index)\n+              if (occupant?.id && occupant.id !== toolCallDelta.id) {\n+                const sameId = [...toolCallsInProgress].find(\n+                  ([, call]) => call.id === toolCallDelta.id,\n+                )\n+                if (sameId) {\n+                  index = sameId[0]\n+                } else {\n+                  while (toolCallsInProgress.has(index)) index += 1\n+                }\n+              }\n+            }\n \n             let toolCall = toolCallsInProgress.get(index)\n             if (!toolCall) {"
+  },
+  {
+   "filename": "packages/ai-mistral/tests/mistral-adapter.test.ts",
+   "status": "modified",
+   "additions": 129,
+   "deletions": 0,
+   "patch": "@@ -1088,6 +1088,135 @@ describe('Mistral AG-UI event emission', () => {\n     expect(caught?.message).toMatch(/lookup_weather/)\n   })\n \n+  it('keeps parallel tool calls apart when they all arrive with index 0', async () => {\n+    setupMockStream([\n+      {\n+        id: 'cmpl-parallel',\n+        model: 'mistral-large-latest',\n+        choices: [\n+          {\n+            index: 0,\n+            delta: {\n+              toolCalls: [\n+                {\n+                  index: 0,\n+                  id: 'tc_1',\n+                  function: {\n+                    name: 'lookup_weather',\n+                    arguments: '{\"location\": \"Paris\"}',\n+                  },\n+                },\n+                {\n+                  index: 0,\n+                  id: 'tc_2',\n+                  function: {\n+                    name: 'lookup_weather',\n+                    arguments: '{\"location\": \"Rome\"}',\n+                  },\n+                },\n+              ],\n+            },\n+            finishReason: null,\n+          },\n+        ],\n+      },\n+      {\n+        id: 'cmpl-parallel',\n+        model: 'mistral-large-latest',\n+        choices: [{ index: 0, delta: {}, finishReason: 'tool_calls' }],\n+      },\n+    ])\n+\n+    const adapter = createMistralText('mistral-large-latest', 'test-api-key')\n+    const chunks: Array<AdapterYieldChunk> = []\n+    for await (const chunk of adapter.chatStream(\n+      chatOpts({\n+        model: 'mistral-large-latest',\n+        messages: [{ role: 'user', content: 'Weather in Paris and Rome?' }],\n+        tools: [weatherTool],\n+      }),\n+    )) {\n+      chunks.push(chunk)\n+    }\n+\n+    const starts = chunks.filter((c) => c.type === 'TOOL_CALL_START')\n+    expect(starts.map((c) => (c as { toolCallId: string }).toolCallId)).toEqual(\n+      ['tc_1', 'tc_2'],\n+    )\n+    const ends = chunks.filter((c) => c.type === 'TOOL_CALL_END')\n+    expect(ends).toHaveLength(2)\n+    expect(ends[0]).toMatchObject({\n+      toolCallId: 'tc_1',\n+      args: '{\"location\": \"Paris\"}',\n+      input: { location: 'Paris' },\n+    })\n+    expect(ends[1]).toMatchObject({\n+      toolCallId: 'tc_2',\n+      args: '{\"location\": \"Rome\"}',\n+      input: { location: 'Rome' },\n+    })\n+  })\n+\n+  it('keeps accumulating index-0 argument fragments that carry no id into one call', async () => {\n+    setupMockStream([\n+      {\n+        id: 'cmpl-frag',\n+        model: 'mistral-large-latest',\n+        choices: [\n+          {\n+            index: 0,\n+            delta: {\n+              toolCalls: [\n+                {\n+                  index: 0,\n+                  id: 'tc_frag',\n+                  function: {\n+                    name: 'lookup_weather',\n+                    arguments: '{\"location\": ',\n+                  },\n+                },\n+              ],\n+            },\n+            finishReason: null,\n+          },\n+        ],\n+      },\n+      {\n+        id: 'cmpl-frag',\n+        model: 'mistral-large-latest',\n+        choices: [\n+          {\n+            index: 0,\n+            delta: {\n+              toolCalls: [{ index: 0, function: { arguments: '\"Paris\"}' } }],\n+            },\n+            finishReason: 'tool_calls',\n+          },\n+        ],\n+      },\n+    ])\n+\n+    const adapter = createMistralText('mistral-large-latest', 'test-api-key')\n+    const chunks: Array<AdapterYieldChunk> = []\n+    for await (const chunk of adapter.chatStream(\n+      chatOpts({\n+        model: 'mistral-large-latest',\n+        messages: [{ role: 'user', content: 'Weather in Paris?' }],\n+        tools: [weatherTool],\n+      }),\n+    )) {\n+      chunks.push(chunk)\n+    }\n+\n+    expect(chunks.filter((c) => c.type === 'TOOL_CALL_START')).toHaveLength(1)\n+    const ends = chunks.filter((c) => c.type === 'TOOL_CALL_END')\n+    expect(ends).toHaveLength(1)\n+    expect(ends[0]).toMatchObject({\n+      toolCallId: 'tc_frag',\n+      args: '{\"location\": \"Paris\"}',\n+    })\n+  })\n+\n   it('puts the raw argument string on TOOL_CALL_END', async () => {\n     setupMockStream([\n       {"
+  }
+ ],
+ "test_files": [
+  "packages/ai-mistral/tests/mistral-adapter.test.ts"
+ ]
+}

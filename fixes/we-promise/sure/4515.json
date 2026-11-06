@@ -1,0 +1,26 @@
+{
+ "repo": "we-promise/sure",
+ "number": 4515,
+ "url": "https://github.com/we-promise/sure/pull/4515",
+ "title": "fix(assistant): keep whitespace-only streamed chunks so spaces before numbers survive",
+ "merged_at": "2026-10-27T02:38:54Z",
+ "files": [
+  {
+   "filename": "app/models/assistant/responder.rb",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 3,
+   "patch": "@@ -77,10 +77,22 @@ def respond(previous_response_id: nil)\n     def request_response(function_results: [], previous_response_id: nil, tool_choice: nil)\n       response_has_text = false\n \n+      leading_whitespace = +\"\"\n+\n       streamer = proc do |chunk|\n-        if chunk.type == \"output_text\" && chunk.data.present?\n-          response_has_text = true\n-          emit(:output_text, chunk.data)\n+        # A whitespace-only chunk is real text (OpenAI streams the space before a number as its own chunk),\n+        # but a message cannot be saved with whitespace-only content, so hold leading whitespace back\n+        # until the first non-blank chunk arrives and emit it together with that chunk.\n+        if chunk.type == \"output_text\" && !chunk.data.to_s.empty?\n+          if response_has_text\n+            emit(:output_text, chunk.data)\n+          elsif chunk.data.blank?\n+            leading_whitespace << chunk.data\n+          else\n+            response_has_text = true\n+            emit(:output_text, leading_whitespace + chunk.data)\n+            leading_whitespace = +\"\"\n+          end\n         end\n       end\n "
+  },
+  {
+   "filename": "test/models/assistant/responder_test.rb",
+   "status": "modified",
+   "additions": 43,
+   "deletions": 0,
+   "patch": "@@ -41,6 +41,49 @@ def call(params = {}) = params\n     assert_equal 8, Assistant::Responder::DEFAULT_MAX_TOOL_CALL_ITERATIONS\n   end\n \n+  test \"streamed chunks that are only whitespace are emitted so the spaces before numbers survive\" do\n+    reply = Provider::LlmConcept::ChatResponse.new(\n+      id: \"1\", model: \"gpt-4.1\",\n+      messages: [ Provider::LlmConcept::ChatMessage.new(id: \"1\", output_text: \"as of 10-22-2026\") ],\n+      function_requests: []\n+    )\n+\n+    @llm.stubs(:chat_response).with do |_prompt, **kwargs|\n+      [ \"as\", \" of\", \" \", \"10\", \"-\", \"22\", \"-\", \"202\", \"6\" ].each do |text|\n+        kwargs[:streamer].call(Provider::LlmConcept::ChatStreamChunk.new(type: \"output_text\", data: text, usage: nil))\n+      end\n+      true\n+    end.returns(provider_success_response(reply))\n+\n+    streamed = []\n+    @responder.on(:output_text) { |text| streamed << text }\n+    @responder.respond\n+\n+    assert_equal \"as of 10-22-2026\", streamed.join\n+  end\n+\n+  test \"leading whitespace-only chunks are held back and emitted with the first non-blank chunk\" do\n+    reply = Provider::LlmConcept::ChatResponse.new(\n+      id: \"1\", model: \"gpt-4.1\",\n+      messages: [ Provider::LlmConcept::ChatMessage.new(id: \"1\", output_text: \"\\n Hello there\") ],\n+      function_requests: []\n+    )\n+\n+    @llm.stubs(:chat_response).with do |_prompt, **kwargs|\n+      [ \"\\n\", \" \", \"Hello\", \" \", \"there\" ].each do |text|\n+        kwargs[:streamer].call(Provider::LlmConcept::ChatStreamChunk.new(type: \"output_text\", data: text, usage: nil))\n+      end\n+      true\n+    end.returns(provider_success_response(reply))\n+\n+    streamed = []\n+    @responder.on(:output_text) { |text| streamed << text }\n+    @responder.respond\n+\n+    assert_equal \"\\n Hello\", streamed.first\n+    assert_equal \"\\n Hello there\", streamed.join\n+  end\n+\n   test \"final round requests forbid tool calls via tool_choice while keeping tool definitions\" do\n     function_request = Provider::LlmConcept::ChatFunctionRequest.new(\n       id: \"1\", call_id: \"1\", function_name: \"echo\", function_args: \"{}\""
+  }
+ ],
+ "test_files": [
+  "test/models/assistant/responder_test.rb"
+ ]
+}

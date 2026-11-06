@@ -1,0 +1,26 @@
+{
+ "repo": "aws-cloudformation/cfn-lint",
+ "number": 4937,
+ "url": "https://github.com/aws-cloudformation/cfn-lint/pull/4937",
+ "title": "fix(E3510): accept an empty Sid, repeated or not",
+ "merged_at": "2026-11-02T18:06:15Z",
+ "files": [
+  {
+   "filename": "src/cfnlint/data/schemas/other/iam/policy_identity.json",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -47,7 +47,7 @@\n     },\n     \"Sid\": {\n      \"$ref\": \"policy#/definitions/Statement/properties/Sid\",\n-     \"pattern\": \"^[A-Za-z0-9]+$\"\n+     \"pattern\": \"^[A-Za-z0-9]*\\\\Z\"\n     }\n    }\n   }"
+  },
+  {
+   "filename": "test/unit/rules/resources/iam/test_identity_policy.py",
+   "status": "modified",
+   "additions": 49,
+   "deletions": 1,
+   "patch": "@@ -246,6 +246,54 @@ def test_duplicate_sid(self):\n         self.assertEqual(errs[0].message, \"array items are not unique for keys ['Sid']\")\n         self.assertListEqual(list(errs[0].path), [\"Statement\"])\n \n+    def test_empty_sid(self):\n+        \"\"\"IAM accepts an empty Sid\"\"\"\n+        validator = CfnTemplateValidator()\n+\n+        policy = {\n+            \"Version\": \"2012-10-17\",\n+            \"Statement\": [\n+                {\n+                    \"Sid\": \"\",\n+                    \"Effect\": \"Allow\",\n+                    \"Action\": \"s3:GetObject\",\n+                    \"Resource\": \"*\",\n+                },\n+            ],\n+        }\n+\n+        errs = list(\n+            self.rule.validate(\n+                validator=validator, policy=policy, schema={}, policy_type=None\n+            )\n+        )\n+        self.assertListEqual(errs, [])\n+\n+    def test_newline_only_sid(self):\n+        \"\"\"A Sid made only of a newline is not an empty Sid\"\"\"\n+        validator = CfnTemplateValidator()\n+\n+        policy = {\n+            \"Version\": \"2012-10-17\",\n+            \"Statement\": [\n+                {\n+                    \"Sid\": \"\\n\",\n+                    \"Effect\": \"Allow\",\n+                    \"Action\": \"s3:GetObject\",\n+                    \"Resource\": \"*\",\n+                },\n+            ],\n+        }\n+\n+        errs = list(\n+            self.rule.validate(\n+                validator=validator, policy=policy, schema={}, policy_type=None\n+            )\n+        )\n+        self.assertEqual(len(errs), 1, errs)\n+        self.assertEqual(errs[0].validator, \"pattern\")\n+        self.assertListEqual(list(errs[0].path), [\"Statement\", 0, \"Sid\"])\n+\n     def test_pattern_sid(self):\n         validator = CfnTemplateValidator()\n \n@@ -270,7 +318,7 @@ def test_pattern_sid(self):\n             errs,\n             [\n                 ValidationError(\n-                    message=\"'A ' does not match '^[A-Za-z0-9]+$'\",\n+                    message=\"'A ' does not match '^[A-Za-z0-9]*\\\\\\\\Z'\",\n                     validator=\"pattern\",\n                     path=deque([\"Statement\", 0, \"Sid\"]),\n                     schema_path=deque("
+  }
+ ],
+ "test_files": [
+  "test/unit/rules/resources/iam/test_identity_policy.py"
+ ]
+}

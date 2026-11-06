@@ -1,0 +1,41 @@
+{
+ "repo": "Arize-ai/phoenix",
+ "number": 17313,
+ "url": "https://github.com/Arize-ai/phoenix/pull/17313",
+ "title": "fix(evals): raise a clear error when Google or LiteLLM tool calling returns no tool call",
+ "merged_at": "2026-10-29T04:09:48Z",
+ "files": [
+  {
+   "filename": "packages/phoenix-evals/src/phoenix/evals/llm/adapters/google/adapter.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -344,7 +344,7 @@ def _generate_with_tool_calling(\n                 for candidate in response.candidates:\n                     if hasattr(candidate, \"content\") and hasattr(candidate.content, \"parts\"):\n                         for part in candidate.content.parts:\n-                            if hasattr(part, \"function_call\"):\n+                            if getattr(part, \"function_call\", None) is not None:\n                                 return cast(Dict[str, Any], dict(part.function_call.args))\n \n             raise ValueError(\"No function call in response\")\n@@ -381,7 +381,7 @@ async def _async_generate_with_tool_calling(\n                 for candidate in response.candidates:\n                     if hasattr(candidate, \"content\") and hasattr(candidate.content, \"parts\"):\n                         for part in candidate.content.parts:\n-                            if hasattr(part, \"function_call\"):\n+                            if getattr(part, \"function_call\", None) is not None:\n                                 return cast(Dict[str, Any], dict(part.function_call.args))\n \n             raise ValueError(\"No function call in response\")"
+  },
+  {
+   "filename": "packages/phoenix-evals/src/phoenix/evals/llm/adapters/litellm/adapter.py",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 2,
+   "patch": "@@ -335,7 +335,11 @@ def _generate_with_tool_calling(\n             **kwargs,\n         )\n \n-        tool_call = response.choices[0].message.tool_calls[0]\n+        tool_calls = response.choices[0].message.tool_calls\n+        if not tool_calls:\n+            raise ValueError(\"No tool calls in response\")\n+\n+        tool_call = tool_calls[0]\n         arguments = tool_call.function.arguments\n         if isinstance(arguments, str):\n             return cast(Dict[str, Any], json.loads(arguments))\n@@ -389,7 +393,11 @@ async def _async_generate_with_tool_calling(\n             **kwargs,\n         )\n \n-        tool_call = response.choices[0].message.tool_calls[0]\n+        tool_calls = response.choices[0].message.tool_calls\n+        if not tool_calls:\n+            raise ValueError(\"No tool calls in response\")\n+\n+        tool_call = tool_calls[0]\n         arguments = tool_call.function.arguments\n         if isinstance(arguments, str):\n             return cast(Dict[str, Any], json.loads(arguments))"
+  },
+  {
+   "filename": "packages/phoenix-evals/tests/phoenix/evals/llm/adapters/google/test_tool_calling.py",
+   "status": "added",
+   "additions": 58,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,58 @@\n+# type: ignore\n+\"\"\"Tests for ``GoogleGenAIAdapter`` tool-calling object generation.\"\"\"\n+\n+from unittest.mock import MagicMock\n+\n+import pytest\n+\n+genai = pytest.importorskip(\"google.genai\")\n+\n+from phoenix.evals.llm.adapters.google.adapter import GoogleGenAIAdapter  # noqa: E402\n+\n+SIMPLE_SCHEMA = {\n+    \"type\": \"object\",\n+    \"properties\": {\"label\": {\"type\": \"string\", \"enum\": [\"yes\", \"no\"]}},\n+    \"required\": [\"label\"],\n+}\n+\n+\n+def _make_adapter(response: object) -> GoogleGenAIAdapter:\n+    client = MagicMock()\n+    client.__module__ = \"google.genai\"\n+    client.model = \"gemini-1.5-pro\"\n+    client.models.generate_content.return_value = response\n+    # aio attr absent -> _check_if_async_client() treats this as sync\n+    del client.aio\n+    return GoogleGenAIAdapter(client=client, model=\"gemini-1.5-pro\")\n+\n+\n+def _response(*parts: object) -> object:\n+    return genai.types.GenerateContentResponse(\n+        candidates=[\n+            genai.types.Candidate(content=genai.types.Content(role=\"model\", parts=list(parts)))\n+        ]\n+    )\n+\n+\n+def test_tool_calling_skips_parts_without_a_function_call() -> None:\n+    adapter = _make_adapter(\n+        _response(\n+            genai.types.Part(text=\"Let me think about this.\", thought=True),\n+            genai.types.Part(\n+                function_call=genai.types.FunctionCall(\n+                    name=\"extract_structured_data\", args={\"label\": \"yes\"}\n+                )\n+            ),\n+        )\n+    )\n+\n+    result = adapter._generate_with_tool_calling(\"prompt\", SIMPLE_SCHEMA)\n+\n+    assert result == {\"label\": \"yes\"}\n+\n+\n+def test_tool_calling_without_a_function_call_raises_a_clear_error() -> None:\n+    adapter = _make_adapter(_response(genai.types.Part(text=\"I cannot do that.\")))\n+\n+    with pytest.raises(ValueError, match=\"No function call in response\"):\n+        adapter._generate_with_tool_calling(\"prompt\", SIMPLE_SCHEMA)"
+  },
+  {
+   "filename": "packages/phoenix-evals/tests/phoenix/evals/llm/adapters/litellm/test_adapter.py",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -313,6 +313,22 @@ def test_tool_calling_without_capability_precheck(\n \n         assert result == {\"label\": \"yes\"}\n \n+    @pytest.mark.parametrize(\"tool_calls\", [None, []])\n+    def test_tool_calling_without_tool_calls_raises_a_clear_error(\n+        self, monkeypatch: pytest.MonkeyPatch, tool_calls: list | None\n+    ) -> None:\n+        adapter, completion_mock, _ = _make_adapter(monkeypatch)\n+        response = _make_tool_calling_response()\n+        response.choices[0].message.tool_calls = tool_calls\n+        completion_mock.return_value = response\n+\n+        with pytest.raises(ValueError, match=\"No tool calls in response\"):\n+            adapter.generate_object(\n+                \"test prompt\",\n+                SIMPLE_SCHEMA,\n+                method=ObjectGenerationMethod.TOOL_CALLING,\n+            )\n+\n     def test_explicit_method_propagates_api_error(self, monkeypatch: pytest.MonkeyPatch) -> None:\n         adapter, completion_mock, _ = _make_adapter(monkeypatch)\n         completion_mock.side_effect = _bad_request(\"bad schema\")"
+  }
+ ],
+ "test_files": [
+  "packages/phoenix-evals/tests/phoenix/evals/llm/adapters/google/test_tool_calling.py",
+  "packages/phoenix-evals/tests/phoenix/evals/llm/adapters/litellm/test_adapter.py"
+ ]
+}

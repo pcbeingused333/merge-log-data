@@ -1,0 +1,26 @@
+{
+ "repo": "lich0821/ccNexus",
+ "number": 150,
+ "url": "https://github.com/lich0821/ccNexus/pull/150",
+ "title": "fix: honor Claude tool_choice when converting requests to Gemini",
+ "merged_at": "2026-10-27T10:08:16Z",
+ "files": [
+  {
+   "filename": "internal/transformer/convert/claude_gemini.go",
+   "status": "modified",
+   "additions": 31,
+   "deletions": 3,
+   "patch": "@@ -73,15 +73,43 @@ func ClaudeReqToGemini(claudeReq []byte, model string) ([]byte, error) {\n \t\tgeminiReq[\"tools\"] = []map[string]interface{}{{\"functionDeclarations\": funcDecls}}\n \t\t// Add toolConfig to enable function calling\n \t\tgeminiReq[\"toolConfig\"] = map[string]interface{}{\n-\t\t\t\"functionCallingConfig\": map[string]interface{}{\n-\t\t\t\t\"mode\": \"AUTO\",\n-\t\t\t},\n+\t\t\t\"functionCallingConfig\": claudeToolChoiceToGeminiConfig(req.ToolChoice),\n \t\t}\n \t}\n \n \treturn json.Marshal(geminiReq)\n }\n \n+// claudeToolChoiceToGeminiConfig maps a Claude tool_choice to a Gemini\n+// functionCallingConfig. A missing or unknown choice stays AUTO.\n+func claudeToolChoiceToGeminiConfig(toolChoice interface{}) map[string]interface{} {\n+\tconfig := map[string]interface{}{\"mode\": \"AUTO\"}\n+\n+\tvar choiceType string\n+\tvar name string\n+\tswitch tc := toolChoice.(type) {\n+\tcase map[string]interface{}:\n+\t\tchoiceType, _ = tc[\"type\"].(string)\n+\t\tname, _ = tc[\"name\"].(string)\n+\tcase string:\n+\t\tchoiceType = tc\n+\t}\n+\n+\tswitch choiceType {\n+\tcase \"any\", \"required\":\n+\t\tconfig[\"mode\"] = \"ANY\"\n+\tcase \"tool\":\n+\t\tconfig[\"mode\"] = \"ANY\"\n+\t\tif name != \"\" {\n+\t\t\tconfig[\"allowedFunctionNames\"] = []string{name}\n+\t\t}\n+\tcase \"none\":\n+\t\tconfig[\"mode\"] = \"NONE\"\n+\t}\n+\n+\treturn config\n+}\n+\n // GeminiReqToClaude converts Gemini request to Claude request\n func GeminiReqToClaude(geminiReq []byte, model string) ([]byte, error) {\n \tvar req transformer.GeminiRequest"
+  },
+  {
+   "filename": "internal/transformer/convert/claude_gemini_tool_choice_test.go",
+   "status": "added",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,49 @@\n+package convert\n+\n+import (\n+\t\"encoding/json\"\n+\t\"reflect\"\n+\t\"testing\"\n+)\n+\n+func TestClaudeReqToGeminiToolChoice(t *testing.T) {\n+\ttests := []struct {\n+\t\tname       string\n+\t\ttoolChoice string\n+\t\twantMode   string\n+\t\twantNames  []interface{}\n+\t}{\n+\t\t{\"omitted\", ``, \"AUTO\", nil},\n+\t\t{\"auto\", `,\"tool_choice\":{\"type\":\"auto\"}`, \"AUTO\", nil},\n+\t\t{\"any\", `,\"tool_choice\":{\"type\":\"any\"}`, \"ANY\", nil},\n+\t\t{\"tool\", `,\"tool_choice\":{\"type\":\"tool\",\"name\":\"get_weather\"}`, \"ANY\", []interface{}{\"get_weather\"}},\n+\t\t{\"none\", `,\"tool_choice\":{\"type\":\"none\"}`, \"NONE\", nil},\n+\t\t{\"string any\", `,\"tool_choice\":\"any\"`, \"ANY\", nil},\n+\t}\n+\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tclaudeReq := `{\"model\":\"claude\",\"max_tokens\":100,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\n+\t\t\t\t\"tools\":[{\"name\":\"get_weather\",\"description\":\"d\",\"input_schema\":{\"type\":\"object\",\"properties\":{}}}]` + tt.toolChoice + `}`\n+\n+\t\t\tout, err := ClaudeReqToGemini([]byte(claudeReq), \"gemini-2.5-pro\")\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatalf(\"ClaudeReqToGemini failed: %v\", err)\n+\t\t\t}\n+\n+\t\t\tvar got map[string]interface{}\n+\t\t\tif err := json.Unmarshal(out, &got); err != nil {\n+\t\t\t\tt.Fatalf(\"invalid output: %v\", err)\n+\t\t\t}\n+\t\t\ttoolConfig, _ := got[\"toolConfig\"].(map[string]interface{})\n+\t\t\tfcc, _ := toolConfig[\"functionCallingConfig\"].(map[string]interface{})\n+\t\t\tif fcc[\"mode\"] != tt.wantMode {\n+\t\t\t\tt.Errorf(\"mode = %v, want %v\", fcc[\"mode\"], tt.wantMode)\n+\t\t\t}\n+\t\t\tgotNames, _ := fcc[\"allowedFunctionNames\"].([]interface{})\n+\t\t\tif !reflect.DeepEqual(gotNames, tt.wantNames) {\n+\t\t\t\tt.Errorf(\"allowedFunctionNames = %v, want %v\", gotNames, tt.wantNames)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/transformer/convert/claude_gemini_tool_choice_test.go"
+ ]
+}

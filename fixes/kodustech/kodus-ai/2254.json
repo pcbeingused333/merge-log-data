@@ -1,0 +1,26 @@
+{
+ "repo": "kodustech/kodus-ai",
+ "number": 2254,
+ "url": "https://github.com/kodustech/kodus-ai/pull/2254",
+ "title": "fix(llm): read Z.AI's weekly/monthly limit as a spent quota",
+ "merged_at": "2026-10-29T21:48:49Z",
+ "files": [
+  {
+   "filename": "libs/llm/error-classifier.spec.ts",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -126,6 +126,33 @@ describe('classifyLLMError', () => {\n             );\n         });\n \n+        // Read off production (#2104): Z.AI's weekly/monthly cap (code 1310)\n+        // says neither quota nor balance, so it landed on RATE_LIMIT. A\n+        // one-shot call (maxRetries: 0) never fails over on RATE_LIMIT, and the\n+        // configured fallback sat unused until the cap reset.\n+        it('reads the Z.AI weekly/monthly cap as a spent quota and fails over', () => {\n+            const err = errorWithStatus(\n+                'Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-10-10 21:00:06',\n+                429,\n+            );\n+            expect(classifyLLMError(err).category).toBe(\n+                LlmErrorCategory.QUOTA_EXCEEDED,\n+            );\n+            expect(shouldFailoverToNextModel(err)).toBe(true);\n+        });\n+\n+        // Its neighbour, Z.AI code 1308, is a window that reopens within hours.\n+        // It stays a rate limit, the cheap direction to be wrong in.\n+        it('keeps the Z.AI short-window usage limit on RATE_LIMIT', () => {\n+            const err = errorWithStatus(\n+                'Usage limit reached for 5 hour. Your limit will reset at 2026-10-10 21:00:06',\n+                429,\n+            );\n+            expect(classifyLLMError(err).category).toBe(\n+                LlmErrorCategory.RATE_LIMIT,\n+            );\n+        });\n+\n         it('treats plain 429 → RATE_LIMIT', () => {\n             const err = errorWithStatus('too many requests', 429);\n             expect(classifyLLMError(err).category).toBe("
+  },
+  {
+   "filename": "libs/llm/error-classifier.ts",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -359,6 +359,10 @@ function looksLikeQuota(lower: string): boolean {\n         // failure mode of matching the exact phrase is exactly that delay --\n         // if Anthropic rewords the cap, we wait instead of mislabelling.\n         lower.includes('specified api usage limits') ||\n+        // Z.AI's weekly/monthly cap (code 1310, #2104), matched on its exact\n+        // wording for the same reason. Its short-window sibling (\"Usage limit\n+        // reached for 5 hour\") reopens within hours and stays a rate limit.\n+        lower.includes('weekly/monthly limit exhausted') ||\n         lower.includes('failure to pay') ||\n         lower.includes('past invoices') ||\n         lower.includes('past due')"
+  }
+ ],
+ "test_files": [
+  "libs/llm/error-classifier.spec.ts"
+ ]
+}

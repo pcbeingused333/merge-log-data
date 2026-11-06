@@ -1,0 +1,40 @@
+{
+ "repo": "TanStack/ai",
+ "number": 1928,
+ "url": "https://github.com/TanStack/ai/pull/1928",
+ "title": "fix(ai-gemini): allow native image generation with store: false",
+ "merged_at": "2026-10-30T01:48:37Z",
+ "files": [
+  {
+   "filename": ".changeset/gemini-image-store-false.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@tanstack/ai-gemini': patch\n+---\n+\n+Native Gemini image generation no longer throws `image interaction returned no id.` when `modelOptions.store` is `false`. Gemini leaves the interaction id out of an unstored interaction, so the result gets a local id, which cannot be passed as `previous_interaction_id`. A stored interaction without an id still throws."
+  },
+  {
+   "filename": "docs/media/image-generation.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -227,7 +227,7 @@ const edited = await generateImage({\n \n Rules for the edit:\n \n-- Leave `store` unset. The API default is `true`. If you set `store` to `false`, a later call cannot use that id.\n+- Leave `store` unset. The API default is `true`. If you set `store` to `false`, Gemini does not keep the interaction, so `id` is a local id and a later call cannot use it as `previous_interaction_id`.\n - A free tier keeps a stored interaction for 1 day. A paid tier keeps it for 55 days.\n - If the edit needs a new reference image, add that image part on this call. Do not send the image from `first` again.\n "
+  },
+  {
+   "filename": "packages/ai-gemini/src/adapters/image.ts",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 4,
+   "patch": "@@ -4,7 +4,11 @@ import {\n   resolveMediaPrompt,\n } from '@tanstack/ai'\n import { BaseImageAdapter } from '@tanstack/ai/adapters'\n-import { createGeminiClient, getGeminiApiKeyFromEnv } from '../utils'\n+import {\n+  createGeminiClient,\n+  generateId,\n+  getGeminiApiKeyFromEnv,\n+} from '../utils'\n import { flattenModalityTokenCounts, hasModalityTokens } from '../usage'\n import {\n   parseNativeImageSize,\n@@ -196,7 +200,11 @@ export class GeminiImageAdapter<\n         })\n       : await this.client.interactions.create(request)\n \n-    return this.transformInteractionResponse(model, interaction)\n+    return this.transformInteractionResponse(\n+      model,\n+      interaction,\n+      modelOptions?.store !== false,\n+    )\n   }\n \n   /**\n@@ -261,13 +269,17 @@ export class GeminiImageAdapter<\n   private transformInteractionResponse(\n     model: string,\n     interaction: Interactions.Interaction,\n+    stored: boolean,\n   ): ImageGenerationResult {\n     if (interaction.status !== 'completed') {\n       throw new Error(\n         `Gemini ${model} image interaction ended with status \"${interaction.status}\".`,\n       )\n     }\n-    if (!interaction.id) {\n+    // The interaction id only matters for chaining an edit through\n+    // `previous_interaction_id`, and an unstored interaction cannot be chained.\n+    // Gemini leaves the id out when `store` is false, so use a local one.\n+    if (!interaction.id && stored) {\n       throw new Error(`Gemini ${model} image interaction returned no id.`)\n     }\n \n@@ -302,7 +314,7 @@ export class GeminiImageAdapter<\n \n     const usage = interactionImageUsage(interaction.usage)\n     return {\n-      id: interaction.id,\n+      id: interaction.id ?? generateId(this.name),\n       model,\n       images,\n       ...(usage ? { usage } : {}),"
+  },
+  {
+   "filename": "packages/ai-gemini/tests/image-adapter.test.ts",
+   "status": "modified",
+   "additions": 41,
+   "deletions": 0,
+   "patch": "@@ -627,6 +627,47 @@ describe('Gemini Image Adapter', () => {\n       expect(result.id).toBe('int_test')\n     })\n \n+    it('returns the images with a local id when store is false and Gemini returns no interaction id', async () => {\n+      const mockCreate = vi\n+        .fn()\n+        .mockResolvedValueOnce(interactionWithImages('out', { id: undefined }))\n+      const adapter = createGeminiImage(\n+        'gemini-3.1-flash-image',\n+        'test-api-key',\n+      )\n+      stubCreate(adapter, mockCreate)\n+\n+      const result = await generateImage({\n+        threadId: 'thread-1',\n+        adapter,\n+        prompt: 'A red apple',\n+        modelOptions: { store: false },\n+      })\n+\n+      expect(result.images).toHaveLength(1)\n+      expect(result.id).toEqual(expect.any(String))\n+      expect(result.id).not.toBe('')\n+    })\n+\n+    it('still throws when a stored interaction comes back without an id', async () => {\n+      const mockCreate = vi\n+        .fn()\n+        .mockResolvedValueOnce(interactionWithImages('out', { id: undefined }))\n+      const adapter = createGeminiImage(\n+        'gemini-3.1-flash-image',\n+        'test-api-key',\n+      )\n+      stubCreate(adapter, mockCreate)\n+\n+      await expect(\n+        generateImage({\n+          threadId: 'thread-1',\n+          adapter,\n+          prompt: 'A red apple',\n+        }),\n+      ).rejects.toThrow(/returned no id/)\n+    })\n+\n     it('passes abortSignal only when one is set', async () => {\n       const { adapter, mockCreate } = mockedNativeAdapter()\n       const controller = new AbortController()"
+  }
+ ],
+ "test_files": [
+  "packages/ai-gemini/tests/image-adapter.test.ts"
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 279,
+ "url": "https://github.com/lofcz/LLMTornado/pull/279",
+ "title": "Support $and / $or metadata filters in the Faiss and PgVector databases",
+ "merged_at": "2026-10-28T08:55:45Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/VectorLogicalFilterTests.cs",
+   "status": "added",
+   "additions": 79,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,79 @@\n+using System.Reflection;\n+using System.Runtime.CompilerServices;\n+using LlmTornado.VectorDatabases;\n+using LlmTornado.VectorDatabases.Faiss;\n+using LlmTornado.VectorDatabases.PgVector;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class VectorLogicalFilterTests\n+{\n+    private static readonly Dictionary<string, object> Laptop = new()\n+    {\n+        [\"category\"] = \"electronics\",\n+        [\"brand\"] = \"Apple\"\n+    };\n+\n+    [Test]\n+    public void Faiss_And_MatchesWhenBothClausesMatch()\n+    {\n+        Assert.That(FaissMatches(Laptop, TornadoWhereOperator.Equal(\"category\", \"electronics\") & TornadoWhereOperator.Equal(\"brand\", \"Apple\")), Is.True);\n+    }\n+\n+    [Test]\n+    public void Faiss_And_DoesNotMatchWhenOneClauseFails()\n+    {\n+        Assert.That(FaissMatches(Laptop, TornadoWhereOperator.Equal(\"category\", \"electronics\") & TornadoWhereOperator.Equal(\"brand\", \"Sony\")), Is.False);\n+    }\n+\n+    [Test]\n+    public void Faiss_Or_MatchesWhenOneClauseMatches()\n+    {\n+        Assert.That(FaissMatches(Laptop, TornadoWhereOperator.Equal(\"category\", \"computers\") | TornadoWhereOperator.Equal(\"brand\", \"Apple\")), Is.True);\n+    }\n+\n+    [Test]\n+    public void Faiss_Or_DoesNotMatchWhenNoClauseMatches()\n+    {\n+        Assert.That(FaissMatches(Laptop, TornadoWhereOperator.Equal(\"category\", \"computers\") | TornadoWhereOperator.Equal(\"brand\", \"Sony\")), Is.False);\n+    }\n+\n+    [Test]\n+    public void PgVector_And_JoinsTheClausesWithAnd()\n+    {\n+        string sql = PgVectorFilter(TornadoWhereOperator.Equal(\"category\", \"electronics\") & TornadoWhereOperator.GreaterThan(\"price\", 100));\n+\n+        Assert.That(sql, Is.EqualTo(\"\"\"((metadata->'category' = '\"electronics\"') AND ((metadata->'price')::numeric > 100))\"\"\"));\n+    }\n+\n+    [Test]\n+    public void PgVector_Or_JoinsTheClausesWithOr()\n+    {\n+        string sql = PgVectorFilter(TornadoWhereOperator.Equal(\"category\", \"electronics\") | TornadoWhereOperator.Equal(\"category\", \"computers\"));\n+\n+        Assert.That(sql, Is.EqualTo(\"\"\"((metadata->'category' = '\"electronics\"') OR (metadata->'category' = '\"computers\"'))\"\"\"));\n+    }\n+\n+    [Test]\n+    public void PgVector_NestedLogicalOperators_KeepTheirGrouping()\n+    {\n+        string sql = PgVectorFilter((TornadoWhereOperator.Equal(\"a\", \"x\") | TornadoWhereOperator.Equal(\"b\", \"y\")) & TornadoWhereOperator.Equal(\"c\", \"z\"));\n+\n+        Assert.That(sql, Does.StartWith(\"(((\").And.Contain(\" OR \").And.Contain(\") AND (\"));\n+    }\n+\n+    private static bool FaissMatches(Dictionary<string, object> metadata, TornadoWhereOperator where)\n+    {\n+        // MatchesFilter does not touch the index, so skip the native FAISS setup.\n+        FaissCollectionClient client = (FaissCollectionClient)RuntimeHelpers.GetUninitializedObject(typeof(FaissCollectionClient));\n+        MethodInfo method = typeof(FaissCollectionClient).GetMethod(\"MatchesFilter\", BindingFlags.NonPublic | BindingFlags.Instance)!;\n+        return (bool)method.Invoke(client, [metadata, where.ToWhere()])!;\n+    }\n+\n+    private static string PgVectorFilter(TornadoWhereOperator where)\n+    {\n+        MethodInfo method = typeof(PgVectorCollectionClient).GetMethod(\"BuildMetadataFilter\", BindingFlags.NonPublic | BindingFlags.Static)!;\n+        return (string)method.Invoke(null, [where.ToWhere()])!;\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado.VectorDatabases.Faiss/FaissCollectionClient.cs",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -439,6 +439,26 @@ private bool MatchesFilter(Dictionary<string, object>? metadata, Dictionary<stri\n             var key = filterKvp.Key;\n             var filterValue = filterKvp.Value;\n \n+            if (key is \"$and\" or \"$or\")\n+            {\n+                if (filterValue is not IEnumerable<object> clauses)\n+                {\n+                    return false;\n+                }\n+\n+                var clauseMatches = clauses\n+                    .OfType<Dictionary<string, object>>()\n+                    .Select(clause => MatchesFilter(metadata, clause))\n+                    .ToList();\n+\n+                if (key == \"$and\" ? !clauseMatches.All(matched => matched) : !clauseMatches.Any(matched => matched))\n+                {\n+                    return false;\n+                }\n+\n+                continue;\n+            }\n+\n             if (!metadata.TryGetValue(key, out var metadataValue))\n             {\n                 return false;"
+  },
+  {
+   "filename": "src/LlmTornado.VectorDatabases.PgVector/PgVectorCollectionClient.cs",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 1,
+   "patch": "@@ -346,7 +346,24 @@ private static string BuildMetadataFilter(Dictionary<string, object> whereMetada\n             string key = kvp.Key;\n             object value = kvp.Value;\n \n-            if (value is Dictionary<string, object> operatorDict)\n+            if (key is \"$and\" or \"$or\")\n+            {\n+                if (value is IEnumerable<object> clauses)\n+                {\n+                    List<string> clauseConditions = clauses\n+                        .OfType<Dictionary<string, object>>()\n+                        .Select(BuildMetadataFilter)\n+                        .Where(clause => clause.Length > 0)\n+                        .Select(clause => $\"({clause})\")\n+                        .ToList();\n+\n+                    if (clauseConditions.Count > 0)\n+                    {\n+                        conditions.Add($\"({string.Join(\"$and\" == key ? \" AND \" : \" OR \", clauseConditions)})\");\n+                    }\n+                }\n+            }\n+            else if (value is Dictionary<string, object> operatorDict)\n             {\n                 foreach (KeyValuePair<string, object> op in operatorDict)\n                 {"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/VectorLogicalFilterTests.cs"
+ ]
+}

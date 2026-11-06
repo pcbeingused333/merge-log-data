@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 275,
+ "url": "https://github.com/lofcz/LLMTornado/pull/275",
+ "title": "Report OpenAI cache write tokens as ChatUsage.CacheCreationTokens",
+ "merged_at": "2026-10-24T01:36:12Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/ChatCacheWriteUsageTests.cs",
+   "status": "added",
+   "additions": 31,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,31 @@\n+using LlmTornado.Chat;\n+using Newtonsoft.Json;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class ChatCacheWriteUsageTests\n+{\n+    [Test]\n+    public void Usage_MapsPromptTokenDetailsCacheWriteTokensToCacheCreationTokens()\n+    {\n+        const string json = \"\"\"\n+            {\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120,\"prompt_tokens_details\":{\"cached_tokens\":20,\"cache_write_tokens\":30}}\n+            \"\"\";\n+\n+        ChatUsage? usage = JsonConvert.DeserializeObject<ChatUsage>(json);\n+\n+        Assert.That(usage, Is.Not.Null);\n+        Assert.That(usage!.PromptTokenDetails?.CacheWriteTokens, Is.EqualTo(30));\n+        Assert.That(usage.CacheCreationTokens, Is.EqualTo(30));\n+    }\n+\n+    [Test]\n+    public void Usage_WithoutCacheWriteTokensHasNoCacheCreationTokens()\n+    {\n+        ChatUsage? usage = JsonConvert.DeserializeObject<ChatUsage>(\"\"\"{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120}\"\"\");\n+\n+        Assert.That(usage, Is.Not.Null);\n+        Assert.That(usage!.CacheCreationTokens, Is.Null);\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/ChatResult.cs",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 3,
+   "patch": "@@ -350,6 +350,12 @@ public class ChatPromptTokenDetails\n \t[JsonProperty(\"cached_tokens\")]\n \tpublic int? CachedTokens { get; set; }\n \t\n+\t/// <summary>\n+\t///\t\tHow many tokens were written to the prompt cache.\n+\t/// </summary>\n+\t[JsonProperty(\"cache_write_tokens\")]\n+\tpublic int? CacheWriteTokens { get; set; }\n+\t\n \t/// <summary>\n \t///\t\tHow many tokens were in the audio part of the prompt.\n \t/// </summary>\n@@ -448,10 +454,16 @@ public class ChatUsage : Usage\n \tpublic decimal? CostUsd => CostInUsdTicks is null ? null : CostInUsdTicks.Value / 10_000_000_000m;\n \t\n \t/// <summary>\n-\t///\t\tNumber of cached tokens.\n+\t///\t\tNumber of cached tokens. Falls back to <see cref=\"PromptTokenDetails\"/> cache write tokens, which OpenAI reports.\n \t/// </summary>\n \t[JsonIgnore]\n-\tpublic int? CacheCreationTokens { get; set; }\n+\tpublic int? CacheCreationTokens\n+\t{\n+\t\tget => cacheCreationTokens ?? PromptTokenDetails?.CacheWriteTokens;\n+\t\tset => cacheCreationTokens = value;\n+\t}\n+\n+\tprivate int? cacheCreationTokens;\n \t\n \t/// <summary>\n \t///\t\tNumber of tokens read from cache.\n@@ -560,7 +572,7 @@ internal ChatUsage(ResponseUsage responseUsage)\n \t\tPromptTokens = responseUsage.InputTokens;\n \t\tTotalTokens = responseUsage.TotalTokens;\n \t\tCacheReadTokens = responseUsage.InputTokenDetails?.CachedTokens;\n-\t\tCacheCreationTokens = 0;\n+\t\tCacheCreationTokens = responseUsage.InputTokenDetails?.CacheWriteTokens ?? 0;\n \t\tCostInUsdTicks = responseUsage.CostInUsdTicks;\n \t\t\n \t\tCompletionTokensDetails = new ChatUsageTokenDetails"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/ChatCacheWriteUsageTests.cs"
+ ]
+}

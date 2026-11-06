@@ -1,0 +1,33 @@
+{
+ "repo": "lancedb/lancedb",
+ "number": 4737,
+ "url": "https://github.com/lancedb/lancedb/pull/4737",
+ "title": "fix(python): use dim as the embedding size for OpenAI-compatible models",
+ "merged_at": "2026-11-01T00:49:50Z",
+ "files": [
+  {
+   "filename": "docs/web/integrations/embedding/openai.mdx",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -10,7 +10,7 @@ LanceDB registers the OpenAI embeddings function in the registry by default, as\n | Parameter | Type | Default Value | Description |\n |---|---|---|---|\n | `name` | `str` | `\"text-embedding-ada-002\"` | The name of the model. |\n-| `dim` | `int` |  Model default   | Requested output dimensions for models that support shortening embeddings. Use `func.ndims()` when defining the vector field. |\n+| `dim` | `int` |  Model default   | Requested output dimensions for models that support shortening embeddings. Required for model names other than the OpenAI ones listed by `model_names()` (for example a model served behind an OpenAI-compatible `base_url`), where it is the model's embedding dimension. Use `func.ndims()` when defining the vector field. |\n | `use_azure` | bool | `False` | Set true to use Azure OpenAI SDK |\n \n Set your OpenAI API key before running the example:"
+  },
+  {
+   "filename": "python/python/lancedb/embeddings/openai.py",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 1,
+   "patch": "@@ -36,6 +36,7 @@ class OpenAIEmbeddings(TextEmbeddingFunction):\n     embedding_function = openai.create(\n         name=\"<ollama-embedding-model-name>\",\n         base_url=\"http://localhost:11434\",\n+        dim=768,  # the model's embedding dimension; required for unlisted names\n         )\n     ```\n \n@@ -77,8 +78,15 @@ def _ndims(self):\n             return self.dim or 3072\n         elif self.name == \"text-embedding-3-small\":\n             return self.dim or 1536\n+        elif self.dim:\n+            # A name not listed above, e.g. a model served behind an\n+            # OpenAI-compatible `base_url`: `dim` is its embedding size\n+            return self.dim\n         else:\n-            raise ValueError(f\"Unknown model name {self.name}\")\n+            raise ValueError(\n+                f\"Unknown model name {self.name}: set `dim` to the model's \"\n+                \"embedding dimension\"\n+            )\n \n     def generate_embeddings(\n         self, texts: Union[List[str], \"np.ndarray\"]"
+  },
+  {
+   "filename": "python/python/tests/test_embeddings.py",
+   "status": "modified",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -602,6 +602,51 @@ class Words(LanceModel):\n     assert len(actual.text) > 0\n \n \n+@pytest.mark.parametrize(\"base_url\", [None, \"http://localhost:11434/v1\"])\n+def test_openai_compatible_model_uses_dim_for_ndims(base_url):\n+    # Unlisted model names use the explicit dimension independently of base_url.\n+    openai = get_registry().get(\"openai\")\n+    func = openai.create(\n+        name=\"nomic-embed-text\",\n+        base_url=base_url,\n+        dim=768,\n+    )\n+    assert func.ndims() == 768\n+\n+    class Schema(LanceModel):\n+        text: str = func.SourceField()\n+        vector: Vector(func.ndims()) = func.VectorField()\n+\n+    schema = Schema.to_arrow_schema()\n+    assert schema.field(\"vector\").type == pa.list_(pa.float32(), 768)\n+\n+\n+def test_openai_unknown_model_without_dim_raises_clear_error():\n+    openai = get_registry().get(\"openai\")\n+    func = openai.create(\n+        name=\"nomic-embed-text\",\n+        base_url=\"http://localhost:11434/v1\",\n+    )\n+    with pytest.raises(ValueError, match=\"dim\"):\n+        func.ndims()\n+\n+\n+@pytest.mark.parametrize(\n+    (\"name\", \"dim\", \"expected_dim\"),\n+    [\n+        (\"text-embedding-ada-002\", None, 1536),\n+        (\"text-embedding-ada-002\", 512, 1536),\n+        (\"text-embedding-3-large\", None, 3072),\n+        (\"text-embedding-3-large\", 1024, 1024),\n+        (\"text-embedding-3-small\", None, 1536),\n+        (\"text-embedding-3-small\", 512, 512),\n+    ],\n+)\n+def test_openai_known_model_ndims(name, dim, expected_dim):\n+    func = get_registry().get(\"openai\").create(name=name, dim=dim)\n+    assert func.ndims() == expected_dim\n+\n+\n @patch(\"time.sleep\")\n def test_openai_no_retry_on_401(mock_sleep):\n     \"\"\""
+  }
+ ],
+ "test_files": [
+  "python/python/tests/test_embeddings.py"
+ ]
+}

@@ -1,0 +1,51 @@
+{
+ "repo": "Arize-ai/phoenix",
+ "number": 17313,
+ "url": "https://github.com/Arize-ai/phoenix/pull/17313",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-28T06:13:31Z",
+   "body": "## Factory review of 36c5931: Approve\n\nThe fix does what it claims, the checks pass, the added tests fail on `main` for the reported reasons, and there are no blocking findings.\n\n| Criterion | Result | Notes |\n|---|---|---|\n| Fit | Pass | does what it claims |\n| Checks | Pass | ruff check, ruff format, mypy --strict (evals src), google + litellm adapter tests |\n| Tests | Pass | all 4 new tests fail on `main`, pass with the change |\n| Blocking findings | 0 | none |\n| Non-blocking findings | 2 | async paths untested `litellm/adapter.py:397`; inverted comment / private call in Google test `google/test_tool_calling.py:24` |\n| Risk | Low | backwards compatibility: malformed-response errors now raise `ValueError` instead of `AttributeError`/`TypeError`/`IndexError` |\n| Review depth | Focused | small adapter fix in a published package; no public API change |\n\n<details><summary>Details</summary>\n\n**Intent:** Make the tool-calling paths (sync and async) in `GoogleGenAIAdapter` and `LiteLLMAdapter` raise the intended \"No function call in response\" / \"No tool calls in response\" `ValueError` instead of opaque errors. Google should also skip response parts whose `function_call` is `None`, such as a leading thought or text part.\n**Fit:** Google now matches a part only when `part.function_call is not None`, and LiteLLM checks `tool_calls` before indexing. Both changes are applied to the sync and async methods. The LiteLLM message and guard match the OpenAI adapter. Nothing extra changes.\n**Verified:**\n- `ruff check` and `ruff format --check` on the 4 changed files: pass.\n- `mypy --strict` over `packages/phoenix-evals/src`: no issues.\n- `pytest tests/phoenix/evals/llm/adapters/google tests/phoenix/evals/llm/adapters/litellm`: 70 passed.\n- With the two adapter files restored to `main`, the 4 new tests fail with the errors the PR describes: `AttributeError: 'NoneType' object has no attribute 'args'` (x2), `IndexError` and `TypeError`.\n- The area reviewer traced the callers. None catches `AttributeError`, `IndexError` or `TypeError` specifically. LiteLLM's AUTO fallback catches only `BadRequestError`, and Google's catches `Exception`, so control flow does not change.\n**Not verified:**\n- `tox -e phoenix_evals` could not resolve dependencies in the sandbox: the uv version is too old for `exclude-newer = \"3 days\"`, and litellm conflicts with openai>=3.1. I ran the equivalent ruff, mypy and pytest commands in the repo venv instead. CI should confirm the package's own environment.\n- `make lint-python` was not run as written because it applies `--fix`. I ran check-only `ruff check` instead.\n**Findings without a diff line:** none\n**Risk:** side effects none, performance none, backwards compatibility low (only the exception type and message on an already-failing path change).\n\nGraded against the [review criteria](https://github.com/Arize-ai/phoenix/blob/main/factory/agents/pr-reviewer.md#verdict).\n\n</details>"
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-28T06:14:29Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "packages/phoenix-evals/src/phoenix/evals/llm/adapters/litellm/adapter.py",
+   "created_at": "2026-10-28T06:13:14Z",
+   "body": "**Non-blocking:** no test covers the async half of this fix. The guard here, and `google/adapter.py:384` in `_async_generate_with_tool_calling`, could be reverted and every new test would still pass, because all of them call only the sync paths. `REVIEW.md` § Always Check says tests must fail when the behavior they cover is removed.\n\n**Fix:** add async twins, or parametrize the sync and async cases.\n- LiteLLM: use `acompletion_mock` from `_make_adapter` with `async_generate_object(..., method=ObjectGenerationMethod.TOOL_CALLING)`, following `TestAsyncGenerateObjectFallback`.\n- Google: use an `AsyncMock` for `client.aio.models.generate_content`."
+  },
+  {
+   "role": "bot",
+   "path": "packages/phoenix-evals/tests/phoenix/evals/llm/adapters/google/test_tool_calling.py",
+   "created_at": "2026-10-28T06:13:16Z",
+   "body": "**Non-blocking:** this comment says the opposite of what the code does. `_check_if_async_client` (`google/adapter.py:60-63`) returns `True` when `aio` is absent, so `del client.aio` makes the adapter **async** (`_is_async == True`). The tests pass only because they call the private `_generate_with_tool_calling` directly (lines 49 and 58), which skips the `_is_async` dispatch in `generate_object`. That dispatch is the real entry point. `REVIEW.md` § Style says comments should explain why, and here the comment is simply wrong.\n\n**Fix:** drop `del client.aio` and the comment, then call `adapter.generate_object(\"prompt\", SIMPLE_SCHEMA, method=ObjectGenerationMethod.TOOL_CALLING)`, as the LiteLLM tests do."
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-10-28T04:17:56Z",
+   "body": "<!-- mintlify-fork-preview-approval -->\n### Preview approval required\n\nThis pull request comes from a fork, so Mintlify won't build a preview until someone with write access approves commit `36c5931`.\n\n[Approve preview](https://github.com/Arize-ai/phoenix/pull/17313/checks?check_run_id=122628780285)"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-28T06:07:07Z",
+   "body": "The factory started a **review** of 36c5931a69 (session [`sesn_01TSRAoBLHMY2X4JDYoPsJNJ`](https://platform.claude.com/workspaces/wrkspc_019uQCzw86YfY8Li79ZLtsom/sessions/sesn_01TSRAoBLHMY2X4JDYoPsJNJ)). It reports back here when the session ends."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-28T06:14:14Z",
+   "body": "The factory recommends **Approve** for 36c5931a69. [Read the review](https://github.com/Arize-ai/phoenix/pull/17313#pullrequestreview-5678546357)."
+  }
+ ]
+}

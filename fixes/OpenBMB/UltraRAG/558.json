@@ -1,0 +1,34 @@
+{
+ "repo": "OpenBMB/UltraRAG",
+ "number": 558,
+ "url": "https://github.com/OpenBMB/UltraRAG/pull/558",
+ "title": "fix(generation): retry a 429 instead of aborting the pipeline",
+ "merged_at": "2026-11-02T06:00:39Z",
+ "files": [
+  {
+   "filename": "servers/generation/src/generation.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -368,9 +368,9 @@ async def call_with_retry(\n                         app.logger.error(error_msg)\n                         raise ToolError(error_msg)\n                     except RateLimitError as e:\n+                        # Transient: log and back off before the next attempt.\n                         warn_msg = f\"[{e.status_code}] API Rate limited (idx={idx}, attempt={attempt+1}): {e}\"\n                         app.logger.warning(warn_msg)\n-                        raise ToolError(warn_msg)\n                     except APIStatusError as e:\n                         if e.status_code >= 500:\n                             warn_msg = f\"[{e.status_code}] Server error (idx={idx}, attempt={attempt+1}): {e}\"\n@@ -454,9 +454,9 @@ async def call_with_retry(\n                         app.logger.error(error_msg)\n                         raise ToolError(error_msg)\n                     except litellm.RateLimitError as e:\n+                        # Transient: log and back off before the next attempt.\n                         warn_msg = f\"[429] API Rate limited (idx={idx}, attempt={attempt+1}): {e}\"\n                         app.logger.warning(warn_msg)\n-                        raise ToolError(warn_msg)\n                     except (\n                         litellm.Timeout,\n                         litellm.APIConnectionError,"
+  },
+  {
+   "filename": "servers/generation/tests/test_litellm_backend.py",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -112,3 +112,23 @@ def test_multiturn_routes_through_litellm():\n     )\n     assert out == {\"ans_ls\": [\"Ada\"]}\n     assert fake.acompletion.calls[0][\"model\"] == \"gemini/gemini-1.5-pro\"\n+\n+\n+def test_rate_limit_is_retried_instead_of_aborting():\n+    fake = _stub_litellm(\"ok\")\n+    calls = []\n+\n+    async def _flaky(**kwargs):\n+        calls.append(kwargs)\n+        if len(calls) == 1:\n+            raise fake.RateLimitError(\"slow down\")\n+        message = types.SimpleNamespace(content=\"ok\")\n+        return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])\n+\n+    fake.acompletion = _flaky\n+    g = _make({\"model_name\": \"openai/gpt-4o-mini\", \"base_delay\": 0.001})\n+\n+    out = asyncio.run(g.generate(prompt_ls=[\"hi\"]))\n+\n+    assert out == {\"ans_ls\": [\"ok\"]}\n+    assert len(calls) == 2"
+  },
+  {
+   "filename": "servers/generation/tests/test_openai_backend.py",
+   "status": "added",
+   "additions": 58,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,58 @@\n+\"\"\"Unit tests for the OpenAI generation backend's retry loop. No network needed.\"\"\"\n+\n+import asyncio\n+import os\n+import sys\n+import types\n+\n+import httpx\n+import openai\n+\n+HERE = os.path.dirname(__file__)\n+sys.path.insert(0, os.path.join(HERE, \"..\", \"src\"))\n+\n+import generation as gen_mod\n+\n+\n+def _make(base_delay=0.001):\n+    g = gen_mod.Generation.__new__(gen_mod.Generation)\n+    g.generation_init(\n+        backend_configs={\n+            \"openai\": {\n+                \"model_name\": \"gpt-x\",\n+                \"base_url\": \"http://localhost:1/v1\",\n+                \"api_key\": \"sk-test\",\n+                \"base_delay\": base_delay,\n+            }\n+        },\n+        sampling_params={\"temperature\": 0.1, \"max_tokens\": 8},\n+        backend=\"openai\",\n+    )\n+    return g\n+\n+\n+def _rate_limit_error():\n+    request = httpx.Request(\"POST\", \"http://localhost:1/v1/chat/completions\")\n+    response = httpx.Response(429, request=request)\n+    return openai.RateLimitError(\"slow down\", response=response, body=None)\n+\n+\n+def test_rate_limit_is_retried_instead_of_aborting():\n+    g = _make()\n+    calls = []\n+\n+    async def _create(**kwargs):\n+        calls.append(kwargs)\n+        if len(calls) == 1:\n+            raise _rate_limit_error()\n+        message = types.SimpleNamespace(content=\"ok\")\n+        return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])\n+\n+    g.client = types.SimpleNamespace(\n+        chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=_create))\n+    )\n+\n+    out = asyncio.run(g.generate(prompt_ls=[\"hi\"]))\n+\n+    assert out == {\"ans_ls\": [\"ok\"]}\n+    assert len(calls) == 2"
+  }
+ ],
+ "test_files": [
+  "servers/generation/tests/test_litellm_backend.py",
+  "servers/generation/tests/test_openai_backend.py"
+ ]
+}

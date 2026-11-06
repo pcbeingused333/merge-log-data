@@ -1,0 +1,56 @@
+{
+ "repo": "open-telemetry/opentelemetry-python-genai",
+ "number": 1018,
+ "url": "https://github.com/open-telemetry/opentelemetry-python-genai/pull/1018",
+ "title": "fix(bedrock): include cached tokens in gen_ai.usage.input_tokens for Converse",
+ "merged_at": "2026-10-31T21:57:13Z",
+ "files": [
+  {
+   "filename": "instrumentation/opentelemetry-instrumentation-genai-bedrock/.changelog/1018.fixed",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+Include cached tokens in `gen_ai.usage.input_tokens` for Bedrock Converse and ConverseStream."
+  },
+  {
+   "filename": "instrumentation/opentelemetry-instrumentation-genai-bedrock/src/opentelemetry/instrumentation/genai/bedrock/extractors.py",
+   "status": "modified",
+   "additions": 31,
+   "deletions": 5,
+   "patch": "@@ -90,6 +90,26 @@ def _safe_int(val: Any) -> int | None:\n         return None\n \n \n+def _total_input_tokens(\n+    input_tokens: int | None,\n+    cache_read_input_tokens: int | None,\n+    cache_creation_input_tokens: int | None,\n+) -> int | None:\n+    \"\"\"Converse ``inputTokens`` excludes cached tokens; the semantic\n+    conventions want ``gen_ai.usage.input_tokens`` to include them.\"\"\"\n+    if (\n+        input_tokens is None\n+        and cache_read_input_tokens is None\n+        and cache_creation_input_tokens is None\n+    ):\n+        return None\n+    return (\n+        (input_tokens or 0)\n+        + (cache_read_input_tokens or 0)\n+        + (cache_creation_input_tokens or 0)\n+    )\n+\n+\n def _safe_float(val: Any) -> float | None:\n     \"\"\"Safely convert a value to float or return None.\"\"\"\n     if val is None:\n@@ -419,11 +439,17 @@ def extract_converse_response(\n \n     usage = response.get(\"usage\")\n     if _is_dict(usage):\n-        invocation.input_tokens = usage.get(\"inputTokens\")\n-        invocation.output_tokens = usage.get(\"outputTokens\")\n-        invocation.cache_read_input_tokens = usage.get(\"cacheReadInputTokens\")\n-        invocation.cache_creation_input_tokens = usage.get(\n-            \"cacheWriteInputTokens\"\n+        invocation.output_tokens = _safe_int(usage.get(\"outputTokens\"))\n+        invocation.cache_read_input_tokens = _safe_int(\n+            usage.get(\"cacheReadInputTokens\")\n+        )\n+        invocation.cache_creation_input_tokens = _safe_int(\n+            usage.get(\"cacheWriteInputTokens\")\n+        )\n+        invocation.input_tokens = _total_input_tokens(\n+            _safe_int(usage.get(\"inputTokens\")),\n+            invocation.cache_read_input_tokens,\n+            invocation.cache_creation_input_tokens,\n         )\n \n "
+  },
+  {
+   "filename": "instrumentation/opentelemetry-instrumentation-genai-bedrock/src/opentelemetry/instrumentation/genai/bedrock/stream.py",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -33,6 +33,7 @@\n     _is_list,\n     _parse_body,\n     _safe_int,\n+    _total_input_tokens,\n     extract_embedding_response,\n     extract_invoke_model_response,\n     map_finish_reason,\n@@ -205,7 +206,11 @@ def _on_stream_end(self) -> None:\n                         finish_reason=finish_reason or \"error\",\n                     )\n                 ]\n-        self._self_invocation.input_tokens = self._self_input_tokens\n+        self._self_invocation.input_tokens = _total_input_tokens(\n+            self._self_input_tokens,\n+            self._self_cache_read_input_tokens,\n+            self._self_cache_creation_input_tokens,\n+        )\n         self._self_invocation.output_tokens = self._self_output_tokens\n         self._self_invocation.cache_read_input_tokens = (\n             self._self_cache_read_input_tokens"
+  },
+  {
+   "filename": "instrumentation/opentelemetry-instrumentation-genai-bedrock/tests/test_async.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 2,
+   "patch": "@@ -315,7 +315,8 @@ async def test_async_converse_stream_success(\n     spans = span_exporter.get_finished_spans()\n     assert len(spans) == 1\n     span = spans[0]\n-    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 10\n+    # inputTokens (10) excludes the cached tokens: 10 + 2 read + 1 written\n+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13\n     assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 5\n     assert (\n         span.attributes[GenAIAttributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS]\n@@ -408,7 +409,7 @@ async def test_async_converse_stream_async_with_success(\n     assert mock_stream.closed\n     spans = span_exporter.get_finished_spans()\n     assert len(spans) == 1\n-    assert spans[0].attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 10\n+    assert spans[0].attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 13\n \n \n @pytest.mark.asyncio"
+  },
+  {
+   "filename": "instrumentation/opentelemetry-instrumentation-genai-bedrock/tests/test_converse.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -390,7 +390,8 @@ def test_extract_converse_response_no_content(tracer_provider) -> None:\n         )\n         assert not invocation.output_messages\n         assert invocation.finish_reasons == [\"stop\"]\n-        assert invocation.input_tokens == 5\n+        # inputTokens (5) excludes the cached tokens: 5 + 3 read + 7 written\n+        assert invocation.input_tokens == 15\n         assert invocation.output_tokens == 2\n         assert invocation.cache_read_input_tokens == 3\n         assert invocation.cache_creation_input_tokens == 7"
+  },
+  {
+   "filename": "instrumentation/opentelemetry-instrumentation-genai-bedrock/tests/test_converse_stream.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -411,7 +411,8 @@ def test_stream_wrapper_no_content(tracer_provider) -> None:\n     assert not invocation.output_messages\n     assert invocation.finish_reasons == [\"stop\"]\n     assert invocation.response_model_name is None\n-    assert invocation.input_tokens == 10\n+    # inputTokens (10) excludes the cached tokens: 10 + 4 read + 8 written\n+    assert invocation.input_tokens == 22\n     assert invocation.output_tokens == 5\n     assert invocation.cache_read_input_tokens == 4\n     assert invocation.cache_creation_input_tokens == 8"
+  }
+ ],
+ "test_files": [
+  "instrumentation/opentelemetry-instrumentation-genai-bedrock/tests/test_async.py",
+  "instrumentation/opentelemetry-instrumentation-genai-bedrock/tests/test_converse.py",
+  "instrumentation/opentelemetry-instrumentation-genai-bedrock/tests/test_converse_stream.py"
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "tox-dev/tox",
+ "number": 4300,
+ "url": "https://github.com/tox-dev/tox/pull/4300",
+ "title": "🐛 fix(run): decode installpkg file URIs once",
+ "merged_at": "2026-10-30T17:49:20Z",
+ "files": [
+  {
+   "filename": "docs/changelog/4223.bugfix.rst",
+   "status": "added",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,2 @@\n+A ``file:`` URI passed to ``--installpkg`` is now percent-decoded once instead of twice, so a path containing a literal\n+``%`` sequence, such as a directory named ``feature%2Flogin``, selects the package the user named."
+  },
+  {
+   "filename": "src/tox/session/cmd/run/common.py",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 2,
+   "patch": "@@ -13,7 +13,7 @@\n from signal import SIGINT, Handlers, signal\n from threading import Event, Thread\n from typing import TYPE_CHECKING, Any, Literal, cast\n-from urllib.parse import unquote, urlparse\n+from urllib.parse import urlparse\n from urllib.request import url2pathname\n \n from colorama import Fore\n@@ -77,7 +77,7 @@ def _resolve_path(raw: str) -> Path:\n         \"\"\"Convert a raw string (possibly a ``file:`` URI) to an absolute :class:`~pathlib.Path`.\"\"\"\n         if raw.startswith(\"file:\"):\n             parsed = urlparse(raw)\n-            path = Path(url2pathname(unquote(parsed.path)))\n+            path = Path(url2pathname(parsed.path))\n         else:\n             path = Path(raw)\n         return path.absolute()\n@@ -579,3 +579,12 @@ def run_order(state: State, to_run: list[str]) -> tuple[list[str], dict[str, set\n         msg = f\"circular dependency detected between environments: {exception}\"\n         raise HandledError(msg) from exception\n     return order, todo\n+\n+\n+__all__ = [\n+    \"InstallPackageAction\",\n+    \"SkipMissingInterpreterAction\",\n+    \"env_run_create_flags\",\n+    \"execute\",\n+    \"run_order\",\n+]"
+  },
+  {
+   "filename": "tests/session/cmd/run/test_common.py",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 1,
+   "patch": "@@ -4,7 +4,7 @@\n import re\n import sys\n from argparse import ArgumentError, ArgumentParser, Namespace\n-from typing import TYPE_CHECKING\n+from typing import TYPE_CHECKING, Final\n from urllib.parse import quote\n \n import pytest\n@@ -65,6 +65,18 @@ def test_install_pkg_file_uri_percent_encoded(tmp_path: Path) -> None:\n     assert namespace.into == path\n \n \n+def test_install_pkg_file_uri_decoded_once(tmp_path: Path) -> None:\n+    directory: Final[Path] = tmp_path / \"feature%2Flogin\"\n+    directory.mkdir()\n+    path: Final[Path] = directory / \"pkg-1.0.whl\"\n+    path.write_text(\"\")\n+    uri: Final[str] = path.as_uri()\n+    assert \"%252F\" in uri\n+    namespace: Final[Namespace] = Namespace()\n+    InstallPackageAction(option_strings=[\"--install-pkg\"], dest=\"into\")(ArgumentParser(), namespace, uri)\n+    assert namespace.into == path\n+\n+\n def test_install_pkg_file_uri_does_not_exist(tmp_path: Path) -> None:\n     argument_parser = ArgumentParser()\n     path = tmp_path / \"missing.whl\""
+  }
+ ],
+ "test_files": [
+  "tests/session/cmd/run/test_common.py"
+ ]
+}

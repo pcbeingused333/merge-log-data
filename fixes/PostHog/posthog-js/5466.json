@@ -1,0 +1,41 @@
+{
+ "repo": "PostHog/posthog-js",
+ "number": 5466,
+ "url": "https://github.com/PostHog/posthog-js/pull/5466",
+ "title": "fix(react-native): Capture touch autocapture events on Fabric instances",
+ "merged_at": "2026-10-28T13:54:04Z",
+ "files": [
+  {
+   "filename": ".changeset/rn-fabric-touch-autocapture.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'posthog-react-native': patch\n+---\n+\n+fix: capture touch autocapture events on React Native's new architecture (Fabric), where the touched element is only reachable through `target.__internalInstanceHandle`"
+  },
+  {
+   "filename": "packages/react-native/src/autocapture.tsx",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -81,11 +81,16 @@ const maxOwnerAncestors = 100\n let warnedCaptureFailure = false\n \n // react-dom (RN Web) events have no _targetInst; the fiber sits on e.target under a randomised\n-// __reactFiber$ key. The clicked node may be a non-React node inside a React subtree, so walk up.\n+// __reactFiber$ key. Fabric host instances (RN new architecture) have no such key either, but expose\n+// the fiber as __internalInstanceHandle. The clicked node may be a non-React node inside a React\n+// subtree, so walk up.\n const getFallbackTargetInstance = (e: any): Element | undefined => {\n   let node = e.target\n \n   for (let depth = 0; node && typeof node === 'object' && depth < maxFallbackAncestors; depth++) {\n+    if (node.__internalInstanceHandle) {\n+      return node.__internalInstanceHandle\n+    }\n     const key = Object.getOwnPropertyNames(node).find((name) => reactFiberKeyPattern.test(name))\n     if (key) {\n       return node[key]"
+  },
+  {
+   "filename": "packages/react-native/test/__snapshots__/autocapture.spec.ts.snap",
+   "status": "modified",
+   "additions": 89,
+   "deletions": 0,
+   "patch": "@@ -89,6 +89,95 @@ exports[`PostHog React Native > autocapture > should capture a valid event 1`] =\n ]\n `;\n \n+exports[`PostHog React Native > autocapture > should capture a valid event via the Fabric instance handle when _targetInst is absent 1`] = `\n+[\n+  \"touch\",\n+  [\n+    {\n+      \"$el_text\": \"I have the property \"ph-label\" which means touching me will be autocaptured with a specific label\",\n+      \"attr__ph-label\": \"special-text\",\n+      \"attr__testID\": \"example-ph-label\",\n+      \"tag_name\": \"special-text\",\n+    },\n+    {\n+      \"$el_text\": \"I have the property \"ph-label\" which means touching me will be autocaptured with a specific label\",\n+      \"attr__testID\": \"example-ph-label\",\n+      \"tag_name\": \"higher-level-element\",\n+    },\n+    {\n+      \"attr__style\": \"backgroundColor:rgba(0,0,0,.1);padding:15;borderRadius:10;marginBottom:10\",\n+      \"tag_name\": \"higher-level-element\",\n+    },\n+    {\n+      \"attr__ph-label\": \"higher-level-element\",\n+      \"tag_name\": \"higher-level-element\",\n+    },\n+    {\n+      \"attr__style\": \"flex:1\",\n+      \"tag_name\": \"ScrollView\",\n+    },\n+    {\n+      \"attr__style\": \"flex:1\",\n+      \"tag_name\": \"ScrollView\",\n+    },\n+    {\n+      \"tag_name\": \"PostHogDemoScreen\",\n+    },\n+    {\n+      \"tag_name\": \"StaticContainer\",\n+    },\n+    {\n+      \"tag_name\": \"EnsureSingleNavigator\",\n+    },\n+    {\n+      \"tag_name\": \"SceneView\",\n+    },\n+    {\n+      \"attr__style\": \"flex:1\",\n+      \"tag_name\": \"View\",\n+    },\n+    {\n+      \"attr__style\": \"flex:1;backgroundColor:rgb(242, 242, 242);flexDirection:column-reverse\",\n+      \"tag_name\": \"View\",\n+    },\n+    {\n+      \"attr__style\": \"flex:1;flexDirection:column-reverse\",\n+      \"tag_name\": \"Background\",\n+    },\n+    {\n+      \"tag_name\": \"Screen\",\n+    },\n+    {\n+      \"attr__style\": \"position:absolute;left:0;right:0;top:0;bottom:0;zIndex:0\",\n+      \"tag_name\": \"AnimatedComponent\",\n+    },\n+    {\n+      \"tag_name\": \"MaybeFreeze\",\n+    },\n+    {\n+      \"attr__style\": \"position:absolute;left:0;right:0;top:0;bottom:0;zIndex:0\",\n+      \"tag_name\": \"Screen\",\n+    },\n+    {\n+      \"attr__style\": \"position:absolute;left:0;right:0;top:0;bottom:0;zIndex:0\",\n+      \"tag_name\": \"MaybeScreen\",\n+    },\n+    {\n+      \"attr__style\": \"flex:1;overflow:hidden\",\n+      \"tag_name\": \"ScreenContainer\",\n+    },\n+    {\n+      \"attr__style\": \"flex:1;overflow:hidden\",\n+      \"tag_name\": \"MaybeScreenContainer\",\n+    },\n+  ],\n+  {\n+    \"$touch_x\": 1,\n+    \"$touch_y\": 2,\n+  },\n+]\n+`;\n+\n exports[`PostHog React Native > autocapture > should capture a valid event via the target fiber fallback when _targetInst is absent 1`] = `\n [\n   \"touch\","
+  },
+  {
+   "filename": "packages/react-native/test/autocapture.spec.ts",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -31,6 +31,15 @@ describe('PostHog React Native', () => {\n       expect(mockPostHog.autocapture.mock.calls[0]).toMatchSnapshot()\n     })\n \n+    it('should capture a valid event via the Fabric instance handle when _targetInst is absent', () => {\n+      const mockPostHog = { autocapture: vi.fn() } as any\n+      // A Fabric host instance (ReactNativeElement) has no __reactFiber$ key, only the handle\n+      const fabricEvent = { target: { __nativeTag: 7, __internalInstanceHandle: goodEvent }, nativeEvent }\n+      autocaptureFromTouchEvent(fabricEvent, mockPostHog)\n+      expect(mockPostHog.autocapture).toHaveBeenCalledTimes(1)\n+      expect(mockPostHog.autocapture.mock.calls[0]).toMatchSnapshot()\n+    })\n+\n     it('should skip framework-internal components so the touched component heads the chain', () => {\n       const mockPostHog = { autocapture: vi.fn() } as any\n       autocaptureFromTouchEvent({ target: { ['__reactFiber$abc123']: localeProviderFiber }, nativeEvent }, mockPostHog)"
+  }
+ ],
+ "test_files": [
+  "packages/react-native/test/__snapshots__/autocapture.spec.ts.snap",
+  "packages/react-native/test/autocapture.spec.ts"
+ ]
+}

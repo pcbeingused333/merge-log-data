@@ -1,0 +1,26 @@
+{
+ "repo": "lich0821/ccNexus",
+ "number": 151,
+ "url": "https://github.com/lich0821/ccNexus/pull/151",
+ "title": "fix: give parallel Gemini tool calls distinct tool_use ids",
+ "merged_at": "2026-10-27T10:07:56Z",
+ "files": [
+  {
+   "filename": "internal/transformer/convert/claude_gemini.go",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 2,
+   "patch": "@@ -5,9 +5,17 @@ import (\n \t\"fmt\"\n \t\"strings\"\n \n+\t\"github.com/google/uuid\"\n \t\"github.com/lich0821/ccNexus/internal/transformer\"\n )\n \n+// newGeminiToolUseID returns a unique id for a tool_use block built from a Gemini\n+// functionCall. Gemini does not send call ids, and an id derived from the function\n+// name alone collides when the model calls the same tool twice in one turn.\n+func newGeminiToolUseID() string {\n+\treturn \"call_\" + uuid.NewString()\n+}\n+\n // ClaudeReqToGemini converts Claude request to Gemini request\n func ClaudeReqToGemini(claudeReq []byte, model string) ([]byte, error) {\n \tvar req transformer.ClaudeRequest\n@@ -275,7 +283,7 @@ func GeminiRespToClaude(geminiResp []byte) ([]byte, error) {\n \t\t\tif part.FunctionCall != nil {\n \t\t\t\tcontent = append(content, map[string]interface{}{\n \t\t\t\t\t\"type\":  \"tool_use\",\n-\t\t\t\t\t\"id\":    fmt.Sprintf(\"call_%s\", part.FunctionCall.Name),\n+\t\t\t\t\t\"id\":    newGeminiToolUseID(),\n \t\t\t\t\t\"name\":  part.FunctionCall.Name,\n \t\t\t\t\t\"input\": part.FunctionCall.Args,\n \t\t\t\t})\n@@ -419,7 +427,7 @@ func GeminiStreamToClaude(event []byte, ctx *transformer.StreamContext) ([]byte,\n \t\t\tresult = append(result, buildClaudeEvent(\"content_block_start\", map[string]interface{}{\n \t\t\t\t\"index\": ctx.ContentIndex,\n \t\t\t\t\"content_block\": map[string]interface{}{\n-\t\t\t\t\t\"type\": \"tool_use\", \"id\": fmt.Sprintf(\"call_%s\", part.FunctionCall.Name), \"name\": part.FunctionCall.Name,\n+\t\t\t\t\t\"type\": \"tool_use\", \"id\": newGeminiToolUseID(), \"name\": part.FunctionCall.Name,\n \t\t\t\t},\n \t\t\t})...)\n \t\t\targs, _ := json.Marshal(part.FunctionCall.Args)"
+  },
+  {
+   "filename": "internal/transformer/convert/claude_gemini_tool_ids_test.go",
+   "status": "added",
+   "additions": 65,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,65 @@\n+package convert\n+\n+import (\n+\t\"encoding/json\"\n+\t\"regexp\"\n+\t\"testing\"\n+\n+\t\"github.com/lich0821/ccNexus/internal/transformer\"\n+)\n+\n+const geminiParallelSameToolResp = `{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[` +\n+\t`{\"functionCall\":{\"name\":\"read_file\",\"args\":{\"path\":\"a.txt\"}}},` +\n+\t`{\"functionCall\":{\"name\":\"read_file\",\"args\":{\"path\":\"b.txt\"}}}]},\"finishReason\":\"STOP\"}]}`\n+\n+func TestGeminiRespToClaudeGivesParallelSameToolCallsDistinctIDs(t *testing.T) {\n+\tout, err := GeminiRespToClaude([]byte(geminiParallelSameToolResp))\n+\tif err != nil {\n+\t\tt.Fatalf(\"GeminiRespToClaude failed: %v\", err)\n+\t}\n+\n+\tvar resp struct {\n+\t\tContent []struct {\n+\t\t\tType string `json:\"type\"`\n+\t\t\tID   string `json:\"id\"`\n+\t\t} `json:\"content\"`\n+\t}\n+\tif err := json.Unmarshal(out, &resp); err != nil {\n+\t\tt.Fatalf(\"invalid output: %v\", err)\n+\t}\n+\n+\tvar ids []string\n+\tfor _, block := range resp.Content {\n+\t\tif block.Type == \"tool_use\" {\n+\t\t\tids = append(ids, block.ID)\n+\t\t}\n+\t}\n+\tif len(ids) != 2 {\n+\t\tt.Fatalf(\"expected 2 tool_use blocks, got %d\", len(ids))\n+\t}\n+\tif ids[0] == \"\" || ids[0] == ids[1] {\n+\t\tt.Errorf(\"tool_use ids must be non-empty and distinct, got %q and %q\", ids[0], ids[1])\n+\t}\n+}\n+\n+func TestGeminiStreamToClaudeGivesParallelSameToolCallsDistinctIDs(t *testing.T) {\n+\tctx := transformer.NewStreamContext()\n+\tctx.ModelName = \"gemini-3.8-flash\"\n+\n+\tout, err := GeminiStreamToClaude([]byte(\"data: \"+geminiParallelSameToolResp+\"\\n\\n\"), ctx)\n+\tif err != nil {\n+\t\tt.Fatalf(\"GeminiStreamToClaude failed: %v\", err)\n+\t}\n+\n+\tmatches := regexp.MustCompile(`\"id\":\"(call_[^\"]*)\"`).FindAllStringSubmatch(string(out), -1)\n+\tvar ids []string\n+\tfor _, m := range matches {\n+\t\tids = append(ids, m[1])\n+\t}\n+\tif len(ids) != 2 {\n+\t\tt.Fatalf(\"expected 2 tool_use ids in the stream, got %d: %s\", len(ids), out)\n+\t}\n+\tif ids[0] == \"\" || ids[0] == ids[1] {\n+\t\tt.Errorf(\"tool_use ids must be non-empty and distinct, got %q and %q\", ids[0], ids[1])\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/transformer/convert/claude_gemini_tool_ids_test.go"
+ ]
+}

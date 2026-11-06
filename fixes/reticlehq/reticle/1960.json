@@ -1,0 +1,33 @@
+{
+ "repo": "reticlehq/reticle",
+ "number": 1960,
+ "url": "https://github.com/reticlehq/reticle/pull/1960",
+ "title": "fix(server): reticle verify retries the lease without root on an older daemon",
+ "merged_at": "2026-10-28T22:54:34Z",
+ "files": [
+  {
+   "filename": ".changes/1659-verify-older-daemon-lease.md",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+### Fixed\n+\n+- **`@reticlehq/server` — `reticle verify <url>` from a newer CLI failed before it opened the page when the running daemon was older.** The CLI sends the lease the `root` argument, and a daemon from an older release refuses a parameter it does not know, so the run ended as `unverifiable` with \"unknown parameter for reticle_lease: root\". The CLI now asks once more without `root` when the daemon refuses that parameter, so the page opens against the older daemon (its runs land where that daemon puts them). Closes [#1659](https://github.com/reticlehq/reticle/issues/1659)."
+  },
+  {
+   "filename": "server/src/command/cli/adhoc-verdict.test.ts",
+   "status": "modified",
+   "additions": 51,
+   "deletions": 0,
+   "patch": "@@ -356,6 +356,57 @@ describe('a lease that had to supply its own reader', () => {\n   });\n });\n \n+// A daemon from an older release refuses the `root` argument a newer CLI sends with the lease. The\n+// CLI used to print that refusal and stop, before it had opened the page (#1659).\n+describe('a daemon that does not know the lease `root`', () => {\n+  type Call = { name: string; args: { args: Record<string, unknown> } };\n+  const olderDaemon = (): { tool: ToolCaller; calls: Call[] } => {\n+    const calls: Call[] = [];\n+    return {\n+      calls,\n+      tool: {\n+        call: (name, args) => {\n+          calls.push({ name, args } as Call);\n+          const sent = (args as Call['args']).args;\n+          return Promise.resolve({\n+            structuredContent:\n+              'root' in sent\n+                ? { error: 'unknown parameter for reticle_lease: root' }\n+                : { sessionId: 's' },\n+          });\n+        },\n+        close: () => Promise.resolve(),\n+      },\n+    };\n+  };\n+\n+  it('opens the lease again without `root`', async () => {\n+    const daemon = olderDaemon();\n+    const got = await acquireLease(daemon.tool, 'http://x/', undefined, '/project');\n+\n+    expect(got).toEqual({ leased: 's', zeroInstall: false });\n+    expect(daemon.calls).toHaveLength(2);\n+    expect(daemon.calls[0]?.args.args).toHaveProperty('root', '/project');\n+    expect(daemon.calls[1]?.args.args).not.toHaveProperty('root');\n+  });\n+\n+  it('does not retry a refusal that is about something else', async () => {\n+    const calls: unknown[] = [];\n+    const tool: ToolCaller = {\n+      call: (name, args) => {\n+        calls.push({ name, args });\n+        return Promise.resolve({ structuredContent: { error: 'no browser available' } });\n+      },\n+      close: () => Promise.resolve(),\n+    };\n+\n+    const got = await acquireLease(tool, 'http://x/', undefined, '/project');\n+\n+    expect(got).toHaveProperty('failed');\n+    expect(calls).toHaveLength(1);\n+  });\n+});\n+\n /*\n  * `reticle try` and the ad-hoc suite want the finished report, and an explore now answers\n  * `running` when its drive outlasts the call. Asking again by run id is the only way to get it"
+  },
+  {
+   "filename": "server/src/command/cli/adhoc-verdict.ts",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 17,
+   "patch": "@@ -159,34 +159,47 @@ export async function acquireLease(\n   /** The `.reticle` the lease's runs belong in: the caller's project, not wherever the page resolves. */\n   root?: string,\n ): Promise<{ leased: string; zeroInstall: boolean } | { failed: string[] }> {\n-  const acquired = await caller.call(\n-    ReticleTool.RUN,\n-    {\n-      tool: ReticleTool.LEASE,\n-      args: {\n-        action: LeaseAction.ACQUIRE,\n-        url,\n-        ...(true === headed ? { headed } : {}),\n-        ...(root === undefined ? {} : { root }),\n+  const ask = (withRoot: boolean): Promise<unknown> =>\n+    caller.call(\n+      ReticleTool.RUN,\n+      {\n+        tool: ReticleTool.LEASE,\n+        args: {\n+          action: LeaseAction.ACQUIRE,\n+          url,\n+          ...(true === headed ? { headed } : {}),\n+          ...(withRoot && root !== undefined ? { root } : {}),\n+        },\n       },\n-    },\n-    LEASE_TIMEOUT_MS,\n-  );\n+      LEASE_TIMEOUT_MS,\n+    );\n+  let acquired = await ask(true);\n+  // A daemon from an older release does not know `root` and refuses the whole call, so the page\n+  // was never opened. Ask once more without it: the lease works, only its runs land where that\n+  // daemon puts them.\n+  if (root !== undefined && REFUSES_ROOT.test(refusalOf(acquired) ?? '')) {\n+    acquired = await ask(false);\n+  }\n   const report = verdictOf(acquired, 'sessionId');\n   const sessionId = report?.['sessionId'];\n   // `zeroInstall`: the page never dialled in, so the lease supplied Reticle's own reader.\n   if ('string' === typeof sessionId) {\n     return { leased: sessionId, zeroInstall: true === report?.['zeroInstall'] };\n   }\n-  const why = verdictOf(acquired, 'error')?.['error'];\n   return {\n-    failed: [\n-      leaseFailedLine(url),\n-      'string' === typeof why ? why : (refusalText(acquired) ?? JSON.stringify(acquired)),\n-    ],\n+    failed: [leaseFailedLine(url), refusalOf(acquired) ?? JSON.stringify(acquired)],\n   };\n }\n \n+/** The lease refusal an older daemon answers when it does not know the `root` argument. */\n+const REFUSES_ROOT = /unknown parameter[^\\n]*\\broot\\b/i;\n+\n+/** What the lease said no with: the `error` of its payload, else the refusal text. */\n+function refusalOf(acquired: unknown): string | undefined {\n+  const why = verdictOf(acquired, 'error')?.['error'];\n+  return 'string' === typeof why ? why : refusalText(acquired);\n+}\n+\n /** Hand back a lease `leaseIfNoTab` opened. Best-effort: an expired lease is already gone. */\n export async function releaseLease(caller: ToolCaller, sessionId: string): Promise<void> {\n   await caller"
+  }
+ ],
+ "test_files": [
+  "server/src/command/cli/adhoc-verdict.test.ts"
+ ]
+}

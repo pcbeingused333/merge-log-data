@@ -1,0 +1,48 @@
+{
+ "repo": "o19s/quepid",
+ "number": 1869,
+ "url": "https://github.com/o19s/quepid/pull/1869",
+ "title": "Polish the Qdrant endpoint page: troubleshooting link and readable JSON",
+ "merged_at": "2026-11-02T18:48:49Z",
+ "files": [
+  {
+   "filename": "app/helpers/json_helper.rb",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 0,
+   "patch": "@@ -24,4 +24,25 @@ def format_json json_data\n \n     JSON.pretty_generate(json_data)\n   end\n+\n+  # Like format_json, but accepts any value: a String that holds JSON is pretty-printed too, for\n+  # read-only display - a Search API test query is often JSON, but may also be plain text.\n+  # Anything that does not parse as a JSON object or array is returned as-is.\n+  #\n+  # Examples:\n+  #   format_for_display('{\"api-key\":\"abc\"}')\n+  #   # => \"{\\n  \\\"api-key\\\": \\\"abc\\\"\\n}\"\n+  #\n+  #   format_for_display('q=star wars')\n+  #   # => 'q=star wars'\n+  #\n+  def format_for_display value\n+    return format_json(value) unless value.is_a?(String)\n+    return value unless value.lstrip.start_with?('{', '[')\n+\n+    parsed = JSON.parse(value)\n+    parsed.is_a?(Hash) || parsed.is_a?(Array) ? JSON.pretty_generate(parsed) : value\n+  rescue JSON::ParserError\n+    value\n+  end\n end"
+  },
+  {
+   "filename": "app/javascript/utils/settings_catalog_runtime.js",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -167,7 +167,8 @@ const troubleshootingPages = {\n   os: \"Troubleshooting-OpenSearch-and-Quepid\",\n   vectara: \"Troubleshooting-Vectara-and-Quepid\",\n   searchapi: \"Troubleshooting-SearchAPI-and-Quepid\",\n-  vespa: \"Troubleshooting-Vespa-and-Quepid\"\n+  vespa: \"Troubleshooting-Vespa-and-Quepid\",\n+  qdrant: \"Troubleshooting-Qdrant-and-Quepid\"\n }\n \n export function createSettingsCatalog() {"
+  },
+  {
+   "filename": "app/views/search_endpoints/_search_endpoint.html.erb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -55,7 +55,7 @@\n     <div class=\"mb-3\">\n       <strong>Test Query:</strong>\n       <div class=\"form-text\">Search API only. Sample query used by the Mapper Wizard for testing mappers.</div>\n-      <pre class=\"bg-light p-2 border rounded\"><%= search_endpoint.test_query.presence || 'Not set' %></pre>\n+      <pre class=\"bg-light p-2 border rounded\"><%= format_for_display(search_endpoint.test_query).presence || 'Not set' %></pre>\n     </div>\n   <% end %>\n "
+  },
+  {
+   "filename": "test/helpers/json_helper_test.rb",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -25,4 +25,20 @@ class JsonHelperTest < ActionView::TestCase\n     json_string = '{\"key\": \"value\"}'\n     assert_equal json_string, format_json(json_string)\n   end\n+\n+  test 'format_for_display pretty-prints a JSON string' do\n+    result = format_for_display('{\"api-key\":\"abc\",\"limit\":1}')\n+\n+    assert_equal \"{\\n  \\\"api-key\\\": \\\"abc\\\",\\n  \\\"limit\\\": 1\\n}\", result\n+  end\n+\n+  test 'format_for_display leaves a non-JSON string as-is' do\n+    assert_equal 'q=star wars&rows=10', format_for_display('q=star wars&rows=10')\n+    assert_equal '42', format_for_display('42')\n+  end\n+\n+  test 'format_for_display formats a hash like format_json' do\n+    assert_equal format_json({ 'a' => 1 }), format_for_display({ 'a' => 1 })\n+    assert_equal '', format_for_display(nil)\n+  end\n end"
+  },
+  {
+   "filename": "test/javascript/utils/settings_catalog_runtime.test.js",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -250,6 +250,9 @@ describe(\"settings catalog defaults\", () => {\n       )\n     }\n     expect(catalog.troubleshootingWikiUrl(\"searchapi\", \"vespa\")).toContain(\"Vespa\")\n+    expect(catalog.troubleshootingWikiUrl(\"searchapi\", \"qdrant\")).toBe(\n+      \"https://github.com/o19s/quepid/wiki/Troubleshooting-Qdrant-and-Quepid\"\n+    )\n   })\n \n   it(\"limits escapeQuery support to solr, es and os\", () => {"
+  }
+ ],
+ "test_files": [
+  "test/helpers/json_helper_test.rb",
+  "test/javascript/utils/settings_catalog_runtime.test.js"
+ ]
+}

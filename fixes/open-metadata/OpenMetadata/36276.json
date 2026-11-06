@@ -1,0 +1,26 @@
+{
+ "repo": "open-metadata/OpenMetadata",
+ "number": 36276,
+ "url": "https://github.com/open-metadata/OpenMetadata/pull/36276",
+ "title": "Fixes #36118: Keep entities without a name when the filter pattern is empty",
+ "merged_at": "2026-11-05T13:38:15Z",
+ "files": [
+  {
+   "filename": "ingestion/src/metadata/utils/filters.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -51,11 +51,11 @@ def _filter(filter_pattern: FilterPattern | None, name: str | None) -> bool:\n     :param name: table or schema name\n     :return: True for filtering, False otherwise\n     \"\"\"\n-    if not filter_pattern:\n-        # No filter pattern, nothing to filter\n+    if filter_pattern is None or not filter_pattern_enabled(filter_pattern):\n+        # No filter pattern, or one without includes/excludes: nothing to filter\n         return False\n \n-    if filter_pattern and not name:\n+    if not name:\n         # Filter pattern is present but not the name so we'll filter it out\n         return True\n "
+  },
+  {
+   "filename": "ingestion/tests/unit/test_filter_pattern.py",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -23,6 +23,7 @@\n     filter_by_classifications,\n     filter_by_dashboard,\n     filter_by_fqn,\n+    filter_by_project,\n     filter_pattern_enabled,\n     validate_regex,\n )\n@@ -47,6 +48,19 @@ def test_filter():\n     assert _filter(filter_pattern_both, \"potato_tomato\")\n \n \n+def test_filter_without_configured_pattern_keeps_nameless_entities():\n+    \"\"\"An empty pattern filters nothing, also when the entity has no name\"\"\"\n+    assert not _filter(None, None)\n+    # What the UI saves for \"scan all\": a pattern with empty includes and excludes\n+    assert not _filter(FilterPattern(includes=[], excludes=[]), None)\n+    assert not _filter(FilterPattern(), None)\n+    assert not _filter(FilterPattern(), \"potato\")\n+    # A real pattern still filters out an entity without a name\n+    assert _filter(FilterPattern(includes=[\"^potato$\"]), None)\n+    assert _filter(FilterPattern(excludes=[\"^tomato$\"]), \"\")\n+    assert not filter_by_project(FilterPattern(includes=[], excludes=[]), None)\n+\n+\n def test_filter_server_compatible_no_pattern_keeps_everything():\n     assert _filter_server_compatible(None, \"anything\") is False\n     assert _filter_server_compatible(FilterPattern(), \"anything\") is False"
+  }
+ ],
+ "test_files": [
+  "ingestion/tests/unit/test_filter_pattern.py"
+ ]
+}

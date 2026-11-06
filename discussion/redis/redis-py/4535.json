@@ -1,0 +1,46 @@
+{
+ "repo": "redis/redis-py",
+ "number": 4535,
+ "url": "https://github.com/redis/redis-py/pull/4535",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-29T10:32:56Z",
+   "body": "<!-- codex-review-receipt:v1 -->\n\n\n### 💡 Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** `02af345db4`\n    \n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\nCodex has been enabled to automatically review pull requests in this repo. Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nWhen you [sign up for Codex through ChatGPT](https://openai.com/codex), Codex can also answer questions or update the PR, like \"@codex address that feedback\".\n            \n</details>"
+  },
+  {
+   "role": "collaborator",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-10-29T17:00:21Z",
+   "body": "Hey @pcbeingused333, thank you for your contribution!\n\nThe fix is in the right place, and keeping the sync transaction path out of scope is correct. Two changes before merging:\n\n1. Please remove the option in place with `cmd.kwargs.pop(\"keys\", None)` instead of building a new dict. This matches the other execution paths (`redis/asyncio/client.py` transaction handling and `redis/cluster.py`) and avoids an extra allocation per command in every transaction. Nothing reads `keys` after the callbacks run.\n2. Please replace the mocked test with a real-cluster test in `tests/test_asyncio/test_cluster_transaction.py`, for example `hset` a hash and then `hgetall` it inside `pipeline(transaction=True)`. The CI matrix runs that file with RESP2 and RESP3 and both response shapes, and the test does not depend on private strategy internals.\n"
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-30T09:28:57Z",
+   "body": "Thanks for the quick update, both points are addressed. The in-place `pop` matches the other execution paths, and the real-cluster test covers the failing RESP2 path in the CI matrix. LGTM.\n"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "redis/asyncio/cluster.py",
+   "created_at": "2026-10-29T10:32:56Z",
+   "body": "**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Mirror callback handling in synchronous cluster transactions**\n\nFor `RedisCluster(..., protocol=2).pipeline(transaction=True)`, the sync `TransactionStrategy` at `redis/cluster.py:6566-6574` still applies only `cluster_response_callbacks`; it never applies the ordinary `HGETALL` callback that this async branch now completes successfully. Consequently the same queued `hgetall` returns a raw `[b'a', b'1']` in sync while returning `{b'a': b'1'}` in async, so mirror the ordinary callback/options handling in the sync transaction path.\n\nAGENTS.md reference: [AGENTS.md:L146-L149](https://github.com/redis/redis-py/blob/02af345db472cd8c684334c951ecda88f9147437/AGENTS.md#L146-L149)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-10-29T10:28:54Z",
+   "body": "<!-- codex-pull-request-review-summary -->\n<!-- codex-review-state:v1 {\"code_review\":{\"commit_sha\":\"d4d2f51ab368fb99b04cb77bb97eacb58bba5f3a\",\"has_any_findings\":true,\"has_unresolved_findings\":true,\"status\":\"completed\"},\"security_review\":{\"commit_sha\":null,\"has_any_findings\":null,\"has_unresolved_findings\":null,\"status\":null}} -->\n\n## Codex Review Summary\n\nThis comment shows the latest Codex review activity on this pull request.\n\n| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n| 📝 **Code Review** | ✅ **Completed** <relative-time datetime=\"2026-10-30T12:37:39.100984Z\">2026-10-30T12:37:39.100984Z</relative-time> | `d4d2f51` | New commits |\n\n\n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\" or \"@codex security review\".\n\nCodex reacts with 👀 while any review is running, comments if it has suggestions, and reacts with 👍 once all reviews finish with no findings.\n\n</details>"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-30T00:57:23Z",
+   "body": "Thanks @petyaslavova, both done in 98210c6 (new commit on the branch):\n\n1. The `keys` option is now removed in place with `cmd.kwargs.pop(\"keys\", None)` before the callback runs, like the other execution paths.\n2. The mocked test is gone from `tests/test_asyncio/test_cluster.py`. `tests/test_asyncio/test_cluster_transaction.py` has a real-cluster test instead: `hset` a hash and `hgetall` it inside `pipeline(transaction=True)`, expecting `[2, {b\"a\": b\"1\", b\"b\": b\"2\"}]`.\n\nThe new test passes with RESP2 and RESP3 against a local 6-node cluster, and fails on the previous code with `TypeError: <lambda>() got an unexpected keyword argument 'keys'` under RESP2. The full `test_cluster_transaction.py` passes there as well.\n\nDrafted with the assistance of an AI agent (Claude) working for the author.\n"
+  }
+ ]
+}

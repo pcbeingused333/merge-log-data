@@ -1,0 +1,26 @@
+{
+ "repo": "zenml-io/zenml",
+ "number": 5376,
+ "url": "https://github.com/zenml-io/zenml/pull/5376",
+ "title": "Use GPT-6 Luna for the ChatGPT alerter failure hook",
+ "merged_at": "2026-11-05T16:50:44Z",
+ "files": [
+  {
+   "filename": "src/zenml/integrations/openai/hooks/open_ai_failure_hook.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -125,7 +125,7 @@ def openai_chatgpt_alerter_failure_hook(\n     Args:\n         exception: The exception that was raised.\n     \"\"\"\n-    openai_alerter_failure_hook_helper(exception, \"gpt-3.5-turbo\")\n+    openai_alerter_failure_hook_helper(exception, \"gpt-6-luna\")\n \n \n def openai_gpt4_alerter_failure_hook("
+  },
+  {
+   "filename": "tests/unit/integrations/openai/test_open_ai_failure_hook.py",
+   "status": "added",
+   "additions": 59,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,59 @@\n+#  Copyright (c) ZenML GmbH 2026. All Rights Reserved.\n+#\n+#  Licensed under the Apache License, Version 2.0 (the \"License\");\n+#  you may not use this file except in compliance with the License.\n+#  You may obtain a copy of the License at:\n+#\n+#       https://www.apache.org/licenses/LICENSE-2.0\n+#\n+#  Unless required by applicable law or agreed to in writing, software\n+#  distributed under the License is distributed on an \"AS IS\" BASIS,\n+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express\n+#  or implied. See the License for the specific language governing\n+#  permissions and limitations under the License.\n+\"\"\"Tests for the OpenAI alerter failure hooks.\"\"\"\n+\n+from unittest.mock import MagicMock, patch\n+\n+import pytest\n+\n+from zenml.integrations.openai.hooks import open_ai_failure_hook\n+from zenml.integrations.openai.hooks.open_ai_failure_hook import (\n+    openai_chatgpt_alerter_failure_hook,\n+    openai_gpt4_alerter_failure_hook,\n+)\n+\n+\n+@pytest.mark.parametrize(\n+    \"hook, expected_model\",\n+    [\n+        (openai_chatgpt_alerter_failure_hook, \"gpt-6-luna\"),\n+        (openai_gpt4_alerter_failure_hook, \"gpt-4o\"),\n+    ],\n+)\n+def test_alerter_hook_asks_the_expected_model(hook, expected_model):\n+    \"\"\"The hooks send their suggestion request to the expected model.\"\"\"\n+    client = MagicMock()\n+    client.get_secret.return_value.secret_values = {\"api_key\": \"sk-test\"}\n+    openai_client = MagicMock()\n+    openai_client.chat.completions.create.return_value.choices = [\n+        MagicMock(message=MagicMock(content=\"try again\"))\n+    ]\n+\n+    with (\n+        patch.object(open_ai_failure_hook, \"Client\", return_value=client),\n+        patch.object(open_ai_failure_hook, \"get_step_context\"),\n+        patch.object(\n+            open_ai_failure_hook, \"OpenAI\", return_value=openai_client\n+        ),\n+    ):\n+        try:\n+            raise ValueError(\"boom\")\n+        except ValueError as e:\n+            # the hook prints the active traceback, as it does when a step fails\n+            hook(e)\n+\n+    create = openai_client.chat.completions.create\n+    create.assert_called_once()\n+    assert create.call_args.kwargs[\"model\"] == expected_model\n+    client.active_stack.alerter.post.assert_called_once()"
+  }
+ ],
+ "test_files": [
+  "tests/unit/integrations/openai/test_open_ai_failure_hook.py"
+ ]
+}

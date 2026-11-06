@@ -1,0 +1,26 @@
+{
+ "repo": "i-am-bee/beeai-framework",
+ "number": 1884,
+ "url": "https://github.com/i-am-bee/beeai-framework/pull/1884",
+ "title": "fix(python): keep a whitespace-only last line buffered in LinePrefixParser",
+ "merged_at": "2026-11-01T18:41:50Z",
+ "files": [
+  {
+   "filename": "python/beeai_framework/parsers/line_prefix.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -132,7 +132,7 @@ async def add(self, chunk: str) -> None:\n             if not (is_termination_node or (last_node and not line.new_line)):\n                 parsed_line = self._extract_line(line.value)\n \n-            if is_last_line and ((parsed_line is not None and parsed_line.partial) or not line.value):\n+            if is_last_line and ((parsed_line is not None and parsed_line.partial) or not line.value.strip()):\n                 break\n \n             self._lines.pop(0)"
+  },
+  {
+   "filename": "python/tests/parsers/line_prefix_test.py",
+   "status": "modified",
+   "additions": 50,
+   "deletions": 0,
+   "patch": "@@ -239,6 +239,56 @@ async def test_interprets_new_lines(should_throw: bool) -> None:\n         assert parser.final_state[\"thought\"] == expected\n \n \n+def get_thought_final_answer_parser() -> LinePrefixParser:\n+    config = {\n+        \"thought\": LinePrefixParserNode(\n+            prefix=\"Thought:\", next=[\"final_answer\"], is_start=True, field=ParserField.from_type(str)\n+        ),\n+        \"final_answer\": LinePrefixParserNode(\n+            prefix=\"Final Answer:\", next=[], is_end=True, field=ParserField.from_type(str)\n+        ),\n+    }\n+    return LinePrefixParser(config)\n+\n+\n+@pytest.mark.asyncio\n+@pytest.mark.unit\n+@pytest.mark.parametrize(\n+    \"chunks\",\n+    [\n+        [\"Thought: a\\n\", \" \", \"Final Answer: b\"],\n+        [\"Thought: a\\n\", \"\\t\", \"Final Answer: b\"],\n+        [\"Thought: a\", \"\\n\", \" \", \" \", \"Final Answer: b\"],\n+        [\"Thought: a\\n  \", \"Final Answer: b\"],\n+        [\"Thought: a\\n\", \"  \", \"\\t\", \"Final Answer: b\"],\n+    ],\n+)\n+async def test_keeps_whitespace_only_line_until_prefix_arrives(chunks: list[str]) -> None:\n+    parser = get_thought_final_answer_parser()\n+    for chunk in chunks:\n+        await parser.add(chunk)\n+    state = await parser.end()\n+\n+    assert state == {\"thought\": \"a\", \"final_answer\": \"b\"}\n+\n+\n+@pytest.mark.asyncio\n+@pytest.mark.unit\n+@pytest.mark.parametrize(\"indent\", [\"\", \" \", \"    \", \"\\t\"])\n+async def test_split_point_does_not_change_result(indent: str) -> None:\n+    text = f\"Thought: a\\n{indent}Final Answer: b\"\n+\n+    expected_parser = get_thought_final_answer_parser()\n+    await expected_parser.add(text)\n+    expected = await expected_parser.end()\n+\n+    for split in range(1, len(text)):\n+        parser = get_thought_final_answer_parser()\n+        await parser.add(text[:split])\n+        await parser.add(text[split:])\n+        assert await parser.end() == expected, f\"split at {split}\"\n+\n+\n @pytest.mark.asyncio\n @pytest.mark.unit\n async def test_ignores_unrelated_text_and_non_starting_nodes() -> None:"
+  }
+ ],
+ "test_files": [
+  "python/tests/parsers/line_prefix_test.py"
+ ]
+}

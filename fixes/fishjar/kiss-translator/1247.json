@@ -1,0 +1,48 @@
+{
+ "repo": "fishjar/kiss-translator",
+ "number": 1247,
+ "url": "https://github.com/fishjar/kiss-translator/pull/1247",
+ "title": "fix(claude): take the translation from the first text block, not content[0]",
+ "merged_at": "2026-10-30T14:54:19Z",
+ "files": [
+  {
+   "filename": "src/apis/trans.translate.test.js",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -1589,6 +1589,17 @@ describe(\"handleTranslate\", () => {\n     expect(messages[2].role).toBe(\"user\");\n   });\n \n+  test(\"Claude thinking 模式：thinking 块在前时仍取到译文且写入历史\", async () => {\n+    const { messages, errors } = await runClaudeContextRounds([\n+      { type: \"thinking\", thinking: \"先想一想\", signature: \"sig\" },\n+      { type: \"text\", text: \"你好\" },\n+    ]);\n+\n+    // 首块没有 .text 时旧写法得到空译文并抛 \"unexpected result\"。\n+    expect(errors).toEqual([]);\n+    expect(messages[1]).toEqual({ role: \"assistant\", content: \"你好\" });\n+  });\n+\n   test(\"Claude 历史：多个文本块按顺序拼接，不丢后续块\", async () => {\n     const { messages, errors } = await runClaudeContextRounds([\n       { type: \"text\", text: \"A\" },"
+  },
+  {
+   "filename": "src/builtin-plugins/claude.js",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 1,
+   "patch": "@@ -60,4 +60,11 @@ const genClaude = ({\n   return { url, body, headers, userMsg };\n };\n \n-export { genClaude };\n+// With thinking enabled the first content block is a thinking block with no text, so the\n+// answer is the first block that carries one. Non-array shapes keep reading content[0].\n+const claudeResponseText = (res) =>\n+  Array.isArray(res?.content)\n+    ? res.content.find((b) => typeof b?.text === \"string\")?.text\n+    : res?.content?.[0]?.text;\n+\n+export { genClaude, claudeResponseText };"
+  },
+  {
+   "filename": "src/builtin-plugins/responses.js",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 6,
+   "patch": "@@ -36,6 +36,7 @@ import {\n } from \"../config\";\n import { decodeHTMLTranslationText, decodeHTMLEntities } from \"../libs/html\";\n import { geminiResponseText } from \"../builtin-plugins/gemini\";\n+import { claudeResponseText } from \"../builtin-plugins/claude\";\n \n // 厂家结果和历史写入在原生适配器内处理；场景只接收统一译文。\n function parseGoogleResponse(res) {\n@@ -218,12 +219,9 @@ function parseClaudeResponse(\n   if (history && userMsg) {\n     history.addPair(userMsg, modelMsg);\n   }\n-  return parseAIRes(\n-    res?.content?.[0]?.text ?? \"\",\n-    useBatchFetch,\n-    batchProtocol,\n-    textFormat\n-  );\n+  // 译文取首个文本块：开启 thinking 时首块是 {type:\"thinking\"}，没有 .text。\n+  const firstText = claudeResponseText(res);\n+  return parseAIRes(firstText ?? \"\", useBatchFetch, batchProtocol, textFormat);\n }\n \n function parseCloudflareaiResponse(res) {"
+  },
+  {
+   "filename": "src/builtin-plugins/textResponses.js",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 4,
+   "patch": "@@ -19,6 +19,7 @@ import {\n   OPT_TRANS_CUSTOMIZE,\n   OPT_TRANS_LOCALAI,\n } from \"../config/apiConstants\";\n+import { claudeResponseText } from \"./claude\";\n import { geminiResponseText, geminiText } from \"./gemini\";\n import { normalizeThinkingSettings } from \"./thinkingCapabilities\";\n \n@@ -45,7 +46,7 @@ export function parseNativeDictionaryResponse(res, apiType) {\n     case OPT_TRANS_GEMINI:\n       return geminiResponseText(res);\n     case OPT_TRANS_CLAUDE:\n-      return res?.content?.[0]?.text || \"\";\n+      return claudeResponseText(res) || \"\";\n     case OPT_TRANS_CUSTOMIZE:\n       if (typeof res === \"string\") return res;\n       return res?.text || res?.result || \"\";\n@@ -76,13 +77,13 @@ export function parseNativeSummaryResponse(res, apiType) {\n     case OPT_TRANS_GEMINI:\n       return geminiResponseText(res).trim() || \"\";\n     case OPT_TRANS_CLAUDE:\n-      return res?.content?.[0]?.text?.trim() || \"\";\n+      return claudeResponseText(res)?.trim() || \"\";\n     case OPT_TRANS_CUSTOMIZE:\n       if (typeof res === \"string\") return res.trim();\n       return (\n         res?.choices?.[0]?.message?.content?.trim() ||\n         geminiText(res?.candidates?.[0]?.content?.parts).trim() ||\n-        res?.content?.[0]?.text?.trim() ||\n+        claudeResponseText(res)?.trim() ||\n         \"\"\n       );\n     default:\n@@ -168,7 +169,7 @@ export async function parseNativeSubtitleResponse(\n       return parseSTRes(geminiResponseText(res), events, from);\n     }\n     case OPT_TRANS_CLAUDE:\n-      return parseSTRes(res?.content?.[0]?.text ?? \"\", events, from);\n+      return parseSTRes(claudeResponseText(res) ?? \"\", events, from);\n     case OPT_TRANS_CUSTOMIZE:\n       return res;\n     default:"
+  },
+  {
+   "filename": "src/builtin-plugins/textResponses.test.js",
+   "status": "modified",
+   "additions": 52,
+   "deletions": 2,
+   "patch": "@@ -1,5 +1,9 @@\n-import { parseNativeSubtitleResponse } from \"./textResponses\";\n-import { OPT_TRANS_GEMINI } from \"../config/apiConstants\";\n+import {\n+  parseNativeDictionaryResponse,\n+  parseNativeSubtitleResponse,\n+  parseNativeSummaryResponse,\n+} from \"./textResponses\";\n+import { OPT_TRANS_CLAUDE, OPT_TRANS_GEMINI } from \"../config/apiConstants\";\n \n jest.mock(\"query-string\", () => ({\n   stringify: (value) => new URLSearchParams(value).toString(),\n@@ -44,3 +48,49 @@ test(\"Gemini truncation retry preserves cancellation instead of accepting partia\n   expect(fetchData).toHaveBeenCalledTimes(1);\n   expect(parseSTRes).not.toHaveBeenCalled();\n });\n+\n+describe(\"Claude responses with a thinking block first\", () => {\n+  const thinkingFirst = {\n+    content: [\n+      { type: \"thinking\", thinking: \"let me think\", signature: \"sig\" },\n+      { type: \"text\", text: \" answer \" },\n+    ],\n+  };\n+\n+  test(\"dictionary result is the first text block\", () => {\n+    expect(parseNativeDictionaryResponse(thinkingFirst, OPT_TRANS_CLAUDE)).toBe(\n+      \" answer \"\n+    );\n+  });\n+\n+  test(\"summary result is the first text block, trimmed\", () => {\n+    expect(parseNativeSummaryResponse(thinkingFirst, OPT_TRANS_CLAUDE)).toBe(\n+      \"answer\"\n+    );\n+  });\n+\n+  test(\"a response without a block array still reads content[0].text\", () => {\n+    expect(\n+      parseNativeSummaryResponse(\n+        { content: { 0: { text: \"single\" } } },\n+        OPT_TRANS_CLAUDE\n+      )\n+    ).toBe(\"single\");\n+  });\n+\n+  test(\"subtitle result is the first text block, not an empty string\", async () => {\n+    const parseSTRes = jest.fn((text) => text);\n+    await expect(\n+      parseNativeSubtitleResponse(\n+        thinkingFirst,\n+        {\n+          apiSetting: { apiType: OPT_TRANS_CLAUDE },\n+          events: [{ text: \"hello\", start: 0, end: 1 }],\n+          from: \"en\",\n+          to: \"zh-CN\",\n+        },\n+        { parseSTRes, genTransReq: jest.fn(), fetchData: jest.fn() }\n+      )\n+    ).resolves.toBe(\" answer \");\n+  });\n+});"
+  }
+ ],
+ "test_files": [
+  "src/apis/trans.translate.test.js",
+  "src/builtin-plugins/textResponses.test.js"
+ ]
+}

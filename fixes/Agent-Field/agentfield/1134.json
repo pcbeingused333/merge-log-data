@@ -1,0 +1,40 @@
+{
+ "repo": "Agent-Field/agentfield",
+ "number": 1134,
+ "url": "https://github.com/Agent-Field/agentfield/pull/1134",
+ "title": "fix(sdk/go): request usage on streamed completions from OpenAI endpoints",
+ "merged_at": "2026-10-30T13:32:14Z",
+ "files": [
+  {
+   "filename": "sdk/go/agent/agent.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -2780,7 +2780,9 @@ func agentToolNameToInvocationTarget(name string) string {\n //\n //\tchunks, errs := agent.AIStream(ctx, \"Tell me a story\")\n //\tfor chunk := range chunks {\n-//\t    fmt.Print(chunk.Choices[0].Delta.Content)\n+//\t    if len(chunk.Choices) > 0 {\n+//\t        fmt.Print(chunk.Choices[0].Delta.Content)\n+//\t    }\n //\t}\n //\tif err := <-errs; err != nil {\n //\t    log.Fatal(err)"
+  },
+  {
+   "filename": "sdk/go/ai/model_params.go",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -99,6 +99,15 @@ func (c *Client) marshalRequest(req *Request) ([]byte, error) {\n \t\treq.Usage = &RequestUsage{Include: true}\n \t}\n \n+\t// OpenAI (and Azure OpenAI, OpenRouter) only report token usage on a\n+\t// stream when the request opts in with stream_options.include_usage.\n+\t// Self-hosted OpenAI-compatible servers may reject or drop the field, so\n+\t// it is limited to the same endpoints as the max_completion_tokens\n+\t// rewrite. Requests that already set StreamOptions are left alone.\n+\tif req.Stream && req.StreamOptions == nil && isVouchedRewriteEndpoint(c.config.BaseURL) {\n+\t\treq.StreamOptions = &StreamOptions{IncludeUsage: true}\n+\t}\n+\n \tmodel := req.Model\n \tif model == \"\" {\n \t\tmodel = c.config.Model"
+  },
+  {
+   "filename": "sdk/go/ai/model_params_test.go",
+   "status": "modified",
+   "additions": 94,
+   "deletions": 0,
+   "patch": "@@ -607,3 +607,97 @@ func TestComplete_WireBody_UnknownHostKeepsMaxTokens(t *testing.T) {\n \t\tt.Errorf(\"expected max_tokens=654, got %v\", val)\n \t}\n }\n+\n+func TestStreamComplete_WireBody_VouchedEndpointRequestsUsage(t *testing.T) {\n+\t// OpenAI only reports token usage on a stream when the request carries\n+\t// stream_options.include_usage; without it the final chunk has no usage.\n+\tcfg := &Config{\n+\t\tAPIKey:  \"test-key\",\n+\t\tBaseURL: \"https://api.openai.com/v1\",\n+\t\tModel:   \"gpt-5\",\n+\t}\n+\n+\tclient, err := NewClient(cfg)\n+\tif err != nil {\n+\t\tt.Fatalf(\"NewClient error: %v\", err)\n+\t}\n+\trt := &recordingTransport{}\n+\tclient.httpClient.Transport = rt\n+\n+\tchunks, errs := client.StreamComplete(context.Background(), \"hello\")\n+\tfor range chunks {\n+\t}\n+\t<-errs\n+\n+\tvar raw map[string]interface{}\n+\tif err := json.Unmarshal(rt.body, &raw); err != nil {\n+\t\tt.Fatalf(\"unmarshal captured body: %v\", err)\n+\t}\n+\n+\topts, ok := raw[\"stream_options\"].(map[string]interface{})\n+\tif !ok {\n+\t\tt.Fatalf(\"expected stream_options in the wire body for api.openai.com, got %s\", rt.body)\n+\t}\n+\tif opts[\"include_usage\"] != true {\n+\t\tt.Errorf(\"expected stream_options.include_usage=true, got %v\", opts[\"include_usage\"])\n+\t}\n+}\n+\n+func TestStreamComplete_WireBody_UnknownHostOmitsStreamOptions(t *testing.T) {\n+\t// Self-hosted OpenAI-compatible servers (Ollama, LM Studio, llama.cpp)\n+\t// may reject or ignore unknown fields: they keep the plain stream body.\n+\tvar captured []byte\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tb, err := io.ReadAll(r.Body)\n+\t\tif err != nil {\n+\t\t\thttp.Error(w, err.Error(), http.StatusInternalServerError)\n+\t\t\treturn\n+\t\t}\n+\t\tcaptured = b\n+\t\tw.Header().Set(\"Content-Type\", \"text/event-stream\")\n+\t\t_, _ = io.WriteString(w, \"data: [DONE]\\n\\n\")\n+\t}))\n+\tdefer server.Close()\n+\n+\tclient, err := NewClient(&Config{APIKey: \"test-key\", BaseURL: server.URL, Model: \"llama3\"})\n+\tif err != nil {\n+\t\tt.Fatalf(\"NewClient error: %v\", err)\n+\t}\n+\n+\tchunks, errs := client.StreamComplete(context.Background(), \"hello\")\n+\tfor range chunks {\n+\t}\n+\tif err := <-errs; err != nil {\n+\t\tt.Fatalf(\"StreamComplete error: %v\", err)\n+\t}\n+\n+\tvar raw map[string]interface{}\n+\tif err := json.Unmarshal(captured, &raw); err != nil {\n+\t\tt.Fatalf(\"unmarshal captured body: %v\", err)\n+\t}\n+\tif _, ok := raw[\"stream_options\"]; ok {\n+\t\tt.Errorf(\"expected no stream_options for a self-hosted endpoint, got %s\", captured)\n+\t}\n+}\n+\n+func TestComplete_WireBody_NoStreamOptions(t *testing.T) {\n+\t// stream_options is only valid on a streaming request.\n+\tcfg := &Config{APIKey: \"test-key\", BaseURL: \"https://api.openai.com/v1\", Model: \"gpt-5\"}\n+\tclient, err := NewClient(cfg)\n+\tif err != nil {\n+\t\tt.Fatalf(\"NewClient error: %v\", err)\n+\t}\n+\trt := &recordingTransport{}\n+\tclient.httpClient.Transport = rt\n+\n+\tif _, err := client.Complete(context.Background(), \"hello\"); err != nil {\n+\t\tt.Fatalf(\"Complete error: %v\", err)\n+\t}\n+\tvar raw map[string]interface{}\n+\tif err := json.Unmarshal(rt.body, &raw); err != nil {\n+\t\tt.Fatalf(\"unmarshal captured body: %v\", err)\n+\t}\n+\tif _, ok := raw[\"stream_options\"]; ok {\n+\t\tt.Errorf(\"expected no stream_options on a non-streaming request, got %s\", rt.body)\n+\t}\n+}"
+  },
+  {
+   "filename": "sdk/go/ai/request.go",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -46,6 +46,16 @@ type Request struct {\n \t// object carry the native cost of the call; the client sets it\n \t// automatically for OpenRouter requests.\n \tUsage *RequestUsage `json:\"usage,omitempty\"`\n+\n+\t// StreamOptions carries streaming-only options. The client sets\n+\t// include_usage for streaming requests to endpoints known to accept it\n+\t// (see isVouchedRewriteEndpoint), so the final chunk reports token usage.\n+\tStreamOptions *StreamOptions `json:\"stream_options,omitempty\"`\n+}\n+\n+// StreamOptions is the request-body stream_options object (OpenAI shape).\n+type StreamOptions struct {\n+\tIncludeUsage bool `json:\"include_usage\"`\n }\n \n // RequestUsage is the request-body usage accounting opt-in (OpenRouter shape)."
+  }
+ ],
+ "test_files": [
+  "sdk/go/ai/model_params_test.go"
+ ]
+}

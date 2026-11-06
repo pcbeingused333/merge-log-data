@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 278,
+ "url": "https://github.com/lofcz/LLMTornado/pull/278",
+ "title": "fix: send ChatRequest.Seed to Mistral as random_seed",
+ "merged_at": "2026-10-26T21:56:39Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/MistralChatSeedTests.cs",
+   "status": "added",
+   "additions": 80,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,80 @@\n+using LlmTornado.Chat;\n+using LlmTornado.Chat.Models;\n+using LlmTornado.Chat.Vendors.Mistral;\n+using LlmTornado.Code;\n+using Newtonsoft.Json.Linq;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class MistralChatSeedTests\n+{\n+    private static IEndpointProvider Provider => new TornadoApi(LLmProviders.Mistral, \"test-key\").GetProvider(LLmProviders.Mistral);\n+\n+    private static JObject Serialize(ChatRequest request)\n+    {\n+        TornadoRequestContent serialized = request.Serialize(Provider);\n+        return JObject.Parse(serialized.Body.ToString()!);\n+    }\n+\n+    private static ChatRequest CreateRequest()\n+    {\n+        return new ChatRequest\n+        {\n+            Model = ChatModel.Mistral.Premier.MistralLarge,\n+            Messages = [new ChatMessage(ChatMessageRoles.User, \"Hello\")]\n+        };\n+    }\n+\n+    [Test]\n+    public void Seed_IsSentAsRandomSeed()\n+    {\n+        ChatRequest request = CreateRequest();\n+        request.Seed = 42;\n+\n+        JObject body = Serialize(request);\n+\n+        Assert.That(body[\"random_seed\"]?.Value<int>(), Is.EqualTo(42));\n+        Assert.That(body.ContainsKey(\"seed\"), Is.False);\n+    }\n+\n+    [Test]\n+    public void VendorExtensionRandomSeed_WinsOverSeed()\n+    {\n+        ChatRequest request = CreateRequest();\n+        request.Seed = 42;\n+        request.VendorExtensions = new ChatRequestVendorExtensions\n+        {\n+            Mistral = new ChatRequestVendorMistralExtensions { RandomSeed = 7 }\n+        };\n+\n+        JObject body = Serialize(request);\n+\n+        Assert.That(body[\"random_seed\"]?.Value<int>(), Is.EqualTo(7));\n+        Assert.That(body.ContainsKey(\"seed\"), Is.False);\n+    }\n+\n+    [Test]\n+    public void VendorExtensionsWithoutRandomSeed_KeepSeed()\n+    {\n+        ChatRequest request = CreateRequest();\n+        request.Seed = 42;\n+        request.VendorExtensions = new ChatRequestVendorExtensions\n+        {\n+            Mistral = new ChatRequestVendorMistralExtensions { SafePrompt = true }\n+        };\n+\n+        JObject body = Serialize(request);\n+\n+        Assert.That(body[\"random_seed\"]?.Value<int>(), Is.EqualTo(42));\n+    }\n+\n+    [Test]\n+    public void NoSeed_SendsNeitherField()\n+    {\n+        JObject body = Serialize(CreateRequest());\n+\n+        Assert.That(body.ContainsKey(\"random_seed\"), Is.False);\n+        Assert.That(body.ContainsKey(\"seed\"), Is.False);\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/Vendors/Mistral/VendorMistralChatRequest.cs",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -58,6 +58,10 @@ public VendorMistralChatRequestData(ChatRequest request) : base(request)\n             // Mistral's strict API rejects properties it doesn't support\n             Verbosity = null;\n             ReasoningFormat = null;\n+\n+            // Mistral names this field \"random_seed\", not \"seed\"\n+            RandomSeed = request.Seed;\n+            Seed = null;\n             ReasoningEffort = MapReasoningEffort(request.ReasoningEffort);\n \n             if (request.Tools is { Count: > 0 })\n@@ -148,7 +152,7 @@ public VendorMistralChatRequest(ChatRequest request, IEndpointProvider provider)\n                 };\n             }\n \n-            ExtendedRequest.RandomSeed = extensions.RandomSeed;\n+            ExtendedRequest.RandomSeed = extensions.RandomSeed ?? ExtendedRequest.RandomSeed;\n \n             if (extensions.Prefix is not null)\n             {"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/MistralChatSeedTests.cs"
+ ]
+}

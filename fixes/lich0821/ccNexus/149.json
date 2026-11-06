@@ -1,0 +1,40 @@
+{
+ "repo": "lich0821/ccNexus",
+ "number": 149,
+ "url": "https://github.com/lich0821/ccNexus/pull/149",
+ "title": "fix: keep temperature 0 and forward top_p, top_k and stop_sequences from Claude requests",
+ "merged_at": "2026-10-27T09:37:15Z",
+ "files": [
+  {
+   "filename": "internal/transformer/convert/claude_gemini.go",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 2,
+   "patch": "@@ -53,8 +53,17 @@ func ClaudeReqToGemini(claudeReq []byte, model string) ([]byte, error) {\n \tif req.MaxTokens > 0 {\n \t\tgenConfig[\"maxOutputTokens\"] = req.MaxTokens\n \t}\n-\tif req.Temperature > 0 {\n-\t\tgenConfig[\"temperature\"] = req.Temperature\n+\tif req.Temperature != nil {\n+\t\tgenConfig[\"temperature\"] = *req.Temperature\n+\t}\n+\tif req.TopP != nil {\n+\t\tgenConfig[\"topP\"] = *req.TopP\n+\t}\n+\tif req.TopK != nil {\n+\t\tgenConfig[\"topK\"] = *req.TopK\n+\t}\n+\tif len(req.StopSequences) > 0 {\n+\t\tgenConfig[\"stopSequences\"] = req.StopSequences\n \t}\n \tif len(genConfig) > 0 {\n \t\tgeminiReq[\"generationConfig\"] = genConfig"
+  },
+  {
+   "filename": "internal/transformer/convert/claude_openai.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -116,9 +116,9 @@ func ClaudeReqToOpenAI(claudeReq []byte, model string) ([]byte, error) {\n \tif req.MaxTokens > 0 {\n \t\topenaiReq.MaxCompletionTokens = req.MaxTokens\n \t}\n-\tif req.Temperature > 0 {\n-\t\topenaiReq.Temperature = &req.Temperature\n-\t}\n+\topenaiReq.Temperature = req.Temperature\n+\topenaiReq.TopP = req.TopP\n+\topenaiReq.Stop = req.StopSequences\n \n \t// Convert tools\n \tif len(req.Tools) > 0 {"
+  },
+  {
+   "filename": "internal/transformer/convert/claude_sampling_test.go",
+   "status": "added",
+   "additions": 97,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,97 @@\n+package convert\n+\n+import (\n+\t\"encoding/json\"\n+\t\"testing\"\n+)\n+\n+const claudeReqWithSampling = `{\n+\t\"model\": \"claude-sonnet-4-6\",\n+\t\"max_tokens\": 1024,\n+\t\"temperature\": 0,\n+\t\"top_p\": 0.9,\n+\t\"top_k\": 40,\n+\t\"stop_sequences\": [\"END\", \"STOP\"],\n+\t\"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]\n+}`\n+\n+const claudeReqWithoutSampling = `{\n+\t\"model\": \"claude-sonnet-4-6\",\n+\t\"max_tokens\": 1024,\n+\t\"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]\n+}`\n+\n+func convertedBody(t *testing.T, out []byte, err error) map[string]interface{} {\n+\tt.Helper()\n+\tif err != nil {\n+\t\tt.Fatalf(\"conversion failed: %v\", err)\n+\t}\n+\tvar body map[string]interface{}\n+\tif err := json.Unmarshal(out, &body); err != nil {\n+\t\tt.Fatalf(\"converted request is not JSON: %v\", err)\n+\t}\n+\treturn body\n+}\n+\n+func TestClaudeReqToOpenAIKeepsSamplingParams(t *testing.T) {\n+\tout, err := ClaudeReqToOpenAI([]byte(claudeReqWithSampling), \"gpt-test\")\n+\tbody := convertedBody(t, out, err)\n+\n+\t// temperature 0 is a real value (deterministic output), not \"unset\"\n+\tif v, ok := body[\"temperature\"]; !ok || v != float64(0) {\n+\t\tt.Errorf(\"expected temperature 0 to be kept, got %v (present=%v)\", v, ok)\n+\t}\n+\tif body[\"top_p\"] != 0.9 {\n+\t\tt.Errorf(\"expected top_p 0.9, got %v\", body[\"top_p\"])\n+\t}\n+\tstop, _ := body[\"stop\"].([]interface{})\n+\tif len(stop) != 2 || stop[0] != \"END\" || stop[1] != \"STOP\" {\n+\t\tt.Errorf(\"expected stop [END STOP], got %v\", body[\"stop\"])\n+\t}\n+\tif _, ok := body[\"top_k\"]; ok {\n+\t\tt.Errorf(\"OpenAI has no top_k, it should not be forwarded\")\n+\t}\n+}\n+\n+func TestClaudeReqToOpenAIOmitsUnsetSamplingParams(t *testing.T) {\n+\tout, err := ClaudeReqToOpenAI([]byte(claudeReqWithoutSampling), \"gpt-test\")\n+\tbody := convertedBody(t, out, err)\n+\n+\tfor _, key := range []string{\"temperature\", \"top_p\", \"stop\"} {\n+\t\tif v, ok := body[key]; ok {\n+\t\t\tt.Errorf(\"expected %s to be omitted when the client did not set it, got %v\", key, v)\n+\t\t}\n+\t}\n+}\n+\n+func TestClaudeReqToGeminiKeepsSamplingParams(t *testing.T) {\n+\tout, err := ClaudeReqToGemini([]byte(claudeReqWithSampling), \"gemini-test\")\n+\tbody := convertedBody(t, out, err)\n+\n+\tcfg, _ := body[\"generationConfig\"].(map[string]interface{})\n+\tif v, ok := cfg[\"temperature\"]; !ok || v != float64(0) {\n+\t\tt.Errorf(\"expected temperature 0 to be kept, got %v (present=%v)\", v, ok)\n+\t}\n+\tif cfg[\"topP\"] != 0.9 {\n+\t\tt.Errorf(\"expected topP 0.9, got %v\", cfg[\"topP\"])\n+\t}\n+\tif cfg[\"topK\"] != float64(40) {\n+\t\tt.Errorf(\"expected topK 40, got %v\", cfg[\"topK\"])\n+\t}\n+\tstop, _ := cfg[\"stopSequences\"].([]interface{})\n+\tif len(stop) != 2 || stop[0] != \"END\" || stop[1] != \"STOP\" {\n+\t\tt.Errorf(\"expected stopSequences [END STOP], got %v\", cfg[\"stopSequences\"])\n+\t}\n+}\n+\n+func TestClaudeReqToGeminiOmitsUnsetSamplingParams(t *testing.T) {\n+\tout, err := ClaudeReqToGemini([]byte(claudeReqWithoutSampling), \"gemini-test\")\n+\tbody := convertedBody(t, out, err)\n+\n+\tcfg, _ := body[\"generationConfig\"].(map[string]interface{})\n+\tfor _, key := range []string{\"temperature\", \"topP\", \"topK\", \"stopSequences\"} {\n+\t\tif v, ok := cfg[key]; ok {\n+\t\t\tt.Errorf(\"expected %s to be omitted when the client did not set it, got %v\", key, v)\n+\t\t}\n+\t}\n+}"
+  },
+  {
+   "filename": "internal/transformer/types.go",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 9,
+   "patch": "@@ -38,6 +38,8 @@ type OpenAIRequest struct {\n \tMaxTokens           int             `json:\"max_tokens,omitempty\"` // Legacy field\n \tMaxCompletionTokens int             `json:\"max_completion_tokens,omitempty\"`\n \tTemperature         *float64        `json:\"temperature,omitempty\"`\n+\tTopP                *float64        `json:\"top_p,omitempty\"`\n+\tStop                []string        `json:\"stop,omitempty\"`\n \tStream              bool            `json:\"stream,omitempty\"`\n \tStreamOptions       *StreamOptions  `json:\"stream_options,omitempty\"`\n \tEnableThinking      bool            `json:\"enable_thinking,omitempty\"` // For models that support reasoning/thinking\n@@ -106,15 +108,20 @@ type ClaudeMessage struct {\n \n // ClaudeRequest represents a Claude API request\n type ClaudeRequest struct {\n-\tModel       string          `json:\"model\"`\n-\tMessages    []ClaudeMessage `json:\"messages\"`\n-\tMaxTokens   int             `json:\"max_tokens,omitempty\"`\n-\tTemperature float64         `json:\"temperature,omitempty\"`\n-\tStream      bool            `json:\"stream,omitempty\"`\n-\tSystem      interface{}     `json:\"system,omitempty\"`   // Can be string or array of system messages\n-\tThinking    interface{}     `json:\"thinking,omitempty\"` // Claude's thinking/extended thinking parameter\n-\tTools       []ClaudeTool    `json:\"tools,omitempty\"`\n-\tToolChoice  interface{}     `json:\"tool_choice,omitempty\"`\n+\tModel     string          `json:\"model\"`\n+\tMessages  []ClaudeMessage `json:\"messages\"`\n+\tMaxTokens int             `json:\"max_tokens,omitempty\"`\n+\t// Sampling parameters are pointers so that an explicit 0 (temperature 0 is the\n+\t// deterministic setting) can be told apart from a parameter the client did not send.\n+\tTemperature   *float64     `json:\"temperature,omitempty\"`\n+\tTopP          *float64     `json:\"top_p,omitempty\"`\n+\tTopK          *int         `json:\"top_k,omitempty\"`\n+\tStopSequences []string     `json:\"stop_sequences,omitempty\"`\n+\tStream        bool         `json:\"stream,omitempty\"`\n+\tSystem        interface{}  `json:\"system,omitempty\"`   // Can be string or array of system messages\n+\tThinking      interface{}  `json:\"thinking,omitempty\"` // Claude's thinking/extended thinking parameter\n+\tTools         []ClaudeTool `json:\"tools,omitempty\"`\n+\tToolChoice    interface{}  `json:\"tool_choice,omitempty\"`\n }\n \n // ClaudeTool represents a tool definition in Claude format"
+  }
+ ],
+ "test_files": [
+  "internal/transformer/convert/claude_sampling_test.go"
+ ]
+}

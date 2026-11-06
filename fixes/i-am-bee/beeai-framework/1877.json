@@ -1,0 +1,26 @@
+{
+ "repo": "i-am-bee/beeai-framework",
+ "number": 1877,
+ "url": "https://github.com/i-am-bee/beeai-framework/pull/1877",
+ "title": "fix(adapters): pass maxTokens to the AI SDK as maxOutputTokens in the Vercel chat model",
+ "merged_at": "2026-10-29T11:02:24Z",
+ "files": [
+  {
+   "filename": "typescript/src/adapters/vercel/backend/chat.test.ts",
+   "status": "modified",
+   "additions": 37,
+   "deletions": 0,
+   "patch": "@@ -32,4 +32,41 @@ describe(\"VercelChatModel\", () => {\n       process.off(\"unhandledRejection\", onUnhandled);\n     }\n   });\n+\n+  describe(\"maxTokens\", () => {\n+    const generate = async (configure: (model: TestChatModel) => void, maxTokens?: number) => {\n+      let maxOutputTokens: number | undefined;\n+      const model = new TestChatModel(\n+        new MockLanguageModelV3({\n+          doGenerate: async (options) => {\n+            maxOutputTokens = options.maxOutputTokens;\n+            return {\n+              content: [{ type: \"text\", text: \"ok\" }],\n+              finishReason: { unified: \"stop\", raw: undefined },\n+              usage: {\n+                inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },\n+                outputTokens: { total: 1, text: 1, reasoning: undefined },\n+              },\n+              warnings: [],\n+            };\n+          },\n+        }),\n+      );\n+      configure(model);\n+      await model.create({ messages: [new UserMessage(\"hi\")], maxTokens });\n+      return maxOutputTokens;\n+    };\n+\n+    it(\"passes the per-call maxTokens to the AI SDK as maxOutputTokens\", async () => {\n+      expect(await generate(() => {}, 42)).toBe(42);\n+    });\n+\n+    it(\"passes the model-level maxTokens to the AI SDK as maxOutputTokens\", async () => {\n+      expect(\n+        await generate((model) => {\n+          model.parameters.maxTokens = 77;\n+        }),\n+      ).toBe(77);\n+    });\n+  });\n });"
+  },
+  {
+   "filename": "typescript/src/adapters/vercel/backend/chat.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -339,6 +339,8 @@ export abstract class VercelChatModel<\n     return {\n       ...this.parameters,\n       ...input,\n+      // AI SDK reads maxOutputTokens; maxTokens is ignored\n+      maxOutputTokens: input.maxTokens ?? this.parameters.maxTokens,\n       toolChoice,\n       model: this.model,\n       tools: mapToObj(tools, ({ name, ...tool }) => [name, tool]),"
+  }
+ ],
+ "test_files": [
+  "typescript/src/adapters/vercel/backend/chat.test.ts"
+ ]
+}

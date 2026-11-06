@@ -1,0 +1,55 @@
+{
+ "repo": "i-am-bee/beeai-framework",
+ "number": 1858,
+ "url": "https://github.com/i-am-bee/beeai-framework/pull/1858",
+ "title": "fix(adapters): replace retired default models in the TypeScript Anthropic and Vertex AI chat models",
+ "merged_at": "2026-10-26T10:07:50Z",
+ "files": [
+  {
+   "filename": "typescript/examples/backend/providers/anthropic.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -7,7 +7,7 @@ import { ChatModelError } from \"beeai-framework/backend/errors\";\n import { OpenMeteoTool } from \"beeai-framework/tools/weather/openMeteo\";\n \n const llm = new AnthropicChatModel(\n-  \"claude-3-5-sonnet-latest\",\n+  \"claude-haiku-4-5\",\n   // {},\n   // {\n   //   baseURL: \"ANTHROPIC_API_BASE_URL\","
+  },
+  {
+   "filename": "typescript/examples/backend/providers/vertexai.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -7,7 +7,7 @@ import { ChatModelError } from \"beeai-framework/backend/errors\";\n import { OpenMeteoTool } from \"beeai-framework/tools/weather/openMeteo\";\n \n const llm = new GoogleVertexChatModel(\n-  \"gemini-1.5-flash-001\",\n+  \"gemini-3.8-flash\",\n   // {},\n   // {\n   //   location: \"GOOGLE_VERTEX_LOCATION\",\n@@ -26,7 +26,7 @@ llm.config({\n });\n \n async function googleVertexFromName() {\n-  const googleVertexLLM = await ChatModel.fromName(\"google-vertex:gemini-1.5-flash-001\");\n+  const googleVertexLLM = await ChatModel.fromName(\"google-vertex:gemini-3.8-flash\");\n   const response = await googleVertexLLM.create({\n     messages: [new UserMessage(\"what states are part of New England?\")],\n   });"
+  },
+  {
+   "filename": "typescript/src/adapters/anthropic/backend/chat.test.ts",
+   "status": "added",
+   "additions": 31,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,31 @@\n+/**\n+ * Copyright 2025 © BeeAI a Series of LF Projects, LLC\n+ * SPDX-License-Identifier: Apache-2.0\n+ */\n+\n+import { AnthropicChatModel } from \"@/adapters/anthropic/backend/chat.js\";\n+\n+describe(\"AnthropicChatModel\", () => {\n+  const original = process.env.ANTHROPIC_CHAT_MODEL;\n+\n+  afterEach(() => {\n+    vi.unstubAllEnvs();\n+    if (original === undefined) {\n+      delete process.env.ANTHROPIC_CHAT_MODEL;\n+    } else {\n+      process.env.ANTHROPIC_CHAT_MODEL = original;\n+    }\n+  });\n+\n+  it(\"defaults to a model that has not been retired\", () => {\n+    delete process.env.ANTHROPIC_CHAT_MODEL;\n+    const llm = new AnthropicChatModel(undefined, {}, { apiKey: \"test\" });\n+    expect(llm.modelId).toBe(\"claude-haiku-4-5\");\n+  });\n+\n+  it(\"prefers ANTHROPIC_CHAT_MODEL over the default\", () => {\n+    vi.stubEnv(\"ANTHROPIC_CHAT_MODEL\", \"claude-sonnet-4-5\");\n+    const llm = new AnthropicChatModel(undefined, {}, { apiKey: \"test\" });\n+    expect(llm.modelId).toBe(\"claude-sonnet-4-5\");\n+  });\n+});"
+  },
+  {
+   "filename": "typescript/src/adapters/anthropic/backend/chat.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -14,7 +14,7 @@ export type AnthropicChatModelId = NonNullable<AnthropicParameters[0]>;\n \n export class AnthropicChatModel extends VercelChatModel {\n   constructor(\n-    modelId: AnthropicChatModelId = getEnv(\"ANTHROPIC_CHAT_MODEL\", \"claude-3-5-sonnet-latest\"),\n+    modelId: AnthropicChatModelId = getEnv(\"ANTHROPIC_CHAT_MODEL\", \"claude-haiku-4-5\"),\n     parameters: ChatModelParameters = {},\n     client?: AnthropicClientSettings | AnthropicClient,\n   ) {"
+  },
+  {
+   "filename": "typescript/src/adapters/google-vertex/backend/chat.test.ts",
+   "status": "added",
+   "additions": 39,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,39 @@\n+/**\n+ * Copyright 2025 © BeeAI a Series of LF Projects, LLC\n+ * SPDX-License-Identifier: Apache-2.0\n+ */\n+\n+import { GoogleVertexChatModel } from \"@/adapters/google-vertex/backend/chat.js\";\n+\n+describe(\"GoogleVertexChatModel\", () => {\n+  const original = process.env.GOOGLE_VERTEX_CHAT_MODEL;\n+\n+  afterEach(() => {\n+    vi.unstubAllEnvs();\n+    if (original === undefined) {\n+      delete process.env.GOOGLE_VERTEX_CHAT_MODEL;\n+    } else {\n+      process.env.GOOGLE_VERTEX_CHAT_MODEL = original;\n+    }\n+  });\n+\n+  it(\"defaults to a model that has not been retired\", () => {\n+    delete process.env.GOOGLE_VERTEX_CHAT_MODEL;\n+    const llm = new GoogleVertexChatModel(\n+      undefined,\n+      {},\n+      { project: \"test\", location: \"us-central1\" },\n+    );\n+    expect(llm.modelId).toBe(\"gemini-3.8-flash\");\n+  });\n+\n+  it(\"prefers GOOGLE_VERTEX_CHAT_MODEL over the default\", () => {\n+    vi.stubEnv(\"GOOGLE_VERTEX_CHAT_MODEL\", \"gemini-3.6-flash\");\n+    const llm = new GoogleVertexChatModel(\n+      undefined,\n+      {},\n+      { project: \"test\", location: \"us-central1\" },\n+    );\n+    expect(llm.modelId).toBe(\"gemini-3.6-flash\");\n+  });\n+});"
+  },
+  {
+   "filename": "typescript/src/adapters/google-vertex/backend/chat.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -17,7 +17,7 @@ export type GoogleVertexChatModelId = NonNullable<GoogleVertexParameters[0]>;\n \n export class GoogleVertexChatModel extends VercelChatModel {\n   constructor(\n-    modelId: GoogleVertexChatModelId = getEnv(\"GOOGLE_VERTEX_CHAT_MODEL\", \"gemini-1.5-pro\"),\n+    modelId: GoogleVertexChatModelId = getEnv(\"GOOGLE_VERTEX_CHAT_MODEL\", \"gemini-3.8-flash\"),\n     parameters: ChatModelParameters = {},\n     client?: GoogleVertexClientSettings | GoogleVertexClient,\n   ) {"
+  }
+ ],
+ "test_files": [
+  "typescript/src/adapters/anthropic/backend/chat.test.ts",
+  "typescript/src/adapters/google-vertex/backend/chat.test.ts"
+ ]
+}

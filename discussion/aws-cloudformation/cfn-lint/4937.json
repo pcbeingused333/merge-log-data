@@ -1,0 +1,43 @@
+{
+ "repo": "aws-cloudformation/cfn-lint",
+ "number": 4937,
+ "url": "https://github.com/aws-cloudformation/cfn-lint/pull/4937",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "none",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-27T12:05:04Z",
+   "body": "Found an uncovered edge case in the new Sid pattern: `^[A-Za-z0-9]*$` accepts a Sid containing only a newline.\n\nBecause `$` can match immediately before a final newline, the `*` permits an empty match for this value.\n\nReproduction policy:\n\n```json\n{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Sid\": \"\\n\",\n      \"Effect\": \"Allow\",\n      \"Action\": \"s3:GetObject\",\n      \"Resource\": \"*\"\n    }\n  ]\n}\n```\n\nThrough `IdentityPolicy.validate`, current main reports a pattern error at `Statement/0/Sid`; commit `22bd8bd` returns no errors.\n\nCould we add this negative test and anchor the pattern to the actual end of the string, while preserving support for genuinely empty Sids?\n\nFor context, 475 related JSON Schema, IAM, and tagging tests passed locally on Python 3.12.14. Repeated empty Sids pass, and duplicate non-empty Sids still trigger the uniqueness check."
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-02T16:28:06Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-10-27T14:19:23Z",
+   "body": "Thanks, good catch: `$` also matches before a trailing newline, so `\"\\n\"` slipped through. The pattern is now anchored with `\\Z` and `test_newline_only_sid` covers that case; empty and repeated empty Sids still pass.\n\n"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-10-30T19:57:31Z",
+   "body": "Confirmed against CloudFormation — two statements with an empty `Sid` deploy fine, and a repeated non-empty Sid still gets rejected, so the false positive you found is real.\r\n\r\nThe pattern changes in policy_identity.json are good and we'll take them. The $ → \\Z fix is a real catch; it does mean Sid: > folded scalars start getting flagged, so that needs a changelog note.\r\n\r\nWe can't take the uniq_keys change, though. uniqueKeys is used by 13 schemas, including the shared tagging one, so skipping empty strings there also stops us catching duplicate blank keys in ECS environment variables, DynamoDB key schemas, CodePipeline stage names and resource tags.\r\n\r\nThe IAM rule is really \"non-empty Sids must be unique,\" which uniqueKeys can't express. We'll implement that in the IAM policy code ourselves — it touches shared IAM rules, so it's outside what this PR should have to take on.\r\n\r\nIf you want to split the pattern changes into their own PR we'll merge those now, otherwise we can do the split on our end."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-30T20:17:30Z",
+   "body": "Thanks, I took the first option: this PR now only carries the Sid pattern change (`^[A-Za-z0-9]*\\Z`) with its tests, and the `uniq_keys` change is removed. A single empty `Sid` and a newline-only `Sid` are covered; repeated empty Sids are left to the IAM rule you plan to add.\n\nSince the PR no longer covers repeated empty Sids, the title could read \"fix(E3510): accept an empty Sid\". As you noted, the `$` -> `\\Z` change means `Sid: >` folded scalars start being flagged, so that belongs in the changelog note.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-02T17:49:32Z",
+   "body": "## [Codecov](https://app.codecov.io/gh/aws-cloudformation/cfn-lint/pull/4937?dropdown=coverage&src=pr&el=h1&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=aws-cloudformation) Report\n:white_check_mark: All modified and coverable lines are covered by tests.\n:white_check_mark: Project coverage is 94.75%. Comparing base ([`4c7581a`](https://app.codecov.io/gh/aws-cloudformation/cfn-lint/commit/4c7581aa6ed17b69e43d99fcde52ccd549181d0c?dropdown=coverage&el=desc&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=aws-cloudformation)) to head ([`5aeb963`](https://app.codecov.io/gh/aws-cloudformation/cfn-lint/commit/5aeb96336459b663d6f0b9aec644150ad011c3ae?dropdown=coverage&el=desc&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=aws-cloudformation)).\n\n<details><summary>Additional details and impacted files</summary>\n\n\n\n```diff\n@@           Coverage Diff           @@\n##             main    #4937   +/-   ##\n=======================================\n  Coverage   94.75%   94.75%           \n=======================================\n  Files         442      442           \n  Lines       16105    16105           \n  Branches     3125     3125           \n=======================================\n  Hits        15260    15260           \n  Misses        466      466           \n  Partials      379      379           \n```\n\n| [Flag](https://app.codecov.io/gh/aws-cloudformation/cfn-lint/pull/4937/flags?src=pr&el=flags&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=aws-cloudformation) | Coverage Δ | |\n|---|---|---|\n| [unittests](https://app.codecov.io/gh/aws-cloudformation/cfn-lint/pull/4937/flags?src=pr&el=flag&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=aws-cloudformation) | `94.74% <ø> (ø)` | |\n\nFlags with carried forward coverage won't be shown. [Click here](https://docs.codecov.io/docs/carryforward-flags?utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=aws-cloudformation#carryforward-flags-in-the-pull-request-comment) to find out more.\n</details>\n\n[:umbrella: View full report in Codecov by Harness](https://app.codecov.io/gh/aws-cloudformation/cfn-lint/pull/4937?dropdown=coverage&src=pr&el=continue&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=aws-cloudformation).   \n:loudspeaker: Have feedback on the report? [Share it here](https://about.codecov.io/codecov-pr-comment-feedback/?utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=aws-cloudformation).\n<details><summary> :rocket: New features to boost your workflow: </summary>\n\n- :snowflake: [Test Analytics](https://docs.codecov.com/docs/test-analytics): Detect flaky tests, report on failures, and find test suite problems.\n</details>"
+  }
+ ]
+}

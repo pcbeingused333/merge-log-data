@@ -1,0 +1,26 @@
+{
+ "repo": "sligter/LandPPT",
+ "number": 139,
+ "url": "https://github.com/sligter/LandPPT/pull/139",
+ "title": "fix(ollama): use Ollama's reported token counts and done_reason",
+ "merged_at": "2026-10-29T02:57:31Z",
+ "files": [
+  {
+   "filename": "src/landppt/ai/providers.py",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 5,
+   "patch": "@@ -1623,14 +1623,25 @@ async def chat_completion(self, messages: List[AIMessage], **kwargs) -> AIRespon\n             content = response_message.get(\"content\", \"\") or \"\"\n             tool_calls = response_message.get(\"tool_calls\") or []\n             \n+            prompt_tokens = response.get(\"prompt_eval_count\")\n+            completion_tokens = response.get(\"eval_count\")\n+            if prompt_tokens is not None and completion_tokens is not None:\n+                usage = {\n+                    \"prompt_tokens\": prompt_tokens,\n+                    \"completion_tokens\": completion_tokens,\n+                    \"total_tokens\": prompt_tokens + completion_tokens,\n+                }\n+            else:\n+                usage = self._calculate_usage(\n+                    \" \".join([msg.content for msg in messages if isinstance(msg.content, str)]),\n+                    content\n+                )\n+\n             return AIResponse(\n                 content=content,\n                 model=config.get(\"model\", self.model),\n-                usage=self._calculate_usage(\n-                    \" \".join([msg.content for msg in messages if isinstance(msg.content, str)]),\n-                    content\n-                ),\n-                finish_reason=\"stop\",\n+                usage=usage,\n+                finish_reason=response.get(\"done_reason\") or \"stop\",\n                 tool_calls=tool_calls,\n                 metadata={\"provider\": \"ollama\"}\n             )"
+  },
+  {
+   "filename": "tests/test_ollama_provider_usage.py",
+   "status": "added",
+   "additions": 40,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,40 @@\n+\"\"\"OllamaProvider reports the usage and stop reason that Ollama returns.\"\"\"\n+\n+import asyncio\n+\n+from landppt.ai.base import AIMessage, MessageRole\n+from landppt.ai.providers import OllamaProvider\n+\n+\n+class _FakeClient:\n+    def __init__(self, response):\n+        self.response = response\n+\n+    async def chat(self, **kwargs):\n+        return self.response\n+\n+\n+def _run(response):\n+    provider = OllamaProvider({\"model\": \"llama3\", \"base_url\": \"http://localhost:11434\"})\n+    provider.client = _FakeClient(response)\n+    messages = [AIMessage(role=MessageRole.USER, content=\"你好 世界\")]\n+    return asyncio.run(provider.chat_completion(messages))\n+\n+\n+def test_usage_and_finish_reason_come_from_ollama():\n+    result = _run({\n+        \"message\": {\"content\": \"你好，我是助手\"},\n+        \"prompt_eval_count\": 12,\n+        \"eval_count\": 34,\n+        \"done_reason\": \"length\",\n+    })\n+\n+    assert result.usage == {\"prompt_tokens\": 12, \"completion_tokens\": 34, \"total_tokens\": 46}\n+    assert result.finish_reason == \"length\"\n+\n+\n+def test_falls_back_when_ollama_omits_counts():\n+    result = _run({\"message\": {\"content\": \"hello there\"}})\n+\n+    assert result.usage[\"completion_tokens\"] == 2\n+    assert result.finish_reason == \"stop\""
+  }
+ ],
+ "test_files": [
+  "tests/test_ollama_provider_usage.py"
+ ]
+}

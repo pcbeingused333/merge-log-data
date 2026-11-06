@@ -1,0 +1,26 @@
+{
+ "repo": "o19s/quepid",
+ "number": 1860,
+ "url": "https://github.com/o19s/quepid/pull/1860",
+ "title": "fix: mark an AI judgement unrateable when the model's answer is not JSON",
+ "merged_at": "2026-11-02T18:41:48Z",
+ "files": [
+  {
+   "filename": "app/services/llm_judge_adapters/base.rb",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -58,13 +58,18 @@ def envelope user_prompt, system_prompt\n       { path: path, headers: headers, body: body_for(user_prompt, system_prompt) }\n     end\n \n+    # Bad model output raises a RuntimeError, which LlmService#perform_safe_judgement\n+    # turns into an unrateable judgement instead of aborting the run.\n     def extract_judgement response_body\n       parsed_content = JSON.parse(content_from(response_body))\n+      raise TypeError, 'not a JSON object' unless parsed_content.is_a?(Hash)\n \n       {\n         explanation: parsed_content['explanation'],\n         judgment:    parsed_content['judgment'],\n       }\n+    rescue JSON::ParserError, TypeError => e\n+      raise \"LLM response was not a JSON judgement (#{e.class}: #{e.message.truncate(80)})\"\n     end\n \n     def user_prompt query_doc_pair"
+  },
+  {
+   "filename": "test/services/llm_service_test.rb",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -102,6 +102,21 @@ class LlmServiceTest < ActiveSupport::TestCase\n       assert_nil judgement.rating\n     end\n \n+    test 'an answer that is not JSON marks the judgement unrateable instead of raising' do\n+      [ 'I am sorry, I cannot rate that document.', '{\"judgment\": 2, \"expla', nil ].each do |content|\n+        judgement = Judgement.new(query_doc_pair: query_doc_pair, user: judge)\n+\n+        stub_request(:post, 'https://api.openai.com/v1/chat/completions')\n+          .with(headers: { 'Authorization' => \"Bearer #{OPENAI_VALID_KEY}\" })\n+          .to_return(status: 200, body: { choices: [ { message: { content: content } } ] }.to_json, headers: {})\n+\n+        service.perform_safe_judgement judgement\n+\n+        assert judgement.unrateable, \"expected #{content.inspect} to be unrateable\"\n+        assert_match(/\\ABOOM: Runtime Error: LLM response was not a JSON judgement/, judgement.explanation)\n+      end\n+    end\n+\n     test 'a numeric-looking string judgment value is still accepted' do\n       judgement = Judgement.new(query_doc_pair: query_doc_pair, user: judge)\n "
+  }
+ ],
+ "test_files": [
+  "test/services/llm_service_test.rb"
+ ]
+}

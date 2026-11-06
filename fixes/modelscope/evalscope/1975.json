@@ -1,0 +1,33 @@
+{
+ "repo": "modelscope/evalscope",
+ "number": 1975,
+ "url": "https://github.com/modelscope/evalscope/pull/1975",
+ "title": "fix(bridge): report tool_use when a stopped Anthropic message carries tool calls",
+ "merged_at": "2026-10-30T03:08:34Z",
+ "files": [
+  {
+   "filename": "evalscope/agent/external/bridge/sse_anthropic.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -26,7 +26,7 @@\n from evalscope.api.model import ModelOutput\n \n from ._sse_common import PING_INTERVAL_S, TEXT_CHUNK, TOOL_INPUT_CHUNK, iter_chunks\n-from .translate_anthropic import anthropic_usage_payload, map_stop_reason_to_anthropic, unpack_tool_call\n+from .translate_anthropic import anthropic_stop_reason, anthropic_usage_payload, unpack_tool_call\n \n \n def _sse(event_type: str, data: Dict[str, Any]) -> bytes:\n@@ -105,7 +105,7 @@ async def stream_anthropic_response(\n             index += 1\n \n     # 4. message_delta — stop reason + cumulative usage.\n-    stop_reason = map_stop_reason_to_anthropic(output.choices[0].stop_reason if output.choices else 'stop')\n+    stop_reason = anthropic_stop_reason(output)\n     delta_payload: Dict[str, Any] = {\n         'type': 'message_delta',\n         'delta': {'stop_reason': stop_reason, 'stop_sequence': None},"
+  },
+  {
+   "filename": "evalscope/agent/external/bridge/translate_anthropic.py",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 1,
+   "patch": "@@ -224,7 +224,7 @@ def model_output_to_anthropic_response(\n     if not blocks:\n         blocks.append({'type': 'text', 'text': ''})\n \n-    stop_reason = map_stop_reason_to_anthropic(output.choices[0].stop_reason if output.choices else 'stop')\n+    stop_reason = anthropic_stop_reason(output)\n     usage = anthropic_usage_payload(output.usage)\n     return {\n         'id': output.id or f'msg_{uuid.uuid4().hex[:24]}',\n@@ -257,6 +257,23 @@ def map_stop_reason_to_anthropic(reason: str) -> str:\n     return _STOP_REASON_MAP.get(reason, 'end_turn')\n \n \n+def anthropic_stop_reason(output: ModelOutput) -> str:\n+    \"\"\"Anthropic ``stop_reason`` for ``output``.\n+\n+    Some OpenAI-compatible backends (Gemini) finish a tool-calling turn with\n+    ``finish_reason: \"stop\"``. A ``tool_use`` block with ``end_turn`` makes the\n+    Anthropic client treat the turn as final and not run the tool, so a message\n+    that carries tool calls reports ``tool_use`` when the original reason is\n+    ``stop``. ``content_filter``, ``unknown`` and truncation are left as mapped.\n+    \"\"\"\n+    if not output.choices:\n+        return map_stop_reason_to_anthropic('stop')\n+    choice = output.choices[0]\n+    if choice.stop_reason == 'stop' and choice.message.tool_calls:\n+        return 'tool_use'\n+    return map_stop_reason_to_anthropic(choice.stop_reason)\n+\n+\n def anthropic_usage_payload(usage: Any) -> Dict[str, Any]:\n     payload: Dict[str, Any] = {\n         'input_tokens': usage.input_tokens if usage else 0,"
+  },
+  {
+   "filename": "tests/agent/external/test_anthropic_bridge_stop_reason.py",
+   "status": "added",
+   "additions": 63,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,63 @@\n+import asyncio\n+import json\n+\n+import pytest\n+\n+from evalscope.agent.external.bridge.sse_anthropic import stream_anthropic_response\n+from evalscope.agent.external.bridge.translate_anthropic import model_output_to_anthropic_response\n+from evalscope.api.model import ModelOutput\n+\n+\n+def _tool_call_output(stop_reason):\n+    output = ModelOutput.for_tool_call('gemini', 'read_file', {'path': 'a.py'})\n+    output.choices[0].stop_reason = stop_reason\n+    return output\n+\n+\n+def test_anthropic_response_reports_tool_use_when_backend_stops_with_tool_calls():\n+    response = model_output_to_anthropic_response(_tool_call_output('stop'), request_model='claude')\n+\n+    assert [block['type'] for block in response['content']] == ['text', 'tool_use']\n+    assert response['stop_reason'] == 'tool_use'\n+\n+\n+def test_anthropic_response_keeps_end_turn_without_tool_calls():\n+    output = ModelOutput.from_content('gemini', 'done')\n+\n+    assert model_output_to_anthropic_response(output)['stop_reason'] == 'end_turn'\n+\n+\n+def test_anthropic_response_keeps_max_tokens_for_a_cut_off_tool_call():\n+    output = _tool_call_output('max_tokens')\n+\n+    assert model_output_to_anthropic_response(output)['stop_reason'] == 'max_tokens'\n+\n+\n+@pytest.mark.parametrize('reason', ['content_filter', 'unknown'])\n+def test_anthropic_response_keeps_end_turn_for_non_stop_reasons_with_tool_calls(reason):\n+    response = model_output_to_anthropic_response(_tool_call_output(reason))\n+\n+    assert response['stop_reason'] == 'end_turn'\n+\n+\n+def _stream_stop_reason(stop_reason):\n+\n+    async def _go():\n+        task = asyncio.create_task(asyncio.sleep(0, result=_tool_call_output(stop_reason)))\n+        deltas = []\n+        async for chunk in stream_anthropic_response(task, request_model='claude'):\n+            text = chunk.decode('utf-8')\n+            if text.startswith('event: message_delta'):\n+                deltas.append(json.loads(text.split('data: ', 1)[1].strip()))\n+        return deltas\n+\n+    return asyncio.run(_go())[0]['delta']['stop_reason']\n+\n+\n+def test_anthropic_stream_reports_tool_use_when_backend_stops_with_tool_calls():\n+    assert _stream_stop_reason('stop') == 'tool_use'\n+\n+\n+@pytest.mark.parametrize('reason', ['content_filter', 'unknown'])\n+def test_anthropic_stream_keeps_end_turn_for_non_stop_reasons_with_tool_calls(reason):\n+    assert _stream_stop_reason(reason) == 'end_turn'"
+  }
+ ],
+ "test_files": [
+  "tests/agent/external/test_anthropic_bridge_stop_reason.py"
+ ]
+}

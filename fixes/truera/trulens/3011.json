@@ -1,0 +1,26 @@
+{
+ "repo": "truera/trulens",
+ "number": 3011,
+ "url": "https://github.com/truera/trulens/pull/3011",
+ "title": "fix(bedrock): keep the first message when an Anthropic request has no system message",
+ "merged_at": "2026-11-02T18:26:16Z",
+ "files": [
+  {
+   "filename": "src/providers/bedrock/trulens/providers/bedrock/provider.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 6,
+   "patch": "@@ -145,16 +145,14 @@ def _create_chat_completion(\n                 raise ValueError(\n                     \"`messages` argument must be supplied for Anthropic Bedrock models.\"\n                 )\n-            if messages[0][\"role\"] == \"system\":\n-                system_prompt = messages[0][\"content\"]\n-            _messages = messages[1:] if len(messages) > 1 else []\n-\n             anthropic_body = {\n-                \"system\": system_prompt,\n-                \"messages\": _messages,\n+                \"messages\": messages,\n                 \"max_tokens\": 4095,\n                 \"anthropic_version\": \"bedrock-2023-05-31\",\n             }\n+            if messages[0][\"role\"] == \"system\":\n+                anthropic_body[\"system\"] = messages[0][\"content\"]\n+                anthropic_body[\"messages\"] = messages[1:]\n             # Claude 4.5+ rejects `temperature` together with `top_p`, so only\n             # `temperature` is sent, and not to the models that reject it.\n             if not base_model_id.startswith(_CLAUDE_NO_TEMPERATURE_PREFIXES):"
+  },
+  {
+   "filename": "tests/unit/providers/test_bedrock_capabilities.py",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -186,6 +186,23 @@ def test_anthropic_request_shape():\n     assert body[\"messages\"] == [{\"role\": \"user\", \"content\": \"hi\"}]\n \n \n+@pytest.mark.optional\n+def test_anthropic_request_without_system_message():\n+    \"\"\"Without a leading system message there is no `system` field, and the\n+    first message is kept.\"\"\"\n+    provider = _make_provider(\n+        \"anthropic.claude-3-sonnet-20240229-v1:0\",\n+        {\"content\": [{\"text\": \"claude-ok\"}]},\n+    )\n+    out = provider._create_chat_completion(\n+        messages=[{\"role\": \"user\", \"content\": \"hi\"}]\n+    )\n+    assert out == \"claude-ok\"\n+    body = json.loads(provider.endpoint.client.calls[0][\"body\"])\n+    assert \"system\" not in body\n+    assert body[\"messages\"] == [{\"role\": \"user\", \"content\": \"hi\"}]\n+\n+\n _CLAUDE_MESSAGES = [\n     {\"role\": \"system\", \"content\": \"be terse\"},\n     {\"role\": \"user\", \"content\": \"hi\"},"
+  }
+ ],
+ "test_files": [
+  "tests/unit/providers/test_bedrock_capabilities.py"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "posit-dev/great-tables",
+ "number": 1010,
+ "url": "https://github.com/posit-dev/great-tables/pull/1010",
+ "title": "fix: let loc.body(rows=) take a callable with polars data",
+ "merged_at": "2026-10-23T16:27:58Z",
+ "files": [
+  {
+   "filename": "great_tables/_tbl_data.py",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 5,
+   "patch": "@@ -868,13 +868,22 @@ def _(df: PdDataFrame, expr: Callable[[PdDataFrame], PdSeries]) -> list[Any]:\n \n \n @eval_transform.register\n-def _(df: PlDataFrame, expr: PlExpr) -> list[Any]:\n-    df_res = df.select(expr)\n+def _(df: PlDataFrame, expr: PlExpr | Callable[[PlDataFrame], PlSeries | PlExpr]) -> list[Any]:\n+    if not isinstance(expr, PlExpr):\n+        # a callable takes the DataFrame and returns a Series (or an expression to evaluate)\n+        expr = expr(df)\n \n-    if len(df_res.columns) > 1:  # pragma: no cover\n-        raise ValueError(f\"Result must be a single column. Received {len(df_res.columns)} columns.\")\n+    if isinstance(expr, PlSeries):\n+        res = expr\n     else:\n-        res = df_res[df_res.columns[0]]\n+        df_res = df.select(expr)\n+\n+        if len(df_res.columns) > 1:  # pragma: no cover\n+            raise ValueError(\n+                f\"Result must be a single column. Received {len(df_res.columns)} columns.\"\n+            )\n+        else:\n+            res = df_res[df_res.columns[0]]\n \n     if not isinstance(res, PlSeries):  # pragma: no cover\n         raise ValueError(f\"Result must be a polars Series. Received {type(res)}\")"
+  },
+  {
+   "filename": "tests/test_locations.py",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -100,6 +100,24 @@ def test_resolve_rows_i_func_expr():\n     assert resolve_rows_i(gt, lambda D: D[\"x\"].isin([\"a\", \"b\"])) == [(\"a\", 0), (\"b\", 1)]\n \n \n+def test_resolve_rows_i_func_expr_polars():\n+    gt = GT(pl.DataFrame({\"x\": [\"a\", \"b\", \"c\"]}), rowname_col=\"x\")\n+    assert resolve_rows_i(gt, lambda D: D[\"x\"].is_in([\"a\", \"b\"])) == [(\"a\", 0), (\"b\", 1)]\n+\n+\n+def test_resolve_rows_i_func_expr_polars_returning_expr():\n+    gt = GT(pl.DataFrame({\"x\": [\"a\", \"b\", \"c\"]}), rowname_col=\"x\")\n+    assert resolve_rows_i(gt, lambda D: pl.col(\"x\").is_in([\"a\", \"b\"])) == [(\"a\", 0), (\"b\", 1)]\n+\n+\n+def test_resolve_rows_i_func_expr_return_non_bool_pl_series():\n+    gt = GT(pl.DataFrame({\"x\": [\"a\", \"b\", \"c\"]}), rowname_col=\"x\")\n+    with pytest.raises(ValueError) as exc_info:\n+        resolve_rows_i(gt, lambda D: pl.Series([4, 5, 6]))\n+\n+    assert \"return a boolean Series.\" in exc_info.value.args[0]\n+\n+\n def test_tab_style_rows_native_selector(frame_constructor: DataFrameConstructor):\n     from great_tables import loc, style\n "
+  }
+ ],
+ "test_files": [
+  "tests/test_locations.py"
+ ]
+}

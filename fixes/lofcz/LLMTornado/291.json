@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 291,
+ "url": "https://github.com/lofcz/LLMTornado/pull/291",
+ "title": "Default transcription response_format to json for gpt-4o-transcribe models",
+ "merged_at": "2026-10-28T14:35:15Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/TranscriptionTemperatureTests.cs",
+   "status": "modified",
+   "additions": 26,
+   "deletions": 0,
+   "patch": "@@ -4,6 +4,7 @@\n using System.Text.RegularExpressions;\n using LlmTornado.Audio;\n using LlmTornado.Audio.Models;\n+using LlmTornado.Audio.Models.OpenAi;\n using LlmTornado.Code;\n using LlmTornado.Code.Vendor;\n \n@@ -72,4 +73,29 @@ public async Task Temperature_Unset_DefaultsToZero()\n \n         Assert.That(Field(body, \"temperature\"), Is.EqualTo(\"0\"));\n     }\n+\n+    [TestCase(\"gpt-4o-transcribe\", \"json\")]\n+    [TestCase(\"gpt-4o-mini-transcribe\", \"json\")]\n+    [TestCase(\"whisper-1\", \"verbose_json\")]\n+    public void ResponseFormat_Unset_DefaultsToWhatTheModelAccepts(string model, string expected)\n+    {\n+        TranscriptionRequest request = new TranscriptionRequest\n+        {\n+            Model = new AudioModel(model, LLmProviders.OpenAi)\n+        };\n+\n+        Assert.That(request.GetResponseFormat, Is.EqualTo(expected));\n+    }\n+\n+    [Test]\n+    public void ResponseFormat_SetByTheCaller_IsKept()\n+    {\n+        TranscriptionRequest request = new TranscriptionRequest\n+        {\n+            Model = AudioModelOpenAiGpt4.Model4OTranscribe,\n+            ResponseFormat = AudioTranscriptionResponseFormats.Text\n+        };\n+\n+        Assert.That(request.GetResponseFormat, Is.EqualTo(\"text\"));\n+    }\n }"
+  },
+  {
+   "filename": "src/LlmTornado/Audio/TranscriptionRequest.cs",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 1,
+   "patch": "@@ -5,6 +5,7 @@\n using LlmTornado.Audio.Google;\n using LlmTornado.Audio.Vendors.Google;\n using LlmTornado.Audio.Models;\n+using LlmTornado.Audio.Models.OpenAi;\n using LlmTornado.Audio.Vendors.Zai;\n using LlmTornado.Chat;\n using LlmTornado.Chat.Models;\n@@ -70,7 +71,18 @@ public class TranscriptionRequest\n     ///     The format of the transcript output, in one of these options: json, text, srt, verbose_json, or vtt.\n     /// </summary>\n     [JsonProperty(\"response_format\")]\n-    public AudioTranscriptionResponseFormats ResponseFormat { get; set; } = AudioTranscriptionResponseFormats.VerboseJson;\n+    public AudioTranscriptionResponseFormats ResponseFormat\n+    {\n+        get => responseFormat ?? DefaultResponseFormat;\n+        set => responseFormat = value;\n+    }\n+\n+    private AudioTranscriptionResponseFormats? responseFormat;\n+\n+    // OpenAI models outside the Whisper family (gpt-4o-transcribe, gpt-4o-mini-transcribe, ...) only accept \"json\".\n+    private AudioTranscriptionResponseFormats DefaultResponseFormat => Model?.Provider is LLmProviders.OpenAi && !AudioModelOpenAi.VerboseJsonCompatibleModels.Contains(Model)\n+        ? AudioTranscriptionResponseFormats.Json\n+        : AudioTranscriptionResponseFormats.VerboseJson;\n \n     internal string GetResponseFormat => ResponseFormat switch\n     {"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/TranscriptionTemperatureTests.cs"
+ ]
+}

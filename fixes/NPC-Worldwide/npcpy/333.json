@@ -1,0 +1,26 @@
+{
+ "repo": "NPC-Worldwide/npcpy",
+ "number": 333,
+ "url": "https://github.com/NPC-Worldwide/npcpy/pull/333",
+ "title": "fix(gen): include the summary completion in usage for litellm auto tool turns",
+ "merged_at": "2026-10-31T13:00:40Z",
+ "files": [
+  {
+   "filename": "npcpy/gen/response.py",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -2994,6 +2994,14 @@ def _usage_aware_stream():\n         if stream:\n             processed_result[\"response\"] = final_resp\n         else:\n+            if hasattr(final_resp, 'usage') and final_resp.usage:\n+                first_usage = processed_result.get(\"usage\") or {}\n+                processed_result[\"usage\"] = {\n+                    \"input_tokens\": first_usage.get(\"input_tokens\", 0)\n+                    + (getattr(final_resp.usage, 'prompt_tokens', 0) or 0),\n+                    \"output_tokens\": first_usage.get(\"output_tokens\", 0)\n+                    + (getattr(final_resp.usage, 'completion_tokens', 0) or 0),\n+                }\n             if final_resp.choices:\n                 final_content = final_resp.choices[0].message.content\n                 processed_result[\"response\"] = final_content"
+  },
+  {
+   "filename": "tests/test_litellm_tool_turn_usage.py",
+   "status": "added",
+   "additions": 66,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,66 @@\n+import json\n+from types import SimpleNamespace\n+from unittest.mock import patch\n+\n+from npcpy.gen.response import get_litellm_response\n+\n+\n+def _usage(prompt_tokens, completion_tokens):\n+    return SimpleNamespace(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)\n+\n+\n+def _tool_call_response(usage):\n+    tool_call = SimpleNamespace(\n+        id=\"call_1\",\n+        type=\"function\",\n+        function=SimpleNamespace(name=\"add\", arguments=json.dumps({\"a\": 1, \"b\": 2})),\n+    )\n+    message = SimpleNamespace(content=None, tool_calls=[tool_call])\n+    return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=usage)\n+\n+\n+def _text_response(text, usage):\n+    message = SimpleNamespace(content=text, tool_calls=None)\n+    return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=usage)\n+\n+\n+TOOLS = [{\n+    \"type\": \"function\",\n+    \"function\": {\n+        \"name\": \"add\",\n+        \"description\": \"Add two numbers\",\n+        \"parameters\": {\n+            \"type\": \"object\",\n+            \"properties\": {\"a\": {\"type\": \"number\"}, \"b\": {\"type\": \"number\"}},\n+        },\n+    },\n+}]\n+\n+\n+def _run(second_usage):\n+    responses = [_tool_call_response(_usage(100, 20)), _text_response(\"3\", second_usage)]\n+    with patch(\"npcpy.gen.response.completion\", side_effect=responses) as mocked:\n+        result = get_litellm_response(\n+            prompt=\"add 1 and 2\",\n+            model=\"gpt-test\",\n+            provider=\"openai\",\n+            tools=TOOLS,\n+            tool_map={\"add\": lambda a, b: a + b},\n+            api_key=\"sk-test\",\n+            auto_process_tool_calls=True,\n+        )\n+    assert mocked.call_count == 2\n+    return result\n+\n+\n+def test_tool_turn_usage_includes_the_summary_completion():\n+    result = _run(_usage(50, 10))\n+\n+    assert result[\"response\"] == \"3\"\n+    assert result[\"usage\"] == {\"input_tokens\": 150, \"output_tokens\": 30}\n+\n+\n+def test_tool_turn_usage_tolerates_a_summary_completion_without_usage():\n+    result = _run(None)\n+\n+    assert result[\"usage\"] == {\"input_tokens\": 100, \"output_tokens\": 20}"
+  }
+ ],
+ "test_files": [
+  "tests/test_litellm_tool_turn_usage.py"
+ ]
+}

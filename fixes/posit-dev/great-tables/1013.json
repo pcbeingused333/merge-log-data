@@ -1,0 +1,26 @@
+{
+ "repo": "posit-dev/great-tables",
+ "number": 1013,
+ "url": "https://github.com/posit-dev/great-tables/pull/1013",
+ "title": "fix: let fmt_nanoplot() draw PyArrow float64 and Decimal columns",
+ "merged_at": "2026-10-23T13:54:57Z",
+ "files": [
+  {
+   "filename": "great_tables/_formats.py",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 2,
+   "patch": "@@ -9367,8 +9367,9 @@ def fmt_nanoplot(\n \n     # A numeric column has a single `y` value per cell; these are drawn as horizontal bars or lines\n     # on a scale shared by all of the targeted cells (so autoscaling doesn't apply)\n-    if col_class.startswith((\"int\", \"uint\", \"float\")):\n-        all_single_y_vals = target_vals\n+    # (dtype names differ between libraries: PyArrow calls float64 `double` and has `decimal128(...)`)\n+    if col_class.startswith((\"int\", \"uint\", \"float\", \"double\", \"decimal\")):\n+        all_single_y_vals = [float(v) if isinstance(v, Decimal) else v for v in target_vals]\n         autoscale = False\n     else:\n         all_single_y_vals = None\n@@ -9520,6 +9521,9 @@ def _generate_data_vals(\n     elif isinstance(data_vals, int) or isinstance(data_vals, float):\n         return data_vals\n \n+    elif isinstance(data_vals, Decimal):\n+        return float(data_vals)\n+\n     elif isinstance(data_vals, str):\n         # If the cell value is a string, assume it is a value stream and convert to a list\n "
+  },
+  {
+   "filename": "tests/test_formats_nanoplots.py",
+   "status": "modified",
+   "additions": 32,
+   "deletions": 0,
+   "patch": "@@ -1,3 +1,4 @@\n+import re\n import math\n from typing import Any\n \n@@ -196,3 +197,34 @@ def render(vals: list[str]) -> str:\n         return gt.as_raw_html()\n \n     assert render([\"[1, 5, 3]\", \"[2; 4]\"]) == render([\"1 5 3\", \"2 4\"])\n+\n+\n+def _numeric_column(kind: str):\n+    import pyarrow as pa\n+    from decimal import Decimal\n+\n+    vals = [\"1.5\", \"2.5\", \"4.0\"]\n+    if kind == \"polars_float\":\n+        return pl.DataFrame({\"x\": [float(v) for v in vals]})\n+    if kind == \"pyarrow_float64\":\n+        return pa.table({\"x\": pa.array([float(v) for v in vals])})\n+    if kind == \"polars_decimal\":\n+        return pl.DataFrame({\"x\": [Decimal(v) for v in vals]}, schema={\"x\": pl.Decimal(10, 2)})\n+    if kind == \"pyarrow_decimal\":\n+        return pa.table({\"x\": pa.array([Decimal(v) for v in vals], type=pa.decimal128(10, 2))})\n+    raise ValueError(kind)\n+\n+\n+@pytest.mark.parametrize(\"plot_type\", [\"line\", \"bar\"])\n+@pytest.mark.parametrize(\"kind\", [\"pyarrow_float64\", \"polars_decimal\", \"pyarrow_decimal\"])\n+def test_fmt_nanoplot_numeric_column_dtypes_match_polars_float(kind: str, plot_type: str):\n+    pytest.importorskip(\"pyarrow\")\n+\n+    def draw(tbl):\n+        # the alignment is fixed: it is inferred from the dtype, which is not under test here\n+        gt = GT(tbl).fmt_nanoplot(\"x\", plot_type=plot_type).cols_align(\"right\", columns=\"x\")\n+        html = gt.as_raw_html()\n+        # the table id and the ids of the SVG elements differ between tables\n+        return re.sub(r'id=\"[^\"]*\"|#[a-z]+\\w*', \"\", html)\n+\n+    assert draw(_numeric_column(kind)) == draw(_numeric_column(\"polars_float\"))"
+  }
+ ],
+ "test_files": [
+  "tests/test_formats_nanoplots.py"
+ ]
+}

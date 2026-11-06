@@ -1,0 +1,24 @@
+{
+ "repo": "jeremychone/rust-genai",
+ "number": 351,
+ "url": "https://github.com/jeremychone/rust-genai/pull/351",
+ "title": "fix: send Cohere chat_history entries with the message field",
+ "merged_at": "2026-10-27T02:42:18Z",
+ "files": [
+  {
+   "filename": "src/adapter/adapters/cohere/adapter_impl.rs",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 2,
+   "patch": "@@ -288,8 +288,8 @@ impl CohereAdapter {\n \t\t\tmatch msg.role {\n \t\t\t\t// For now, system and tool messages go to the system\n \t\t\t\tChatRole::System => systems.push(content),\n-\t\t\t\tChatRole::User => chat_history.push(json! ({\"role\": \"USER\", \"content\": content})),\n-\t\t\t\tChatRole::Assistant => chat_history.push(json! ({\"role\": \"CHATBOT\", \"content\": content})),\n+\t\t\t\tChatRole::User => chat_history.push(json! ({\"role\": \"USER\", \"message\": content})),\n+\t\t\t\tChatRole::Assistant => chat_history.push(json! ({\"role\": \"CHATBOT\", \"message\": content})),\n \t\t\t\tChatRole::Tool => {\n \t\t\t\t\treturn Err(Error::MessageRoleNotSupported {\n \t\t\t\t\t\tmodel_iden,\n@@ -326,3 +326,11 @@ struct CohereChatRequestParts {\n }\n \n // endregion: --- Support\n+\n+// region:    --- Tests\n+\n+#[cfg(test)]\n+#[path = \"adapter_impl_tests.rs\"]\n+mod tests;\n+\n+// endregion: --- Tests"
+  },
+  {
+   "filename": "src/adapter/adapters/cohere/adapter_impl_tests.rs",
+   "status": "added",
+   "additions": 56,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,56 @@\n+use super::CohereAdapter;\n+use crate::adapter::{Adapter, AdapterKind, ServiceType};\n+use crate::chat::{ChatMessage, ChatOptionsSet, ChatRequest};\n+use crate::resolver::{AuthData, Endpoint};\n+use crate::{ModelIden, ServiceTarget};\n+use serde_json::json;\n+\n+type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>;\n+\n+fn chat_payload(chat_req: ChatRequest) -> Result<serde_json::Value> {\n+\tlet target = ServiceTarget {\n+\t\tmodel: ModelIden::new(AdapterKind::Cohere, \"command-r-plus\"),\n+\t\tauth: AuthData::from_single(\"test-key\"),\n+\t\tendpoint: Endpoint::from_static(\"https://api.cohere.com/v1/\"),\n+\t};\n+\n+\tlet web_req = CohereAdapter::to_web_request_data(target, ServiceType::Chat, chat_req, ChatOptionsSet::default())?;\n+\n+\tOk(web_req.payload)\n+}\n+\n+#[test]\n+fn test_cohere_chat_history_entries_use_message_field() -> Result<()> {\n+\t// -- Setup & Fixtures\n+\tlet chat_req = ChatRequest::new(vec![\n+\t\tChatMessage::user(\"What is Rust?\"),\n+\t\tChatMessage::assistant(\"A systems language.\"),\n+\t\tChatMessage::user(\"Who made it?\"),\n+\t]);\n+\n+\t// -- Exec\n+\tlet payload = chat_payload(chat_req)?;\n+\n+\t// -- Check\n+\t// Cohere's v1 chat API reads `message` in each history entry (and the response parser reads it back).\n+\tassert_eq!(payload[\"message\"], \"Who made it?\");\n+\tassert_eq!(\n+\t\tpayload[\"chat_history\"],\n+\t\tjson!([\n+\t\t\t{\"role\": \"USER\", \"message\": \"What is Rust?\"},\n+\t\t\t{\"role\": \"CHATBOT\", \"message\": \"A systems language.\"},\n+\t\t])\n+\t);\n+\n+\tOk(())\n+}\n+\n+#[test]\n+fn test_cohere_single_message_has_no_chat_history() -> Result<()> {\n+\tlet payload = chat_payload(ChatRequest::new(vec![ChatMessage::user(\"Hello\")]))?;\n+\n+\tassert_eq!(payload[\"message\"], \"Hello\");\n+\tassert!(payload.get(\"chat_history\").is_none());\n+\n+\tOk(())\n+}"
+  }
+ ],
+ "test_files": []
+}

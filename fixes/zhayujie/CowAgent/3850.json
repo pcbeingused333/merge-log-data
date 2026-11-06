@@ -1,0 +1,26 @@
+{
+ "repo": "zhayujie/CowAgent",
+ "number": 3850,
+ "url": "https://github.com/zhayujie/CowAgent/pull/3850",
+ "title": "fix(gemini): count thinking tokens in the completion tokens of the usage",
+ "merged_at": "2026-10-28T07:50:29Z",
+ "files": [
+  {
+   "filename": "models/gemini/google_gemini_bot.py",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 2,
+   "patch": "@@ -24,6 +24,15 @@\n from models.chatgpt.chat_gpt_session import ChatGPTSession\n \n \n+def _completion_tokens(usage_meta: dict) -> int:\n+    \"\"\"Output tokens of a Gemini usageMetadata: the answer plus the thinking tokens.\n+\n+    Gemini reports thinking tokens in thoughtsTokenCount, apart from candidatesTokenCount,\n+    but bills them as output.\n+    \"\"\"\n+    return (usage_meta.get(\"candidatesTokenCount\") or 0) + (usage_meta.get(\"thoughtsTokenCount\") or 0)\n+\n+\n # OpenAI对话模型API (可用)\n class GoogleGeminiBot(Bot):\n \n@@ -274,7 +283,7 @@ def call_vision(self, image_url: str, question: str,\n                 \"content\": \"\".join(text_parts),\n                 \"usage\": {\n                     \"prompt_tokens\": usage_meta.get(\"promptTokenCount\", 0),\n-                    \"completion_tokens\": usage_meta.get(\"candidatesTokenCount\", 0),\n+                    \"completion_tokens\": _completion_tokens(usage_meta),\n                     \"total_tokens\": usage_meta.get(\"totalTokenCount\", 0),\n                 },\n             }\n@@ -846,7 +855,7 @@ def _handle_gemini_rest_stream_response(self, response, model_name):\n                 # reads (prompt_tokens is what the context indicator needs).\n                 final_chunk[\"usage\"] = {\n                     \"prompt_tokens\": last_usage_meta.get(\"promptTokenCount\", 0),\n-                    \"completion_tokens\": last_usage_meta.get(\"candidatesTokenCount\", 0),\n+                    \"completion_tokens\": _completion_tokens(last_usage_meta),\n                     \"total_tokens\": last_usage_meta.get(\"totalTokenCount\", 0),\n                 }\n             yield final_chunk"
+  },
+  {
+   "filename": "tests/test_gemini_usage_thoughts_tokens.py",
+   "status": "added",
+   "additions": 72,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,72 @@\n+\"\"\"Gemini reports thinking tokens apart from the answer's, and bills both as output.\"\"\"\n+import json\n+import os\n+import sys\n+\n+sys.path.insert(0, os.path.join(os.path.dirname(__file__), \"..\"))\n+\n+USAGE = {\n+    \"promptTokenCount\": 31,\n+    \"candidatesTokenCount\": 10,\n+    \"thoughtsTokenCount\": 40,\n+    \"totalTokenCount\": 81,\n+}\n+\n+\n+class _StreamResponse:\n+    def iter_lines(self):\n+        chunk = {\n+            \"candidates\": [{\"content\": {\"parts\": [{\"text\": \"hi\"}]}, \"finishReason\": \"STOP\"}],\n+            \"usageMetadata\": USAGE,\n+        }\n+        yield b\"data: \" + json.dumps(chunk).encode()\n+\n+\n+class _VisionResponse:\n+    status_code = 200\n+    text = \"\"\n+\n+    def json(self):\n+        return {\n+            \"candidates\": [{\"content\": {\"parts\": [{\"text\": \"a cat\"}]}}],\n+            \"usageMetadata\": USAGE,\n+        }\n+\n+\n+def _bot():\n+    from models.gemini.google_gemini_bot import GoogleGeminiBot\n+\n+    return GoogleGeminiBot.__new__(GoogleGeminiBot)\n+\n+\n+def test_stream_final_chunk_counts_thinking_tokens_as_completion():\n+    chunks = list(_bot()._handle_gemini_rest_stream_response(_StreamResponse(), \"gemini-2.5-flash\"))\n+\n+    assert chunks[-1][\"usage\"] == {\"prompt_tokens\": 31, \"completion_tokens\": 50, \"total_tokens\": 81}\n+\n+\n+def test_vision_usage_counts_thinking_tokens_as_completion(monkeypatch):\n+    from config import conf\n+    from models.gemini import google_gemini_bot\n+\n+    monkeypatch.setitem(conf(), \"gemini_api_key\", \"test\")\n+    bot = _bot()\n+    monkeypatch.setattr(\n+        google_gemini_bot.requests, \"post\", lambda *args, **kwargs: _VisionResponse()\n+    )\n+    monkeypatch.setattr(\n+        google_gemini_bot.GoogleGeminiBot,\n+        \"_build_inline_part_from_image_url\",\n+        lambda self, image: {\"inlineData\": {\"mimeType\": \"image/png\", \"data\": \"\"}},\n+    )\n+\n+    result = bot.call_vision(\"data:image/png;base64,AAAA\", \"what is this?\", model=\"gemini-2.5-flash\")\n+\n+    assert result[\"usage\"] == {\"prompt_tokens\": 31, \"completion_tokens\": 50, \"total_tokens\": 81}\n+\n+\n+def test_missing_thinking_tokens_leave_the_answer_count_unchanged():\n+    from models.gemini.google_gemini_bot import _completion_tokens\n+\n+    assert _completion_tokens({\"candidatesTokenCount\": 10}) == 10\n+    assert _completion_tokens({}) == 0"
+  }
+ ],
+ "test_files": [
+  "tests/test_gemini_usage_thoughts_tokens.py"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "looplj/axonhub",
+ "number": 2779,
+ "url": "https://github.com/looplj/axonhub/pull/2779",
+ "title": "fix(biz): strip NUL escapes before storing bodies in jsonb",
+ "merged_at": "2026-10-27T03:25:44Z",
+ "files": [
+  {
+   "filename": "internal/server/biz/request.go",
+   "status": "modified",
+   "additions": 41,
+   "deletions": 6,
+   "patch": "@@ -83,6 +83,41 @@ func (s *RequestService) shouldUseExternalStorage(_ context.Context, ds *ent.Dat\n // _InvalidRequestBodyJSON returns a JSON object indicating invalid text.\n var _InvalidRequestBodyJSON = objects.JSONRawMessage(`{\"message\":\"invalid text\"}`)\n \n+// jsonNulEscape is the JSON escape of U+0000. PostgreSQL jsonb rejects it\n+// (SQLSTATE 22P05), which would otherwise lose the whole payload.\n+var jsonNulEscape = []byte(`\\u0000`)\n+\n+// stripJSONNul removes U+0000 escapes from a JSON document so it can be stored\n+// in a jsonb column. An escaped backslash followed by \"u0000\" is plain text and\n+// is kept. Documents without the escape are returned as is.\n+func stripJSONNul(body objects.JSONRawMessage) objects.JSONRawMessage {\n+\tif !bytes.Contains(body, jsonNulEscape) {\n+\t\treturn body\n+\t}\n+\n+\tout := make(objects.JSONRawMessage, 0, len(body))\n+\n+\tfor i := 0; i < len(body); {\n+\t\tif body[i] == '\\\\' && i+1 < len(body) {\n+\t\t\tif bytes.HasPrefix(body[i:], jsonNulEscape) {\n+\t\t\t\ti += len(jsonNulEscape)\n+\t\t\t\tcontinue\n+\t\t\t}\n+\n+\t\t\t// Copy the escape pair as a unit so `\\\\u0000` is not mistaken for a NUL.\n+\t\t\tout = append(out, body[i], body[i+1])\n+\t\t\ti += 2\n+\n+\t\t\tcontinue\n+\t\t}\n+\n+\t\tout = append(out, body[i])\n+\t\ti++\n+\t}\n+\n+\treturn out\n+}\n+\n // External payload markers live in the DB when the real JSON is in object storage.\n // They must not match the GC strip placeholders (`{}` / `[]`).\n var (\n@@ -270,7 +305,7 @@ func (s *RequestService) CreateRequest(\n \t\tmut = mut.SetRequestBody([]byte(\"{}\"))\n \t} else {\n \t\t// Store in database\n-\t\tmut = mut.SetRequestBody(requestBodyBytes)\n+\t\tmut = mut.SetRequestBody(stripJSONNul(requestBodyBytes))\n \t}\n \n \tif dataStorage != nil {\n@@ -391,7 +426,7 @@ func (s *RequestService) CreateRequestExecution(\n \t\trequestBodyForDB = []byte(\"{}\")\n \t} else {\n \t\t// Store in database\n-\t\trequestBodyForDB = requestBodyBytes\n+\t\trequestBodyForDB = stripJSONNul(requestBodyBytes)\n \t}\n \n \tmut := client.RequestExecution.Create().\n@@ -611,7 +646,7 @@ func (s *RequestService) UpdateRequestFinalized(\n \t\t\t}\n \t\t} else {\n \t\t\t// Store in database\n-\t\t\tupd = upd.SetResponseBody(responseBodyBytes)\n+\t\t\tupd = upd.SetResponseBody(stripJSONNul(responseBodyBytes))\n \t\t}\n \t}\n \n@@ -800,7 +835,7 @@ func (s *RequestService) UpdateRequestCompletedWithAudio(\n \t\t\t\tupd = upd.SetResponseBody(ExternalResponseBodyMarker)\n \t\t\t}\n \t\t} else {\n-\t\t\tupd = upd.SetResponseBody(responseBodyBytes)\n+\t\t\tupd = upd.SetResponseBody(stripJSONNul(responseBodyBytes))\n \t\t}\n \t}\n \n@@ -909,7 +944,7 @@ func (s *RequestService) UpdateRequestStatusExternalIDAndResponseBody(\n \t\t\t}\n \t\t} else {\n \t\t\t// Store in database\n-\t\t\tupd = upd.SetResponseBody(responseBodyBytes)\n+\t\t\tupd = upd.SetResponseBody(stripJSONNul(responseBodyBytes))\n \t\t}\n \t}\n \n@@ -1010,7 +1045,7 @@ func (s *RequestService) UpdateRequestExecutionFinalized(\n \t\t\t}\n \t\t} else {\n \t\t\t// Store in database\n-\t\t\tupd = upd.SetResponseBody(responseBodyBytes)\n+\t\t\tupd = upd.SetResponseBody(stripJSONNul(responseBodyBytes))\n \t\t}\n \t}\n "
+  },
+  {
+   "filename": "internal/server/biz/request_nul_test.go",
+   "status": "added",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,35 @@\n+package biz\n+\n+import (\n+\t\"testing\"\n+\n+\t\"github.com/stretchr/testify/require\"\n+\n+\t\"github.com/looplj/axonhub/internal/objects\"\n+)\n+\n+func TestStripJSONNul(t *testing.T) {\n+\tt.Parallel()\n+\n+\ttests := []struct {\n+\t\tname string\n+\t\tin   string\n+\t\twant string\n+\t}{\n+\t\t{name: \"no nul\", in: `{\"a\":\"hello\"}`, want: `{\"a\":\"hello\"}`},\n+\t\t{name: \"nul inside string\", in: `{\"a\":\"hello\\u0000world\"}`, want: `{\"a\":\"helloworld\"}`},\n+\t\t{name: \"several\", in: `{\"a\":\"\\u0000x\\u0000\",\"b\":[\"\\u0000\"]}`, want: `{\"a\":\"x\",\"b\":[\"\"]}`},\n+\t\t{name: \"escaped backslash kept\", in: `{\"a\":\"\\\\u0000\"}`, want: `{\"a\":\"\\\\u0000\"}`},\n+\t\t{name: \"escaped backslash then nul\", in: `{\"a\":\"\\\\\\u0000\"}`, want: `{\"a\":\"\\\\\"}`},\n+\t\t{name: \"other unicode escape kept\", in: `{\"a\":\"A\\u0001\"}`, want: `{\"a\":\"A\\u0001\"}`},\n+\t\t{name: \"empty\", in: ``, want: ``},\n+\t}\n+\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tt.Parallel()\n+\n+\t\t\trequire.Equal(t, tt.want, string(stripJSONNul(objects.JSONRawMessage(tt.in))))\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/server/biz/request_nul_test.go"
+ ]
+}

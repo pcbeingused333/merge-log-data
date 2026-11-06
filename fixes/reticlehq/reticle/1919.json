@@ -1,0 +1,40 @@
+{
+ "repo": "reticlehq/reticle",
+ "number": 1919,
+ "url": "https://github.com/reticlehq/reticle/pull/1919",
+ "title": "fix(engine): grade a net miss over a media file as inconclusive",
+ "merged_at": "2026-10-27T20:48:23Z",
+ "files": [
+  {
+   "filename": ".changes/1664-net-media-inconclusive.md",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+### Fixed\n+\n+- **`@reticlehq/engine`: a `net` check over a `<video>` or `<audio>` source no longer answers `no`.** A media element loads its file through neither `fetch` nor `XMLHttpRequest`, and Chromium does not report the load as a `resource` timing entry. So `until: { kind: \"net\", urlContains: \"/media/clip.mp4\" }` found no call and graded the playing video as a failure, even when the resource timing observer was live. A miss over a `.mp4`, `.webm`, `.m3u8`, `.mp3`, `.vtt` or other media suffix is now `inconclusive` (`net.media-load`). The reason says that media element loads are not observed and names an element check on the `<video>` or `<audio>` as the alternative. A `net` check over an ordinary API URL still fails when no call matched. Closes [#1664](https://github.com/reticlehq/reticle/issues/1664)."
+  },
+  {
+   "filename": "engine/src/question/predicate-net-media.test.ts",
+   "status": "added",
+   "additions": 85,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,85 @@\n+import { describe, it, expect } from 'vitest';\n+import { EventType } from '@reticlehq/core';\n+import type { ReticleEvent } from '@reticlehq/core';\n+import { evalNet } from './predicate/predicate-eval.js';\n+import { PredicateKind } from './predicate/predicate.js';\n+\n+/**\n+ * A media element's load is not a missing request.\n+ *\n+ * `<video src>` / `<audio src>` / `<track src>` loads reach neither the patched `fetch` and\n+ * `XMLHttpRequest` nor the `resource` timing entries (Chromium does not report media element loads\n+ * as `resource` entries), so a `net` clause over a media file can never be matched by the page\n+ * playing it. Graded `no`, it sends an agent to fix a video that plays (#1664).\n+ */\n+function netEvent(t: number, data: Record<string, unknown>): ReticleEvent {\n+  return { type: EventType.NET_REQUEST, t, data } as ReticleEvent;\n+}\n+\n+const API_CALL = netEvent(10, { method: 'GET', url: '/api/session', status: 200, ok: true });\n+// A document-initiated resource entry proves the resource-timing observer is live on the page.\n+const IMAGE_ENTRY = netEvent(11, {\n+  method: 'GET',\n+  url: '/img/logo.png',\n+  status: 200,\n+  ok: true,\n+  initiator: 'img',\n+});\n+\n+describe('evalNet — media element loads', () => {\n+  it.each([\n+    '/media/clip.mp4',\n+    '/media/clip.webm',\n+    '/media/live/index.m3u8',\n+    '/media/song.mp3',\n+    '/media/captions.vtt',\n+    '/media/clip.mp4?token=abc',\n+  ])('reports a miss on %s as inconclusive, even when resource timing is live', (urlContains) => {\n+    const r = evalNet([API_CALL, IMAGE_ENTRY], { kind: PredicateKind.NET, urlContains });\n+\n+    expect(r.pass).toBe(false);\n+    expect(r.inconclusive).toBeDefined();\n+    expect(r.inconclusive).toContain('media');\n+    expect(r.inconclusive).toContain('element');\n+    expect(r.assertion).toBe('net.media-load');\n+  });\n+\n+  it('applies to a count clause too', () => {\n+    const r = evalNet([API_CALL, IMAGE_ENTRY], {\n+      kind: PredicateKind.NET,\n+      urlContains: '/media/clip.mp4',\n+      count: 1,\n+    });\n+\n+    expect(r.inconclusive).toBeDefined();\n+  });\n+\n+  it('still passes when a fetch of the media file was observed', () => {\n+    const ranged = netEvent(20, { method: 'GET', url: '/media/clip.mp4', status: 206, ok: true });\n+    const r = evalNet([API_CALL, ranged], {\n+      kind: PredicateKind.NET,\n+      urlContains: '/media/clip.mp4',\n+    });\n+\n+    expect(r.pass).toBe(true);\n+  });\n+\n+  it('still fails an ordinary API URL that never fired', () => {\n+    const r = evalNet([API_CALL, IMAGE_ENTRY], {\n+      kind: PredicateKind.NET,\n+      urlContains: '/api/save',\n+    });\n+\n+    expect(r.pass).toBe(false);\n+    expect(r.inconclusive).toBeUndefined();\n+  });\n+\n+  it('does not downgrade a filter that merely contains a media suffix mid-pattern', () => {\n+    const r = evalNet([API_CALL, IMAGE_ENTRY], {\n+      kind: PredicateKind.NET,\n+      urlContains: '/api/clip.mp4/list',\n+    });\n+\n+    expect(r.inconclusive).toBeUndefined();\n+  });\n+});"
+  },
+  {
+   "filename": "engine/src/question/predicate/net-blind-spots.ts",
+   "status": "modified",
+   "additions": 43,
+   "deletions": 0,
+   "patch": "@@ -81,6 +81,31 @@ const NATIVE_DOWNLOAD_SUFFIXES: readonly string[] = [\n   '.rar',\n ];\n \n+/**\n+ * File suffixes a media element (`<video>`, `<audio>`, `<track>`) loads.\n+ *\n+ * Unlike DOCUMENT_ONLY_SUFFIXES this is not gated on a live resource-timing observer: Chromium does\n+ * not report media element loads as `resource` entries, so a page that plays the file leaves no\n+ * record however live the observer is. A miss over one of these says nothing about the file.\n+ */\n+const MEDIA_LOAD_SUFFIXES: readonly string[] = [\n+  '.mp4',\n+  '.m4v',\n+  '.webm',\n+  '.mov',\n+  '.ogv',\n+  '.m3u8',\n+  '.mp3',\n+  '.m4a',\n+  '.ogg',\n+  '.oga',\n+  '.wav',\n+  '.aac',\n+  '.flac',\n+  '.opus',\n+  '.vtt',\n+];\n+\n /**\n  * Does this filter target a class of request the observer cannot see?\n  *\n@@ -109,6 +134,24 @@ export function targetsNativeDownload(url: string | undefined): boolean {\n   return NATIVE_DOWNLOAD_SUFFIXES.some((suffix) => filterPath(url).endsWith(suffix));\n }\n \n+export function targetsMediaLoad(url: string | undefined): boolean {\n+  if (undefined === url) {\n+    return false;\n+  }\n+  return MEDIA_LOAD_SUFFIXES.some((suffix) => filterPath(url).endsWith(suffix));\n+}\n+\n+/** `filter` is the net clause as applied — `describeNetFilter` of it. */\n+export function mediaLoadReason(filter: string): string {\n+  return (\n+    `no fetch or XHR matched ${filter}. A media element (<video>, <audio>, <track>) loads its ` +\n+    `source itself: the load goes through neither fetch nor XMLHttpRequest, and the browser does ` +\n+    `not report it as a resource timing entry, so media element loads are not observed and an ` +\n+    `empty net window is not evidence the file failed to load. Assert something that proves ` +\n+    `playback instead, for example an element check on the <video> or <audio>`\n+  );\n+}\n+\n /** `filter` is the net clause as applied — `describeNetFilter` of it. */\n export function nativeDownloadReason(filter: string): string {\n   return ("
+  },
+  {
+   "filename": "engine/src/question/predicate/predicate-eval.ts",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 4,
+   "patch": "@@ -39,7 +39,9 @@ import { keyFragmentOnly } from './body-key-fragment.js';\n import { evalExactCount } from '@/exact-count.js';\n import {\n   PRE_ATTACH_CAVEAT,\n+  mediaLoadReason,\n   nativeDownloadReason,\n+  targetsMediaLoad,\n   targetsNativeDownload,\n   targetsUnobservedChannel,\n   unobservedChannelReason,\n@@ -145,17 +147,19 @@ function nativeDownloadMiss(\n   events: ReticleEvent[],\n   p: Extract<Predicate, { kind: typeof PredicateKind.NET }>,\n ): EvalResult | undefined {\n-  if (!targetsNativeDownload(p.urlContains)) {\n+  const media = targetsMediaLoad(p.urlContains);\n+  if (!media && !targetsNativeDownload(p.urlContains)) {\n     return undefined;\n   }\n-  const reason = nativeDownloadReason(describeNetFilter(p));\n+  const filter = describeNetFilter(p);\n+  const reason = media ? mediaLoadReason(filter) : nativeDownloadReason(filter);\n   return {\n     pass: false,\n     failureReason: reason,\n     inconclusive: reason,\n     observed: observedNetCalls(events, p.urlContains),\n-    expected: `a fetch or XHR matching ${describeNetFilter(p)}`,\n-    assertion: 'net.native-download',\n+    expected: `a fetch or XHR matching ${filter}`,\n+    assertion: media ? 'net.media-load' : 'net.native-download',\n   };\n }\n "
+  }
+ ],
+ "test_files": [
+  "engine/src/question/predicate-net-media.test.ts"
+ ]
+}

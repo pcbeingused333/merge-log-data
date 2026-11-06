@@ -1,0 +1,41 @@
+{
+ "repo": "Tencent/teamai-cli",
+ "number": 1541,
+ "url": "https://github.com/Tencent/teamai-cli/pull/1541",
+ "title": "fix(import): fail when the push to the team repo fails instead of reporting a publish",
+ "merged_at": "2026-10-29T06:12:22Z",
+ "files": [
+  {
+   "filename": "src/__tests__/auto-push-team-repo.test.ts",
+   "status": "added",
+   "additions": 70,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,70 @@\n+import { afterAll, beforeAll, describe, expect, it } from 'vitest';\n+import fs from 'node:fs/promises';\n+import os from 'node:os';\n+import path from 'node:path';\n+import { autoPushTeamRepo, createGit } from '../utils/git.js';\n+\n+let root: string;\n+let remote: string;\n+let member: string;\n+\n+async function clone(dir: string) {\n+  await createGit(root).clone(remote, dir);\n+  const git = createGit(dir);\n+  await git.addConfig('user.name', 'Test');\n+  await git.addConfig('user.email', 'test@example.com');\n+  return git;\n+}\n+\n+beforeAll(async () => {\n+  root = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-push-team-repo-'));\n+  remote = path.join(root, 'team.git');\n+  const seed = path.join(root, 'seed');\n+  await createGit(root).raw(['init', '--bare', '-b', 'main', remote]);\n+  await fs.mkdir(seed);\n+  const seedGit = createGit(seed);\n+  await seedGit.init(['-b', 'main']);\n+  await seedGit.addConfig('user.name', 'Test');\n+  await seedGit.addConfig('user.email', 'test@example.com');\n+  await fs.writeFile(path.join(seed, 'teamai.yaml'), 'team: test\\n');\n+  await seedGit.add('.');\n+  await seedGit.commit('team');\n+  await seedGit.push([remote, 'main']);\n+  member = path.join(root, 'member');\n+  await clone(member);\n+});\n+\n+afterAll(async () => { await fs.rm(root, { recursive: true, force: true }); });\n+\n+describe('autoPushTeamRepo', () => {\n+  it('throws with a next step when the push is rejected because main moved', async () => {\n+    const other = await clone(path.join(root, 'other'));\n+    await fs.writeFile(path.join(root, 'other', 'other.md'), 'other member\\n');\n+    await other.add('.');\n+    await other.commit('other member pushed first');\n+    await other.push(['origin', 'main']);\n+\n+    await fs.mkdir(path.join(member, 'svc'));\n+    await fs.writeFile(path.join(member, 'svc', 'index.md'), 'imported\\n');\n+\n+    await expect(autoPushTeamRepo(member, '[teamai] Import from local dir: svc')).rejects.toThrow(\n+      /^Push to the team repo failed: .*\\(fetch first\\).*failed to push some refs.*\\nRun `teamai pull`, then rerun this command\\.$/s,\n+    );\n+  });\n+\n+  it('keeps the hook output and gives no pull advice when a hook declines the push', async () => {\n+    const hook = path.join(remote, 'hooks', 'pre-receive');\n+    await fs.writeFile(hook, '#!/bin/sh\\necho \"main is protected\" >&2\\nexit 1\\n', { mode: 0o755 });\n+    const third = path.join(root, 'third');\n+    await clone(third);\n+    await fs.mkdir(path.join(third, 'svc'));\n+    await fs.writeFile(path.join(third, 'svc', 'index.md'), 'imported\\n');\n+\n+    const err = await autoPushTeamRepo(third, '[teamai] Import from local dir: svc').catch(e => e as Error);\n+    expect(err).toBeInstanceOf(Error);\n+    expect((err as Error).message).toMatch(/^Push to the team repo failed: /);\n+    expect((err as Error).message).toContain('main is protected');\n+    expect((err as Error).message).toContain('pre-receive hook declined');\n+    expect((err as Error).message).not.toContain('teamai pull');\n+  });\n+});"
+  },
+  {
+   "filename": "src/__tests__/import-dir.test.ts",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 0,
+   "patch": "@@ -300,6 +300,29 @@ describe('import --dir', () => {\n     expect(await fs.pathExists(staging!)).toBe(false);\n   });\n \n+  it('does not report a publish when the push to the team repo fails', async () => {\n+    (autoPushTeamRepo as ReturnType<typeof vi.fn>).mockRejectedValue(\n+      new Error('Push to the team repo failed: rejected. Run `teamai pull`, then rerun this command.'),\n+    );\n+    const lines: string[] = [];\n+    const logSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')); });\n+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);\n+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);\n+    let exitCode: unknown;\n+    try {\n+      await runImportDir({ dir: projectDir });\n+      exitCode = exitSpy.mock.calls[0]?.[0];\n+    } finally {\n+      logSpy.mockRestore();\n+      errorSpy.mockRestore();\n+      exitSpy.mockRestore();\n+    }\n+\n+    expect(exitCode).toBe(1);\n+    expect(lines.join('\\n')).not.toContain('Pushed to team knowledge repo');\n+    expect(lines.join('\\n')).not.toContain('import complete');\n+  });\n+\n   it('source directory is not polluted with teamwiki/', async () => {\n     await runImportDir({ dir: projectDir });\n "
+  },
+  {
+   "filename": "src/import.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -509,10 +509,10 @@ export async function importCmd(opts: ImportOptions): Promise<void> {\n         dryRun: opts.dryRun,\n         outputDir: opts.output,\n       });\n-      log.success('Import complete');\n       if (pushed > 0 && !opts.dryRun && !opts.output) {\n         await autoPushTeamRepo(localConfig.repo.localPath, `[teamai] Import from local: claude-rules`);\n       }\n+      log.success('Import complete');\n     } else {\n       // 默认：未指定来源，提示用户\n       log.info('Please specify import source: --dir <path>, --from-repo <url>, --from-repo-list <yaml>, --from-org <org>, --from-mr <url>, or --from-iwiki <id>');"
+  },
+  {
+   "filename": "src/utils/git.ts",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 3,
+   "patch": "@@ -706,16 +706,26 @@ export async function pushLearningToOrigin(\n }\n \n /**\n- * Best-effort push all changes in a team repo clone.\n- * Logs other push failures; refuses detached team clones.\n+ * Push all changes in a team repo clone.\n+ * Refuses detached team clones. Throws when the push fails (a moved `main`, a protected\n+ * branch, a hook rejection), so a caller never reports a publish that did not happen.\n  * @deprecated Use autoPushViaMR instead for import flows.\n  */\n export async function autoPushTeamRepo(repoPath: string, message: string): Promise<void> {\n   try {\n     await pushRepoDirectly(repoPath, message, ['.']);\n   } catch (err) {\n     DetachedTeamRepoError.rethrow(err);\n-    log.warn(`[git] autoPush failed (non-blocking): ${(err as Error).message}`);\n+    const lines = (err as Error).message.split('\\n').map(line => line.trim()).filter(Boolean);\n+    // Keep the lines that say why git refused: the `! [rejected]` ref line (fetch first,\n+    // pre-receive hook declined, protected branch), the hook's `remote:` output and the generic\n+    // error:/fatal: line. git prints the remote URL first, which is not a cause.\n+    const reasonLines = lines.filter(line => /^(error|fatal|remote):/.test(line) || /^!\\s/.test(line) || /\\[(remote )?rejected\\]/.test(line));\n+    const reason = (reasonLines.length > 0 ? reasonLines : lines.slice(0, 1)).join('\\n') || 'unknown error';\n+    // Only a stale clone is fixed by pulling; a protected branch or a hook rejection is not.\n+    const stale = /\\(fetch first\\)|\\(non-fast-forward\\)/.test((err as Error).message);\n+    const advice = stale ? '\\nRun `teamai pull`, then rerun this command.' : '';\n+    throw new Error(`Push to the team repo failed: ${reason}${advice}`, { cause: err });\n   }\n }\n "
+  }
+ ],
+ "test_files": [
+  "src/__tests__/auto-push-team-repo.test.ts",
+  "src/__tests__/import-dir.test.ts"
+ ]
+}
