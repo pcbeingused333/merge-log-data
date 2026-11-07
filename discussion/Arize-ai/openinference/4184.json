@@ -1,0 +1,39 @@
+{
+ "repo": "Arize-ai/openinference",
+ "number": 4184,
+ "url": "https://github.com/Arize-ai/openinference/pull/4184",
+ "state": "closed",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-29T16:13:53Z",
+   "body": "## Factory review of d6f70c6: Request changes\n\nChecks fail: `openinference-core` no longer type-checks or builds, and `fmt:check` fails on the new changeset.\n\n| Criterion | Result | Notes |\n|---|---|---|\n| Fit | Pass | does what it claims |\n| Checks | Fail | core `type:check`/`build` (TS2561, TS2769); `fmt:check` on changeset |\n| Tests | Pass | new-env and redaction tests fail on main |\n| Blocking findings | 0 | none beyond the failing checks |\n| Non-blocking findings | 2 | OR test passes on main `traceConfig.test.ts:72`; stale docs, no diff line |\n| Risk | Medium | backwards compatibility: hidden vector goes from absent to `\"__REDACTED__\"` |\n| Review depth | Deep | core package public API; Risk Medium |\n\n<details><summary>Details</summary>\n\n**Intent:** Make `@arizeai/openinference-core` read the spec's `OPENINFERENCE_HIDE_EMBEDDINGS_VECTORS`, OR-ed with the deprecated `OPENINFERENCE_HIDE_EMBEDDING_VECTORS` as Python does, and replace hidden embedding vectors with `\"__REDACTED__\"` instead of dropping them (fixes #4183).\n**Fit:** The diff adds the env key, ORs it into `hideEmbeddingVectors`, switches the masking action to `REDACTED_VALUE`, exports the constant and adds a changeset. The claim that this matches Python holds: in `config.py`, `hide_embedding_vectors` and `hide_embeddings_vectors` resolve independently and are OR-ed at line 453, so an explicit false for one doesn't override the env var for the other.\n**Verified:** `pnpm --filter @arizeai/openinference-core type:check` fails, and `make install-js` (core `tsc --build`) fails the same way. The first error is `constants.ts(97,3)` TS2561: `hideEmbeddingsVectors` isn't a `TraceConfigKey`, and `traceConfigMetadata` is `satisfies Readonly<Record<TraceConfigKey, TraceConfigFlag>>`. The second is a knock-on at `traceConfig.ts(112,9)` TS2769: once contextual typing is lost, `type` widens to `string`.\n**Verified, fix for the type error:** keep the metadata map keyed by `TraceConfigKey`. Declare the new flag as a standalone constant (`{ default, envKey: OPENINFERENCE_HIDE_EMBEDDINGS_VECTORS, type: \"boolean\" } satisfies BooleanTraceConfigFlag`) and pass that to `parseOption`.\n**Verified:** `pnpm run fmt:check` fails on `js/.changeset/js-core-hide-embeddings-vectors.md`. oxfmt reads `__REDACTED__` as bold and wants `**REDACTED**`. Wrapping it in backticks (`` `\"__REDACTED__\"` ``) passes, which I checked on a copy.\n**Verified:** `pnpm run lint` passes.\n**Verified:** `vitest run --typecheck` on core with `dist/**` excluded: 178 passed, 1 skipped. Vitest transpiles without type-checking, so the tsc errors don't show here. A plain `pnpm --filter … test` also picks up stale CJS files in `dist/test` left by the partial build. That comes from the sandbox build and the package's unchanged tsconfig, not from this diff.\n**Verified:** with `src/` reverted to `origin/main`, two of the PR's tests fail: the `OPENINFERENCE_HIDE_EMBEDDINGS_VECTORS` case and the `__REDACTED__` masking expectation. The deprecated-name case and the \"either name\" case still pass.\n**Not verified:** the change touches `openinference-core`, but core doesn't build, so the workspace-wide `pnpm run -r test` and `pnpm run type:check` couldn't run against it. No other `js/packages` code or test references `hideEmbeddingVectors` or the masking rule (grep). CI runs Node 20; the sandbox has Node 22.\n**Findings without a diff line:** Docs contradict the new behaviour (`js-docs-sync` skill: behaviour or public API changes must update `docs/`). `docs/trace-config-and-masking.md:86` says `hideEmbeddingVectors` \"Removes\" the vector attributes. Line 98 lists it under **Removes** rather than Redacts. The env-var table at line 114 and `README.md:279` list only the deprecated `OPENINFERENCE_HIDE_EMBEDDING_VECTORS`. The precedence section (around line 119, \"option > env > default\") doesn't mention that the new env var can't be overridden by `hideEmbeddingVectors: false`. Fix: move the flag to Redacts, add the new env var with a deprecation note for the old one, and note the precedence exception. **Non-blocking**\n**Risk:** side effects low, performance none, backwards compatibility medium, from the language reviewer. The vector attribute changes from absent to `\"__REDACTED__\"` for existing `hideEmbeddingVectors` users. The spec requires this, but downstream consumers will see it.\n\nGraded against the [review criteria](https://github.com/Arize-ai/openinference/blob/main/factory/agents/pr-reviewer.md#verdict).\n\n</details>"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "js/packages/openinference-core/test/trace-config/traceConfig.test.ts",
+   "created_at": "2026-10-29T16:13:34Z",
+   "body": "This test doesn't pin the Python-parity behaviour it's named after. It sets the deprecated name to `true` and the new one to `false`, and `main` already returns `hideEmbeddingVectors: true` for that input. I reverted `src/` to `origin/main` and it still passed. The behaviour the PR does introduce isn't asserted anywhere: an explicit `hideEmbeddingVectors: false` option combined with `OPENINFERENCE_HIDE_EMBEDDINGS_VECTORS=true` still hides, because of the OR at `traceConfig.ts:105-113`. Python does the same at `config.py:453`.\nFix: add `generateTraceConfig({ hideEmbeddingVectors: false })` with only the new env var set to `\"true\"`, and expect `true`. That pins the deliberate exception to option > env > default.\n**Non-blocking**"
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-10-29T16:09:11Z",
+   "body": "The factory started a **review** of d6f70c6f32 (session [`sesn_019uQDpeML9JAkAY7YmDBzrA`](https://platform.claude.com/workspaces/wrkspc_01P7k888EhFQdCHm2iyi4ThZ/sessions/sesn_019uQDpeML9JAkAY7YmDBzrA)). It reports back here when the session ends."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-29T16:15:17Z",
+   "body": "The factory recommends **Request changes** for d6f70c6f32. [Read the review](https://github.com/Arize-ai/openinference/pull/4184#pullrequestreview-5701065217)."
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-10-29T18:41:39Z",
+   "body": "I don't understand this PR, there's already a masking env var. Closing."
+  }
+ ]
+}

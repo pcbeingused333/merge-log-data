@@ -1,0 +1,173 @@
+{
+ "repo": "versity/versitygw",
+ "number": 2596,
+ "url": "https://github.com/versity/versitygw/pull/2596",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-02T10:46:15Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-02T12:56:07Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-02T18:22:13Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-02T19:02:49Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "DISMISSED",
+   "submitted_at": "2026-11-03T06:25:48Z",
+   "body": ""
+  },
+  {
+   "role": "member",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-03T17:47:21Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-02T10:33:47Z",
+   "body": "With a sync after the fact, the object is still visible from `f.link()` until these attributes are written. During that window a reader sees it without its retention, legal hold or tags (numbers in the review summary). Also, if this fsync fails, the PUT returns an error even though the object is already published with its lock. `TestFsyncFailureFailsThePut` expects a failed fsync to publish nothing.\n\nCould these be written on the staged file before `f.link()`, the way CompleteMultipartUpload does?\n\n```go\nif tags != nil {\n\tb, err := json.Marshal(tags)\n\t// ...\n\terr = p.meta.StoreAttribute(f.File(), *po.Bucket, object, tagHdr, b)\n\t// ...\n}\n// Legal hold / retention: if the put has lock parameters, check\n// isBucketObjectLockEnabled first (as the directory branch already does).\n// Then StoreAttribute(f.File(), ...) with objectLegalHoldKey and\n// objectRetentionKey (explicit, or from bucketDefaultRetention).\n```\n\nThe existing `syncData()` in `link()` then covers them. That's one fsync per PUT, no re-open, no window where the object is unlocked, and nothing is published if a step fails. `putObjectLockSettings` would also no longer need the extra return value.\n"
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-02T10:34:28Z",
+   "body": "The regular copy path below still has the bug. With `TaggingDirective=COPY`, which is the default, the source tags are written on the destination after `PutObject` returns, and nothing flushes them:\nhttps://github.com/versity/versitygw/blob/da735ffe748a8a1aab689b081cb96535b8222a17/backend/posix/posix.go#L7190-L7197\n\nA test that checks the destination's tag attribute inside the `syncFile` hook finds no tags at the last flush. If the source tags were decoded and passed as `putObjectInput.Tagging`, `PutObject` would write them along with everything else.\n"
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-02T10:43:03Z",
+   "body": "Same as the directory branch: the in-place self copy rewrites the metadata by path. A self copy with `MetadataDirective=REPLACE` and no tagging or lock change is acknowledged with no flush (0 syncs). This sync should also run whenever `--fsync` is set."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/fsync.go",
+   "created_at": "2026-11-02T10:45:05Z",
+   "body": "On Windows, `os.Open` gives a read-only handle, and `Sync()` calls `FlushFileBuffers`, which needs a handle with `GENERIC_WRITE`:\nhttps://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers\n\nI haven't run this on Windows, but according to the docs, every tagged or locked PUT with `--fsync` would fail there after the object is already published. CI won't catch it, because the Windows functional tests don't use `--fsync`.\n\nWindows runs with `--sidecar`, where the attributes aren't stored in this file, so the flush wouldn't save them anyway. The same goes for `--sidecar` on Linux: it adds a data-file fsync that doesn't reach the sidecar files."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/fsync.go",
+   "created_at": "2026-11-02T10:45:20Z",
+   "body": "nit: `p.ObjectPath(bucket, object)` already does this join."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/fsync_test.go",
+   "created_at": "2026-11-02T10:45:50Z",
+   "body": "Counting flushes doesn't show they happened after the writes: a flush placed before the setxattrs would also give 2. Checking the attribute inside the hook catches ordering:\n\n```go\nsyncFile = func(f *os.File) error {\n\t_, err := p.meta.RetrieveAttribute(nil, bucket, \"object\", tagHdr)\n\ttaggedAtLastSync = err == nil\n\treturn origFile(f)\n}\n```\n\nIt would also be worth covering CopyObject (both COPY and REPLACE directives) and a directory object.\n"
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-02T12:51:53Z",
+   "body": "This moves PutObject's retention, legal hold and tags onto the staged file, so they now depend on `link()` carrying the file's xattrs to the final path. One path doesn't. With `--disableotmp`, which nested mounts below a bucket need, `link()` goes through `backend.MoveFile`; non-Linux builds always do. On `EXDEV`, `MoveFile` falls back to copying the data only, and the copy gets none of the staged xattrs.\n\nI checked on `main` with a separate filesystem mounted at `bucket/sub`:\n\n| Write into `sub/` on `main` | Content type (staged) | Retention | Tags |\n|---|---|---|---|\n| PutObject | lost | kept (written by path after the move) | kept |\n| CompleteMultipartUpload | lost | **lost** | **lost** |\n\nWith this change, PutObject behaves like the CMU row, so a locked PUT into a nested mount lands unlocked.\n\nCould the `EXDEV` fallback copy the xattrs too? That would also fix CMU and the lost etag/checksums. With `--fsync`, the copy should also be flushed before the source is removed: today it isn't, so even the data isn't durable on that path.\n"
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-02T12:52:44Z",
+   "body": "This flushes the directory itself, but not the parent directories `mkdirAll` created for it. For `PUT a/b/dir/` where `a/` didn't exist, the entries for `a`, `a/b` and `dir` are never flushed, so the object can still disappear after a crash. The file branch handles this in `syncNamespace` by syncing each parent up to the bucket; the same walk is needed here. `TestFsyncPutDirectoryObjectMeta` would catch it with a nested key like `a/b/dir/`."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/fsync_test.go",
+   "created_at": "2026-11-02T12:53:46Z",
+   "body": "`newFsyncMetaPosix` sets `VersioningDir` and creates an Object Lock bucket, which turns versioning on. In a versioned bucket, a self copy creates a new version through `PutObject`, so this subtest never reaches the in-place branch. It passes on `main` too (2 file syncs there), where the in-place branch has no flush at all, so the new `syncObjectMeta` call in that branch is untested.\n\nA gateway without `VersioningDir` and a plain bucket would cover it. Checking that the replaced metadata (`metadataHdr`) is present at the last flush, like the other tests do, would also cover ordering."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-02T12:54:51Z",
+   "body": "`PutObject` re-validates these tags with `ParseObjectTags`. Tags stored before the charset check existed (before v1.0.14), or set on the xattr outside the gateway, now fail the copy with a 400 `InvalidTag`. Before, they were copied as stored, and S3 never fails a COPY because of the source's tags. Passing the stored bytes to an internal put helper, instead of through `PutObjectInput.Tagging`, would avoid the round trip. I'm fine leaving it if you'd rather not."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-02T12:56:00Z",
+   "body": "Two small things:\n- This check runs after the tags are stored. With xattrs that's harmless, because the staged file is discarded. With `--sidecar`, `StoreAttribute` ignores the file and writes by path, so everything here, lock attributes included, lands on the *current* object before `link()`. A rejected or failed PUT then leaves the old object with the new tags, or even the new retention. Checking the lock settings before storing anything helps a little. The rest is sidecar's existing non-atomicity, but it's worth a line in the comment on `syncObjectMeta`.\n- nit: the retention resolution duplicates `putObjectLockSettings`. A shared helper returning `(legalHold bool, retention []byte, err error)` would keep the two in step. `storeObjectTags` could also take the file handle instead of being inlined here."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/fsync_test.go",
+   "created_at": "2026-11-02T18:22:06Z",
+   "body": "nit: with `TaggingDirective=REPLACE` here, the first round's conditional flush (which ran only when tags were replaced or a lock was set) would also pass this test. A second case that replaces only the metadata would catch a regression back to that."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/common.go",
+   "created_at": "2026-11-02T19:02:45Z",
+   "body": "The deny-list copies any namespace that isn't `system.`, `security.` or `trusted.`, and some filesystems list their own. Lustre, for example, lists `lustre.lov` on every file, which is why `rsync -X` from Lustre fails with \"Operation not supported\". With a Lustre bucket and a different filesystem mounted below it, every PUT into the mount would now fail here.\n\nThe gateway only writes `user.` attributes (the meta package's `xattrPrefix`), and on FreeBSD `pkg/xattr` only sees the user namespace anyway. An allow-list is tighter and simpler:\n\n```go\n// the gateway's own attributes; FreeBSD lists the user namespace unprefixed\nif runtime.GOOS != \"freebsd\" && !strings.HasPrefix(attr, \"user.\") {\n\tcontinue\n}\n```\n"
+  },
+  {
+   "role": "member",
+   "path": "backend/common.go",
+   "created_at": "2026-11-03T17:42:25Z",
+   "body": "This calls Sync() unconditionally, but MoveFile is also used when --fsync is disabled. We need the fsync setting to be passed into this path so the flush only happens when enabled.\n"
+  },
+  {
+   "role": "member",
+   "path": "backend/common.go",
+   "created_at": "2026-11-03T17:44:19Z",
+   "body": "Noting here that the xattrs are copied after the file is moved, so there is a window of time where metadata such as objectlock info is missing from other racing requests. Might need to be addressed somehow."
+  }
+ ],
+ "comments": [
+  {
+   "role": "collaborator",
+   "created_at": "2026-10-31T05:42:06Z",
+   "body": "This won't automatically run in continuous integration without approval. A member of the Versity organization must allow it."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-02T11:46:26Z",
+   "body": "Thanks for the thorough review. 14ecc68 follows the suggested approach:\n\n1. **Attributes before `f.link()`:** tags, legal hold and retention (explicit, or the bucket default) are now stored on the staged file, the way `CompleteMultipartUpload` does, after the `isBucketObjectLockEnabled` check. `link()`'s `syncData()` covers them, so a PUT does one fsync, the object is never visible without its lock, and a failed step publishes nothing. `putObjectLockSettings` no longer returns the extra value.\n2. **CopyObject with `TaggingDirective=COPY`:** the source tags are decoded and passed as `putObjectInput.Tagging`, so `PutObject` writes them with everything else. The post-put `StoreAttribute` is gone.\n3. **Self copy with `MetadataDirective=REPLACE`:** the in-place branch now syncs whenever `--fsync` is set. The directory-object branch does the same and flushes the directory.\n4. **Windows / sidecar:** `syncObjectMeta` opens the file `O_RDWR` on Windows. Its comment now notes that with `--sidecar` the attributes live in other files that this does not flush. Sidecar durability is left out of this PR.\n5. **nit:** uses `p.ObjectPath(bucket, object)`.\n6. **Tests:** the `syncFile` hook now records which attributes were present at each flush, instead of counting flushes. `TestFsyncPutObjectMeta` covers plain, tags, legal hold, explicit and default retention, and all combined. New tests: `TestFsyncPutDirectoryObjectMeta`, plus `TestFsyncCopyObjectMeta` (COPY tagging, REPLACE tagging, and a self copy with REPLACE metadata). All three fail on da735ff and pass now. `go test ./backend/posix` passes.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-02T15:23:25Z",
+   "body": "Thanks, second round addressed in 6b4d6e2:\n\n- **Lock check before storing** (posix.go): `storeStagedPutAttrs` now resolves the legal hold and retention and runs the Object Lock check before any tag or lock attribute is written. Retention resolution is a shared helper, `objectLockSettings`, used by it and by `putObjectLockSettings`. `storeObjectTags` takes the file handle instead of being inlined.\n- **Sidecar:** the `syncObjectMeta` comment now says that with `--sidecar` the data and its sidecar are not updated atomically, so a crash can leave them out of step.\n- **Directory object parents:** `syncObjectMeta` now flushes each directory from the object up to the bucket. `TestFsyncPutDirectoryObjectNested` (`a/b/dir/`) fails without it (the bucket directory was not flushed) and passes now.\n- **Self copy:** `TestFsyncSelfCopyInPlace` uses a gateway without `VersioningDir` and a plain bucket, so it reaches the in-place branch, and checks the replaced metadata is present at the last flush.\n- **CopyObject tags:** I left it as is, as you said you're fine with that.\n- **EXDEV / `--disableotmp`:** you're right that a locked PUT into a nested mount loses its attributes on the copy fallback, same as CMU does today. Fixing it means `MoveFile` copying the xattrs, which needs the metadata store passed in, so it changes the API. I'll send that as a separate PR right after this one, which also flushes the copy before the source is removed when `--fsync` is set. If you'd rather this PR not merge with that gap, I can fold it in here instead.\n\n`go test ./backend/posix` passes.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-11-02T18:20:11Z",
+   "body": "> Thanks, second round addressed in [6b4d6e2](https://github.com/versity/versitygw/commit/6b4d6e2210ea237067055e065d709b474bfdcacb):\r\n> \r\n> * **Lock check before storing** (posix.go): `storeStagedPutAttrs` now resolves the legal hold and retention and runs the Object Lock check before any tag or lock attribute is written. Retention resolution is a shared helper, `objectLockSettings`, used by it and by `putObjectLockSettings`. `storeObjectTags` takes the file handle instead of being inlined.\r\n> * **Sidecar:** the `syncObjectMeta` comment now says that with `--sidecar` the data and its sidecar are not updated atomically, so a crash can leave them out of step.\r\n> * **Directory object parents:** `syncObjectMeta` now flushes each directory from the object up to the bucket. `TestFsyncPutDirectoryObjectNested` (`a/b/dir/`) fails without it (the bucket directory was not flushed) and passes now.\r\n> * **Self copy:** `TestFsyncSelfCopyInPlace` uses a gateway without `VersioningDir` and a plain bucket, so it reaches the in-place branch, and checks the replaced metadata is present at the last flush.\r\n> * **CopyObject tags:** I left it as is, as you said you're fine with that.\r\n> * **EXDEV / `--disableotmp`:** you're right that a locked PUT into a nested mount loses its attributes on the copy fallback, same as CMU does today. Fixing it means `MoveFile` copying the xattrs, which needs the metadata store passed in, so it changes the API. I'll send that as a separate PR right after this one, which also flushes the copy before the source is removed when `--fsync` is set. If you'd rather this PR not merge with that gap, I can fold it in here instead.\r\n> \r\n> `go test ./backend/posix` passes.\r\n> \r\n> This comment was drafted with Claude Code.\r\n\r\nThanks, this round looks good. The lock check before any store, the shared helper, the parent flush and the in-place test are all what I was after.\r\n\r\nOn `EXDEV`, please fold it in here. On `main` today, PutObject's retention survives the copy fallback because it's written after the move. This PR is what puts it on that path, so merging it alone would ship a regression where a locked PUT into a nested mount lands unlocked.\r\n\r\nIt shouldn't need an API change. `MoveFile`'s only callers are the two posix link fallbacks, and the source's user xattrs can be copied onto the destination with `pkg/xattr`, without the metadata store. Handling `EXDEV` in posix's own fallback is fine too, if you prefer. With `--fsync`, please also flush the copy before the source is removed.\r\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-02T18:29:01Z",
+   "body": "Folded in, with no API change. `MoveFile`'s copy fallback now copies the source's user xattrs onto the destination with `pkg/xattr` and syncs the copy before the staged file is removed (it is the only place the copy exists, so the sync is unconditional on that path). Added `TestMoveFileAcrossFilesystems` (staged file on /dev/shm, object elsewhere; fails on main with the attribute missing) and the metadata-only case in the self-copy fsync test, as suggested.\n\nThis text was drafted with the help of an AI assistant (Claude).\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-02T21:07:36Z",
+   "body": "Switched to the allow-list in a8d66d7: `copyUserXattrs` now skips everything that is not `user.` (FreeBSD excepted, as suggested), so foreign namespaces such as `lustre.lov` are never copied. gofmt, vet and the backend, meta and posix test packages pass.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-03T18:45:27Z",
+   "body": "Both points addressed in 0586a291:\n- `MoveFile` takes the fsync setting (`tmp.fsync` from both callers) and only syncs the copy when `--fsync` is enabled.\n- The cross-filesystem fallback now copies the data and user xattrs to a hidden `.<name>.sgwtmp.<n>` file next to the destination (same naming as `linkatOTmpfile`), syncs it if `--fsync`, then renames it into place, so the object never appears at its path without its Object Lock attributes. The temp file is removed on any failure. `TestMoveFileAcrossFilesystems` now runs with fsync off and on and checks nothing is left behind.\n`go test ./backend/ ./backend/meta/ ./backend/posix/` passes.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
+}

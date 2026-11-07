@@ -1,0 +1,64 @@
+{
+ "repo": "open-telemetry/opentelemetry-python-genai",
+ "number": 998,
+ "url": "https://github.com/open-telemetry/opentelemetry-python-genai/pull/998",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-28T12:14:35Z",
+   "body": "<!-- ccr-overview-v2 -->\n\n### 🟡 Changes recommended\n\nIndexless tool-call buffering splits interleaved calls with recurring IDs and merges distinct name-only calls, corrupting reconstructed arguments.\n\n<details open>\n<summary><strong>2 open issues</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Recognize name-only boundaries in indexless tool calls](https://github.com/open-telemetry/opentelemetry-python-genai/pull/998#discussion_r4400399370) · New\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Reuse matching buffers for repeated interleaved call IDs](https://github.com/open-telemetry/opentelemetry-python-genai/pull/998#discussion_r4400399517) · New\n</details>\n\n<details>\n<summary><strong>What changed in this PR</strong></summary>\n\nThis PR prevents a `TypeError` when OpenAI-compatible servers stream tool-call deltas without an index, allowing the OpenAI instrumentation to continue buffering them.\n\n**Changes:**\n- Adds fallback buffer selection for missing or null tool-call indexes.\n- Adds regression tests for indexless calls and consecutive fragments with repeated IDs.\n\n| File | Description |\r\n| ---- | ----------- |\r\n| `instrumentation/​opentelemetry-instrumentation-genai-openai/​tests/​test_choice_buffer.py` | Tests missing-index handling and repeated-ID continuations. |\r\n| `instrumentation/​opentelemetry-instrumentation-genai-openai/​src/​opentelemetry/​instrumentation/​genai/​openai/​chat_buffers.py` | Adds fallback routing for indexless tool-call deltas. |\n</details>\n\n<sub>Review effort: Balanced</sub>"
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-28T15:15:08Z",
+   "body": ""
+  },
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-29T04:07:03Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "instrumentation/opentelemetry-instrumentation-genai-openai/src/opentelemetry/instrumentation/genai/openai/chat_buffers.py",
+   "created_at": "2026-10-28T12:14:34Z",
+   "body": "The fallback ignores function names, although the PR description says a name can start a new call. For two indexless, id-less deltas naming `get_weather` and then `get_time`, this keeps only the `get_weather` buffer and concatenates both calls' arguments (for example, `{\"city\":\"NYC\"}{}`). Please recognize name-only call boundaries while preserving the repeated-id continuation behavior, and add a regression test for this case."
+  },
+  {
+   "role": "bot",
+   "path": "instrumentation/opentelemetry-instrumentation-genai-openai/src/opentelemetry/instrumentation/genai/openai/chat_buffers.py",
+   "created_at": "2026-10-28T12:14:35Z",
+   "body": "For indexless parallel calls, checking only the last buffer splits a call when its ID reappears after another call. For example, fragments with IDs `call_1`, `call_2`, `call_1` create three buffers, leaving `call_1`'s arguments split across two output tool calls. Please reuse an existing buffer with the matching ID before allocating a new one, and add an interleaved-ID regression case."
+  },
+  {
+   "role": "contributor",
+   "path": "instrumentation/opentelemetry-instrumentation-genai-openai/src/opentelemetry/instrumentation/genai/openai/chat_buffers.py",
+   "created_at": "2026-10-28T15:15:07Z",
+   "body": "Could we handle parallel indexless tool calls when later deltas only contain arguments? Right now, those fragments all get added to the last call, which can leave the earlier calls incomplete and corrupt the arguments."
+  },
+  {
+   "role": "member",
+   "path": "instrumentation/opentelemetry-instrumentation-genai-openai/tests/test_choice_buffer.py",
+   "created_at": "2026-10-29T04:02:54Z",
+   "body": "These tests build `ChoiceDeltaToolCall` objects by hand, so they only cover the delta shapes we imagine. Could we add a test (or swap these for one) that replays a real Gemini stream through the public client? Gemini's OpenAI-compatible API sends `index=None` on every tool call delta. It fails on `main` with the `TypeError`.\n\nI recorded a cassette you can reuse: [test_chat_completion_streaming_tool_calls_without_index.yaml](https://github.com/lmolkova/opentelemetry-python-genai/blob/fix/openai-stream-tool-call-no-index/instrumentation/opentelemetry-instrumentation-genai-openai/tests/cassettes/test_chat_completion_streaming_tool_calls_without_index.yaml). The `authorization` filter in `vcr_config` already scrubs the key when re-recording with `GEMINI_API_KEY`.\n\n```python\n# conftest.py\n@pytest.fixture\ndef gemini_client():\n    return OpenAI(\n        api_key=os.getenv(\"GEMINI_API_KEY\", \"test_gemini_api_key\"),\n        base_url=\"https://generativelanguage.googleapis.com/v1beta/openai/\",\n    )\n\n\n# test_chat_completions.py\ndef test_chat_completion_streaming_tool_calls_without_index(\n    span_exporter, gemini_client, instrument_with_content, vcr\n):\n    with vcr.use_cassette(\n        \"test_chat_completion_streaming_tool_calls_without_index.yaml\"\n    ):\n        stream = gemini_client.chat.completions.create(\n            messages=WEATHER_TOOL_PROMPT,\n            model=\"gemini-3.5-flash\",\n            tools=[get_current_weather_tool_definition()],\n            stream=True,\n        )\n        tool_calls = [\n            tool_call\n            for chunk in stream\n            for choice in chunk.choices\n            for tool_call in choice.delta.tool_calls or []\n        ]\n\n    assert [tool_call.index for tool_call in tool_calls] == [None, None]\n    (span,) = span_exporter.get_finished_spans()\n    assert ErrorAttributes.ERROR_TYPE not in span.attributes\n    assert_messages_attribute(\n        span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES],\n        [\n            {\n                \"role\": \"assistant\",\n                \"parts\": [\n                    {\n                        \"type\": \"tool_call\",\n                        \"id\": tool_call.id,\n                        \"name\": \"get_current_weather\",\n                        \"arguments\": json.loads(tool_call.function.arguments),\n                    }\n                    for tool_call in tool_calls\n                ],\n                # Gemini reports \"stop\" rather than \"tool_calls\".\n                \"finish_reason\": \"stop\",\n                \"name\": None,\n            }\n        ],\n    )\n```\n\nAn async variant with `AsyncOpenAI` can replay the same cassette."
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-10-28T12:12:47Z",
+   "body": "<!-- pull-request-dashboard-status -->\n<!-- pull-request-dashboard-status-revision:22 -->\n<!-- pull-request-dashboard-author-nudge-episode:4cdcef7101ec4a308c67091ab4af6561 -->\n## Pull request dashboard status\n\n**Waiting on the author** · refreshed 2026-11-05 04:39 UTC\n\nRespond to 1 review item (e.g. link a commit, explain why not, ask a follow-up):\n- **Inline threads:** [1](https://github.com/open-telemetry/opentelemetry-python-genai/pull/998#discussion_r4408564492)\n\n<details>\n<summary>Status above doesn't look right?</summary>\n\n<br>\n\n- **Just replied or pushed?** Anything around or after the refresh time above may not be picked up yet — give it a few minutes.\n- **Should this be with reviewers?** Comment `/dashboard route:reviewers` to route it to them.\n- **Anything wrong — including the routing?** [Report it](https://github.com/open-telemetry/shared-workflows/issues/new?template=incorrect-pr-dashboard-result.md&title=PR+dashboard+result+looks+incorrect&body=PR%3A+https%3A%2F%2Fgithub.com%2Fopen-telemetry%2Fopentelemetry-python-genai%2Fpull%2F998%0A%0ACurrent+live+status+comment%3A%0A%3E+%3C%21--+pull-request-dashboard-status+--%3E%0A%3E+%3C%21--+pull-request-dashboard-status-revision%3A22+--%3E%0A%3E+%3C%21--+pull-request-dashboard-author-nudge-episode%3A4cdcef7101ec4a308c67091ab4af6561+--%3E%0A%3E+%23%23+Pull+request+dashboard+status%0A%3E+%0A%3E+%2A%2AWaiting+on+the+author%2A%2A+%C2%B7+refreshed+2026-11-05+04%3A39+UTC%0A%3E+%0A%3E+Respond+to+1+review+item+%28e.g.+link+a+commit%2C+explain+why+not%2C+ask+a+follow-up%29%3A%0A%3E+-+%2A%2AInline+threads%3A%2A%2A+%5B1%5D%28https%3A%2F%2Fgithub.com%2Fopen-telemetry%2Fopentelemetry-python-genai%2Fpull%2F998%23discussion_r4408564492%29%0A%0AWhat+looks+incorrect%3A%0A) with what you expected; it helps us improve the dashboard.\n\n</details>\n"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-05T04:39:03Z",
+   "body": "<!-- pull-request-dashboard-author-nudge:4cdcef7101ec4a308c67091ab4af6561 -->\nHi @pcbeingused333 — just a friendly reminder that this pull request is waiting on you. The [dashboard status comment](https://github.com/open-telemetry/opentelemetry-python-genai/pull/998#issuecomment-6468663548) has the open items and is kept current.\n\n- Replying is enough to hand it off — answer, explain why no change is needed, or ask a follow-up. The dashboard routes it onward once nothing on the list is waiting on you.\n- To hand it back for any other reason, including the dashboard getting this wrong, comment `/dashboard route:reviewers`.\n"
+  }
+ ]
+}

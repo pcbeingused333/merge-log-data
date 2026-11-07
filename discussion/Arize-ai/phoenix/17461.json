@@ -1,0 +1,45 @@
+{
+ "repo": "Arize-ai/phoenix",
+ "number": 17461,
+ "url": "https://github.com/Arize-ai/phoenix/pull/17461",
+ "state": "closed",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-31T03:39:59Z",
+   "body": "## Factory review of 1d261e1: Close\n\nThe same change is already in another open PR: #17433, by the same author and opened earlier, makes the identical `spans/__init__.py` edit and also fixes the trace and session methods for the same issue.\n\n| Criterion | Result | Notes |\n|---|---|---|\n| Fit | Pass | does what it claims |\n| Checks | Fail | `mypy --strict` and `pyright` fail in phoenix-client |\n| Tests | Pass | all 4 new tests fail without the change |\n| Blocking findings | 2 | typecheck failure from `**kwargs` `packages/phoenix-client/tests/client/resources/spans/test_spans.py:127`; duplicates #17433 (no diff line) |\n| Non-blocking findings | 1 | flag wiring not pinned by tests `packages/phoenix-client/tests/client/resources/spans/test_spans.py:100` |\n| Risk | Low | backwards compatibility: only inputs that already failed now fail earlier |\n| Review depth | Deep | changes behavior of a public method in the published client |\n\n<details><summary>Details</summary>\n\n**Intent:** Make sync and async `log_span_annotations_dataframe` reject a DataFrame that has no `annotator_kind` column or no `name`/`annotation_name` column (when the matching argument isn't given) with the same clear `ValueError` the document methods raise, before any request (#17398).\n**Fit:** The two call sites now pass `annotation_name_required` / `annotator_kind_required` exactly as the document methods do (spans/__init__.py:1027, :2332). That fixes both cases in the issue, and the diff contains nothing else.\n**Verified:** `ruff format --check` and `ruff check` on packages/phoenix-client pass. In a CI-style env (`uv sync --frozen --no-editable --package arize-phoenix-client --all-extras`, Python 3.11), `mypy --strict .` fails with 1 error and `pyright .` fails with 3 errors, all at test_spans.py:127. Both tools report 0 errors on `main`. `pytest tests/client`: 740 passed, 6 skipped. With `spans/__init__.py` reverted to `main`, the 4 new tests fail for the reported reasons: `Error processing row 0: assert None` and `request must not be sent`.\n**Not verified:** CI's Python 3.14 and 3.15 matrix entries (only 3.11 was run). Behavior against a running Phoenix server.\n**Findings without a diff line:** Duplicate of open PR #17433. Its `spans/__init__.py` hunk is byte-identical to this PR's. It also applies the same fix to the trace and session dataframe methods, which have the same gap, and its tests cover all three resources. **Blocking**. Fix: close this PR and continue on #17433.\n**Risk:** side effects none, performance none, backwards compatibility low: only inputs that already failed (row assertion or server 422) are now rejected earlier. DataFrames over 100 rows no longer send partial chunks before failing.\n\nGraded against the [review criteria](https://github.com/Arize-ai/phoenix/blob/main/factory/agents/pr-reviewer.md#verdict).\n\n</details>"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "packages/phoenix-client/tests/client/resources/spans/test_spans.py",
+   "created_at": "2026-10-31T03:39:45Z",
+   "body": "**Blocking.** Splatting `**kwargs` (typed `kwargs: dict[str, str]`, line 119) into the overloaded `log_span_annotations_dataframe` makes the client's CI typecheck steps fail. The Phoenix Client job runs `mypy --strict .` and `pyright .` in `packages/phoenix-client`. At this commit both fail on this line:\n- mypy: `No overload variant of \"log_span_annotations_dataframe\" of \"Spans\" matches argument types \"DataFrame\", \"dict[str, str]\"  [call-overload]`\n- pyright: 3 errors here, including `\"str\" is not assignable to type \"_AnnotatorKind | None\"` and `\"str\" is not assignable to \"bool\"` for `sync`\n\nBoth tools report 0 errors on `main`. Every case passes `kwargs={}`, so the parameter does nothing. Fix: drop the `kwargs` parameter and call `log_span_annotations_dataframe(dataframe=dataframe)`. Or, if you meant to test one-global-argument cases, pass typed keyword arguments explicitly (see the other comment)."
+  },
+  {
+   "role": "bot",
+   "path": "packages/phoenix-client/tests/client/resources/spans/test_spans.py",
+   "created_at": "2026-10-31T03:39:46Z",
+   "body": "**Non-blocking.** The new cases never pass `annotation_name=` or `annotator_kind=`, so both flags are always `True`. As a result the tests don't pin which argument drives which flag. If `annotation_name_required=annotator_kind is None` / `annotator_kind_required=annotation_name is None` were swapped at the call sites, all 72 tests in this file would still pass. The area reviewer ran that mutation and confirmed it, and I checked the cases by reading them. Fix: add two cases. `annotation_name=\"q\"` with no `annotator_kind` column should raise the `annotator_kind` error. `annotator_kind=\"HUMAN\"` with no name column should raise the name error."
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-10-30T16:56:34Z",
+   "body": "<!-- mintlify-fork-preview-approval -->\n### Preview approval required\n\nThis pull request comes from a fork, so Mintlify won't build a preview until someone with write access approves commit `1d261e1`.\n\n[Approve preview](https://github.com/Arize-ai/phoenix/pull/17461/checks?check_run_id=124196210085)"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-31T03:33:00Z",
+   "body": "The factory started a **review** of 1d261e1dd2 (session [`sesn_01SCoAXKnVCQSzbTGYN1NBXi`](https://platform.claude.com/workspaces/wrkspc_019uQCzw86YfY8Li79ZLtsom/sessions/sesn_01SCoAXKnVCQSzbTGYN1NBXi)). It reports back here when the session ends."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-31T03:41:05Z",
+   "body": "The factory recommends **Close** for 1d261e1dd2. [Read the review](https://github.com/Arize-ai/phoenix/pull/17461#pullrequestreview-5720968660)."
+  }
+ ]
+}

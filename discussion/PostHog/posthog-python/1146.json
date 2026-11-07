@@ -1,0 +1,81 @@
+{
+ "repo": "PostHog/posthog-python",
+ "number": 1146,
+ "url": "https://github.com/PostHog/posthog-python/pull/1146",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-29T11:42:22Z",
+   "body": "Automated advisory code review."
+  },
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-29T14:05:34Z",
+   "body": "Automated advisory code review."
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-05T22:30:55Z",
+   "body": "The Anthropic exception-preservation correction is verified. I still found an OpenAI Chat exception-masking case and privacy-sensitive fallback logging, plus two small repository-check failures. Details inline.\n\nAI-assisted review."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "member",
+   "path": "posthog/ai/anthropic/anthropic.py",
+   "created_at": "2026-10-29T11:42:22Z",
+   "body": "blocking: Preserve the provider exception when error telemetry cannot format rejected input — When Anthropic rejects malformed input such as `messages=[None]` with HTTP 400, the newly added capture call formats that same rejected input before reaching the bare `raise`. `format_anthropic_input` calls `msg.get(...)`, raising `AttributeError` and replacing the original `anthropic.BadRequestError`; the async handler at `posthog/ai/anthropic/anthropic_async.py:169` behaves identically. Previously callers received the actionable provider error and could handle `BadRequestError` normally. Ensure failures in this telemetry path cannot replace the original exception. Reproduction: reproduced — `python -m pytest -p no:cacheprovider posthog/test/ai/test_review_connect.py -k invalid_anthropic --timeout=30 -vv` fails both sync/async assertions on the reviewed head with `AttributeError: 'NoneType' object has no attribute 'get'`, while both pass unchanged at the recorded merge base."
+  },
+  {
+   "role": "member",
+   "path": "posthog/ai/gemini/gemini.py",
+   "created_at": "2026-10-29T14:05:34Z",
+   "body": "blocking: Keep the new Gemini handlers compatible with Mypy — Passing the initially empty, unannotated `accumulated_content` into this new exception handler makes Mypy require an explicit element type before the nested generator populates it. Both the sync and async additions introduce `var-annotated` errors and fail the required Mypy check; please annotate the accumulated content in both wrappers. Reproduction: reproduced — `python -m mypy --no-site-packages --config-file mypy.ini posthog/ai/gemini/gemini.py posthog/ai/gemini/gemini_async.py` reports exactly two annotation errors on the reviewed head and no issues on the recorded merge base."
+  },
+  {
+   "role": "contributor",
+   "path": "posthog/ai/openai/openai.py",
+   "created_at": "2026-11-05T22:30:56Z",
+   "body": "### [P1] Preserve OpenAI Chat’s provider exception when telemetry formatting fails\n\n**Severity:** IMPORTANT  \n**Disposition:** REQUIRED  \n**Relationship:** Introduced by the original PR; newly identified in this follow-up, not introduced by the latest Anthropic correction.  \n**Location:** `posthog/ai/openai/openai.py:415`; matching async call at `openai_async.py:419`.\n\nA malformed request rejected with HTTP 400 should still raise OpenAI’s `BadRequestError`. The new capture attempt instead raises `TypeError`, bypassing existing application error handlers.\n\nPublic trigger:\n\n```python\nclient.chat.completions.create(\n    model=\"gpt-test\",\n    messages=123,\n    stream=True,\n)\n```\n\nThis requires **malformed dynamically supplied input**; valid-message controls pass. The wrapper accepts `**kwargs: Any`, and the real OpenAI serializer sends numeric `messages`.\n\nAfter the provider raises `BadRequestError`, `_capture_streaming_event` calls `format_openai_input`. Its loop at `openai_converter.py:235` raises:\n\n```text\nTypeError: 'int' object is not iterable\n```\n\nThe bare `raise` is never reached. Base propagated the provider exception directly. OpenAI’s [official error contract](https://github.com/openai/openai-python/blob/v2.46.0/README.md#handling-errors) maps HTTP 400 to `BadRequestError`.\n\n**Executed regression:** Actual `OpenAI`/`AsyncOpenAI`, actual serialization, `Posthog(send=False)`, and HTTPX `MockTransport` returning:\n\n```json\n{\"error\":{\"message\":\"Invalid request input\",\"type\":\"invalid_request_error\",\"code\":null}}\n```\n\nThe retained `test_openai_rejected_input.py` asserts `BadRequestError`, status 400, and exactly one HTTP request:\n\n- **Base:** eight passed.\n- **Head:** six controls passed; malformed Chat sync/async cases failed with `TypeError`.\n- Malformed Responses controls passed; this finding does not establish the same defect there.\n\n**Consider making the complete new Chat telemetry attempt best-effort while preserving the provider exception**, and retaining these sync/async regressions alongside capture-count tests. Avoid raw exception logging as the fallback."
+  },
+  {
+   "role": "contributor",
+   "path": "posthog/ai/anthropic/anthropic.py",
+   "created_at": "2026-11-05T22:30:56Z",
+   "body": "### [P1] Avoid logging private provider-error text in Anthropic’s fallback\n\n**Severity:** IMPORTANT  \n**Disposition:** REQUIRED  \n**Relationship:** Introduced by the latest correction.  \n**Location:** `posthog/ai/anthropic/anthropic.py:188`; matching async fallback at `anthropic_async.py:188`.\n\nWhen telemetry preparation fails, `log.exception(...)` prints both the formatter exception and its chained provider exception. Consequently, private text in the provider’s error body reaches the SDK logger despite privacy mode.\n\nPublic trigger:\n\n```python\nclient.messages.create(\n    model=\"claude-test\",\n    max_tokens=5,\n    messages=[{\"role\": \"user\", \"content\": \"private text\"}, None],\n    stream=True,\n    posthog_privacy_mode=True,\n)\n```\n\nBoth conditions are required:\n\n1. The provider rejection contains private text.\n2. Telemetry preparation fails—for example, on the malformed `None` message.\n\nThe original provider exception now correctly survives. The regression is the additional SDK diagnostic.\n\nExisting `_summarize_error_for_privacy` / `_format_ai_error` at `posthog/ai/utils.py:925–980` deliberately exclude messages and tracebacks because they can quote prompts/output. The existing privacy tests exercise provider errors containing private canaries.\n\n**Executed regression:** `test_logging_privacy.py` uses actual Anthropic serialization, a synthetic HTTP 400 provider body containing a private canary, and formatted SDK logging—not mocked logging. It tests sync/async, per-call/client privacy, and valid/malformed histories:\n\n- **Base:** eight passed.\n- **Head:** four valid-history controls passed; all four malformed-history privacy cases failed.\n- Every case first verified that the original `BadRequestError` survived and exactly one HTTP request occurred.\n\nObserved SDK output includes:\n\n```text\nERROR posthog:anthropic.py:188 [PostHog] Failed to capture streaming connect error\n...\nanthropic.BadRequestError: Error code: 400 - {\n  ... 'message': 'Rejected history containing REVIEW_PRIVATE_PROMPT_1146'\n}\n...\nAttributeError: 'NoneType' object has no attribute 'get'\n```\n\nThis demonstrates disclosure through SDK logging, **not transmission to PostHog or proof that every live provider rejection echoes private content**. It reproduces with `send=False` and the caller catching the provider exception.\n\n**Consider keeping the guard but logging fixed diagnostic text without `exc_info` or arbitrary exception text.** Changing only the log level does not redact it. Retain the privacy regressions and valid-history controls."
+  },
+  {
+   "role": "contributor",
+   "path": "posthog/ai/anthropic/anthropic_async.py",
+   "created_at": "2026-11-05T22:30:56Z",
+   "body": "### [P2] Move async logger initialization below the remaining imports\n\n**Severity:** MINOR  \n**Disposition:** REQUIRED mechanical check prerequisite  \n**Relationship:** Introduced by the latest correction.  \n**Location:** `posthog/ai/anthropic/anthropic_async.py:16`.\n\nThe new assignment precedes six remaining imports:\n\n```python\nlog = logging.getLogger(\"posthog\")\nfrom ..stream import AsyncStreamWrapper as AsyncStreamWrapper\n```\n\nThe identical focused Ruff check passes on base and fails on head with six E402 diagnostics at lines **17, 18, 23, 27, 28, and 35**. CI’s Ruff job explicitly runs `ruff check .`.\n\nExecuted command, with `SDK` selecting each pinned checkout:\n\n```bash\nruff check --no-cache --config \"$SDK/pyproject.toml\" \\\n  \"$SDK/posthog/ai/anthropic/anthropic.py\" \\\n  \"$SDK/posthog/ai/anthropic/anthropic_async.py\"\n```\n\n**Consider moving initialization below the final import, matching the sync module.** This is a locally reproduced check failure, not a runtime defect or a claim that remote CI completed and failed."
+  },
+  {
+   "role": "contributor",
+   "path": "posthog/ai/anthropic/anthropic.py",
+   "created_at": "2026-11-05T22:30:56Z",
+   "body": "### [P2] Keep implementation loggers private, or update the API snapshot\n\n**Severity:** MINOR  \n**Disposition:** REQUIRED mechanical check prerequisite  \n**Relationship:** Introduced by the latest correction.  \n**Location:** `posthog/ai/anthropic/anthropic.py:35`; also `anthropic_async.py:16`.\n\nThe repository’s static scanner includes local non-underscore attributes. The new `log` globals therefore change its output while the checked-in snapshot remains unchanged.\n\nThe actual no-write check:\n\n```bash\npython .github/scripts/check_public_api.py\n```\n\npasses on base and fails on head with exactly:\n\n```diff\n+attribute posthog.ai.anthropic.anthropic.log = logging.getLogger('posthog')\n+attribute posthog.ai.anthropic.anthropic_async.log = logging.getLogger('posthog')\n```\n\nThis is an artifact-consistency failure, **not a demonstrated supported-API compatibility break**. No user-facing need for exporting these implementation loggers was found.\n\n**Consider naming them `_log` and updating references.** If exposure is intentional, regenerate and review the snapshot as required by `CONTRIBUTING.md`."
+  }
+ ],
+ "comments": [
+  {
+   "role": "member",
+   "created_at": "2026-11-05T10:28:42Z",
+   "body": "@pcbeingused333 ping here, otherwise i can fix comments as well"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-05T15:16:16Z",
+   "body": "Thanks for the ping. Pushed two things:\n\n- Merged `main` (conflict was only in `test_stream_midstream_error.py`; both sides kept).\n- Addressed the blocking Anthropic comment: the capture call in the connect-failure path of `anthropic.py` / `anthropic_async.py` is now wrapped, so an error while building the telemetry event (e.g. `messages=[None]` formatting) is logged and the original provider exception is re-raised. Added sync and async tests using `messages=[None]`; they fail without the change and pass with it.\n\nThe Gemini mypy annotation from the second review was already fixed in 29325a4.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-05T23:05:36Z",
+   "body": "Thanks, all three addressed in 8c738e1:\n\n- **Provider exception masked (OpenAI Chat):** the connect-error capture is now best-effort in the OpenAI Chat and Responses wrappers (sync/async), and the same pattern is applied to Gemini. If formatting the telemetry raises, a fixed warning is logged and the original provider error is re-raised. New tests send `messages=123` through sync and async Chat and assert the provider error survives.\n- **Private text in the Anthropic fallback log:** `log.exception(...)` is replaced by a fixed `warning` with no `exc_info` or exception text. A test runs a malformed history with privacy mode on and asserts the canary from the provider error never reaches the log and no record carries `exc_info`.\n- **Logger placement in `anthropic_async.py`:** moved below the remaining imports.\n\nThis change was prepared with AI assistance (Claude).\n"
+  }
+ ]
+}

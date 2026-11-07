@@ -1,0 +1,59 @@
+{
+ "repo": "microsoft/semantic-kernel",
+ "number": 14678,
+ "url": "https://github.com/microsoft/semantic-kernel/pull/14678",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-29T12:41:00Z",
+   "body": "<!-- ccr-overview-v2 -->\n\n### 🟡 Changes recommended\n\nTyped embedding responses can accept malformed vectors or select inconsistent encodings across a batch, potentially causing dimension errors.\n\n<details open>\n<summary><strong>2 open issues</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Validate selected typed embedding vectors before returning](https://github.com/microsoft/semantic-kernel/pull/14678#discussion_r4412419546) · New\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Select embedding type independently of response key order](https://github.com/microsoft/semantic-kernel/pull/14678#discussion_r4412419635) · New\n</details>\n\n<details>\n<summary><strong>What changed in this PR</strong></summary>\n\nThis PR extends the Python Bedrock Cohere embedding parser to handle responses keyed by embedding type, addressing failures when `embedding_types` is requested.\n\n**Changes:**\n- Accept typed responses, preferring `float` and otherwise selecting the first returned type.\n- Preserve the existing plain-list response path.\n- Add tests for typed embeddings, request forwarding, and empty or malformed typed responses.\n\n| File | Description |\r\n| ---- | ----------- |\r\n| `python/​tests/​unit/​connectors/​ai/​bedrock/​services/​test_bedrock_text_embedding_generation.py` | Adds successful and invalid typed-response test cases. |\r\n| `python/​semantic_kernel/​connectors/​ai/​bedrock/​services/​model_provider/​bedrock_cohere.py` | Adds extraction of embeddings from type-keyed responses. |\n</details>\n\n<sub>Review effort: Balanced</sub>"
+  },
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-02T13:41:50Z",
+   "body": ""
+  },
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-02T13:41:50Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "python/semantic_kernel/connectors/ai/bedrock/services/model_provider/bedrock_cohere.py",
+   "created_at": "2026-10-29T12:41:00Z",
+   "body": "Malformed typed responses such as `{\"float\": [0.1, 0.2]}` and `{\"float\": [[]]}` return a scalar or an empty vector instead of raising `ServiceInvalidResponseError`. A response with `int8` before an empty `float` also silently falls back to int8. Select `float` by key presence and validate that the selected typed value contains a nonempty numeric vector, while preserving the legacy list behavior."
+  },
+  {
+   "role": "bot",
+   "path": "python/semantic_kernel/connectors/ai/bedrock/services/model_provider/bedrock_cohere.py",
+   "created_at": "2026-10-29T12:41:00Z",
+   "body": "When multiple non-float types are requested, the selected representation depends on response key order. Because `generate_embeddings` requests each text separately, differently ordered responses can mix encodings within a batch or cause dimension errors. Choose a consistent type using a documented priority or the requested type order rather than response ordering."
+  },
+  {
+   "role": "member",
+   "path": "python/semantic_kernel/connectors/ai/bedrock/services/model_provider/bedrock_cohere.py",
+   "created_at": "2026-11-02T13:41:50Z",
+   "body": "Confirmed with the current parser: `{\"int8\": [[1, 2]], \"binary\": [[1]]}` returns `[1, 2]`, while reversing those keys returns `[1]`. Identical requested embedding types can therefore produce different vector dimensions across texts. Selection needs a stable type policy rather than JSON object order."
+  },
+  {
+   "role": "member",
+   "path": "python/semantic_kernel/connectors/ai/bedrock/services/model_provider/bedrock_cohere.py",
+   "created_at": "2026-11-02T13:41:50Z",
+   "body": "Confirmed on the current revision. The parser returns `0.1` for `{\"float\": [0.1, 0.2]}`, `[]` for `{\"float\": [[]]}`, and `[1, 2]` for `{\"int8\": [[1, 2]], \"float\": []}`. These cases still need validation before this is ready."
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-02T14:15:59Z",
+   "body": "Thanks, both points are addressed in cad9abe5c. With `embedding_types` set, the parser now picks the first type present in a fixed order (`float`, `int8`, `uint8`, `binary`, `ubinary`) instead of following the JSON key order, so `float` wins whenever its key is present. It then checks that the selected entry holds a non-empty numeric vector and raises `ServiceInvalidResponseError` otherwise. New test cases cover key-order independence and the invalid shapes (flat list, empty vector, non-numeric values, empty `float` next to `int8`, unknown type only). They fail on the previous commit, and the Bedrock unit suite passes.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
+}

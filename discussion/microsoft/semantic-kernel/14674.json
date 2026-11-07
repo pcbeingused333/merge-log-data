@@ -1,0 +1,41 @@
+{
+ "repo": "microsoft/semantic-kernel",
+ "number": 14674,
+ "url": "https://github.com/microsoft/semantic-kernel/pull/14674",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-29T01:55:31Z",
+   "body": "<!-- ccr-overview-v2 -->\n\n### 🟡 Changes recommended\n\nBoth streaming converters incorrectly report STOP instead of TOOL_CALLS when tool calls precede an empty terminal chunk, requiring a fix and regression coverage for both response types.\n\n<details open>\n<summary><strong>1 open issue</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Preserve TOOL_CALLS when terminal chunk follows tool calls](https://github.com/microsoft/semantic-kernel/pull/14674#discussion_r4407946831) · New\n</details>\n\n<details>\n<summary><strong>What changed in this PR</strong></summary>\n\nThis PR updates the Python Ollama chat connector to expose generation finish reasons and preserve usage data when prompt token counts are zero.\n\n**Changes:**\n- Maps Ollama’s `done_reason` to finish reasons for typed and mapping responses, including streaming.\n- Preserves token usage when counts are zero rather than missing.\n- Adds tests for finish reasons, terminal streaming chunks, and zero-prompt-token usage.\n\n| File | Description |\r\n| ---- | ----------- |\r\n| `python/​tests/​unit/​connectors/​ai/​ollama/​services/​test_ollama_chat_completion.py` | Adds finish-reason and zero-token usage tests; updates response doubles. |\r\n| `python/​semantic_kernel/​connectors/​ai/​ollama/​services/​ollama_chat_completion.py` | Adds finish-reason mapping across response paths and retains zero-token usage. |\n</details>\n\n<sub>Review effort: Balanced</sub>"
+  },
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-02T13:48:02Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "python/semantic_kernel/connectors/ai/ollama/services/ollama_chat_completion.py",
+   "created_at": "2026-10-29T01:55:31Z",
+   "body": "When tool calls arrive before an empty terminal chunk with `done_reason=\"stop\"`, the terminal chunk and combined response report `STOP` instead of `TOOL_CALLS`. Include `tool_call_index > 0` alongside the current message's tool-call check in both streaming converters (same issue at line 380). Add regression coverage for a tool-call chunk followed by an empty terminal chunk for both response types."
+  },
+  {
+   "role": "member",
+   "path": "python/semantic_kernel/connectors/ai/ollama/services/ollama_chat_completion.py",
+   "created_at": "2026-11-02T13:48:02Z",
+   "body": "Confirmed on the current head using the actual mapping converter. A chunk containing `tool_calls=[{\"function\":{\"name\":\"fn\",\"arguments\":{\"x\":1}}}]`, followed by `{\"message\":{\"content\":\"\"},\"done_reason\":\"stop\"}` with `tool_call_index=1`, produces finish reasons `None` then `STOP`. Adding the two `StreamingChatMessageContent` objects keeps the function call but reports `STOP`, not `TOOL_CALLS`. Both streaming converters need to account for tool calls from earlier chunks; please add this two-chunk regression case."
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-02T14:11:24Z",
+   "body": "Thanks, confirmed. Both streaming converters now treat `tool_call_index > 0` (tool calls already emitted earlier in the stream) like the current chunk's own tool calls, so an empty terminal chunk with `done_reason=\"stop\"` reports `TOOL_CALLS`. Added a two-chunk regression test for each response type (typed `ChatResponse` and mapping); both fail without the change and the Ollama unit suite passes (8937fa503).\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
+}

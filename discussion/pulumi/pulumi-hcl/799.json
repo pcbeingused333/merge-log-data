@@ -1,0 +1,51 @@
+{
+ "repo": "pulumi/pulumi-hcl",
+ "number": 799,
+ "url": "https://github.com/pulumi/pulumi-hcl/pull/799",
+ "state": "closed",
+ "reviews": [
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-03T11:33:01Z",
+   "body": "Thanks for the PR. I think there is still some work left. This is a general problem, so we don't want to take a special casing solution."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "member",
+   "path": "pkg/converter/converter.go",
+   "created_at": "2026-11-03T11:30:16Z",
+   "body": "The problem isn't unique to resources. This should be part of a general name rewrite mechanism that applies to all top level declarations.\n\nWe probably want to fold this into `nameRewrites`, and then make sure that the converter correctly tracks this across traversals."
+  },
+  {
+   "role": "member",
+   "path": "pkg/converter/converter_test.go",
+   "created_at": "2026-11-03T11:31:08Z",
+   "body": "Let's use the `hcltest` framework for this. I'm leery of asserting code is correct without a computer running it."
+  },
+  {
+   "role": "member",
+   "path": "pkg/converter/converter.go",
+   "created_at": "2026-11-03T11:32:24Z",
+   "body": "We already have `uniqueName`. Let's not duplicate it."
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-03T11:29:40Z",
+   "body": "Merged master into the branch. The conflict in `newProjectTransformer` was trivial (stale `functionSchemas` init vs. the renamed `providerFunctions` map). Master also added `TestConvertSameAddressInModulesOfDifferentPackages`, which failed against the original global rewrite: modules are converted to separate PCL files, so two same-named resources in different module directories do not collide. Resource-name rewrites are now keyed and claimed per module directory.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-03T11:57:27Z",
+   "body": "Thanks for the review. Reworked as asked, in follow-up commits on the same branch:\n\n- Collision handling is no longer resource-only. `nameRewrites` is now keyed by module directory, reference root (`var`, `module`, or the resource type) and logical name, and it covers resources, variables and modules. The separate `resourceRewrites` map and `computeResourceRewrites` are gone.\n- Collisions and invalid names both go through the existing `uniqueName`, instead of a second copy of that loop. Valid names are claimed first, so a rewritten name never takes one a later declaration is entitled to.\n- References follow the rewrite for their own kind: `var.x` and `module.x` look up their own entry, and `local.x` is no longer rewritten by a variable of the same name.\n- Tests: `TestEjectSameNameAcrossKinds` in `converter_test.go` (variable, resource and module sharing `x`; fails on the previous commit, passes now), plus an hcltest case, `l2_same_name_declarations`, that runs a variable and a resource with the same name through `pulumi up` and the PCL round trip.\n\nThe converter package tests and the full hcltest suite pass, including the new hcltest case (`TestL2SameNameDeclarations`, including the PCL and HCL round-trips). In the generated PCL the variable keeps `thing` and the resource becomes `thing_`, with the references pointing at the right one.\n\nThis change was prepared with the help of an AI assistant (Claude Code), and the author is responsible for the change.\n"
+  },
+  {
+   "role": "member",
+   "created_at": "2026-11-05T12:39:08Z",
+   "body": "Hi @pcbeingused333. After another look at the problem space, I decided I wanted a more holistic change on this: https://github.com/pulumi/pulumi-hcl/pull/822. Thanks for getting the ball rolling."
+  }
+ ]
+}

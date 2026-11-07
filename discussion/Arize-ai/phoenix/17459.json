@@ -1,0 +1,61 @@
+{
+ "repo": "Arize-ai/phoenix",
+ "number": 17459,
+ "url": "https://github.com/Arize-ai/phoenix/pull/17459",
+ "state": "closed",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-31T03:37:44Z",
+   "body": "## Factory review of ecd0441: Close\n\nAn earlier open PR, #17442, already fixes the same bug from #17373 in the same lines with the same 3 test cases, so this PR duplicates it.\n\n| Criterion | Result | Notes |\n|---|---|---|\n| Fit | Pass | does what it claims |\n| Checks | Fail | lint-ts: `consistent-type-imports` in the new test file, line 17 |\n| Tests | Pass | 2 failure cases fail on main, pass with the fix |\n| Blocking findings | 0 | none |\n| Non-blocking findings | 1 | status message untested `runExperimentTaskSpanStatus.test.ts:124` |\n| Risk | Low | side effects: failed task spans now export ERROR and a message |\n| Review depth | Focused | small client behavior fix, no API or schema change |\n\n<details><summary>Details</summary>\n\n**Intent:** In `@arizeai/phoenix-client`'s `runExperiment`, a task that throws should keep ERROR status on its `Task: ...` span, now with the error message, instead of having it overwritten with OK after the run is logged (#17373).\n**Fit:** The `taskFailed` flag stops the late `setStatus(OK)` for failed tasks. The ERROR status now carries the error message, which matches `resumeExperiment`. A patch changeset is included.\n**Duplicate:** #17442 (clean99, the reporter of #17373) was opened about 8.5 hours earlier and is still open. It also `resolves #17373`. It changes the same `runTaskWithExamples` status logic by moving `setStatus(OK)` into the try block, and it tests the same success, `\"task failed\"` and `\"\"` cases in the existing `runExperimentTracing.test.ts`. The only extra thing here is the status `message`, which could be suggested on #17442.\n**Verified:** On Node 24.22.2 with pnpm 12, scoped to `phoenix-client`: oxfmt check on changed files passed. `oxlint packages/phoenix-client` failed with 1 error: `typescript(consistent-type-imports)` at `runExperimentTaskSpanStatus.test.ts:17` (`typeof import(\"@arizeai/phoenix-otel\")`). `pnpm run typecheck` passed. `vitest run` passed: 66 files, 642 tests, 1 skipped. With main's `runExperiment.ts` restored, the 2 ERROR cases failed (`expected 1 to be 2`) and the OK case passed.\n**Not verified:** Repo-wide `make lint-ts`, `typecheck-ts` and `test-ts`, because only the `phoenix-client` dependency chain was installed. A run against a live Phoenix server.\n**Findings without a diff line:** none\n**Risk:** side effects low, performance none, backwards compatibility none, from the packages reviewer\n\nGraded against the [review criteria](https://github.com/Arize-ai/phoenix/blob/main/factory/agents/pr-reviewer.md#verdict).\n\n</details>"
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-02T17:28:02Z",
+   "body": "## Factory review of ecd0441: Close\n\nAn earlier PR, #17442, is still open and fixes the same bug from #17373 in the same `runTaskWithExamples` lines with the same 3 test cases, so this PR duplicates it.\n\n| Criterion | Result | Notes |\n|---|---|---|\n| Fit | Pass | does what it claims |\n| Checks | Fail | lint-ts: `consistent-type-imports` at `runExperimentTaskSpanStatus.test.ts:17` |\n| Tests | Pass | 2 ERROR cases fail on base, pass with the fix |\n| Blocking findings | 0 | none |\n| Non-blocking findings | 1 | status message untested `runExperimentTaskSpanStatus.test.ts:124` |\n| Risk | Low | side effects: failed task spans now export ERROR plus a message, not OK |\n| Review depth | Focused | small client behavior fix, no API, schema or auth change |\n\n<details><summary>Details</summary>\n\n**Intent:** In `@arizeai/phoenix-client`'s `runExperiment`, a task that throws should keep ERROR status, now with the error message, on its `Task: ...` span. Before, that status was overwritten with OK after the run was logged (#17373). Successful tasks still get OK.\n**Fit:** The `taskFailed` flag set in the catch block (`runExperiment.ts:603-608`) skips the later `setStatus(OK)` for failed tasks only (`:638-640`). The ERROR status now carries `thisRun.error`, which matches `resumeExperiment.ts:780-783`. A patch changeset for `@arizeai/phoenix-client` is included. Nothing is missing and nothing extra was changed.\n**Duplicate:** #17442 (by clean99, who reported #17373) was opened about 8.5 hours earlier, is still open, and also says `resolves #17373`. It fixes the same status logic by moving `setStatus(OK)` into the try block. It tests the same success, `\"task failed\"` and `\"\"` cases in the existing `runExperimentTracing.test.ts`. The only thing this PR adds is the status `message`, which could be suggested on #17442 instead.\n**Verified:** Node 24.22.1 and pnpm 12.0.0, with workspace deps installed and the phoenix-client dependency chain built. oxfmt `--check` on the 3 changed files passed. `pnpm run lint` (the `make lint-ts` command) failed with 1 error, `typescript(consistent-type-imports)` at `runExperimentTaskSpanStatus.test.ts:17` (`typeof import(\"@arizeai/phoenix-otel\")`), and that file is new in this PR. phoenix-client `typecheck` (`tsc --noEmit` plus examples) passed. phoenix-client `vitest run` passed: 628 passed, 15 skipped. With the base `runExperiment.ts` restored, both ERROR cases failed (`expected 1 to be 2`) and the OK case passed. No `make graphql` / `make openapi` run was needed, since no server API changed.\n**Not verified:** Workspace-wide `make typecheck-ts` and `make test-ts`, because only phoenix-client was checked. The `phoenix-ui` half of `lint-ts`, which did not run after oxlint failed. A run against a live Phoenix server.\n**Findings without a diff line:** none\n**Risk:** side effects low, performance none, backwards compatibility low (no exported API change; only trace-status consumers see the difference), from the packages reviewer\n\nGraded against the [review criteria](https://github.com/Arize-ai/phoenix/blob/main/factory/agents/pr-reviewer.md#verdict).\n\n</details>"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "js/packages/phoenix-client/test/experiments/runExperimentTaskSpanStatus.test.ts",
+   "created_at": "2026-10-31T03:37:32Z",
+   "body": "**Non-blocking.** No test covers the new status message. `runExperiment.ts:611` now sets `span.setStatus({ code: SpanStatusCode.ERROR, message: thisRun.error })`, but the tests only assert `status.code`. If the `message` were dropped, all 3 tests would still pass. That breaks REVIEW.md § Always Check: tests MUST fail when the behavior they cover is removed.\n\nBecause of this, the `new Error(\"\")` row only re-checks the `taskFailed` flag.\n\nFix: also assert `expect(taskSpan().status.message).toBe(error.message)`. That gives `\"task failed\"` for one row and `\"\"` for the other."
+  },
+  {
+   "role": "bot",
+   "path": "js/packages/phoenix-client/test/experiments/runExperimentTaskSpanStatus.test.ts",
+   "created_at": "2026-11-02T17:27:48Z",
+   "body": "**Non-blocking.** No test covers the new status message. `runExperiment.ts:611` now sets `span.setStatus({ code: SpanStatusCode.ERROR, message: thisRun.error })`, but the failure cases only assert `status.code`. If `message: thisRun.error` were removed, all 3 tests would still pass. REVIEW.md § Always Check says tests MUST fail when the behavior they cover is removed.\nFix: also assert `expect(taskSpan().status.message).toBe(error.message)`, which gives `\"task failed\"` for one case and `\"\"` for the other."
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-10-30T16:41:22Z",
+   "body": "<!-- mintlify-fork-preview-approval -->\n### Preview approval required\n\nThis pull request comes from a fork, so Mintlify won't build a preview until someone with write access approves commit `ecd0441`.\n\n[Approve preview](https://github.com/Arize-ai/phoenix/pull/17459/checks?check_run_id=124188513747)"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-31T03:33:02Z",
+   "body": "The factory started a **review** of ecd0441333 (session [`sesn_019nEpjbXzX24UzKCjPZdR4Z`](https://platform.claude.com/workspaces/wrkspc_019uQCzw86YfY8Li79ZLtsom/sessions/sesn_019nEpjbXzX24UzKCjPZdR4Z)). It reports back here when the session ends."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-31T03:38:07Z",
+   "body": "The factory recommends **Close** for ecd0441333. [Read the review](https://github.com/Arize-ai/phoenix/pull/17459#pullrequestreview-5720956342)."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-02T17:22:06Z",
+   "body": "The factory started a **review** of ecd0441333 (session [`sesn_01MWdvtWSSahZGL4XjapZxJZ`](https://platform.claude.com/workspaces/wrkspc_019uQCzw86YfY8Li79ZLtsom/sessions/sesn_01MWdvtWSSahZGL4XjapZxJZ)). It reports back here when the session ends."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-02T17:29:12Z",
+   "body": "The factory recommends **Close** for ecd0441333 and labeled this pull request `factory-close`. [Read the review](https://github.com/Arize-ai/phoenix/pull/17459#pullrequestreview-5740584882)."
+  }
+ ]
+}

@@ -1,0 +1,81 @@
+{
+ "repo": "MacPaw/OpenAI",
+ "number": 483,
+ "url": "https://github.com/MacPaw/OpenAI/pull/483",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-04T04:10:19Z",
+   "body": "Thanks for the PR, please see the comment"
+  },
+  {
+   "role": "collaborator",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-06T03:45:06Z",
+   "body": "Sorry, just one more change before merging. Let me also see if Copilot (balanced) wants something else\n\nEdit: Copilot didn't provide anything meaningful so let's just add the public init"
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-06T03:47:46Z",
+   "body": "<!-- ccr-overview-v2 -->\n\n### 🟡 Changes recommended\n\nMissing detail fields still cause default-configured clients to discard the entire usage object, and the regression test’s relaxed parsing setting does not cover this default behavior.\n\n<details open>\n<summary><strong>1 open issue</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Default missing usage details to zero during decoding](https://github.com/MacPaw/OpenAI/pull/483#discussion_r4488821032) · New\n</details>\n\n<details>\n<summary><strong>What changed in this PR</strong></summary>\n\nThis PR aims to preserve chat usage data when OpenAI-compatible providers omit prompt-token detail fields, without changing the public `Int` property types.\n\n**Changes:**\n- Adds custom decoding for prompt-token details using parsing options, shared by chat and streaming responses.\n- Adds a regression test for a response containing only `cached_tokens`, with relaxed parsing enabled.\n\n| File | Description |\r\n| ---- | ----------- |\r\n| Tests/​OpenAITests/​ChatResultTests.swift | Tests usage decoding when `audio_tokens` is omitted. |\r\n| Sources/​OpenAI/​Public/​Models/​ChatResult.swift | Adds parsing-option-aware decoding for prompt-token details. |\n</details>\n\n<sub>Review effort: Balanced</sub>"
+  },
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-06T04:42:45Z",
+   "body": ""
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-06T23:53:23Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "collaborator",
+   "path": "Sources/OpenAI/Public/Models/ChatResult.swift",
+   "created_at": "2026-11-04T04:09:58Z",
+   "body": "Hi, thanks! Please see other uses of `decodeIfPresent`, the usage of `parsingOptions`. Looks something like this\n\n```\npublic init(from decoder: any Decoder) throws {\n    let container = try decoder.container(keyedBy: CodingKeys.self)\n    let parsingOptions = decoder.userInfo[.parsingOptions] as? ParsingOptions ?? []\n    self.id = try container.decodeString(forKey: .id, parsingOptions: parsingOptions)\n    ...\n}\n```"
+  },
+  {
+   "role": "collaborator",
+   "path": "Sources/OpenAI/Public/Models/ChatResult.swift",
+   "created_at": "2026-11-05T01:29:06Z",
+   "body": "Declaring `init(from:)` in the struct body stops Swift from synthesizing the memberwise `init(audioTokens:cachedTokens:)`, so `PromptTokensDetails` can now only be created by decoding, even from `@testable` tests. Could you either move `init(from:)` into an extension, or add a `public init(audioTokens:cachedTokens:)` like `CompletionTokensDetails` has? A public one would also make the `promptTokensDetails:` parameter of `CompletionUsage.init` usable for anyone mocking usage."
+  },
+  {
+   "role": "bot",
+   "path": "Sources/OpenAI/Public/Models/ChatResult.swift",
+   "created_at": "2026-11-06T03:47:45Z",
+   "body": "With the default parsing options (`[]`), `decodeInt` still throws when either detail is missing, so both `ChatResult` and `ChatStreamResult` discard the entire `usage`. Use `decodeIfPresent(Int.self, forKey:) ?? 0` for both fields so default-configured clients receive the intended fallback. Remove the `.relaxed` setting in `Tests/OpenAITests/ChatResultTests.swift:239` so the regression test covers that default behavior."
+  },
+  {
+   "role": "collaborator",
+   "path": "Sources/OpenAI/Public/Models/ChatResult.swift",
+   "created_at": "2026-11-06T04:42:45Z",
+   "body": "@pcbeingused333 forget it, I'll just resolve it. Claude wanted the same thing. Agents don't understand what strict mode means. "
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-04T05:10:18Z",
+   "body": "Done, now via `decodeInt(forKey:parsingOptions:)` like the rest of `ChatResult`; the test uses `.relaxed`.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "collaborator",
+   "created_at": "2026-11-06T05:10:19Z",
+   "body": "Also just ran the checks to see if they find anything that needs fixing "
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-06T05:16:54Z",
+   "body": "Added `public init(audioTokens:cachedTokens:)` to `PromptTokensDetails` (same shape as `CompletionTokensDetails`), plus a small test that builds `CompletionUsage` with it. `ChatResultTests` pass.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
+}

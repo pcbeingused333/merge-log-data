@@ -1,0 +1,70 @@
+{
+ "repo": "open-telemetry/opentelemetry-python-genai",
+ "number": 999,
+ "url": "https://github.com/open-telemetry/opentelemetry-python-genai/pull/999",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-28T12:19:00Z",
+   "body": "<!-- ccr-overview-v2 -->\n\n### 🟡 Changes recommended\n\nInterleaved indexless tool-call deltas with repeated IDs create duplicate buffers, leaving arguments incomplete and recorded tool calls missing names.\n\n<details open>\n<summary><strong>1 open issue</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Handle interleaved repeated IDs when buffering parallel calls](https://github.com/open-telemetry/opentelemetry-python-genai/pull/999#discussion_r4400442700) · New\n</details>\n\n<details>\n<summary><strong>What changed in this PR</strong></summary>\n\nThis PR updates Portkey’s streamed tool-call accumulation to separate calls that omit an index, preventing distinct calls from being merged in recorded spans.\n\n**Changes:**\n- Adds ID-based slot selection for indexless deltas while preserving explicit-index handling.\n- Adds unit tests for separate calls, consecutive repeated IDs, and indexed continuations.\n\n| File | Description |\r\n| ---- | ----------- |\r\n| `instrumentation/​opentelemetry-instrumentation-genai-portkey/​tests/​test_choice_buffer.py` | Adds focused tool-call accumulation tests. |\r\n| `instrumentation/​opentelemetry-instrumentation-genai-portkey/​src/​opentelemetry/​instrumentation/​genai/​portkey/​wrappers.py` | Adds fallback slot selection for indexless tool-call deltas. |\n</details>\n\n<sub>Review effort: Balanced</sub>"
+  },
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-29T04:10:55Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-07T03:06:19Z",
+   "body": ""
+  },
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-07T04:31:04Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "instrumentation/opentelemetry-instrumentation-genai-portkey/src/opentelemetry/instrumentation/genai/portkey/wrappers.py",
+   "created_at": "2026-10-28T12:18:59Z",
+   "body": "Comparing the ID only with the final buffer splits an existing call whenever indexless parallel calls interleave. For example, deltas with IDs `call_1`, `call_2`, `call_1`, `call_2` create four buffers rather than two, leaving the original arguments incomplete and recording duplicate tool calls with missing names. Look up the ID across existing buffers before allocating a new slot, and add an interleaved repeated-ID regression case."
+  },
+  {
+   "role": "member",
+   "path": "instrumentation/opentelemetry-instrumentation-genai-portkey/src/opentelemetry/instrumentation/genai/portkey/wrappers.py",
+   "created_at": "2026-10-29T02:26:40Z",
+   "body": "Portkey's gateway with `provider=\"google\"` does send `index`, but it's the position inside each chunk, so parallel calls all arrive as `index=0` with a new `id` each. They still end up merged here: `'{\"city\":\"Seattle\"}{\"city\":\"San Francisco\"}'` under the first id. Could a new `id` start a new call even when `index` is set?\n\nHere's a test through the client that fails on `main`, and as far as I can tell would fail on this branch too. Record it with `PORTKEY_API_KEY` and `GEMINI_API_KEY` set. It could also replace `test_choice_buffer.py`, which tests `ChoiceBuffer` internals:\n\n```python\n# conftest.py\n@pytest.fixture\ndef instrument_portkey_with_content(\n    tracer_provider, logger_provider, meter_provider\n):\n    with instrument(\n        PortkeyInstrumentor(),\n        tracer_provider=tracer_provider,\n        logger_provider=logger_provider,\n        meter_provider=meter_provider,\n        content_capture=\"SPAN_ONLY\",\n    ) as instrumentor:\n        yield instrumentor\n\n\n@pytest.fixture\ndef portkey_gemini_client():\n    # `environment` fixture sets placeholder keys for replay.\n    return Portkey(\n        api_key=os.environ[\"PORTKEY_API_KEY\"],\n        provider=\"google\",\n        Authorization=os.environ[\"GEMINI_API_KEY\"],\n    )\n\n\n# test_streaming.py\ndef test_sync_streaming_parallel_tool_calls_gemini(\n    span_exporter, portkey_gemini_client, instrument_portkey_with_content, vcr\n):\n    with vcr.use_cassette(\"streaming_parallel_tool_calls_gemini.yaml\"):\n        stream = portkey_gemini_client.chat.completions.create(\n            model=\"gemini-3.5-flash\",\n            messages=[\n                {\n                    \"role\": \"user\",\n                    \"content\": \"What's the weather in Seattle and San Francisco?\",\n                }\n            ],\n            tools=[\n                {\n                    \"type\": \"function\",\n                    \"function\": {\n                        \"name\": \"get_weather\",\n                        \"parameters\": {\n                            \"type\": \"object\",\n                            \"properties\": {\"city\": {\"type\": \"string\"}},\n                            \"required\": [\"city\"],\n                        },\n                    },\n                }\n            ],\n            stream=True,\n        )\n        tool_calls = [\n            tool_call\n            for chunk in stream\n            for choice in chunk.choices\n            for tool_call in choice.delta.tool_calls or []\n        ]\n\n    (span,) = span_exporter.get_finished_spans()\n    output = json.loads(span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES])\n    assert [p for p in output[0][\"parts\"] if p[\"type\"] == \"tool_call\"] == [\n        {\n            \"type\": \"tool_call\",\n            \"id\": tool_call.id,\n            \"name\": \"get_weather\",\n            \"arguments\": json.loads(tool_call.function.arguments),\n        }\n        for tool_call in tool_calls\n    ]\n```\n"
+  },
+  {
+   "role": "author",
+   "path": "instrumentation/opentelemetry-instrumentation-genai-portkey/src/opentelemetry/instrumentation/genai/portkey/wrappers.py",
+   "created_at": "2026-11-07T03:06:18Z",
+   "body": "Thanks, that makes sense. Pushed a change so that a new `id` opens a new call even when `index` is set (Portkey/Gemini sends the position inside the chunk, so every parallel call arrives as `index=0`). A know>\r\n\r\nI could not record the client-level cassette: I don't have `PORTKEY_API_KEY` or `GEMINI_API_KEY`, and I'd rather not hand-write one. Instead `test_choice_buffer.py` gets two cases (repeated `index=0` with new>"
+  },
+  {
+   "role": "member",
+   "path": "instrumentation/opentelemetry-instrumentation-genai-portkey/src/opentelemetry/instrumentation/genai/portkey/wrappers.py",
+   "created_at": "2026-11-07T04:31:04Z",
+   "body": "Thanks! I don't see that change on the branch yet: the head is still https://github.com/open-telemetry/opentelemetry-python-genai/commit/268ee8597985191d4f751efe50ce4b62326861d0 from Oct 28, and the `index is not None` path returns early. Could you push it, along with the repeated `index=0` test cases?"
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-10-28T12:17:09Z",
+   "body": "<!-- pull-request-dashboard-status -->\n<!-- pull-request-dashboard-status-revision:22 -->\n<!-- pull-request-dashboard-author-nudge-episode:e4a264719c93403488de8e3ccffe9dfe -->\n## Pull request dashboard status\n\n**Waiting on the author** · refreshed 2026-11-07 05:17 UTC\n\nRespond to 1 review item (e.g. link a commit, explain why not, ask a follow-up):\n- **Inline threads:** [1](https://github.com/open-telemetry/opentelemetry-python-genai/pull/999#discussion_r4408102743)\n\n<details>\n<summary>Status above doesn't look right?</summary>\n\n<br>\n\n- **Just replied or pushed?** Anything around or after the refresh time above may not be picked up yet — give it a few minutes.\n- **Should this be with reviewers?** Comment `/dashboard route:reviewers` to route it to them.\n- **Anything wrong — including the routing?** [Report it](https://github.com/open-telemetry/shared-workflows/issues/new?template=incorrect-pr-dashboard-result.md&title=PR+dashboard+result+looks+incorrect&body=PR%3A+https%3A%2F%2Fgithub.com%2Fopen-telemetry%2Fopentelemetry-python-genai%2Fpull%2F999%0A%0ACurrent+live+status+comment%3A%0A%3E+%3C%21--+pull-request-dashboard-status+--%3E%0A%3E+%3C%21--+pull-request-dashboard-status-revision%3A22+--%3E%0A%3E+%3C%21--+pull-request-dashboard-author-nudge-episode%3Ae4a264719c93403488de8e3ccffe9dfe+--%3E%0A%3E+%23%23+Pull+request+dashboard+status%0A%3E+%0A%3E+%2A%2AWaiting+on+the+author%2A%2A+%C2%B7+refreshed+2026-11-07+05%3A17+UTC%0A%3E+%0A%3E+Respond+to+1+review+item+%28e.g.+link+a+commit%2C+explain+why+not%2C+ask+a+follow-up%29%3A%0A%3E+-+%2A%2AInline+threads%3A%2A%2A+%5B1%5D%28https%3A%2F%2Fgithub.com%2Fopen-telemetry%2Fopentelemetry-python-genai%2Fpull%2F999%23discussion_r4408102743%29%0A%0AWhat+looks+incorrect%3A%0A) with what you expected; it helps us improve the dashboard.\n\n</details>\n"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-05T04:39:11Z",
+   "body": "<!-- pull-request-dashboard-author-nudge:26da5f47ae1241e5b19b9a2dc5983cbf -->\nHi @pcbeingused333 — just a friendly reminder that this pull request is waiting on you. The [dashboard status comment](https://github.com/open-telemetry/opentelemetry-python-genai/pull/999#issuecomment-6468753389) has the open items and is kept current.\n\n- Replying is enough to hand it off — answer, explain why no change is needed, or ask a follow-up. The dashboard routes it onward once nothing on the list is waiting on you.\n- To hand it back for any other reason, including the dashboard getting this wrong, comment `/dashboard route:reviewers`.\n\n<!-- pull-request-dashboard-author-nudge-completed:26da5f47ae1241e5b19b9a2dc5983cbf -->\n\n_Outdated as of 2026-11-05 04:38 UTC: this reminder no longer reflects the current dashboard state. Check the [dashboard status comment](https://github.com/open-telemetry/opentelemetry-python-genai/pull/999#issuecomment-6468753389) to see whether action is needed._\n"
+  }
+ ]
+}

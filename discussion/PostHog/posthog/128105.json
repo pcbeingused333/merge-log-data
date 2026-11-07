@@ -1,0 +1,34 @@
+{
+ "repo": "PostHog/posthog",
+ "number": 128105,
+ "url": "https://github.com/PostHog/posthog/pull/128105",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-03T11:03:30Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "common/hogvm/python/stl/__init__.py",
+   "created_at": "2026-11-03T11:03:31Z",
+   "body": "<a href=\"#\"><img src=\"https://app.parameter.ai/_static/icons/severity-low.svg\" height=\"16\" alt=\"🔵\" /></a> **arrayStringConcat now crashes on error objects and malformed date-like dicts instead of returning a string**\n\nThe change routes every element through `toString`, whose hog-error branch is broken: `common/hogvm/python/stl/__init__.py:69-71` reads `args[0]['name']`, but error dicts built by `new_hog_error` (`common/hogvm/python/objects.py:33-39`) carry `'type'`, and it passes `message`/`payload` unwrapped. The date branch also formats `month:02d` without checking the field is an int (`stl/__init__.py:67`). I reproduced both: `arrayStringConcat([Error('boom')], ',')` raises `KeyError: 'name'` and a `__hogDate__` dict with string fields raises `ValueError`. Previously `str(s)` never raised. The exception escapes `call_stl` (`common/hogvm/python/execute.py:201`) uncaught, so Hog `try/catch` cannot handle it and the query fails with an internal error.\n\n**How:**\n1. Send an event with a property list containing `{\"__hogError__\": true, \"type\": \"x\", \"message\": \"y\"}` (event properties are attacker-controlled via the public capture token).\n2. A user's HogQL/Hog expression calls `arrayStringConcat(properties.$list)` on it.\n3. The raw `KeyError` propagates out of the VM as an unexpected internal exception, breaking the query/insight.\n\nThe same crash was already reachable via a direct `toString(properties.x)` call, but this PR newly makes the previously never-raising `arrayStringConcat` throw.\n\n**Fix:** Correct `toString`'s error branch (use `args[0]['type']`, wrap message/payload in lists) and guard the date formatting, or fall back to `str(s)` in `arrayStringConcat` when `toString` raises.\n\n\n---\n <sub> React with 👍 if useful or 👎 if not </sub>\n\n<!-- hex-sentinel-finding-head:12b586104073c59976a3023c4611325c37487b5a -->"
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-11-03T10:59:53Z",
+   "body": "<!-- Trunk Merge -->\nMerging to `master` in this repository is managed by Trunk.\n\n<!-- Start PR Submit Checkbox -->\n- [ ] <!-- End PR Submit Checkbox -->To merge this pull request, check the box to the left or comment `/trunk merge` below.\n\nAfter your PR is submitted to the merge queue, this comment will be automatically updated with its status. If the PR fails, failure details will also be posted here"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-03T10:59:57Z",
+   "body": "<!-- parameter-sentinel-summary -->\n\n**Risk: Low** · 1 low\n\n<!-- overview -->\nA small parity fix: the Python Hog VM's `arrayStringConcat` now renders `null` as empty and booleans lowercase to match the TypeScript VM, plus a new STL-level test. The notable risk is that elements are now routed through `toString`, whose broken error-object and date branches make a previously never-raising function throw uncaught exceptions on error objects and date-shaped dicts.\n<!-- /overview -->\n\n<sub>Sentinel reviewed `12b5861` · [Review settings](https://app.parameter.ai/reviews)</sub>"
+  }
+ ]
+}

@@ -1,0 +1,23 @@
+{
+ "repo": "genkit-ai/genkit",
+ "number": 6954,
+ "url": "https://github.com/genkit-ai/genkit/pull/6954",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-29T10:54:26Z",
+   "body": "## Code Review\n\nThis pull request introduces a helper function `_tool_call_key` to support streaming tool calls from OpenAI-compatible endpoints (such as Gemini) that omit the `index` field, along with corresponding unit tests. A review comment correctly identifies a bug in `_tool_call_key` where interleaved parallel tool calls with repeated IDs could be misrouted, and provides a code suggestion to search across all accumulated tool calls to resolve the issue."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "py/packages/genkit-openai/src/genkit_openai/_models/_model.py",
+   "created_at": "2026-10-29T10:54:26Z",
+   "body": "![high](https://www.gstatic.com/codereviewagent/high-priority.svg)\n\nIf parallel tool calls are interleaved or sent in the same chunk, and the provider repeats the `id` on subsequent chunks, comparing only against `accumulated[latest].id` will fail. For example, if we have two active tool calls (index 0 for `call_a` and index 1 for `call_b`), a subsequent chunk for `call_a` will have `latest = 1` (which is `call_b`). Comparing `call_a` to `call_b` will result in `starts_new_call = True`, incorrectly starting a third tool call (index 2) instead of continuing index 0.\n\nBy looking up the `id` across all accumulated tool calls, we can correctly route the fragment to the existing slot regardless of the order or interleaving of chunks.\n\n```suggestion\n    if tool_call.id:\n        for k, v in accumulated.items():\n            if getattr(v, 'id', None) == tool_call.id:\n                return k\n        starts_new_call = True\n    else:\n        starts_new_call = bool(tool_call.function and tool_call.function.name)\n    return latest + 1 if starts_new_call else latest\n```"
+  }
+ ],
+ "comments": []
+}

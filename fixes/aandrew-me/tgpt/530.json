@@ -1,0 +1,26 @@
+{
+ "repo": "aandrew-me/tgpt",
+ "number": 530,
+ "url": "https://github.com/aandrew-me/tgpt/pull/530",
+ "title": "fix(helper): write non-interactive HTTP error body to stderr",
+ "merged_at": "2026-11-07T08:54:39Z",
+ "files": [
+  {
+   "filename": "src/helper/helper.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -980,7 +980,7 @@ func handleStatus400(resp *http.Response) {\n \tbold.Fprintln(os.Stderr, \"\\rSome error has occurred. Statuscode:\", resp.StatusCode)\n \trespBody, _ := io.ReadAll(resp.Body)\n \tresp.Body.Close()\n-\tfmt.Println(string(respBody))\n+\tfmt.Fprintln(os.Stderr, string(respBody))\n \tos.Exit(1)\n }\n "
+  },
+  {
+   "filename": "src/helper/helper_test.go",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -507,3 +507,30 @@ func TestToolCallFragmentsWithoutIndexContinueTheLastCall(t *testing.T) {\n \t\tt.Errorf(\"expected both tool calls to run with their own results, got %#v\", results)\n \t}\n }\n+\n+// TestHandleStatus400BodyGoesToStderr verifies the provider's error body is\n+// written to stderr, so stdout stays clean for pipes and scripts.\n+func TestHandleStatus400BodyGoesToStderr(t *testing.T) {\n+\tif os.Getenv(\"GO_TEST_SUBPROCESS\") == \"1\" {\n+\t\tresp := &http.Response{\n+\t\t\tBody:       &trackedBody{reader: strings.NewReader(\"PROVIDER-ERROR-BODY\")},\n+\t\t\tStatusCode: 429,\n+\t\t}\n+\t\thandleStatus400(resp)\n+\t\treturn\n+\t}\n+\n+\tcmd := exec.Command(os.Args[0], \"-test.run=^TestHandleStatus400BodyGoesToStderr$\")\n+\tcmd.Env = append(os.Environ(), \"GO_TEST_SUBPROCESS=1\")\n+\tvar stdout, stderr strings.Builder\n+\tcmd.Stdout = &stdout\n+\tcmd.Stderr = &stderr\n+\t_ = cmd.Run()\n+\n+\tif strings.Contains(stdout.String(), \"PROVIDER-ERROR-BODY\") {\n+\t\tt.Errorf(\"error body leaked to stdout: %q\", stdout.String())\n+\t}\n+\tif !strings.Contains(stderr.String(), \"PROVIDER-ERROR-BODY\") {\n+\t\tt.Errorf(\"error body missing from stderr: %q\", stderr.String())\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "src/helper/helper_test.go"
+ ]
+}

@@ -1,0 +1,73 @@
+{
+ "repo": "Arize-ai/phoenix",
+ "number": 17369,
+ "url": "https://github.com/Arize-ai/phoenix/pull/17369",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-31T03:42:50Z",
+   "body": "## Factory review of b7b4e0b: Approve\n\nThe fix does what it claims, the checks pass, its tests fail without it, and there are no blocking findings.\n\n| Criterion | Result | Notes |\n|---|---|---|\n| Fit | Pass | does what it claims |\n| Checks | Pass | ruff format/check, strict mypy on adapter, pytest `tests/phoenix/evals/llm` pass |\n| Tests | Pass | 7 of 8 new tests fail without the fix with the reported `TypeError` |\n| Blocking findings | 0 | none |\n| Non-blocking findings | 2 | method-specific caller fields not dropped, precedence untested `adapter.py:283`; inverted sync/async comment `test_generation_config.py:51` |\n| Risk | Low | backwards compatibility: a caller config with conflicting response or tool fields now reaches the API |\n| Review depth | Focused | private adapter change in a published package; no public signature, schema or auth change |\n\n<details><summary>Details</summary>\n\n**Intent:** Let `GoogleGenAIAdapter.generate_object` / `async_generate_object` accept a caller `config` (dict or `GenerateContentConfig`). The structured-output and tool-calling paths should merge it into the config the adapter builds, instead of raising `TypeError: got multiple values for keyword argument 'config'`. The adapter's own fields take precedence.\n**Fit:** All four private generation methods now go through `_build_object_config`. It pops `config` from the local kwargs, merges it and lets the adapter's non-None fields win. Calls without `config` build the same config as before. The AUTO fallback still gets the caller's config, because each method receives a fresh kwargs dict. The PR touches nothing it doesn't describe.\n**Verified:** `ruff format --check` and `ruff check` on `packages/phoenix-evals` are clean. Strict mypy with the package's `pyproject.toml` on `adapter.py`: no issues. `pytest tests/phoenix/evals/llm`: 336 passed, 1 skipped. I restored `main`'s `adapter.py` and ran the new test file: 7 failed with `TypeError ... got multiple values for keyword argument 'config'` and 1 passed (the no-config regression guard). I also ran the tool-calling path with a caller `response_mime_type`/`response_schema` config, which confirmed that both are kept next to the tools.\n**Not verified:** `tox -e phoenix_evals` (the CI target) can't install its dependencies here: `requirements/packages/phoenix-evals.txt` is unsatisfiable (openai vs litellm). Its equivalent steps ran in the repo's uv environment instead. I sent no requests to the live Gemini API, so it's untested whether the API rejects tool calling combined with a JSON response mime type.\n**Findings without a diff line:** none\n**Risk:** side effects low, performance none, backwards compatibility low, from the area reviewers\n\nGraded against the [review criteria](https://github.com/Arize-ai/phoenix/blob/main/factory/agents/pr-reviewer.md#verdict).\n\n</details>"
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-02T17:31:13Z",
+   "body": "## Factory review of b7b4e0b: Approve\n\nThe fix does what it claims, its checks pass, its tests fail without it, and there are no blocking findings.\n\n| Criterion | Result | Notes |\n|---|---|---|\n| Fit | Pass | does what it claims |\n| Checks | Pass | ruff format/check, strict mypy on `evals/llm`, pytest `tests/phoenix/evals/llm` |\n| Tests | Pass | 7 of 8 new tests fail on `main` with the reported `TypeError` |\n| Blocking findings | 0 | none |\n| Non-blocking findings | 2 | other-method fields leak, precedence untested `adapter.py:283`; inverted sync/async comment `test_generation_config.py:51` |\n| Risk | Low | side effects: conflicting caller fields now reach the Gemini request |\n| Review depth | Focused | private adapter change in a published package; no public signature change |\n\n<details><summary>Details</summary>\n\n**Intent:** Let `GoogleGenAIAdapter.generate_object` / `async_generate_object` accept a caller `config` (a dict or a `GenerateContentConfig`) and merge it into the config built for structured output or tool calling. Today the call raises `TypeError: got multiple values for keyword argument 'config'`. The adapter's own fields should take precedence.\n**Fit:** All four `_generate_with_*` methods now build their config through `_build_object_config`. It pops `config` from kwargs, copies dicts so the caller's dict is not mutated, and overlays the adapter's non-None fields. With no `config`, the result is the same config as before. The AUTO fallback gets the caller config too, because each attempt receives its own kwargs dict. The PR changes nothing it does not describe.\n**Verified:** `ruff format --check` and `ruff check` on `packages/phoenix-evals` are clean. Strict mypy with the package's `pyproject.toml` (`MYPYPATH=src`) on `src/phoenix/evals/llm` reports no issues. `pytest tests/phoenix/evals/llm` gives 336 passed, 1 skipped. With `main`'s `adapter.py` restored, the new test file gives 7 failed with `TypeError ... got multiple values for keyword argument 'config'` and 1 passed (the no-config guard). With a merge where the caller's non-None values win, all 8 tests pass, so the precedence claim is untested. An AUTO call with a caller `response_mime_type`/`response_schema` sent both of them on the tool-calling attempt, next to `tools`.\n**Not verified:** I could not run `tox -e phoenix_evals` (the CI target), so I ran its steps in the repo's uv environment instead. A plain `mypy .` run from the package hits a duplicate-module path error in this sandbox. I sent no request to the live Gemini API, so it is untested whether Gemini rejects tools combined with a JSON response mime type.\n**Findings without a diff line:** none\n**Risk:** side effects low, performance none, backwards compatibility none, from the area reviewers\n\nGraded against the [review criteria](https://github.com/Arize-ai/phoenix/blob/main/factory/agents/pr-reviewer.md#verdict).\n\n</details>"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "packages/phoenix-evals/src/phoenix/evals/llm/adapters/google/adapter.py",
+   "created_at": "2026-10-31T03:42:36Z",
+   "body": "**Non-blocking.** `params.update(...)` only overwrites the fields this method sets. A caller's fields that belong to the *other* method stay in the config.\n\n**Evidence:** I ran `_generate_with_tool_calling(..., config={\"response_mime_type\": \"application/json\", \"response_schema\": S})`. The config it sent kept `response_mime_type=\"application/json\"` and `response_schema` next to the adapter's `tools` and `tool_config` (mode ANY). Structured output has the same gap the other way round: it keeps a caller's `tools`, `tool_config` and `response_json_schema`. In `AUTO` mode the fallback gets the same caller config, so it can carry these fields too. Gemini probably rejects function calling together with a JSON response mime type. I didn't test that against the live API. If it does, the user only sees \"failed with both structured output and tool calling\".\n\nNone of the new tests pass a field that collides with an adapter field. So the precedence this PR describes isn't tested: reversing the merge order would still pass every test.\n\n**Fix:** before the `update`, drop the fields that conflict with the chosen method from `params`:\n- For tool calling: `response_mime_type`, `response_schema` and `response_json_schema`.\n- For structured output: `tools`, `tool_config` and `response_json_schema`.\n\nThen add a test that passes such a config and asserts the adapter's values win."
+  },
+  {
+   "role": "bot",
+   "path": "packages/phoenix-evals/tests/phoenix/evals/llm/adapters/google/test_generation_config.py",
+   "created_at": "2026-10-31T03:42:38Z",
+   "body": "**Non-blocking.** The comment has it backwards.\n\n**Evidence:** `_check_if_async_client` (`adapter.py:60-63`) returns `True`, meaning async, when `aio` is absent. I checked it: `_make_adapter(_structured_response())._is_async` is `True`. The \"sync\" tests pass only because they call the private `_generate_with_*` methods, which don't check `_is_async`. REVIEW.md § Style says comments SHOULD explain why, and this one states something false.\n\n**Fix:** for the sync adapter, keep `client.aio`, so `_is_async` really is `False`. Alternatively, set `adapter._is_async = False` explicitly. Either way, fix or remove the comment."
+  },
+  {
+   "role": "bot",
+   "path": "packages/phoenix-evals/src/phoenix/evals/llm/adapters/google/adapter.py",
+   "created_at": "2026-11-02T17:30:58Z",
+   "body": "**Non-blocking.** `params.update(...)` overwrites only the fields this method sets. Caller fields that belong to the *other* method stay in the config, and no test covers a caller value that collides with an adapter value.\n\n**Evidence:**\n- I ran `generate_object(..., method=AUTO, config={\"response_mime_type\": \"application/json\", \"response_schema\": S})` against a mocked client whose structured attempt fails.\n- The tool-calling fallback then sent `response_mime_type=\"application/json\"` and `response_schema` together with `tools` and the ANY `tool_config`.\n- The reverse also happens: structured output keeps a caller's `tools`, `tool_config` and `response_json_schema`.\n- I did not test against the live API whether Gemini rejects these combinations. If it does, the user sees only \"failed with both structured output and tool calling\".\n- On precedence, I changed the merge so that a caller's non-None values win. All 8 new tests still passed, so the \"adapter fields take precedence\" claim in the PR is untested.\n\n**Fix:** before the update, drop the keys that conflict with the method:\n- tool calling: `response_mime_type`, `response_schema` and `response_json_schema`\n- structured output: `tools`, `tool_config` and `response_json_schema`\n\nThen add tests for two cases:\n- a caller `response_schema`, and a caller `system_instruction` while the prompt has a system message: the adapter's values must win\n- an AUTO call with a caller config: check the config sent on each attempt"
+  },
+  {
+   "role": "bot",
+   "path": "packages/phoenix-evals/tests/phoenix/evals/llm/adapters/google/test_generation_config.py",
+   "created_at": "2026-11-02T17:31:00Z",
+   "body": "**Non-blocking.** This comment gets it backwards. `_check_if_async_client` (`adapter.py:60-63`) returns `True` (async) when `aio` is absent, so the \"sync\" adapter built here has `_is_async=True`.\n\n**Evidence:**\n- The sync tests pass only because they call the private `_generate_with_*` methods, which never check `_is_async`.\n- Calling the public `generate_object` with this adapter would raise \"Cannot call sync method…\".\n- REVIEW.md § Style says comments SHOULD explain why, and this one says something false.\n\n**Fix:** drop `del client.aio` and the comment, so a MagicMock keeps `aio` and `_is_async` is `False`. Better still, drive the tests through `generate_object` / `async_generate_object`, so the flag is exercised."
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-10-29T06:49:28Z",
+   "body": "<!-- mintlify-fork-preview-approval -->\n### Preview approval required\n\nThis pull request comes from a fork, so Mintlify won't build a preview until someone with write access approves commit `b7b4e0b`.\n\n[Approve preview](https://github.com/Arize-ai/phoenix/pull/17369/checks?check_run_id=123306674799)"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-31T03:33:35Z",
+   "body": "The factory started a **review** of b7b4e0b7c4 (session [`sesn_01E6urtabZE7i4NsLHYcjbos`](https://platform.claude.com/workspaces/wrkspc_019uQCzw86YfY8Li79ZLtsom/sessions/sesn_01E6urtabZE7i4NsLHYcjbos)). It reports back here when the session ends."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-31T03:43:41Z",
+   "body": "The factory recommends **Approve** for b7b4e0b7c4. [Read the review](https://github.com/Arize-ai/phoenix/pull/17369#pullrequestreview-5720983685)."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-02T17:22:26Z",
+   "body": "The factory started a **review** of b7b4e0b7c4 (session [`sesn_01Qr1kx89dF2pGWnrshTfj85`](https://platform.claude.com/workspaces/wrkspc_019uQCzw86YfY8Li79ZLtsom/sessions/sesn_01Qr1kx89dF2pGWnrshTfj85)). It reports back here when the session ends."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-02T17:32:32Z",
+   "body": "The factory recommends **Approve** for b7b4e0b7c4 and labeled this pull request `factory-approved`. [Read the review](https://github.com/Arize-ai/phoenix/pull/17369#pullrequestreview-5740624230)."
+  }
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "nextlevelbuilder/goclaw",
+ "number": 1664,
+ "url": "https://github.com/nextlevelbuilder/goclaw/pull/1664",
+ "title": "fix(skills): map the node dependency to nodejs on Alpine and apt",
+ "merged_at": "2026-11-07T10:09:26Z",
+ "files": [
+  {
+   "filename": "internal/skills/system_package_installer.go",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 3,
+   "patch": "@@ -13,17 +13,20 @@ var (\n \tdebPackageNameRE               = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]*$`)\n \tsystemLookPath                 = exec.LookPath\n \tsystemCommandCombinedOutput    = runSystemCommandCombinedOutput\n-\taptSystemPackageAliases        = map[string]string{\"pip3\": \"python3-pip\", \"github-cli\": \"gh\", \"go\": \"golang-go\", \"golang\": \"golang-go\"}\n+\taptSystemPackageAliases        = map[string]string{\"pip3\": \"python3-pip\", \"github-cli\": \"gh\", \"go\": \"golang-go\", \"golang\": \"golang-go\", \"node\": \"nodejs\"}\n \terrSystemPackageMgrUnavailable = \"system package manager unavailable on this runtime\"\n )\n \n+// Alpine has no \"node\" package; the runtime lives in \"nodejs\".\n+var apkSystemPackageAliases = map[string]string{\"node\": \"nodejs\"}\n+\n func runSystemCommandCombinedOutput(ctx context.Context, name string, args ...string) ([]byte, error) {\n \treturn exec.CommandContext(ctx, name, args...).CombinedOutput()\n }\n \n func installSystemPackage(ctx context.Context, requested string) (bool, string) {\n \tif IsAlpineRuntime() {\n-\t\treturn apkViaHelper(ctx, \"install\", requested)\n+\t\treturn apkViaHelper(ctx, \"install\", resolveAlpinePackageName(requested))\n \t}\n \tpkg, err := resolveDebianPackageName(requested)\n \tif err != nil {\n@@ -44,7 +47,7 @@ func installSystemPackage(ctx context.Context, requested string) (bool, string)\n \n func uninstallSystemPackage(ctx context.Context, requested string) (bool, string) {\n \tif IsAlpineRuntime() {\n-\t\treturn apkViaHelper(ctx, \"uninstall\", requested)\n+\t\treturn apkViaHelper(ctx, \"uninstall\", resolveAlpinePackageName(requested))\n \t}\n \tpkg, err := resolveDebianPackageName(requested)\n \tif err != nil {\n@@ -63,6 +66,14 @@ func uninstallSystemPackage(ctx context.Context, requested string) (bool, string\n \treturn true, \"\"\n }\n \n+func resolveAlpinePackageName(requested string) string {\n+\tpkg := strings.ToLower(strings.TrimSpace(requested))\n+\tif alias, ok := apkSystemPackageAliases[pkg]; ok {\n+\t\treturn alias\n+\t}\n+\treturn requested\n+}\n+\n func resolveDebianPackageName(requested string) (string, error) {\n \tpkg := strings.ToLower(strings.TrimSpace(requested))\n \tif alias, ok := aptSystemPackageAliases[pkg]; ok {"
+  },
+  {
+   "filename": "internal/skills/system_package_installer_test.go",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -37,6 +37,7 @@ func TestResolveDebianPackageNameAliases(t *testing.T) {\n \t\t\"golang\":     \"golang-go\",\n \t\t\"ripgrep\":    \"ripgrep\",\n \t\t\"libstdc++\":  \"libstdc++\",\n+\t\t\"node\":       \"nodejs\",\n \t}\n \tfor input, want := range tests {\n \t\tgot, err := resolveDebianPackageName(input)\n@@ -149,3 +150,17 @@ func TestInstallSystemPackageReportsMissingApt(t *testing.T) {\n \t\tt.Fatalf(\"msg = %q, want unavailable\", msg)\n \t}\n }\n+\n+func TestResolveAlpinePackageNameAliases(t *testing.T) {\n+\ttests := map[string]string{\n+\t\t\"node\":    \"nodejs\",\n+\t\t\"Node\":    \"nodejs\",\n+\t\t\"nodejs\":  \"nodejs\",\n+\t\t\"ripgrep\": \"ripgrep\",\n+\t}\n+\tfor input, want := range tests {\n+\t\tif got := resolveAlpinePackageName(input); got != want {\n+\t\t\tt.Fatalf(\"resolveAlpinePackageName(%q) = %q, want %q\", input, got, want)\n+\t\t}\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/skills/system_package_installer_test.go"
+ ]
+}

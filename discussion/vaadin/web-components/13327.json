@@ -1,0 +1,32 @@
+{
+ "repo": "vaadin/web-components",
+ "number": 13327,
+ "url": "https://github.com/vaadin/web-components/pull/13327",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "member",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-02T07:34:43Z",
+   "body": "**suggestion**: Move the aria-controls binding into the heading template\n\nThanks for the fix, overall the approach is right but IMO the code can be simpler to avoid waiting for `updateComplete` and aligned with current logic.\n\nPanel passes `opened` to heading using `delegateProps`. We can do the same for `aria-controls` e.g.\n\n```js\nstatic get delegateProps() {\n return ['disabled', 'opened', '_theme', '_headingLevel', '_contentElements'];\n}\n```\n\nThen remove `__updateAriaControls()` and its call.\n\n```js\n  /**\n   * The content elements of the parent `<vaadin-accordion-panel>`.\n   * The button refers to the first one with `aria-controls`.\n   *\n   * @protected\n   */\n  _contentElements: {\n    type: Array,\n  },\n```\n\n```js\n  render() {\n    const [content] = this._contentElements || [];\n\n    return html`\n      <button\n        id=\"button\"\n        part=\"content\"\n        ?disabled=\"${this.disabled}\"\n        aria-expanded=\"${this.opened ? 'true' : 'false'}\"\n        .ariaControlsElements=\"${content ? [content] : null}\"\n      >\n      <!-- ... -->\n   `;\n  }\n```\n \nResult of this change:\n\n- Lit sets the property when the button renders, so there is no need to wait for updateComplete.\n- When the heading is replaced, `DelegateStateMixin` passes the property to the new heading, so the `focusElement === this.focusElement` check is not needed.\n- The panel no longer depends on the shadow DOM of the heading.\n\nTests added in this PR pass with this change. Could you also add tests for a replaced heading and for replaced content? \n\n```js\n  it('should link the button in a new heading to the content', async () => {\n    const newHeading = document.createElement('vaadin-accordion-heading');\n    newHeading.setAttribute('slot', 'summary');\n    heading.replaceWith(newHeading);\n    await nextRender();\n    expect(newHeading.$.button.ariaControlsElements).to.deep.equal([content]);\n  });\n\n  it('should link the button in the heading to new content', async () => {\n    const newContent = document.createElement('div');\n    content.replaceWith(newContent);\n    await nextRender();\n    expect(heading.$.button.ariaControlsElements).to.deep.equal([newContent]);\n  });\n```\n\nVerified locally and these tests pass with the suggested approach. "
+  }
+ ],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-02T10:13:52Z",
+   "body": "Done: `_contentElements` is now delegated to the heading (`delegateProps`) and the button binds `.ariaControlsElements` in `render()`; `__updateAriaControls()` and its `updateComplete` wait are removed. Added the two tests for a replaced heading and replaced content. The accordion test group passes (78 tests) and eslint/prettier are clean.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-02T10:15:03Z",
+   "body": "## [![Quality Gate Passed](https://sonarsource.github.io/sonarcloud-github-static-resources/v2/checks/QualityGateBadge/qg-passed-20px.png 'Quality Gate Passed')](https://sonarcloud.io/dashboard?id=vaadin_web-components&pullRequest=13327) **Quality Gate passed**  \nIssues  \n![](https://sonarsource.github.io/sonarcloud-github-static-resources/v2/common/passed-16px.png '') [0 New issues](https://sonarcloud.io/project/issues?id=vaadin_web-components&pullRequest=13327&issueStatuses=OPEN,CONFIRMED&sinceLeakPeriod=true)  \n![](https://sonarsource.github.io/sonarcloud-github-static-resources/v2/common/accepted-16px.png '') [0 Accepted issues](https://sonarcloud.io/project/issues?id=vaadin_web-components&pullRequest=13327&issueStatuses=ACCEPTED)\n\nMeasures  \n![](https://sonarsource.github.io/sonarcloud-github-static-resources/v2/common/passed-16px.png '') [0 Security Hotspots](https://sonarcloud.io/project/security_hotspots?id=vaadin_web-components&pullRequest=13327&issueStatuses=OPEN,CONFIRMED&sinceLeakPeriod=true)  \n![](https://sonarsource.github.io/sonarcloud-github-static-resources/v2/common/passed-16px.png '') [0.0% Coverage on New Code](https://sonarcloud.io/component_measures?id=vaadin_web-components&pullRequest=13327&metric=new_coverage&view=list)  \n![](https://sonarsource.github.io/sonarcloud-github-static-resources/v2/common/passed-16px.png '') [0.0% Duplication on New Code](https://sonarcloud.io/component_measures?id=vaadin_web-components&pullRequest=13327&metric=new_duplicated_lines_density&view=list)  \n  \n<!-- sqra-placement-anchor -->\n[See analysis details on SonarQube Cloud](https://sonarcloud.io/dashboard?id=vaadin_web-components&pullRequest=13327)\n\n"
+  },
+  {
+   "role": "member",
+   "created_at": "2026-11-05T13:25:35Z",
+   "body": "Overall the PR looks good, but upon taking a closer look and testing in JAWS, it turns out there is a bug where <kbd>Ins</kbd> + <kbd>Alt</kbd> + <kbd>M</kbd> still doesn't work as expected https://github.com/vaadin/web-components/issues/13065#issuecomment-6659086733. We'll discuss with the team how to proceed."
+  }
+ ]
+}

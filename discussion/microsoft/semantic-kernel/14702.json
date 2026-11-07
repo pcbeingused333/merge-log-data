@@ -1,0 +1,35 @@
+{
+ "repo": "microsoft/semantic-kernel",
+ "number": 14702,
+ "url": "https://github.com/microsoft/semantic-kernel/pull/14702",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-01T00:10:21Z",
+   "body": "<!-- ccr-overview-v2 -->\n\n### 🟡 Changes recommended\n\nDeletion can corrupt key mappings when index removal fails and incorrectly renumber stable-ID indexes, leaving orphaned vectors.\n\n<details open>\n<summary><strong>2 open issues</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png\" alt=\"High severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Preserve ID mapping when index removal fails](https://github.com/microsoft/semantic-kernel/pull/14702#discussion_r4433784829) · New\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png\" alt=\"High severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Avoid renumbering IDs in indexes that preserve them](https://github.com/microsoft/semantic-kernel/pull/14702#discussion_r4433784848) · New\n</details>\n\n<details>\n<summary><strong>What changed in this PR</strong></summary>\n\nThis PR addresses #14695 by updating the Python FAISS connector’s key mappings after flat-index deletions, preventing subsequent deletes from targeting stale positions.\n\n**Changes:**\n- Decrement later mapped positions after each vector removal.\n- Add regression tests for deleting all records and maintaining correct positions after partial deletes.\n\n| File | Description |\r\n| ---- | ----------- |\r\n| `python/​tests/​unit/​connectors/​memory/​test_faiss.py` | Adds full and partial deletion regression tests. |\r\n| `python/​semantic_kernel/​connectors/​faiss.py` | Updates remaining key positions after vector deletion. |\n</details>\n\n<sub>Review effort: Balanced</sub>"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "python/semantic_kernel/connectors/faiss.py",
+   "created_at": "2026-11-01T00:10:20Z",
+   "body": "If `remove_ids` raises, as it does for the accepted custom `IndexHNSWFlat`, this pop loses the key mapping while the vector and stored record remain. Retrying deletion then skips index removal and deletes only the record, leaving an orphaned vector. Read the position first and remove the mapping only after `remove_ids` succeeds."
+  },
+  {
+   "role": "bot",
+   "path": "python/semantic_kernel/connectors/faiss.py",
+   "created_at": "2026-11-01T00:10:21Z",
+   "body": "This renumbering works for flat indexes, but accepted custom indexes such as a trained `IndexIVFFlat` preserve surviving IDs on deletion. With `a:0, b:1, c:2`, deleting `a` incorrectly remaps `b` to 0, so deleting `b` then targets a missing ID and leaves its vector behind. Renumber only indexes that compact IDs, or reject unsupported deletion semantics before mutating state, and add a stable-ID regression test."
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-01T07:14:31Z",
+   "body": "Thanks, both Copilot points were valid and are addressed in the new commit:\n\n- `_inner_delete` now calls `remove_ids` first and drops the key mapping only after it succeeds, so an index that can't remove vectors (e.g. the custom `IndexHNSWFlat`) no longer loses its mapping. Test: `test_delete_keeps_key_map_when_index_cannot_remove`.\n- Only flat indexes compact ids on removal, and the key map relies on that (search resolves ids by position, upsert starts from the current count). Deleting from any other index (e.g. IVF, HNSW) now raises `VectorStoreOperationException` before anything is mutated, instead of leaving a broken mapping. Test: `test_delete_rejected_for_index_that_preserves_ids`.\n\nBoth new tests fail against the previous revision; `tests/unit/connectors/memory/test_faiss.py` passes (25 tests) and `ruff format`/`ruff check` are clean.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
+}

@@ -1,0 +1,48 @@
+{
+ "repo": "PostHog/posthog-js",
+ "number": 5609,
+ "url": "https://github.com/PostHog/posthog-js/pull/5609",
+ "title": "fix(ai): report Anthropic thinking tokens as $ai_reasoning_tokens",
+ "merged_at": "2026-11-07T06:34:22Z",
+ "files": [
+  {
+   "filename": ".changeset/ai-anthropic-thinking-tokens.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@posthog/ai': patch\n+---\n+\n+Report `$ai_reasoning_tokens` for Anthropic calls from `usage.output_tokens_details.thinking_tokens`, in the wrapper (streaming and non-streaming) and in the Claude Agent SDK processor."
+  },
+  {
+   "filename": "packages/ai/src/anthropic/index.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -124,6 +124,7 @@ export class WrappedMessages extends AnthropicOriginal.Messages {\n         const usage: {\n           inputTokens?: number\n           outputTokens?: number\n+          reasoningTokens?: number\n           cacheCreationInputTokens?: number\n           cacheReadInputTokens?: number\n           webSearchCount?: number\n@@ -254,6 +255,9 @@ export class WrappedMessages extends AnthropicOriginal.Messages {\n                     ...Object.fromEntries(Object.entries(chunk.usage).filter(([, value]) => value != null)),\n                   }\n                   usage.outputTokens = chunk.usage.output_tokens ?? 0\n+                  if (chunk.usage.output_tokens_details?.thinking_tokens != null) {\n+                    usage.reasoningTokens = chunk.usage.output_tokens_details.thinking_tokens\n+                  }\n                   // With server tools the final delta reports cumulative input and cache tokens that\n                   // exceed message_start's, so keep the larger value.\n                   usage.inputTokens = Math.max(usage.inputTokens ?? 0, chunk.usage.input_tokens ?? 0)\n@@ -390,6 +394,7 @@ export class WrappedMessages extends AnthropicOriginal.Messages {\n               usage: {\n                 inputTokens: result.usage.input_tokens ?? 0,\n                 outputTokens: result.usage.output_tokens ?? 0,\n+                reasoningTokens: result.usage.output_tokens_details?.thinking_tokens ?? 0,\n                 cacheCreationInputTokens: result.usage.cache_creation_input_tokens ?? 0,\n                 cacheReadInputTokens: result.usage.cache_read_input_tokens ?? 0,\n                 webSearchCount: result.usage.server_tool_use?.web_search_requests ?? 0,"
+  },
+  {
+   "filename": "packages/ai/src/claude-agent-sdk/processor.ts",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -70,6 +70,7 @@ type StreamEvent = SDKPartialAssistantMessage['event']\n interface AnthropicUsage {\n   input_tokens?: number | null\n   output_tokens?: number | null\n+  output_tokens_details?: { thinking_tokens?: number | null } | null\n   cache_read_input_tokens?: number | null\n   cache_creation_input_tokens?: number | null\n   server_tool_use?: { web_search_requests?: number | null } | null\n@@ -872,6 +873,9 @@ function readUsage(usage: AnthropicUsage | undefined): TokenUsage {\n     ...(usage && Object.keys(usage).length > 0 ? { rawUsage: { ...usage } } : {}),\n     ...(usage?.input_tokens != null ? { inputTokens: usage.input_tokens } : {}),\n     ...(usage?.output_tokens != null ? { outputTokens: usage.output_tokens } : {}),\n+    ...(usage?.output_tokens_details?.thinking_tokens != null\n+      ? { reasoningTokens: usage.output_tokens_details.thinking_tokens }\n+      : {}),\n     ...(usage?.cache_read_input_tokens != null ? { cacheReadInputTokens: usage.cache_read_input_tokens } : {}),\n     ...(usage?.cache_creation_input_tokens != null\n       ? { cacheCreationInputTokens: usage.cache_creation_input_tokens }"
+  },
+  {
+   "filename": "packages/ai/tests/anthropic.test.ts",
+   "status": "modified",
+   "additions": 63,
+   "deletions": 1,
+   "patch": "@@ -16,6 +16,7 @@ interface MockAnthropicResponseOptions {\n   usage?: {\n     input_tokens: number\n     output_tokens: number\n+    output_tokens_details?: { thinking_tokens: number } | null\n     cache_creation_input_tokens?: number\n     cache_read_input_tokens?: number\n     cache_creation?: {\n@@ -223,7 +224,10 @@ const createMockStreamChunks = (options: MockAnthropicResponseOptions = {}): Moc\n         stop_reason: options.stopReason || 'end_turn',\n         type: 'stop_reason',\n       },\n-      usage: { output_tokens: options.usage?.output_tokens || 10 },\n+      usage: {\n+        output_tokens: options.usage?.output_tokens || 10,\n+        ...(options.usage?.output_tokens_details ? { output_tokens_details: options.usage.output_tokens_details } : {}),\n+      },\n     },\n     { type: 'message_stop' }\n   )\n@@ -929,6 +933,64 @@ describe('PostHogAnthropic', () => {\n       })\n     })\n \n+    it('should track thinking tokens as reasoning tokens', async () => {\n+      mockResponse = createMockResponse({\n+        content: 'Response',\n+        usage: { input_tokens: 20, output_tokens: 600, output_tokens_details: { thinking_tokens: 512 } },\n+      })\n+\n+      await client.messages.create({\n+        model: 'claude-3-opus-20240229',\n+        messages: [{ role: 'user', content: 'Hello' }],\n+        max_tokens: 1000,\n+        posthogDistinctId: 'test-user-123',\n+      })\n+\n+      const [captureArgs] = (mockPostHogClient.capture as any).mock.calls\n+      expect(captureArgs[0].properties['$ai_output_tokens']).toBe(600)\n+      expect(captureArgs[0].properties['$ai_reasoning_tokens']).toBe(512)\n+    })\n+\n+    it('should track thinking tokens in streaming mode', async () => {\n+      mockStreamChunks = createMockStreamChunks({\n+        content: 'Streaming response',\n+        usage: { input_tokens: 20, output_tokens: 600, output_tokens_details: { thinking_tokens: 512 } },\n+      })\n+\n+      const stream = await client.messages.create({\n+        model: 'claude-3-opus-20240229',\n+        messages: [{ role: 'user', content: 'Hello' }],\n+        max_tokens: 1000,\n+        stream: true,\n+        posthogDistinctId: 'test-user-123',\n+      })\n+      for await (const _chunk of stream) {\n+        // consume\n+      }\n+      await waitForAsyncCapture()\n+\n+      const [captureArgs] = (mockPostHogClient.capture as any).mock.calls\n+      expect(captureArgs[0].properties['$ai_output_tokens']).toBe(600)\n+      expect(captureArgs[0].properties['$ai_reasoning_tokens']).toBe(512)\n+    })\n+\n+    it('should omit reasoning tokens when output_tokens_details is null', async () => {\n+      mockResponse = createMockResponse({\n+        content: 'Response',\n+        usage: { input_tokens: 20, output_tokens: 30, output_tokens_details: null },\n+      })\n+\n+      await client.messages.create({\n+        model: 'claude-3-opus-20240229',\n+        messages: [{ role: 'user', content: 'Hello' }],\n+        max_tokens: 100,\n+        posthogDistinctId: 'test-user-123',\n+      })\n+\n+      const [captureArgs] = (mockPostHogClient.capture as any).mock.calls\n+      expect(captureArgs[0].properties).not.toHaveProperty('$ai_reasoning_tokens')\n+    })\n+\n     conditionalTest('should track cache tokens', async () => {\n       mockResponse = createMockResponse({\n         content: 'Response',"
+  },
+  {
+   "filename": "packages/ai/tests/claude-agent-sdk.test.ts",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -240,6 +240,26 @@ describe('Claude Agent SDK integration', () => {\n     }\n   })\n \n+  it('maps output_tokens_details.thinking_tokens to $ai_reasoning_tokens', async () => {\n+    const client = createMockClient()\n+    queryMock.mockReturnValue(\n+      scriptedQuery([\n+        messageStart(),\n+        assistantMessage([{ type: 'text', text: 'done' }]),\n+        messageDelta({ usage: { output_tokens: 600, output_tokens_details: { thinking_tokens: 512 } } }),\n+        messageStop(),\n+        resultMessage(),\n+      ])\n+    )\n+\n+    const processor = new PostHogClaudeAgentProcessor({ client, distinctId: 'user_123' })\n+    await drain(processor.query({ prompt: 'think' }))\n+\n+    const generation = capturedEvents(client, '$ai_generation')[0].properties\n+    expect(generation.$ai_output_tokens).toBe(600)\n+    expect(generation.$ai_reasoning_tokens).toBe(512)\n+  })\n+\n   it('captures a generation, a tool span, and a trace for one turn', async () => {\n     const client = createMockClient()\n     queryMock.mockReturnValue("
+  }
+ ],
+ "test_files": [
+  "packages/ai/tests/anthropic.test.ts",
+  "packages/ai/tests/claude-agent-sdk.test.ts"
+ ]
+}
