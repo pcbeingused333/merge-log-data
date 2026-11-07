@@ -1,0 +1,26 @@
+{
+ "repo": "Agent-Field/agentfield",
+ "number": 1158,
+ "url": "https://github.com/Agent-Field/agentfield/pull/1158",
+ "title": "fix(sdk-python): omit temperature for models that reject it",
+ "merged_at": "2026-11-07T14:03:26Z",
+ "files": [
+  {
+   "filename": "sdk/python/agentfield/types.py",
+   "status": "modified",
+   "additions": 42,
+   "deletions": 0,
+   "patch": "@@ -364,6 +364,44 @@ class HarnessConfig(BaseModel):\n     )\n \n \n+def _model_rejects_temperature(model: Optional[str]) -> bool:\n+    \"\"\"Return True for models whose default mode rejects a custom temperature.\n+\n+    Mirrors ``rejectsTemperature`` in the Go SDK (sdk/go/ai/model_params.go):\n+    o-series, gpt-5 (base/mini/nano/pro/codex), gpt-5.5+, and newer Claude\n+    models. GPT-5.1/5.2/5.4 accept temperature, so not all ``gpt-5*`` match.\n+    \"\"\"\n+    if not model:\n+        return False\n+    m = model.strip().lower().rsplit(\"/\", 1)[-1]\n+    if len(m) >= 2 and m[0] == \"o\" and m[1].isdigit():\n+        return True\n+    if m == \"gpt-5\" or m.startswith(\"gpt-5-202\"):\n+        return True\n+    for family in (\n+        \"gpt-5-mini\",\n+        \"gpt-5-nano\",\n+        \"gpt-5-pro\",\n+        \"gpt-5.2-pro\",\n+        \"gpt-5.4-pro\",\n+        \"gpt-5.5\",\n+        \"gpt-5.6\",\n+        \"gpt-5-codex\",\n+        \"gpt-5.1-codex\",\n+        \"gpt-5.2-codex\",\n+        \"gpt-5.3-codex\",\n+        \"claude-opus-4-7\",\n+        \"claude-opus-4-8\",\n+        \"claude-opus-5\",\n+        \"claude-sonnet-5\",\n+        \"claude-haiku-5\",\n+        \"claude-fable-5\",\n+    ):\n+        if m == family or m.startswith(family + \"-\"):\n+            return True\n+    return False\n+\n+\n class AIConfig(BaseModel):\n     \"\"\"\n     Configuration for AI calls, defining default models, temperatures, and other parameters.\n@@ -749,6 +787,10 @@ def get_litellm_params(\n         # Apply runtime overrides (highest priority)\n         params.update(overrides)\n \n+        # Models that reject a custom temperature must not receive one\n+        if _model_rejects_temperature(params.get(\"model\") or self.model):\n+            params.pop(\"temperature\", None)\n+\n         # Remove None values\n         params = {k: v for k, v in params.items() if v is not None}\n "
+  },
+  {
+   "filename": "sdk/python/tests/test_ai_config_temperature.py",
+   "status": "added",
+   "additions": 31,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,31 @@\n+import pytest\n+\n+from agentfield.types import AIConfig\n+\n+\n+@pytest.mark.parametrize(\n+    \"model\",\n+    [\n+        \"gpt-5\",\n+        \"openai/gpt-5-mini\",\n+        \"o3-mini\",\n+        \"openai/o4-mini\",\n+        \"gpt-5.5\",\n+        \"anthropic/claude-opus-5\",\n+        \"claude-sonnet-5-20260101\",\n+    ],\n+)\n+def test_temperature_omitted_for_models_that_reject_it(model):\n+    cfg = AIConfig(model=model, temperature=0.3)\n+    assert \"temperature\" not in cfg.get_litellm_params()\n+    assert \"temperature\" not in cfg.get_litellm_params(temperature=0.9)\n+\n+\n+@pytest.mark.parametrize(\n+    \"model\",\n+    [\"gpt-4o\", \"openai/gpt-5.2\", \"gpt-5.4\", \"omni-moderation\", \"claude-sonnet-4-5\"],\n+)\n+def test_temperature_kept_for_models_that_accept_it(model):\n+    cfg = AIConfig(model=model, temperature=0.3)\n+    assert cfg.get_litellm_params()[\"temperature\"] == 0.3\n+    assert cfg.get_litellm_params(temperature=0.9)[\"temperature\"] == 0.9"
+  }
+ ],
+ "test_files": [
+  "sdk/python/tests/test_ai_config_temperature.py"
+ ]
+}

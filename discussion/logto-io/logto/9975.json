@@ -1,0 +1,70 @@
+{
+ "repo": "logto-io/logto",
+ "number": 9975,
+ "url": "https://github.com/logto-io/logto/pull/9975",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-06T02:16:09Z",
+   "body": ""
+  },
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-06T06:18:16Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-06T06:35:18Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "packages/connectors/connector-aws-ses/src/utils.ts",
+   "created_at": "2026-11-06T02:16:09Z",
+   "body": "`emailAddress` can already contain a display name — the connector README documents `Logto<noreply@logto.io>` and `<noreply@logto.io>` — and this wraps it in another pair of angle brackets. With a template `sendFrom` of `Logto`, the request carries `FromEmailAddress: 'Logto <Logto<noreply@logto.io>>'` (or `Logto <<noreply@logto.io>>`), which SES rejects, so every send fails for a tenant configured as documented."
+  },
+  {
+   "role": "contributor",
+   "path": "packages/connectors/connector-aws-ses/src/utils.ts",
+   "created_at": "2026-11-06T02:16:09Z",
+   "body": "`replyTo` is checked before the handlebars are replaced, so a template that renders to an empty string still adds `ReplyToAddresses: ['']`. `replaceSendMessageHandlebars` returns an empty string when the payload has the root property but not the nested one, and SES rejects an empty reply-to address, so the whole send fails."
+  },
+  {
+   "role": "member",
+   "path": "packages/connectors/connector-aws-ses/src/utils.ts",
+   "created_at": "2026-11-06T06:18:16Z",
+   "body": "`includes('@')` treats a display name rendered from `{{application.name}}`, such as `Billing @ Acme Europe`, as a full address and drops the configured sender. The angle-bracket regex can also extract `EU` from a valid configuration like `\"Platform <EU>\" <noreply@example.com>`. Both produce an invalid `FromEmailAddress` for the verification email.\n\nCould we reuse `parseSendFrom` from `@logto/connector-kit`, as SMTP2GO and MailJunky do, to parse the configured and template senders, then validate the extracted email with `z.string().email()`? For a name-only `sendFrom`, keep the configured mailbox and quote and escape the display name as needed when building the SES address, for example `\"Acme, Inc.\" <noreply@example.com>`."
+  },
+  {
+   "role": "contributor",
+   "path": "packages/connectors/connector-aws-ses/src/utils.ts",
+   "created_at": "2026-11-06T06:35:18Z",
+   "body": "The display name is concatenated into `FromEmailAddress` without quoting or encoding. SES requires non-ASCII characters in the friendly name to be RFC 2047 encoded-word, so a localized `sendFrom` such as `Logto 团队` makes every email for that locale fail (or get its characters stripped). Names containing `,`, `(`, `\"` etc. (e.g. `Acme, Inc.`) also need to be quoted, otherwise the header parses as multiple addresses and SES rejects it."
+  },
+  {
+   "role": "contributor",
+   "path": "packages/connectors/connector-aws-ses/src/utils.ts",
+   "created_at": "2026-11-06T06:35:18Z",
+   "body": "Treating any rendered `sendFrom` that contains `@` as a full address is fragile: `sendFrom` is documented as the sender's name alias, so a name like `Support @ Acme` becomes an invalid From and the send fails. Since handlebars are rendered first, a template using a user-controlled value (e.g. `{{user.name}}`) also lets that user set the From to any address on the verified domain."
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-06T05:51:12Z",
+   "body": "Thanks for the review. Both points are fixed in the new commit:\n\n- `getFromEmailAddress` now takes only the bare address from inside `<...>` when the configured `emailAddress` already has a display name, so `Logto<noreply@logto.io>` with `sendFrom: 'Foo'` gives `Foo <noreply@logto.io>` instead of nested brackets.\n- `ReplyToAddresses` is omitted when `replyTo` renders to an empty string (e.g. a template variable with no value), instead of sending `['']`.\n\nAdded a test for each case; the connector's vitest suite and eslint pass.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-06T06:51:17Z",
+   "body": "Thanks both, these points are addressed in the new commit:\n\n- `sendFrom` is now parsed with `parseSendFrom` from `@logto/connector-kit` (as SMTP2GO and MailJunky do) instead of `includes('@')` and the angle-bracket regex. `Billing @ Acme Europe` stays a display name, and `\"Platform <EU>\" <noreply@example.com>` is read as name plus address. The same parser is applied to the configured `emailAddress`, so `Logto<noreply@logto.io>` still works.\n- An address that comes from the template is validated with `z.string().email()`; if it is not valid, the configured sender is used.\n- For a name-only `sendFrom`, the configured mailbox is kept and the name is quoted/escaped when needed (`\"Acme, Inc.\" <noreply@example.com>`). A non-ASCII name such as `Logto 团队` is sent as an RFC 2047 encoded-word.\n\nOn the point that a template value could set the From address: a full address in `sendFrom` is still honored, since that is what the i18n template field allows today. That means a template that interpolates a user-controlled field such as `{{user.name}}` can still pick another address on the verified domain. If you would rather keep the configured mailbox and use `sendFrom` only as the display name in this connector, say so and it will be changed in this PR.\n\nAdded tests for the quoting, the encoded-word, the bracketed name and the invalid-address fallback; the connector's vitest suite and eslint pass.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "pypa/pipenv",
+ "number": 6782,
+ "url": "https://github.com/pypa/pipenv/pull/6782",
+ "title": "fix(requirements): keep markers on VCS entries with --no-lock",
+ "merged_at": "2026-11-07T16:27:44Z",
+ "files": [
+  {
+   "filename": "news/6782.bugfix.rst",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+Fixed ``pipenv requirements --no-lock`` dropping the environment markers of VCS entries."
+  },
+  {
+   "filename": "pipenv/utils/dependencies.py",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 13,
+   "patch": "@@ -2012,6 +2012,19 @@ def requirement_from_pipfile(package_name, package_spec, include_markers=True):\n     if not isinstance(package_spec, dict):\n         return package_name\n \n+    # Process markers\n+    markers = \"\"\n+    if include_markers:\n+        # Handle sys_platform and other common markers\n+        marker_parts = []\n+        if \"markers\" in package_spec and package_spec[\"markers\"]:\n+            marker_parts.append(package_spec[\"markers\"])\n+        if \"sys_platform\" in package_spec and package_spec[\"sys_platform\"]:\n+            marker_parts.append(f\"sys_platform {package_spec['sys_platform']}\")\n+\n+        if marker_parts:\n+            markers = \"; \" + \" and \".join(marker_parts)\n+\n     # Handle VCS dependencies\n     for vcs_type in [\"git\", \"hg\", \"svn\", \"bzr\"]:\n         if vcs_type in package_spec:\n@@ -2043,6 +2056,10 @@ def requirement_from_pipfile(package_name, package_spec, include_markers=True):\n                 line = f\"{package_name}{extras} @ {vcs_type}+{vcs_url}{ref_str}\"\n                 if subdirectory:\n                     line += f\"#subdirectory={subdirectory}\"\n+                # pip ignores markers on an editable line, so only the direct\n+                # reference form carries them (as requirement_from_lockfile does).\n+                if markers:\n+                    line += f\" {markers}\"\n             return line\n \n     # Handle file/path dependencies\n@@ -2077,19 +2094,6 @@ def requirement_from_pipfile(package_name, package_spec, include_markers=True):\n     else:\n         version_str = \"\"\n \n-    # Process markers\n-    markers = \"\"\n-    if include_markers:\n-        # Handle sys_platform and other common markers\n-        marker_parts = []\n-        if \"markers\" in package_spec and package_spec[\"markers\"]:\n-            marker_parts.append(package_spec[\"markers\"])\n-        if \"sys_platform\" in package_spec and package_spec[\"sys_platform\"]:\n-            marker_parts.append(f\"sys_platform {package_spec['sys_platform']}\")\n-\n-        if marker_parts:\n-            markers = \"; \" + \" and \".join(marker_parts)\n-\n     return f\"{package_name}{extras}{version_str}{markers}\"\n \n "
+  },
+  {
+   "filename": "tests/unit/test_requirements_vcs_markers.py",
+   "status": "added",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,29 @@\n+\"\"\"``pipenv requirements --no-lock`` keeps markers on VCS entries (as the lockfile path does).\"\"\"\n+\n+import pytest\n+\n+from pipenv.utils.dependencies import (\n+    requirement_from_lockfile,\n+    requirement_from_pipfile,\n+)\n+\n+URL = \"https://github.com/example/pkg.git\"\n+\n+\n+@pytest.mark.parametrize(\"vcs\", [\"git\", \"hg\"])\n+def test_vcs_marker_kept_without_lock(vcs):\n+    spec = {vcs: URL, \"ref\": \"abc123\", \"markers\": \"sys_platform == 'linux'\"}\n+    line = requirement_from_pipfile(\"pkg\", spec)\n+    assert line == f\"pkg @ {vcs}+{URL}@abc123 ; sys_platform == 'linux'\"\n+    assert line == requirement_from_lockfile(\n+        \"pkg\", spec, include_hashes=False, include_markers=True\n+    )\n+\n+\n+def test_vcs_marker_omitted_when_markers_excluded():\n+    spec = {\"git\": URL, \"ref\": \"abc123\", \"markers\": \"sys_platform == 'linux'\"}\n+    assert requirement_from_pipfile(\"pkg\", spec, include_markers=False) == f\"pkg @ git+{URL}@abc123\"\n+\n+\n+def test_vcs_without_markers_unchanged():\n+    assert requirement_from_pipfile(\"pkg\", {\"git\": URL, \"ref\": \"abc123\"}) == f\"pkg @ git+{URL}@abc123\""
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_requirements_vcs_markers.py"
+ ]
+}

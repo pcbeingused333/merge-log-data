@@ -1,0 +1,26 @@
+{
+ "repo": "LLPhant/LLPhant",
+ "number": 559,
+ "url": "https://github.com/LLPhant/LLPhant/pull/559",
+ "title": "fix(ollama): apply the system message and the json format to streaming calls",
+ "merged_at": "2026-11-07T18:25:59Z",
+ "files": [
+  {
+   "filename": "src/Chat/OllamaChat.php",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -133,6 +133,15 @@ public function generateStreamOfText(string $prompt): StreamInterface\n             'prompt' => $prompt,\n             'stream' => true,\n         ];\n+\n+        if (isset($this->systemMessage->content)) {\n+            $params['system'] = $this->systemMessage->content;\n+        }\n+\n+        if ($this->formatJson) {\n+            $params['format'] = 'json';\n+        }\n+\n         $response = $this->sendRequest(\n             'POST',\n             'generate',\n@@ -217,6 +226,11 @@ public function generateChatStream(array $messages): StreamInterface\n             'messages' => $this->prepareMessages($messages),\n             'stream' => true,\n         ];\n+\n+        if ($this->formatJson) {\n+            $params['format'] = 'json';\n+        }\n+\n         $response = $this->sendRequest(\n             'POST',\n             'chat',"
+  },
+  {
+   "filename": "tests/Unit/Chat/OllamaChatTest.php",
+   "status": "modified",
+   "additions": 70,
+   "deletions": 0,
+   "patch": "@@ -516,3 +516,73 @@ public function sendMail(string $subject, string $body, string $email): string\n         ->and($mailer->lastMessage)->toStartWith('The email has been sent to student@foo.com with the subject Marie Curie Information')\n         ->and($chat->lastFunctionCalled()?->definition->name)->toBe('sendMail');\n });\n+\n+function ollamaStreamPayload(OllamaChat $chat, MockHandler $mock): array\n+{\n+    return Utility::decodeJson($mock->getLastRequest()->getBody()->getContents());\n+}\n+\n+it('OllamaChat generateStreamOfText sends the system message', function () {\n+    $mock = new MockHandler([new Response(200, [], '')]);\n+    $config = new OllamaConfig();\n+    $config->model = 'test';\n+    $chat = new OllamaChat($config);\n+    $chat->client = new Client(['handler' => HandlerStack::create($mock)]);\n+    $chat->setSystemMessage('You are a pirate');\n+\n+    $chat->generateStreamOfText('this is the prompt question');\n+\n+    expect(ollamaStreamPayload($chat, $mock)['system'])->toBe('You are a pirate');\n+});\n+\n+it('OllamaChat generateStreamOfText leaves out the system message when none is set', function () {\n+    $mock = new MockHandler([new Response(200, [], '')]);\n+    $config = new OllamaConfig();\n+    $config->model = 'test';\n+    $chat = new OllamaChat($config);\n+    $chat->client = new Client(['handler' => HandlerStack::create($mock)]);\n+\n+    $chat->generateStreamOfText('this is the prompt question');\n+\n+    expect(ollamaStreamPayload($chat, $mock))->not->toHaveKey('system');\n+});\n+\n+it('OllamaChat generateStreamOfText sends the json format when it is enabled', function () {\n+    $mock = new MockHandler([new Response(200, [], '')]);\n+    $config = new OllamaConfig();\n+    $config->model = 'test';\n+    $config->formatJson = true;\n+    $chat = new OllamaChat($config);\n+    $chat->client = new Client(['handler' => HandlerStack::create($mock)]);\n+\n+    $chat->generateStreamOfText('this is the prompt question');\n+\n+    expect(ollamaStreamPayload($chat, $mock)['format'])->toBe('json');\n+});\n+\n+it('OllamaChat generateChatStream sends the json format when it is enabled', function () {\n+    $mock = new MockHandler([new Response(200, [], '')]);\n+    $config = new OllamaConfig();\n+    $config->model = 'test';\n+    $config->formatJson = true;\n+    $chat = new OllamaChat($config);\n+    $chat->client = new Client(['handler' => HandlerStack::create($mock)]);\n+\n+    $chat->generateChatStream([Message::user('test')]);\n+\n+    expect(ollamaStreamPayload($chat, $mock)['format'])->toBe('json');\n+});\n+\n+it('OllamaChat streams leave out the json format by default', function () {\n+    $mock = new MockHandler([new Response(200, [], ''), new Response(200, [], '')]);\n+    $config = new OllamaConfig();\n+    $config->model = 'test';\n+    $chat = new OllamaChat($config);\n+    $chat->client = new Client(['handler' => HandlerStack::create($mock)]);\n+\n+    $chat->generateStreamOfText('this is the prompt question');\n+    expect(ollamaStreamPayload($chat, $mock))->not->toHaveKey('format');\n+\n+    $chat->generateChatStream([Message::user('test')]);\n+    expect(ollamaStreamPayload($chat, $mock))->not->toHaveKey('format');\n+});"
+  }
+ ],
+ "test_files": [
+  "tests/Unit/Chat/OllamaChatTest.php"
+ ]
+}

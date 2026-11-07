@@ -1,0 +1,26 @@
+{
+ "repo": "fishjar/kiss-translator",
+ "number": 1284,
+ "url": "https://github.com/fishjar/kiss-translator/pull/1284",
+ "title": "fix(translator): stop Claude streaming on error events",
+ "merged_at": "2026-11-07T18:43:47Z",
+ "files": [
+  {
+   "filename": "src/builtin-plugins/streamResponses.js",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -77,6 +77,12 @@ export function getStreamDelta(json, apiType) {\n     }\n     case OPT_TRANS_CLAUDE:\n       // Anthropic Claude 格式 delta 提取逻辑\n+      if (json.type === \"error\") {\n+        // 流中途的 error 事件（如 overloaded_error）必须终止，交由上层回退到非流式\n+        const error = new Error(json.error?.message || \"Claude stream failed\");\n+        error.isAIStreamTerminal = true;\n+        throw error;\n+      }\n       if (json.type === \"content_block_delta\") {\n         return json.delta?.text || \"\";\n       }"
+  },
+  {
+   "filename": "src/libs/stream.test.js",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -225,6 +225,23 @@ describe(\"getStreamDelta\", () => {\n     );\n     expect(getStreamDelta({ type: \"message_stop\" }, OPT_TRANS_CLAUDE)).toBe(\"\");\n   });\n+\n+  test(\"turns Claude stream error events into fallback errors\", () => {\n+    let error;\n+    try {\n+      getStreamDelta(\n+        {\n+          type: \"error\",\n+          error: { type: \"overloaded_error\", message: \"Overloaded\" },\n+        },\n+        OPT_TRANS_CLAUDE\n+      );\n+    } catch (e) {\n+      error = e;\n+    }\n+    expect(error?.message).toBe(\"Overloaded\");\n+    expect(error?.isAIStreamTerminal).toBe(true);\n+  });\n });\n \n describe(\"parseStreamingSegments\", () => {"
+  }
+ ],
+ "test_files": [
+  "src/libs/stream.test.js"
+ ]
+}

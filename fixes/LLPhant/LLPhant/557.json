@@ -1,0 +1,47 @@
+{
+ "repo": "LLPhant/LLPhant",
+ "number": 557,
+ "url": "https://github.com/LLPhant/LLPhant/pull/557",
+ "title": "fix: name MISTRAL_API_KEY and GEMINI_API_KEY and stop falling back to OPENAI_API_KEY",
+ "merged_at": "2026-11-07T17:34:25Z",
+ "files": [
+  {
+   "filename": "src/Chat/GeminiAIChat.php",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -4,7 +4,9 @@\n \n use GuzzleHttp\\Psr7\\Utils;\n use LLPhant\\Chat\\CalledFunction\\CalledFunction;\n+use LLPhant\\Exception\\MissingParameterException;\n use LLPhant\\GeminiOpenAIConfig;\n+use OpenAI\\Contracts\\ClientContract;\n use OpenAI\\Responses\\Chat\\CreateStreamedResponse;\n use OpenAI\\Responses\\StreamResponse;\n use Psr\\Http\\Message\\ResponseInterface;\n@@ -16,6 +18,9 @@ class GeminiAIChat extends OpenAIChat\n {\n     public function __construct(GeminiOpenAIConfig $config = new GeminiOpenAIConfig(), LoggerInterface $logger = new NullLogger())\n     {\n+        if (! $config->client instanceof ClientContract && ! $config->apiKey) {\n+            throw new MissingParameterException('You have to provide a GEMINI_API_KEY env var to request Gemini.');\n+        }\n         parent::__construct($config, $logger);\n     }\n "
+  },
+  {
+   "filename": "src/Chat/MistralAIChat.php",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -20,7 +20,7 @@ public function __construct(MistralAIConfig $config = new MistralAIConfig(), Log\n         $config->model ??= MistralAIChatModel::large->value;\n         if (! $config->client instanceof Client) {\n             if (! $config->apiKey) {\n-                throw new MissingParameterException('You have to provide a OPENAI_API_KEY env var to request OpenAI.');\n+                throw new MissingParameterException('You have to provide a MISTRAL_API_KEY env var to request Mistral AI.');\n             }\n             if (! $config->url) {\n                 throw new MissingParameterException('You have to provide an url o to set OPENAI_BASE_URL env var to request OpenAI.');"
+  },
+  {
+   "filename": "src/GeminiOpenAIConfig.php",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -7,7 +7,9 @@ class GeminiOpenAIConfig extends OpenAIConfig\n     public function __construct(?string $apiKey = null, string $url = 'https://generativelanguage.googleapis.com/v1beta/openai')\n     {\n         parent::__construct(\n-            $apiKey ?? Utility::readEnvironment('GEMINI_API_KEY'),\n+            // An empty key stops OpenAIConfig from falling back to OPENAI_API_KEY,\n+            // so an OpenAI key is never sent to Gemini.\n+            $apiKey ?? Utility::readEnvironment('GEMINI_API_KEY') ?? '',\n             $url\n         );\n     }"
+  },
+  {
+   "filename": "src/MistralAIConfig.php",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -22,7 +22,9 @@ public function __construct(\n         array $modelOptions = [],\n     ) {\n         parent::__construct(\n-            apiKey: $apiKey ?? Utility::readEnvironment('MISTRAL_API_KEY'),\n+            // An empty key stops OpenAIConfig from falling back to OPENAI_API_KEY,\n+            // so an OpenAI key is never sent to Mistral.\n+            apiKey: $apiKey ?? Utility::readEnvironment('MISTRAL_API_KEY') ?? '',\n             url: $url,\n             model: $model ?? 'mistral-small-latest',\n             client: $client,"
+  },
+  {
+   "filename": "tests/Unit/Chat/ApiKeyEnvironmentTest.php",
+   "status": "added",
+   "additions": 67,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,67 @@\n+<?php\n+\n+namespace Tests\\Unit\\Chat;\n+\n+use LLPhant\\Chat\\GeminiAIChat;\n+use LLPhant\\Chat\\MistralAIChat;\n+use LLPhant\\Exception\\MissingParameterException;\n+use LLPhant\\GeminiOpenAIConfig;\n+use LLPhant\\MistralAIConfig;\n+\n+function withEnvironment(array $values, callable $callback): void\n+{\n+    $previous = [];\n+    foreach ($values as $name => $value) {\n+        $previous[$name] = [\n+            'process' => getenv($name),\n+            'env' => array_intersect_key($_ENV, [$name => true]),\n+            'server' => array_intersect_key($_SERVER, [$name => true]),\n+        ];\n+        unset($_ENV[$name], $_SERVER[$name]);\n+        putenv($value === null ? $name : \"$name=$value\");\n+    }\n+\n+    try {\n+        $callback();\n+    } finally {\n+        foreach ($previous as $name => $value) {\n+            $processValue = $value['process'];\n+            putenv($processValue === false ? $name : \"$name=$processValue\");\n+            unset($_ENV[$name], $_SERVER[$name]);\n+            $_ENV += $value['env'];\n+            $_SERVER += $value['server'];\n+        }\n+    }\n+}\n+\n+it('asks for MISTRAL_API_KEY when no Mistral key is set', function () {\n+    withEnvironment(['MISTRAL_API_KEY' => null, 'OPENAI_API_KEY' => null], function () {\n+        expect(fn () => new MistralAIChat())\n+            ->toThrow(MissingParameterException::class, 'MISTRAL_API_KEY');\n+    });\n+});\n+\n+it('does not use OPENAI_API_KEY for Mistral', function () {\n+    withEnvironment(['MISTRAL_API_KEY' => null, 'OPENAI_API_KEY' => 'openai-key'], function () {\n+        $config = new MistralAIConfig();\n+\n+        expect($config->apiKey)->toBe('')\n+            ->and(fn () => new MistralAIChat($config))->toThrow(MissingParameterException::class, 'MISTRAL_API_KEY');\n+    });\n+});\n+\n+it('asks for GEMINI_API_KEY when no Gemini key is set', function () {\n+    withEnvironment(['GEMINI_API_KEY' => null, 'OPENAI_API_KEY' => null], function () {\n+        expect(fn () => new GeminiAIChat())\n+            ->toThrow(MissingParameterException::class, 'GEMINI_API_KEY');\n+    });\n+});\n+\n+it('does not use OPENAI_API_KEY for Gemini', function () {\n+    withEnvironment(['GEMINI_API_KEY' => null, 'OPENAI_API_KEY' => 'openai-key'], function () {\n+        $config = new GeminiOpenAIConfig();\n+\n+        expect($config->apiKey)->toBe('')\n+            ->and(fn () => new GeminiAIChat($config))->toThrow(MissingParameterException::class, 'GEMINI_API_KEY');\n+    });\n+});"
+  }
+ ],
+ "test_files": [
+  "tests/Unit/Chat/ApiKeyEnvironmentTest.php"
+ ]
+}

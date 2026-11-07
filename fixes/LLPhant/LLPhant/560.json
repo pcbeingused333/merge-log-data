@@ -1,0 +1,26 @@
+{
+ "repo": "LLPhant/LLPhant",
+ "number": 560,
+ "url": "https://github.com/LLPhant/LLPhant/pull/560",
+ "title": "fix(ollama): send tool results that are not strings back to the model",
+ "merged_at": "2026-11-07T17:20:07Z",
+ "files": [
+  {
+   "filename": "src/Chat/OllamaChat.php",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 3,
+   "patch": "@@ -192,9 +192,7 @@ private function generateChatRecursive(array $messages): string\n             foreach ($message['tool_calls'] as $toolCall) {\n                 $functionName = $toolCall['function']['name'];\n                 $toolResult = $this->callFunction($functionName, $toolCall['function']['arguments']);\n-                if (is_string($toolResult)) {\n-                    $toolsOutput[] = Message::toolResult($toolResult);\n-                }\n+                $toolsOutput[] = Message::toolResult($toolResult);\n             }\n         }\n "
+  },
+  {
+   "filename": "tests/Unit/Chat/OllamaChatTest.php",
+   "status": "modified",
+   "additions": 68,
+   "deletions": 0,
+   "patch": "@@ -392,6 +392,74 @@ public function tool1()\n     expect($toolMessageFound)->toBeTrue('Tool result message is missing from history');\n });\n \n+it('OllamaChat generateChat sends tool results that are not strings back to the model', function () {\n+    $toolCallAnswer = <<<'JSON'\n+    {\n+      \"message\": {\n+        \"role\": \"assistant\",\n+        \"content\": \"\",\n+        \"tool_calls\": [\n+          {\"function\": {\"name\": \"tool1\", \"arguments\": {}}},\n+          {\"function\": {\"name\": \"tool2\", \"arguments\": {}}}\n+        ]\n+      },\n+      \"done\": true\n+    }\n+    JSON;\n+\n+    $finalAnswer = <<<'JSON'\n+    {\n+      \"message\": {\n+        \"role\": \"assistant\",\n+        \"content\": \"Final Answer\"\n+      },\n+      \"done\": true\n+    }\n+    JSON;\n+\n+    $mock = new MockHandler([\n+        new Response(200, [], $toolCallAnswer),\n+        new Response(200, [], $finalAnswer),\n+    ]);\n+    $client = new Client(['handler' => HandlerStack::create($mock)]);\n+\n+    $config = new OllamaConfig();\n+    $config->model = 'test';\n+    $chat = new OllamaChat($config);\n+    $chat->client = $client;\n+\n+    $obj = new class\n+    {\n+        /** @return array<string, int> */\n+        public function tool1(): array\n+        {\n+            return ['temperature' => 20];\n+        }\n+\n+        public function tool2(): int\n+        {\n+            return 42;\n+        }\n+    };\n+\n+    $chat->addTool(new FunctionInfo('tool1', $obj, 'desc', []));\n+    $chat->addTool(new FunctionInfo('tool2', $obj, 'desc', []));\n+\n+    $response = $chat->generateChat([Message::user('trigger tools')]);\n+\n+    expect($response)->toBe('Final Answer');\n+\n+    $payload = Utility::decodeJson($mock->getLastRequest()->getBody()->getContents());\n+    $toolContents = [];\n+    foreach ($payload['messages'] as $msg) {\n+        if ($msg['role'] === 'tool') {\n+            $toolContents[] = $msg['content'];\n+        }\n+    }\n+\n+    expect($toolContents)->toBe(['{\"temperature\":20}', '42']);\n+});\n+\n it('stops at tool call in generateTextOrReturnFunctionToCall', function () {\n     $ollamaAnswerWithTool = <<<'JSON'\n     {"
+  }
+ ],
+ "test_files": [
+  "tests/Unit/Chat/OllamaChatTest.php"
+ ]
+}

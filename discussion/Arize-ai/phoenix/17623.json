@@ -1,0 +1,34 @@
+{
+ "repo": "Arize-ai/phoenix",
+ "number": 17623,
+ "url": "https://github.com/Arize-ai/phoenix/pull/17623",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-07T00:44:44Z",
+   "body": "## ✅ Factory review of 3fbb7a1: Approve\n\nThe diff does what #17509 asks in both executor copies, its new tests fail on `main` and pass here, and there are no blocking findings.\n\n| Fit | Checks | Tests | Blocking | Non-blocking | Risk | Depth |\n|---|---|---|---|---|---|---|\n| ✅ Pass | ⚠️ Not run | ✅ Pass | ✅ 0 | ⚠️ 1 | ⚠️ Low | ⚠️ Deep |\n\n**Needs attention**\n\n- ⚠️ **Checks (Not run):** package-wide `pyright .` and `mypy --strict .` as CI configures them for phoenix-client and phoenix-evals; `ruff format --check`, `ruff check`, mypy on the changed files, and both executor test modules passed\n- ⚠️ **Non-blocking:** [No test for a generation that cancels itself or for owned-task settling](https://github.com/Arize-ai/phoenix/blob/3fbb7a19ae03cfcc591afdaa7d9d2cc7c27c8a55/packages/phoenix-evals/tests/phoenix/evals/test_executor.py#L799) `packages/phoenix-evals/tests/phoenix/evals/test_executor.py:799`\n- ⚠️ **Risk (Low):** side effects. Cancelling `execute()` now cancels and awaits all owned tasks, waits for each generation's own cleanup, and closes the progress bar on the async path.\n\n<details><summary>Details</summary>\n\n**Intent:** When `AsyncExecutor.execute()` is cancelled, it should cancel and await every task it started, restore the previous termination-signal handler, and close the progress bar. This applies to both phoenix-evals and phoenix-client, and retry, timeout, result and public API behavior should not change.\n**Fit:** The diff does this. A `try/finally` in `execute()` cancels and gathers the producer, the consumers, the join task and the watcher, then restores the handler and closes the bar. A new `except asyncio.CancelledError` in `consumer()` cancels the in-flight generation and awaits it. The two source copies change identically. Removing the termination-path cancel block changes nothing, because `gather(producer, *consumers)` has already finished by then. The self-cancelling-generation case from the issue is also fixed by the new `finally` (checked by running it), though no test covers it.\n**Verified:**\n- `ruff format --check` and `ruff check` on the 4 changed files: clean.\n- mypy (`--strict` for client) on the changed source and test files: no errors on changed lines; the only client error, an unused `type: ignore` at `executors.py:25`, also appears on `main`.\n- pyright on the client `executors.py`: 6 errors, all import resolution in the sandbox, identical on `main`.\n- pytest `tests/phoenix/evals/test_executor.py`: 32 passed, 1 xfailed, 1 xpassed. pytest `tests/client/utils/test_executors.py`: 32 passed, 1 xfailed.\n- With the two `executors.py` files reverted to `main`, all 6 new tests fail, 3 per package. The signal-handler tests fail because `termination_handler` is still installed. The `cancel_settles_generation_tasks[1]` and `[3]` cases fail because generation tasks are not done.\n- In a scratch run on HEAD and on `main`, outputs and `ExecutionDetails` statuses and exception counts match for retry, exhausted-failure and `exit_on_error` runs.\n- After cancelling `execute()` from outside, 1 task remains on HEAD (the caller) against 3 on `main`. When one generation raises `CancelledError` itself, its sibling is cancelled on HEAD and runs to completion on `main`.\n**Not verified:**\n- Package-wide `pyright .` (client) and `mypy .` / `mypy --strict .` (evals / client) as CI runs them. The sandbox has one root venv instead of per-package `uv sync --package`, so pyright can't resolve the packages' imports and package-dir mypy finds modules twice.\n- Behavior under a real terminal `SIGINT`.\n**Findings without a diff line:** none\n**Resolved threads:** none\n**Risk:** side effects low, performance none, backwards compatibility none, from the area reviewers\n\nGraded against the [review criteria](https://github.com/Arize-ai/phoenix/blob/main/factory/agents/pr-reviewer.md#verdict).\n\n</details>"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "packages/phoenix-evals/tests/phoenix/evals/test_executor.py",
+   "created_at": "2026-11-07T00:44:26Z",
+   "body": "**What's wrong:** The new tests check only two things: that in-flight generation tasks settle, and that the signal handler is restored. Two other behaviors this PR changes have no test:\n- The third case from #17509: a generation that cancels itself leaves a sibling generation running.\n- The `finally` block settles the producer, the join task and the watcher tasks. If you remove those cancels, or remove `progress_bar.close()`, every new test still passes.\n\n**Evidence:** I ran a scratch script with `concurrency=2`. In it, `generate(0)` raises `asyncio.CancelledError` on its own, while `generate(1)` sleeps.\n- On `main`, `execute()` raises `CancelledError`, and the sibling keeps running until it finishes.\n- On this commit, the sibling is cancelled by the new `finally` in `execute()` (`executors.py:448-467`).\n\nSo the fix works, but no test would catch it if someone broke it later. In a separate run I cancelled `execute()` from outside. Afterwards `asyncio.all_tasks()` held only the caller's task on this commit, against 3 tasks on `main`, but no test asserts that either.\n\n**Fix:** In both packages, add a test where one `generate()` raises `CancelledError` and assert that the sibling generation task is `done()`. In the existing cancel test, also assert that `asyncio.all_tasks()` is back to its pre-`execute()` set after the cancel. That one check covers the producer, the join task and the watchers without mocking.\n\n**Non-blocking**"
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-11-04T18:47:31Z",
+   "body": "<!-- mintlify-fork-preview-approval -->\n### Preview approval required\n\nThis pull request comes from a fork, so Mintlify won't build a preview until someone with write access approves commit `3fbb7a1`.\n\n[Approve preview](https://github.com/Arize-ai/phoenix/pull/17623/checks?check_run_id=128238442933)"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-07T00:35:42Z",
+   "body": "The factory recommends ✅ **Approve** for 3fbb7a19ae and labeled this pull request `factory-approved`. [Read the review](https://github.com/Arize-ai/phoenix/pull/17623#pullrequestreview-5808946892) · session [`sesn_014Dwnn6tHTvtBuiug6JtaYs`](https://platform.claude.com/workspaces/wrkspc_019uQCzw86YfY8Li79ZLtsom/sessions/sesn_014Dwnn6tHTvtBuiug6JtaYs)\n\ncc @ehutt"
+  }
+ ]
+}

@@ -1,0 +1,16 @@
+{
+ "repo": "ogx-ai/ogx",
+ "number": 6965,
+ "url": "https://github.com/ogx-ai/ogx/pull/6965",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-06T21:17:10Z",
+   "body": "The PR branch is 5 commits behind main, so I applied `gh pr diff` onto main (3cb403051) in a detached worktree. It applied cleanly. I ran the checks below with Python 3.13.3.\n\nThe unit conftest stubs `google.genai`, so I also ran a probe against the real SDK. I installed google-genai 3.0.0 into a side directory and used real `types.GenerateContentResponse.model_validate(...)` objects.\n\nReal SDK facts:\n- `types.FinishReason` is a `str` enum, and `str(types.FinishReason.MAX_TOKENS)` is `'FinishReason.MAX_TOKENS'`.\n- On main, all 20 `FinishReason` members map to `stop`. That includes `MAX_TOKENS`, `SAFETY`, `RECITATION` and `BLOCKLIST`.\n- With the PR, `MAX_TOKENS` maps to `length`. `SAFETY`, `RECITATION`, `LANGUAGE`, `BLOCKLIST`, `PROHIBITED_CONTENT`, `SPII` and `IMAGE_SAFETY` map to `content_filter`. The other 12 members still map to `stop`.\n\nThrough the real converters (main, then PR):\n\n| path | MAX_TOKENS | RECITATION | STOP |\n|---|---|---|---|\n| `convert_gemini_response_to_openai` | stop, then length | stop, then content_filter | stop, then stop |\n| `convert_gemini_stream_chunk_to_openai` | stop, then length | stop, then content_filter | stop, then stop |\n| `convert_gemini_stream_chunk_to_openai_completion` | stop, then length | stop, then content_filter | stop, then stop |\n| `convert_gemini_response_to_openai_completion` | stop, then length | stop, then content_filter | stop, then stop |\n\nA chunk with no finish reason still gives `None` in the stream path. Plain strings behave the same as before: `\"max_tokens\"` and `\"MAX_TOKENS\"` give `length`, and `\"FinishReason.MAX_TOKENS\"` gives `stop`.\n\nTests:\n- `tests/unit/providers/inference/vertexai` with the PR applied: 295 passed.\n- The PR's new `test_converters_requests.py` against unpatched main source: 2 failed (`MAX_TOKENS-length` and `RECITATION-content_filter`), 293 passed.\n\nThe test builds its own `str, Enum` class, because the stub replaces the SDK. My probe shows the real SDK enum behaves the same way, so the test is a fair stand-in.\n\nOne note, not a blocker. `IMAGE_PROHIBITED_CONTENT` and `IMAGE_RECITATION` still map to `stop` with the PR. They are not in `_GEMINI_CONTENT_FILTER_REASONS`, and this PR does not change that table. It could be a follow-up.\n\nApproving.\n"
+  }
+ ],
+ "review_comments": [],
+ "comments": []
+}

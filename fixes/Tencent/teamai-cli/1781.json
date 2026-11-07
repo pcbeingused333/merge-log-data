@@ -1,0 +1,26 @@
+{
+ "repo": "Tencent/teamai-cli",
+ "number": 1781,
+ "url": "https://github.com/Tencent/teamai-cli/pull/1781",
+ "title": "fix(import): reject a non-numeric --max-repos instead of passing NaN",
+ "merged_at": "2026-11-07T14:09:30Z",
+ "files": [
+  {
+   "filename": "src/__tests__/import-numeric-options.test.ts",
+   "status": "added",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,45 @@\n+// -*- coding: utf-8 -*-\n+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';\n+\n+vi.mock('../import-org.js', () => ({\n+    importFromOrg: vi.fn(async () => {}),\n+}));\n+\n+import { importCmd } from '../import.js';\n+import { importFromOrg } from '../import-org.js';\n+import { log } from '../utils/logger.js';\n+\n+describe('importCmd --max-repos', () => {\n+    let exitSpy: ReturnType<typeof vi.spyOn>;\n+    let errorSpy: ReturnType<typeof vi.spyOn>;\n+\n+    beforeEach(() => {\n+        vi.mocked(importFromOrg).mockClear();\n+        exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);\n+        errorSpy = vi.spyOn(log, 'error').mockImplementation(() => {});\n+    });\n+\n+    afterEach(() => {\n+        vi.restoreAllMocks();\n+    });\n+\n+    it('passes a valid --max-repos through as a number', async () => {\n+        await importCmd({ fromOrg: 'acme', maxRepos: '25' });\n+\n+        expect(importFromOrg).toHaveBeenCalledWith(expect.objectContaining({ maxRepos: 25 }));\n+    });\n+\n+    it('defaults to 200 when --max-repos is not given', async () => {\n+        await importCmd({ fromOrg: 'acme' });\n+\n+        expect(importFromOrg).toHaveBeenCalledWith(expect.objectContaining({ maxRepos: 200 }));\n+    });\n+\n+    it.each(['abc', '0', '-3', '1.5'])('refuses --max-repos %s instead of passing NaN or a bad cap', async (value) => {\n+        await importCmd({ fromOrg: 'acme', maxRepos: value });\n+\n+        expect(importFromOrg).not.toHaveBeenCalled();\n+        expect(errorSpy).toHaveBeenCalledWith('--max-repos must be a positive integer');\n+        expect(exitSpy).toHaveBeenCalledWith(1);\n+    });\n+});"
+  },
+  {
+   "filename": "src/import.ts",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 2,
+   "patch": "@@ -76,6 +76,18 @@ function parseMaxFiles(value: string | undefined): number | undefined {\n   return parsed;\n }\n \n+/** Parse a positive-integer option such as --max-repos; an unset option yields the default. */\n+function parsePositiveInt(name: string, value: string | undefined, fallback: number): number {\n+  if (value === undefined || value === '') return fallback;\n+  const parsed = Number(value);\n+\n+  if (!Number.isInteger(parsed) || parsed < 1) {\n+    throw new Error(`${name} must be a positive integer`);\n+  }\n+\n+  return parsed;\n+}\n+\n /**\n  * Main entry point for the import command, orchestrating dir, MR, org, and other import flows.\n  *\n@@ -97,7 +109,7 @@ export async function importCmd(opts: ImportOptions): Promise<void> {\n             task.output = `Org: ${opts.fromOrg}`;\n             await importFromOrg({\n               org: opts.fromOrg!,\n-              maxRepos: opts.maxRepos ? parseInt(opts.maxRepos, 10) : 200,\n+              maxRepos: parsePositiveInt('--max-repos', opts.maxRepos, 200),\n               excludeArchived: opts.excludeArchived ?? true,\n               includePattern: opts.includePattern,\n               excludePattern: opts.excludePattern,\n@@ -124,7 +136,7 @@ export async function importCmd(opts: ImportOptions): Promise<void> {\n       const { previewRepoImport, repoSourceOf } = await import('./import-repo.js');\n       // An unsupported or unsafe URL is refused before anything is written, the lock included.\n       const source = repoSourceOf(fromRepo);\n-      const settings = { depth: opts.depth ? parseInt(opts.depth, 10) : 1, forceSsh: opts.ssh ?? false, incremental: opts.incremental ?? false, skipEnrich: opts.skipEnrich ?? false, maxFiles };\n+      const settings = { depth: parsePositiveInt('--depth', opts.depth, 1), forceSsh: opts.ssh ?? false, incremental: opts.incremental ?? false, skipEnrich: opts.skipEnrich ?? false, maxFiles };\n \n       if (opts.dryRun) {\n         log.info(`Importing remote repo: ${source.owner}/${source.repo} (provider: ${source.providerName})`);"
+  }
+ ],
+ "test_files": [
+  "src/__tests__/import-numeric-options.test.ts"
+ ]
+}

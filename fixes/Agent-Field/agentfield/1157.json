@@ -1,0 +1,26 @@
+{
+ "repo": "Agent-Field/agentfield",
+ "number": 1157,
+ "url": "https://github.com/Agent-Field/agentfield/pull/1157",
+ "title": "fix(sdk-python): omit rejected temperature in schema repair",
+ "merged_at": "2026-11-07T14:03:26Z",
+ "files": [
+  {
+   "filename": "sdk/python/agentfield/harness/_runner.py",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 1,
+   "patch": "@@ -67,6 +67,35 @@ def _is_transient(error_str: str) -> bool:\n     return any(pattern in lower for pattern in TRANSIENT_PATTERNS)\n \n \n+def _rejects_temperature(model: str) -> bool:\n+    \"\"\"Keep the Go SDK's default-mode temperature policy for repair calls.\"\"\"\n+    model = model.strip().lower().rsplit(\"/\", 1)[-1]\n+    if len(model) >= 2 and model[0] == \"o\" and model[1] in \"0123456789\":\n+        return True\n+    if model == \"gpt-5\" or model.startswith(\"gpt-5-202\"):\n+        return True\n+    families = (\n+        \"gpt-5-mini\",\n+        \"gpt-5-nano\",\n+        \"gpt-5-pro\",\n+        \"gpt-5.2-pro\",\n+        \"gpt-5.4-pro\",\n+        \"gpt-5.5\",\n+        \"gpt-5.6\",\n+        \"gpt-5-codex\",\n+        \"gpt-5.1-codex\",\n+        \"gpt-5.2-codex\",\n+        \"gpt-5.3-codex\",\n+        \"claude-opus-4-7\",\n+        \"claude-opus-4-8\",\n+        \"claude-opus-5\",\n+        \"claude-sonnet-5\",\n+        \"claude-haiku-5\",\n+        \"claude-fable-5\",\n+    )\n+    return any(model == family or model.startswith(family + \"-\") for family in families)\n+\n+\n async def _ai_schema_repair(\n     text: str,\n     schema: Any,\n@@ -131,12 +160,17 @@ async def _ai_schema_repair(\n         # Bail rather than guess; the existing retry path will handle this.\n         return None\n \n+    # GPT-5.1/5.2/5.4 accept temperature by default; preserve zero for them.\n+    repair_kwargs: Dict[str, Any] = {}\n+    if not _rejects_temperature(str(model)):\n+        repair_kwargs[\"temperature\"] = 0.0\n+\n     try:\n         response = await asyncio.wait_for(\n             litellm.acompletion(\n                 model=str(model),\n                 messages=[{\"role\": \"user\", \"content\": repair_prompt}],\n-                temperature=0.0,\n+                **repair_kwargs,\n                 response_format={\"type\": \"json_object\"},\n             ),\n             timeout=_SCHEMA_REPAIR_TIMEOUT_SECONDS,"
+  },
+  {
+   "filename": "sdk/python/tests/test_harness_ai_schema_repair.py",
+   "status": "modified",
+   "additions": 44,
+   "deletions": 3,
+   "patch": "@@ -167,10 +167,51 @@ async def _hang(*args, **kwargs):\n         await asyncio.sleep(3600)  # would hang for an hour\n \n     # Patch the module-level timeout to something the test can wait for.\n-    with patch(\n-        \"agentfield.harness._runner._SCHEMA_REPAIR_TIMEOUT_SECONDS\", 0.1\n-    ):\n+    with patch(\"agentfield.harness._runner._SCHEMA_REPAIR_TIMEOUT_SECONDS\", 0.1):\n         with patch(\"litellm.acompletion\", side_effect=_hang):\n             result = await _ai_schema_repair(\"some text\", _Schema, options)\n \n     assert result is None\n+\n+\n+@pytest.mark.asyncio\n+@pytest.mark.parametrize(\n+    \"model\",\n+    [\n+        \"o3-mini\",\n+        \"openai/gpt-5\",\n+        \"openrouter/anthropic/claude-opus-4-7\",\n+        \"claude-opus-5\",\n+        \"gpt-5.5\",\n+        \"gpt-5.1-codex\",\n+        \"gpt-4o\",\n+        \"gpt-5.1\",\n+        \"gpt-5.2\",\n+        \"gpt-5.4\",\n+        \"claude-sonnet-4-6\",\n+    ],\n+)\n+async def test_ai_schema_repair_omits_rejected_temperature(model):\n+    # Match the Go SDK policy: these default-mode models still accept zero.\n+    accepts_temperature = model in {\n+        \"gpt-4o\",\n+        \"gpt-5.1\",\n+        \"gpt-5.2\",\n+        \"gpt-5.4\",\n+        \"claude-sonnet-4-6\",\n+    }\n+\n+    async def complete(**kwargs):\n+        if not accepts_temperature and \"temperature\" in kwargs:\n+            raise ValueError(\"400: temperature is not supported\")\n+        assert kwargs.get(\"temperature\") == (0.0 if accepts_temperature else None)\n+        assert kwargs[\"model\"] == model\n+        return _make_litellm_response('{\"name\": \"repaired\", \"count\": 7}')\n+\n+    with patch(\"litellm.acompletion\", side_effect=complete) as completion:\n+        result = await _ai_schema_repair(\n+            \"name: repaired, count: 7\", _Schema, {\"model\": model}\n+        )\n+\n+    assert result == _Schema(name=\"repaired\", count=7)\n+    completion.assert_called_once()"
+  }
+ ],
+ "test_files": [
+  "sdk/python/tests/test_harness_ai_schema_repair.py"
+ ]
+}

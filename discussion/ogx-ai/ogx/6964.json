@@ -1,0 +1,16 @@
+{
+ "repo": "ogx-ai/ogx",
+ "number": 6964,
+ "url": "https://github.com/ogx-ai/ogx/pull/6964",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-06T21:17:55Z",
+   "body": "The PR branch is 9 commits behind main, so I applied `gh pr diff` onto main (3cb403051) in a detached worktree. It applied cleanly. I ran the checks below with Python 3.13.3.\n\nThe unit tests use a mock response. I also ran the real google-genai SDK (3.0.0, installed in a side directory) and built responses with `types.GenerateContentResponse.model_validate(...)`, so `usage_metadata` is the real `GenerateContentResponseUsageMetadata`.\n\nUsage from `convert_gemini_response_to_openai` (main, then PR):\n\n| usage metadata | completion_tokens | prompt + completion == total |\n|---|---|---|\n| prompt 15, candidates 5, no thoughts, total 20 | 5, then 5 | yes, yes |\n| prompt 15, candidates 5, thoughts 30, total 50 | 5, then 35 | no, yes |\n| prompt 15, no candidates, thoughts 30, total 45 | 0, then 30 | no, yes |\n| thoughts 0, total 20 | 5, then 5 | yes, yes |\n| cached 10 plus thoughts 30, total 50 | 5, then 35 | no, yes |\n| tool-use prompt 7, thoughts 30, total 57 | 5, then 35 | no, no |\n\n`reasoning_tokens` in `completion_tokens_details` is 30 on both sides, and it stays unset when thoughts are 0. The streaming path (`convert_gemini_stream_chunk_to_openai`) also goes through `extract_usage`. For the thoughts 30 case the chunk gives completion 5 on main and 35 with the PR.\n\nTests:\n- `tests/unit/providers/inference/vertexai` with the PR applied: 292 passed.\n- The PR's new `test_converters_responses.py` against unpatched main source: 1 failed (the new thoughts test), 291 passed.\n\nOne note, not a blocker. The last row of the table shows that when Gemini reports `tool_use_prompt_token_count`, the sum still does not match `total_tokens` with the PR. That count is not read anywhere in `src/ogx` and the PR does not touch it. It could be a follow-up.\n\nApproving.\n"
+  }
+ ],
+ "review_comments": [],
+ "comments": []
+}

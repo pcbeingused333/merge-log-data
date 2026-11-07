@@ -1,0 +1,26 @@
+{
+ "repo": "Agent-Field/agentfield",
+ "number": 1156,
+ "url": "https://github.com/Agent-Field/agentfield/pull/1156",
+ "title": "fix(sdk-ts): default searchVector to the handle's scope",
+ "merged_at": "2026-11-07T14:03:26Z",
+ "files": [
+  {
+   "filename": "sdk/typescript/src/memory/MemoryInterface.ts",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -94,8 +94,15 @@ export class MemoryInterface {\n   }\n \n   searchVector(queryEmbedding: number[], options: Omit<VectorSearchOptions, 'metadata'> = {}) {\n+    // Same defaults as set/get/delete: the scoped handle (session(), workflow(), …)\n+    // searches its own scope. An explicit scope in options wins, and the default\n+    // scopeId only applies to the default scope.\n+    const scope = options.scope ?? this.defaultScope;\n+    const scopeId = options.scopeId ?? (scope === this.defaultScope ? this.defaultScopeId : undefined);\n     return this.client.searchVector(queryEmbedding, {\n       ...options,\n+      scope,\n+      scopeId,\n       metadata: this.metadata\n     });\n   }"
+  },
+  {
+   "filename": "sdk/typescript/tests/memory_interface.test.ts",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -240,3 +240,38 @@ describe('MemoryInterface exported methods', () => {\n     });\n   });\n });\n+\n+describe('MemoryInterface.searchVector scoping', () => {\n+  it('searches the scope of a session()/workflow() handle by default', async () => {\n+    const client = createMemoryClient();\n+    const metadata: MemoryRequestMetadata = { workflowId: 'workflow-A', sessionId: 'session-A' };\n+    const memory = new MemoryInterface({ client: client as MemoryClient, metadata });\n+\n+    await memory.session('session-B').searchVector([1, 2], { topK: 3 });\n+    await memory.workflow('workflow-B').searchVector([1, 2]);\n+\n+    expect(client.searchVector).toHaveBeenNthCalledWith(1, [1, 2], {\n+      topK: 3,\n+      scope: 'session',\n+      scopeId: 'session-B',\n+      metadata\n+    });\n+    expect(client.searchVector).toHaveBeenNthCalledWith(2, [1, 2], {\n+      scope: 'workflow',\n+      scopeId: 'workflow-B',\n+      metadata\n+    });\n+  });\n+\n+  it('lets explicit options override the handle scope without leaking its scopeId', async () => {\n+    const client = createMemoryClient();\n+    const memory = new MemoryInterface({ client: client as MemoryClient });\n+    const session = memory.session('session-B');\n+\n+    await session.searchVector([1], { scope: 'actor' });\n+    await session.searchVector([1], { scope: 'global', scopeId: 'global' });\n+\n+    expect(client.searchVector).toHaveBeenNthCalledWith(1, [1], { scope: 'actor', scopeId: undefined, metadata: undefined });\n+    expect(client.searchVector).toHaveBeenNthCalledWith(2, [1], { scope: 'global', scopeId: 'global', metadata: undefined });\n+  });\n+});"
+  }
+ ],
+ "test_files": [
+  "sdk/typescript/tests/memory_interface.test.ts"
+ ]
+}

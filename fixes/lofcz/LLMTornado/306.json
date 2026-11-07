@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 306,
+ "url": "https://github.com/lofcz/LLMTornado/pull/306",
+ "title": "fix(voyage): send raw base64 ChatImage as image_base64 in multimodal embeddings",
+ "merged_at": "2026-11-07T17:06:34Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/VoyageMultimodalInputTests.cs",
+   "status": "added",
+   "additions": 66,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,66 @@\n+using LlmTornado.Chat;\n+using LlmTornado.Code;\n+using LlmTornado.Embedding;\n+using LlmTornado.Embedding.Models;\n+using LlmTornado.Embedding.Vendors.Voyage;\n+using Newtonsoft.Json.Linq;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class VoyageMultimodalInputTests\n+{\n+    private static JObject Serialize(ChatImage image)\n+    {\n+        TornadoApi api = new TornadoApi(LLmProviders.Voyage, \"test-key\");\n+        IEndpointProvider provider = api.GetProvider(LLmProviders.Voyage);\n+\n+        EmbeddingRequest request = new EmbeddingRequest\n+        {\n+            Model = EmbeddingModel.Voyage.Gen4.Large,\n+            MultimodalInput = [[new ChatMessagePart(image)]]\n+        };\n+\n+        VendorVoyageEmbeddingRequest vendor = new VendorVoyageEmbeddingRequest(request, provider);\n+        return JObject.Parse(Newtonsoft.Json.JsonConvert.SerializeObject(vendor));\n+    }\n+\n+    private static JToken Content(JObject body) => body[\"inputs\"]![0]![\"content\"]![0]!;\n+\n+    [Test]\n+    public void ImageUrl_IsSentAsImageUrl()\n+    {\n+        JToken content = Content(Serialize(new ChatImage(\"https://example.com/cat.png\")));\n+\n+        Assert.That(content[\"type\"]!.ToString(), Is.EqualTo(\"image_url\"));\n+        Assert.That(content[\"image_url\"]!.ToString(), Is.EqualTo(\"https://example.com/cat.png\"));\n+    }\n+\n+    [Test]\n+    public void ImageDataUri_IsSentAsImageBase64()\n+    {\n+        JToken content = Content(Serialize(new ChatImage(\"data:image/png;base64,AAAA\")));\n+\n+        Assert.That(content[\"type\"]!.ToString(), Is.EqualTo(\"image_base64\"));\n+        Assert.That(content[\"image_base64\"]!.ToString(), Is.EqualTo(\"data:image/png;base64,AAAA\"));\n+    }\n+\n+    [Test]\n+    public void ImageRawBase64_IsSentAsImageBase64WithDataUriPrefix()\n+    {\n+        JToken content = Content(Serialize(new ChatImage(\"AAAA\", \"image/png\")));\n+\n+        Assert.That(content[\"type\"]!.ToString(), Is.EqualTo(\"image_base64\"));\n+        Assert.That(content[\"image_base64\"]!.ToString(), Is.EqualTo(\"data:image/png;base64,AAAA\"));\n+        Assert.That(content[\"image_url\"], Is.Null);\n+    }\n+\n+    [Test]\n+    public void ImageRawBase64_WithoutMimeType_DefaultsToJpeg()\n+    {\n+        JToken content = Content(Serialize(new ChatImage(\"AAAA\")));\n+\n+        Assert.That(content[\"type\"]!.ToString(), Is.EqualTo(\"image_base64\"));\n+        Assert.That(content[\"image_base64\"]!.ToString(), Is.EqualTo(\"data:image/jpeg;base64,AAAA\"));\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Embedding/Vendors/Voyage/VendorVoyageEmbeddingRequest.cs",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -102,11 +102,17 @@ public VendorVoyageEmbeddingRequest(EmbeddingRequest request, IEndpointProvider\n                             content.Type = \"image_base64\";\n                             content.ImageBase64 = url;\n                         }\n-                        else\n+                        else if (url.StartsWith(\"http://\", StringComparison.OrdinalIgnoreCase) || url.StartsWith(\"https://\", StringComparison.OrdinalIgnoreCase))\n                         {\n                             content.Type = \"image_url\";\n                             content.ImageUrl = url;\n                         }\n+                        else\n+                        {\n+                            // ChatImage.Url may hold raw base64; Voyage expects a data URI in image_base64\n+                            content.Type = \"image_base64\";\n+                            content.ImageBase64 = $\"data:{part.Image.MimeType ?? \"image/jpeg\"};base64,{url}\";\n+                        }\n                     }\n                     else if (part.Type == ChatMessageTypes.Video)\n                     {"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/VoyageMultimodalInputTests.cs"
+ ]
+}

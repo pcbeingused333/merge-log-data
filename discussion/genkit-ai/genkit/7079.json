@@ -1,0 +1,23 @@
+{
+ "repo": "genkit-ai/genkit",
+ "number": 7079,
+ "url": "https://github.com/genkit-ai/genkit/pull/7079",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-04T15:58:28Z",
+   "body": "## Code Review\n\nThis pull request introduces batching for OpenAI embedding requests, splitting inputs into chunks of at most 2048 to comply with the API limit, and adds a unit test to verify this behavior. The reviewer suggested optimizing performance by executing these chunked requests concurrently using `asyncio.gather` instead of sequentially."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "py/packages/genkit-openai/src/genkit_openai/_openai_plugin.py",
+   "created_at": "2026-11-04T15:58:29Z",
+   "body": "![medium](https://www.gstatic.com/codereviewagent/medium-priority.svg)\n\nSince the embedding requests for different chunks are completely independent, we can run them concurrently using `asyncio.gather` instead of sequentially in a loop. This can significantly reduce the total latency for large batches of documents.\n\n```python\n            import asyncio\n\n            client = self._embed_client()\n            data: list[Any] = []\n            try:\n                chunks = [texts[i : i + _MAX_EMBED_INPUTS] for i in range(0, len(texts), _MAX_EMBED_INPUTS)]\n                tasks = [\n                    client.embeddings.create(\n                        model=name,\n                        input=chunk,\n                        **extra,\n                    )\n                    for chunk in chunks\n                ]\n                responses = await asyncio.gather(*tasks)\n                for response in responses:\n                    data.extend(response.data)\n\n```"
+  }
+ ],
+ "comments": []
+}

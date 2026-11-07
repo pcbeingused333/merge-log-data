@@ -1,0 +1,29 @@
+{
+ "repo": "lancedb/lancedb",
+ "number": 4834,
+ "url": "https://github.com/lancedb/lancedb/pull/4834",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-04T15:09:25Z",
+   "body": "## Claude Code Review\n\nThis pull request is from a fork — automated review is disabled. A repository maintainer can comment `@claude review` to run a one-time review."
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-04T15:19:21Z",
+   "body": "⚠️ **Gate recommendation: approve with a non-blocking risk.**\n\nThe batching fixes oversized requests with older Cohere SDKs and preserves embedding order. On current SDKs, it reduces bulk-ingestion throughput by serializing batches that the SDK already sends concurrently. Retaining SDK-managed batching where available would avoid that cost."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "python/python/lancedb/embeddings/cohere.py",
+   "created_at": "2026-11-04T15:19:21Z",
+   "body": "This loop serializes requests that current Cohere SDKs already batch concurrently. With `cohere==7.0.5` (the version in `uv.lock`), the original single `client.embed` call already sends 200 texts as 96/96/8 using the SDK's executor; that behavior was added in [cohere-python#437](https://github.com/cohere-ai/cohere-python/pull/437). The new loop waits for each request before submitting the next, so large table ingestions lose that parallelism.\n\nThis is a non-blocking throughput risk. Letting batching-capable SDKs handle the full input, with a fallback for older versions that need manual batching, would preserve existing performance.\n\n<details><summary>Executed reproducer using the real SDK and an offline HTTP transport</summary>\n\nWith `cohere==7.0.5`, this test observes three concurrent requests with the base implementation, but only one on this head; the final assertion fails on this head. All 200 output embeddings are still correct. The sleep simulates endpoint latency; the test makes no network calls.\n\n```python\nimport json\nimport threading\nimport time\nfrom unittest.mock import patch\n\nimport cohere\nimport httpx\nfrom lancedb.embeddings.cohere import CohereEmbeddingFunction\n\n\ndef test_cohere_retains_sdk_batch_parallelism():\n    active = peak = 0\n    lock = threading.Lock()\n\n    def handle(request):\n        nonlocal active, peak\n        texts = json.loads(request.content)['texts']\n        assert len(texts) <= 96\n        with lock:\n            active += 1\n            peak = max(peak, active)\n        time.sleep(0.05)  # Simulate endpoint latency; no network requests.\n        with lock:\n            active -= 1\n        return httpx.Response(200, json={\n            'id': 'mock', 'response_type': 'embeddings_floats',\n            'texts': texts, 'embeddings': [[float(t)] for t in texts],\n        })\n\n    with httpx.Client(transport=httpx.MockTransport(handle)) as transport:\n        client = cohere.Client(api_key='offline-test-key', httpx_client=transport)\n        with patch.object(CohereEmbeddingFunction, '_init_client'), patch.object(CohereEmbeddingFunction, 'client', client):\n            result = CohereEmbeddingFunction.create().compute_source_embeddings([str(i) for i in range(200)])\n    assert result == [[float(i)] for i in range(200)]\n    assert peak > 1, f'Expected concurrent SDK batches, observed {peak}'\n```\n\n</details>"
+  }
+ ],
+ "comments": []
+}

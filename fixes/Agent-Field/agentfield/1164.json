@@ -1,0 +1,26 @@
+{
+ "repo": "Agent-Field/agentfield",
+ "number": 1164,
+ "url": "https://github.com/Agent-Field/agentfield/pull/1164",
+ "title": "fix(sdk-python): raise max_completion_tokens on empty-reasoning structured retry",
+ "merged_at": "2026-11-07T14:04:36Z",
+ "files": [
+  {
+   "filename": "sdk/python/agentfield/agent_ai.py",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 6,
+   "patch": "@@ -87,12 +87,16 @@ def _is_empty_structured_result(parsed: BaseModel) -> bool:\n \n \n def _increase_retry_max_tokens(params: Dict[str, Any]) -> None:\n-    current = params.get(\"max_tokens\")\n-    if current is None:\n-        params.pop(\"max_tokens\", None)\n-        return\n-    if isinstance(current, int) and current > 0:\n-        params[\"max_tokens\"] = current * 2\n+    # Some providers (e.g. OpenAI) get ``max_tokens`` renamed to\n+    # ``max_completion_tokens`` before the call, so handle both keys.\n+    for key in (\"max_tokens\", \"max_completion_tokens\"):\n+        if key not in params:\n+            continue\n+        current = params[key]\n+        if current is None:\n+            params.pop(key, None)\n+        elif isinstance(current, int) and current > 0:\n+            params[key] = current * 2\n \n \n def _raise_if_empty_reasoning_structured_output("
+  },
+  {
+   "filename": "sdk/python/tests/test_agent_ai.py",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -331,6 +331,24 @@ async def execute_with_retry(self, func):\n     assert calls == [100, 200]\n \n \n+def test_increase_retry_max_tokens_handles_max_completion_tokens():\n+    from agentfield.agent_ai import _increase_retry_max_tokens\n+\n+    params = {\"max_completion_tokens\": 100}\n+    _increase_retry_max_tokens(params)\n+    assert params[\"max_completion_tokens\"] == 200\n+    assert \"max_tokens\" not in params\n+\n+    params = {\"max_tokens\": 100}\n+    _increase_retry_max_tokens(params)\n+    assert params[\"max_tokens\"] == 200\n+\n+    params = {\"max_tokens\": None, \"max_completion_tokens\": None}\n+    _increase_retry_max_tokens(params)\n+    assert \"max_tokens\" not in params\n+    assert \"max_completion_tokens\" not in params\n+\n+\n @pytest.mark.asyncio\n async def test_ai_with_vision_invokes_litellm(monkeypatch, agent_with_ai):\n     stub_module = setup_litellm_stub(monkeypatch)"
+  }
+ ],
+ "test_files": [
+  "sdk/python/tests/test_agent_ai.py"
+ ]
+}

@@ -1,0 +1,64 @@
+{
+ "repo": "lancedb/lancedb",
+ "number": 4827,
+ "url": "https://github.com/lancedb/lancedb/pull/4827",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-04T05:55:02Z",
+   "body": "## Claude Code Review\n\nThis pull request is from a fork — automated review is disabled. A repository maintainer can comment `@claude review` to run a one-time review."
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-04T06:05:20Z",
+   "body": "❌ **Gate recommendation: request changes.**\n\nNormalizing reduced embeddings fixes the provider's behavior for fresh tables, but existing tables also need a consistent embedding representation. Persist the normalization policy in table metadata, preserve the legacy policy when loading older tables, and enable normalization for new or deliberately migrated tables."
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-04T14:42:01Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-04T14:42:20Z",
+   "body": "❌ **Gate recommendation: request changes.**\n\nThe test-expectation issue is fixed. Following [your comment](https://github.com/lancedb/lancedb/pull/4827#issuecomment-6633493120), maintainers can choose the migration mechanism.\n\nThe [existing-table finding](https://github.com/lancedb/lancedb/pull/4827#discussion_r4464199654) remains: upgrading and appending still mixes raw stored vectors with normalized new vectors, degrading default L2 retrieval. Keep each table's stored vectors, new rows, and queries on one policy, using a persisted policy/version that preserves legacy interpretation or a deliberate migration of existing vectors and indexes before switching behavior."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "python/python/lancedb/embeddings/gemini_text.py",
+   "created_at": "2026-11-04T06:05:21Z",
+   "body": "Reopening an existing Gemini table and appending rows now mixes raw and unit-length vectors, which silently misranks results under the default L2 metric. Existing metadata can contain `\"model\": {}`, so it restores this changed function while previously stored vectors retain their old magnitudes.\n\nI reproduced this at the default 768 dimensions: an old exact-match row has distance `0.25`, while a newly appended, less similar row has distance about `0.08` and ranks first. The same regression passes with the base generator, and a fresh table also ranks the exact match first. Ordinary upgrades followed by appends can therefore degrade retrieval; retrying the query does not repair the inconsistent stored vectors.\n\nRecord a normalization mode/version so older metadata keeps a consistent policy until an explicit migration, while new tables can use normalized embeddings. An alternative is a deliberate migration that normalizes the entire existing column and updates its index before the policy changes.\n\n<details><summary>Executed regression test</summary>\n\nAdd this to `python/python/tests/test_gemini_text_embeddings.py`, using its existing imports and `fake_genai` fixture:\n\n```python\ndef test_legacy_table_append_keeps_exact_match_first(fake_genai, tmp_path, monkeypatch):\n    import lancedb\n    from lancedb.embeddings.gemini_text import GeminiText\n    from lancedb.pydantic import LanceModel, Vector\n\n    def embed_content(model, contents, config):\n        embeddings = []\n        for content in contents:\n            text = content[\"parts\"][-1][\"text\"]\n            raw = [0.48, 0.14] if text == \"b\" else [0.5, 0.0]\n            embeddings.append(SimpleNamespace(values=raw + [0.0] * 766))\n        return SimpleNamespace(embeddings=embeddings)\n\n    client = SimpleNamespace(models=SimpleNamespace(embed_content=embed_content))\n    monkeypatch.setattr(GeminiText, \"client\", property(lambda self: client))\n    model = get_registry().get(\"gemini-text\").create()\n\n    class Row(LanceModel):\n        text: str = model.SourceField()\n        vector: Vector(model.ndims()) = model.VectorField()\n\n    db = lancedb.connect(str(tmp_path))\n    db.create_table(\"legacy\", schema=Row, data=[\n        {\"text\": \"a\", \"vector\": [0.5] + [0.0] * 767}\n    ])\n    table = lancedb.connect(str(tmp_path)).open_table(\"legacy\")\n    table.add([{\"text\": \"b\"}])\n    result = table.search(\"a\").limit(2).to_list()\n    print([(row[\"text\"], row[\"_distance\"]) for row in result])\n    assert result[0][\"text\"] == \"a\"\n```\n\nOn this head, the result is `[('b', 0.08000000566244125), ('a', 0.25)]` and the final assertion fails. With the base revision's `generate_embeddings`, it passes.\n\n</details>"
+  },
+  {
+   "role": "bot",
+   "path": "python/python/tests/test_gemini_text_embeddings.py",
+   "created_at": "2026-11-04T06:05:21Z",
+   "body": "The existing Gemini tests still expect raw API values, so the focused suite now has two failures despite these new tests passing. Please align their expectations with the selected normalization policy while retaining their batching and task-type assertions.\n\nI ran:\n\n```sh\ncd python\nuv run --frozen --extra tests pytest python/tests/test_gemini.py python/tests/test_gemini_text_embeddings.py -q\n```\n\n`test_generate_embeddings_batched` fails at `test_gemini.py:98`, and `test_generate_embeddings_retrieval_document` fails at line 131: the returned components are now approximately `0.03608439`, rather than `0.1` or `0.3`. The result is **2 failed, 6 passed**; the existing tests pass with the base generator."
+  },
+  {
+   "role": "bot",
+   "path": "python/python/tests/test_gemini_text_embeddings.py",
+   "created_at": "2026-11-04T14:42:01Z",
+   "body": "Fixed in [cc6b6a4](https://github.com/lancedb/lancedb/commit/cc6b6a4d0993b218b51b2d14b8d155e8a0b4c2e3): the existing batching and retrieval-document tests now expect normalized 768-dimensional output. Both Gemini test files pass (8 tests).\n\n<!-- lance-gatekeeper-review-feedback:v2 agent=7f5b024a7531ea87614336c82b1a4aa5 root=PRRC_kwDOJDTTIs8AAAABChZH8w head=cc6b6a4d0993b218b51b2d14b8d155e8a0b4c2e3 action=addressed -->"
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-11-04T05:55:14Z",
+   "body": "**ACTION NEEDED**\n\n  Lance follows the [Conventional Commits specification](https://www.conventionalcommits.org/en/v1.0.0/) for release automation.\n\n  The PR title and description are used as the merge commit message.  Please update your PR title and description to match the specification.\n\n  For details on the error please inspect the \"PR Title Check\" action.\n  "
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-04T14:39:26Z",
+   "body": "Updated `test_gemini.py` for the new normalized output and fixed the title. Regarding the gatekeeper's point about persisting a normalization policy in table metadata: that is a design change, so I'd like the maintainers' preference before expanding this PR.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
+}
