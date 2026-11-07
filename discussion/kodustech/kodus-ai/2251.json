@@ -1,0 +1,134 @@
+{
+ "repo": "kodustech/kodus-ai",
+ "number": 2251,
+ "url": "https://github.com/kodustech/kodus-ai/pull/2251",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-29T21:37:26Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-10-29T21:37:34Z",
+   "body": "# Found critical issues please review the requested changes\n\n- [Nest can terminate the process before observability shutdown finishes](https://github.com/kodustech/kodus-ai/pull/2251#discussion_r4418164558)"
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-30T02:02:45Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-30T02:02:48Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-30T02:02:51Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-10-30T02:03:00Z",
+   "body": "# Found critical issues please review the requested changes\n\n- [Observability shutdown failures are silently discarded](https://github.com/kodustech/kodus-ai/pull/2251#discussion_r4419771460)"
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-01T14:57:12Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "libs/core/observability/observability.ts",
+   "created_at": "2026-10-29T21:37:26Z",
+   "body": "![kody code-review](https://img.shields.io/badge/kody-code--review-312B4B?labelColor=C9BBF2) ![Bug](https://img.shields.io/badge/Bug-B71C1C) ![critical](https://img.shields.io/badge/severity_level-critical-FF3D3D)\n\n\n**Nest can terminate the process before observability shutdown finishes**\n\nTelemetry or MongoDB buffer writes can be lost if Nest re-sends the signal while `shutdown()` is still flushing. Integrate `shutdown()` into an awaited Nest lifecycle hook so flushing finishes before the signal is re-sent.\n\n\n\n<details>\n<summary>Prompt for LLM</summary>\n\n````text\nFile libs/core/observability/observability.ts, line 864:\n\nNest can terminate the process before observability shutdown finishes\n\nNest can finish its hooks and re-send the signal while `shutdown()` is still flushing telemetry or MongoDB buffers, terminating the process before those writes complete because the listener has already been removed. Integrate observability shutdown into an awaited Nest lifecycle hook so the signal is re-sent only after the exporter flush finishes.\n````\n\n</details>\n\n\n<sub>Talk to Kody by mentioning @kody</sub>\n\n\n<sub>Was this suggestion helpful? React with 👍 or 👎 to help Kody learn from this interaction.</sub>\n\n<!-- kody-codereview -->&#8203;\n&#8203;"
+  },
+  {
+   "role": "bot",
+   "path": "libs/core/log/observability.service.ts",
+   "created_at": "2026-10-30T02:02:45Z",
+   "body": "![kody code-review](https://img.shields.io/badge/kody-code--review-312B4B?labelColor=C9BBF2) ![Kody Rules](https://img.shields.io/badge/Kody_Rules-4527A0) ![critical](https://img.shields.io/badge/severity_level-critical-FF3D3D)\n\n\n**Observability shutdown failures are silently discarded**\n\nFailed flushes are undiagnosable because `Promise.allSettled` results are not inspected. Log each rejection with its error and observability instance context while allowing the remaining shutdowns to complete.\n\nKody rule violation: [Tratamento adequado de exceções\\.](https://app.kodus.io/settings/code-review/956679248/kody-rules/43b72fcc-14b5-4917-8b5f-91708a808f88?teamId=ebb24108-be7e-4fd9-9346-f1f2c7c0b7f1)\n\n\n\n<details>\n<summary>Prompt for LLM</summary>\n\n````text\nFile libs/core/log/observability.service.ts, line 212:\n\nObservability shutdown failures are silently discarded\n\n`Promise.allSettled` discards shutdown failures because its results are never inspected. Log each rejected result with the error and identifying context for the affected observability instance so failed flushes are diagnosable while the remaining shutdowns can complete.\n\nKody rule violation: [Tratamento adequado de exceções\\.](https://app.kodus.io/settings/code-review/956679248/kody-rules/43b72fcc-14b5-4917-8b5f-91708a808f88?teamId=ebb24108-be7e-4fd9-9346-f1f2c7c0b7f1)\n````\n\n</details>\n\n\n<sub>Talk to Kody by mentioning @kody</sub>\n\n\n<sub>Was this suggestion helpful? React with 👍 or 👎 to help Kody learn from this interaction.</sub>\n\n<!-- kody-codereview -->&#8203;\n&#8203;"
+  },
+  {
+   "role": "bot",
+   "path": "libs/core/observability/observability.ts",
+   "created_at": "2026-10-30T02:02:48Z",
+   "body": "![kody code-review](https://img.shields.io/badge/kody-code--review-312B4B?labelColor=C9BBF2) ![Kody Rules](https://img.shields.io/badge/Kody_Rules-4527A0) ![high](https://img.shields.io/badge/severity_level-high-6B6B92)\n\n\n**A stalled shutdown operation can block the remaining cleanup indefinitely**\n\nA stalled telemetry shutdown prevents exporter cleanup, while a stalled exporter leaves `shutdownPromise` pending indefinitely. Add timeouts and timeout logs to `runShutdown` and continue cleanup after a timeout, noting that the underlying operation is not canceled.\n\n**Also found in:**\n- `libs/core/log/observability.service.ts:213-213`\n\nKody rule violation: [Bound async operations with timeouts](https://app.kodus.io/settings/code-review/956679248/kody-rules/b8b12f43-99f2-457d-b815-40499deedbde?teamId=ebb24108-be7e-4fd9-9346-f1f2c7c0b7f1)\n\n\n\n<details>\n<summary>Prompt for LLM</summary>\n\n````text\nFile libs/core/observability/observability.ts, line 553:\n\nA stalled shutdown operation can block the remaining cleanup indefinitely\n\nBound the telemetry and exporter shutdown calls with timeouts and log when each timeout fires. Currently, a never-settling telemetry shutdown prevents exporter cleanup from starting, and a never-settling exporter keeps the cached shutdown promise pending indefinitely. Continue the remaining cleanup after a timeout; the timeout bounds waiting but does not cancel the underlying operation.\n\n**Also found in:**\n- `libs/core/log/observability.service.ts:213-213`\n\nKody rule violation: [Bound async operations with timeouts](https://app.kodus.io/settings/code-review/956679248/kody-rules/b8b12f43-99f2-457d-b815-40499deedbde?teamId=ebb24108-be7e-4fd9-9346-f1f2c7c0b7f1)\n````\n\n</details>\n\n\n<sub>Talk to Kody by mentioning @kody</sub>\n\n\n<sub>Was this suggestion helpful? React with 👍 or 👎 to help Kody learn from this interaction.</sub>\n\n<!-- kody-codereview -->&#8203;\n&#8203;"
+  },
+  {
+   "role": "bot",
+   "path": "libs/core/observability/observability.ts",
+   "created_at": "2026-10-30T02:02:51Z",
+   "body": "![kody code-review](https://img.shields.io/badge/kody-code--review-312B4B?labelColor=C9BBF2) ![Bug](https://img.shields.io/badge/Bug-B71C1C) ![medium](https://img.shields.io/badge/severity_level-medium-1A7BBE)\n\n\n**Hot reload reuses a permanently shut-down observability singleton**\n\nAfter hot-module disposal calls `app.close()`, the next bootstrap reuses the closed observability instance, and its cached `shutdownPromise` prevents newly initialized exporters from being shut down. Reset or recreate the global instance when closing the application.\n\n\n\n<details>\n<summary>Prompt for LLM</summary>\n\n````text\nFile libs/core/observability/observability.ts, lines 549-550:\n\nHot reload reuses a permanently shut-down observability singleton\n\nHot-module disposal calls `app.close()`, which now shuts down the process-global observability instance, but the next application bootstrap retrieves that same instance and this cached promise prevents any subsequent shutdown from processing newly initialized exporters. Reset or recreate the global instance when closing the application so a restarted Nest context gets a live observability system.\n````\n\n</details>\n\n\n<sub>Talk to Kody by mentioning @kody</sub>\n\n\n<sub>Was this suggestion helpful? React with 👍 or 👎 to help Kody learn from this interaction.</sub>\n\n<!-- kody-codereview -->&#8203;\n&#8203;"
+  },
+  {
+   "role": "bot",
+   "path": "libs/core/observability/observability.spec.ts",
+   "created_at": "2026-11-01T14:57:12Z",
+   "body": "![kody code-review](https://img.shields.io/badge/kody-code--review-312B4B?labelColor=C9BBF2) ![Bug](https://img.shields.io/badge/Bug-B71C1C) ![medium](https://img.shields.io/badge/severity_level-medium-1A7BBE)\n\n\n**New signal spec leaks process-global error handlers that throw on fake exporter**\n\nThose process-global listeners survive in the reused jest worker, so a later unhandled rejection throws inside `handleGlobalError` from the fake exporter's missing `exportLog` and duplicate handlers can call `shutdown` or `process.exit(1)`. Capture and remove the installed listeners in `afterEach` or stub `setupErrorProcessors`, and add `exportLog: jest.fn()` to the fake exporter.\n\n\n\n<details>\n<summary>Prompt for LLM</summary>\n\n````text\nFile libs/core/observability/observability.spec.ts, line 6:\n\nNew signal spec leaks process-global error handlers that throw on fake exporter\n\ncreateSystem() builds a real `ObservabilitySystem`, whose constructor installs process-global `uncaughtException`/`unhandledRejection`/`SIGTERM`/`SIGINT` listeners, but the suite only deletes `__kodusObsHandlersInstalled` in `afterEach` and never calls `process.removeListener`, so those handlers (and the fake `{ name, shutdown }` exporter that lacks `exportLog`) survive for the rest of the jest worker's lifetime, which jest reuses across test files. `handleGlobalError` fans the caught error out to `exporter.exportLog(...)`, so any unhandled rejection or uncaught exception raised later in that worker throws a TypeError inside the handler — a fatal error in a global handler — instead of being reported, and clearing the production idempotency guard lets later specs stack duplicate handlers that each call `shutdown()`/`process.exit(1)`. Capture the listeners installed by `createSystem()` and remove them in `afterEach` (or stub `setupErrorProcessors`), and give the fake exporter an `exportLog: jest.fn()` so the leaked handler cannot throw.\n````\n\n</details>\n\n\n<sub>Talk to Kody by mentioning @kody</sub>\n\n\n<sub>Was this suggestion helpful? React with 👍 or 👎 to help Kody learn from this interaction.</sub>\n\n<!-- kody-codereview -->&#8203;\n&#8203;"
+  }
+ ],
+ "comments": [
+  {
+   "role": "member",
+   "created_at": "2026-10-29T21:19:14Z",
+   "body": "@kody start-review"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-29T21:19:23Z",
+   "body": "## Code Review Could Not Complete ⚠️\n\nThe review failed before suggestions could be generated.\n\n**Reason:** Unexpected error while running the code review (openai_compatible).\n\nopenai_compatible · gpt-6.1-terra · HTTP 499 · generalist\n\nAfter fixing the issue, comment `@kody review` on this PR to re-run the review.\n\n\n\n<details>\n<summary>Kody Guide: Usage and Configuration</summary>\n\n<details>\n<summary>Interacting with Kody</summary>\n\n- **Request a Review:** Ask Kody to review your PR manually by adding a comment with the `@kody start-review` command at the root of your PR.\n\n- **Validate Business Logic:** Ask Kody to validate your code against business rules by adding a comment with the `@kody -v business-logic` command.\n\n- **Provide Feedback:** Help Kody learn and improve by reacting to its comments with a 👍 for helpful suggestions or a 👎 if improvements are needed.\n\n</details>\n\n<details>\n<summary>Current Kody Configuration</summary>\n\n<details>\n<summary>Review Options</summary>\n\nThe following review options are enabled or disabled:\n\n| Options                        | Enabled |\n|-------------------------------|---------|\n| **Bug** | ✅ |\n| **Performance** | ✅ |\n| **Security** | ✅ |\n| **Business Logic** | ✅ |\n\n</details>\n\n**[Access your configuration settings here.](https://app.kodus.io/settings/code-review/global/general)**\n\n</details>\n</details>\n\n<!-- kody-codereview-completed-1793308949702-idbwpzsupg -->\n<!-- kody-codereview -->\n&#8203;\n\n**Automatic approval held:** The review is not clean."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-29T21:20:16Z",
+   "body": "<!-- kody-business-logic -->\n## Kody · Business Logic\n\n**[#2087 · Worker process stays alive after SIGTERM once shutdown hooks finish](https://github.com/kodustech/kodus-ai/issues/2087)**\nAll requirements met · 3 to check manually\n<sub>Task read 2026-10-30 02:00 UTC · at `22c4caa`</sub>\n\n✅ 1 of 4 met: Expected result\n\n| | Requirement | In this PR |\n|---|---|---|\n| 👀 **CHECK MANUALLY** | Boot the worker so `ObservabilityService.init('worker')` runs (Mongo config present) and `enableShutdownHooks()` is called with no options. <sub>AC #1</sub> | The diff does not show a worker boot with Mongo configuration or the existing bootstrap calls; verify this reproduction setup in a running worker. |\n| 👀 **CHECK MANUALLY** | Send SIGTERM with `activeJobs` at 0. <sub>AC #2</sub> | `libs/core/observability/observability.spec.ts:37` · The test emits SIGTERM in-process, but the diff does not show a running worker with zero active jobs receiving the signal. |\n| 👀 **CHECK MANUALLY** | Wait until `WorkflowJobConsumer` logs `Shutdown complete.` <sub>AC #3</sub> | The diff does not show the worker shutdown sequence or its completion log; verify this step in a running worker. |\n\n<sub>Earlier checks: `409ec01` 1/4 met ✓</sub>\n\n<sub>Disagree with a line? Reply here and mention @kody. Fixed it? Comment `@kody -v business-logic` and this comment is updated.</sub>"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-29T21:22:28Z",
+   "body": "![kody code-review](https://img.shields.io/badge/kody-code--review-312B4B?labelColor=C9BBF2) ![Kody Rules](https://img.shields.io/badge/Kody_Rules-4527A0) ![high](https://img.shields.io/badge/severity_level-high-6B6B92)\n\n**PR description omits verification**\n\nAdd how the change was verified to the PR description, including the relevant test commands and results.\n\nKody rule violation: [Follow Kodus architecture, development setup, evidence\\-driven issue workflows, and concise PR communication](https://app.kodus.io/settings/code-review/956679248/kody-rules/45222ce8-bf82-4ff1-8d9f-7bd0d3808d41?teamId=ebb24108-be7e-4fd9-9346-f1f2c7c0b7f1)\n\n<details>\n<summary>Prompt for LLM</summary>\n\n````text\nPR description omits verification\n\nAdd how the change was verified to the PR description, including the relevant test commands and results.\n\nKody rule violation: [Follow Kodus architecture, development setup, evidence\\-driven issue workflows, and concise PR communication](https://app.kodus.io/settings/code-review/956679248/kody-rules/45222ce8-bf82-4ff1-8d9f-7bd0d3808d41?teamId=ebb24108-be7e-4fd9-9346-f1f2c7c0b7f1)\n````\n\n</details>\n\n<!-- kody-codereview -->\n&#8203;"
+  },
+  {
+   "role": "member",
+   "created_at": "2026-10-29T21:35:20Z",
+   "body": "@kody review"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-29T21:35:28Z",
+   "body": "## Code Review Completed! 🔥\n\nThe code review was successfully completed based on your current configurations.\n\n\n\n<details>\n<summary>Kody Guide: Usage and Configuration</summary>\n\n<details>\n<summary>Interacting with Kody</summary>\n\n- **Request a Review:** Ask Kody to review your PR manually by adding a comment with the \\`@kody start-review\\` command at the root of your PR.\n\n- **Provide Feedback:** Help Kody learn and improve by reacting to its comments with a 👍 for helpful suggestions or a 👎 if improvements are needed.\n\n</details>\n\n<details>\n<summary>Current Kody Configuration</summary>\n\n<details>\n<summary>Review Options</summary>\n\nThe following review options are enabled or disabled:\n\n| Options                        | Enabled |\n|-------------------------------|---------|\n| **Bug** | ✅ |\n| **Performance** | ✅ |\n| **Security** | ✅ |\n| **Business Logic** | ✅ |\n\n</details>\n\n</details>\n\n**Kody Code Review** — 1 suggested fix.\nPaste the prompt below to your agent and all review fixed at once!\n\n<details>\n<summary>🛠️ Open Agent Prompt</summary>\n\n```\nA code review identified the following issues in this pull request.\nEach section describes what was found and includes a reference implementation where available.\n\nFiles involved:\n- libs/core/observability/observability.ts:864\n\n---\n\n### [1/1] libs/core/observability/observability.ts:864\nIssue identified during code review:\nNest can terminate the process before observability shutdown finishes\n\nNest can finish its hooks and re-send the signal while `shutdown()` is still flushing telemetry or MongoDB buffers, terminating the process before those writes complete because the listener has already been removed. Integrate observability shutdown into an awaited Nest lifecycle hook so the signal is re-sent only after the exporter flush finishes.\n\n---\n\nReview each issue in context, use the reference implementations as guidance, and apply fixes that are consistent with the surrounding codebase.\n```\n\n</details>\n\n**[Access your configuration settings here.](https://app.kodus.io/settings/code-review/global/general)**\n\n</details>\n\n> ⚠️ Note: some checks couldn't be completed in this run, so auto-approval (when enabled) was skipped. Check the details at https://app.kodus.io/pull-requests and then comment `@kody review` on this PR to retry once the issue is resolved.\n\n\n**Automatic approval held:** The review is not clean."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-30T02:00:11Z",
+   "body": "Addressed the review finding about Nest terminating the process mid-flush in 22c4caa87 (new commit on the branch).\n\nThe `once` listeners start `shutdown()` but do not hold the process, so once Nest's hooks finish and it re-sends the signal, the exit could cut off the telemetry and MongoDB buffer writes. `ObservabilityService` now implements `beforeApplicationShutdown` and awaits `shutdown()` on every instance it created. Nest awaits that hook before re-sending the signal. `shutdown()` was already made idempotent in this PR, so the signal listener and the hook share the same run and the exporters still close once.\n\nNew test in `observability.service.spec.ts`: the hook stays pending until the instance's `shutdown()` resolves. It fails without the hook. `observability.service.spec.ts` and `observability.spec.ts` pass (15 tests), and prettier and eslint are clean on the changed files.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-30T02:00:12Z",
+   "body": "## Code Review Completed! 🔥\n\nThe code review was successfully completed based on your current configurations.\n\n\n\n<details>\n<summary>Kody Guide: Usage and Configuration</summary>\n\n<details>\n<summary>Interacting with Kody</summary>\n\n- **Request a Review:** Ask Kody to review your PR manually by adding a comment with the \\`@kody start-review\\` command at the root of your PR.\n\n- **Provide Feedback:** Help Kody learn and improve by reacting to its comments with a 👍 for helpful suggestions or a 👎 if improvements are needed.\n\n</details>\n\n<details>\n<summary>Current Kody Configuration</summary>\n\n<details>\n<summary>Review Options</summary>\n\nThe following review options are enabled or disabled:\n\n| Options                        | Enabled |\n|-------------------------------|---------|\n| **Bug** | ✅ |\n| **Performance** | ✅ |\n| **Security** | ✅ |\n| **Business Logic** | ✅ |\n\n</details>\n\n</details>\n\n**Kody Code Review** — 3 suggested fixes.\nPaste the prompt below to your agent and all review fixed at once!\n\n<details>\n<summary>🛠️ Open Agent Prompt</summary>\n\n```\nA code review identified the following issues in this pull request.\nEach section describes what was found and includes a reference implementation where available.\n\nFiles involved:\n- libs/core/log/observability.service.ts:212\n- libs/core/observability/observability.ts:553\n- libs/core/observability/observability.ts:550\n\n---\n\n### [1/3] libs/core/log/observability.service.ts:212\nIssue identified during code review:\nObservability shutdown failures are silently discarded\n\n`Promise.allSettled` discards shutdown failures because its results are never inspected. Log each rejected result with the error and identifying context for the affected observability instance so failed flushes are diagnosable while the remaining shutdowns can complete.\n\nKody rule violation: [Tratamento adequado de exceções\\.](https://app.kodus.io/settings/code-review/956679248/kody-rules/43b72fcc-14b5-4917-8b5f-91708a808f88?teamId=ebb24108-be7e-4fd9-9346-f1f2c7c0b7f1)\n\n---\n\n### [2/3] libs/core/observability/observability.ts:553\nIssue identified during code review:\nA stalled shutdown operation can block the remaining cleanup indefinitely\n\nBound the telemetry and exporter shutdown calls with timeouts and log when each timeout fires. Currently, a never-settling telemetry shutdown prevents exporter cleanup from starting, and a never-settling exporter keeps the cached shutdown promise pending indefinitely. Continue the remaining cleanup after a timeout; the timeout bounds waiting but does not cancel the underlying operation.\n\n**Also found in:**\n- `libs/core/log/observability.service.ts:213-213`\n\nKody rule violation: [Bound async operations with timeouts](https://app.kodus.io/settings/code-review/956679248/kody-rules/b8b12f43-99f2-457d-b815-40499deedbde?teamId=ebb24108-be7e-4fd9-9346-f1f2c7c0b7f1)\n\n---\n\n### [3/3] libs/core/observability/observability.ts:550\nIssue identified during code review:\nHot reload reuses a permanently shut-down observability singleton\n\nHot-module disposal calls `app.close()`, which now shuts down the process-global observability instance, but the next application bootstrap retrieves that same instance and this cached promise prevents any subsequent shutdown from processing newly initialized exporters. Reset or recreate the global instance when closing the application so a restarted Nest context gets a live observability system.\n\n---\n\nReview each issue in context, use the reference implementations as guidance, and apply fixes that are consistent with the surrounding codebase.\n```\n\n</details>\n\n**[Access your configuration settings here.](https://app.kodus.io/settings/code-review/global/general)**\n\n</details>\n\n> ⚠️ Note: some checks couldn't be completed in this run, so auto-approval (when enabled) was skipped. Check the details at https://app.kodus.io/pull-requests and then comment `@kody review` on this PR to retry once the issue is resolved.\n\n\n**Automatic approval held:** The review is not clean."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-01T14:39:04Z",
+   "body": "Addressed the remaining kody-ai finding (\"Observability shutdown failures are silently discarded\") in fe2cf9c2d: `beforeApplicationShutdown` now inspects the `Promise.allSettled` results and logs each rejected shutdown with the error and the instance key, while the other instances still finish shutting down. Added a spec covering a failing and a succeeding instance (red on the previous commit, green now; the existing `observability.service.spec.ts` suite passes, 13 tests).\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-01T14:39:09Z",
+   "body": "## Code Review Completed! 🔥\n\nThe code review was successfully completed based on your current configurations.\n\n\n\n<details>\n<summary>Kody Guide: Usage and Configuration</summary>\n\n<details>\n<summary>Interacting with Kody</summary>\n\n- **Request a Review:** Ask Kody to review your PR manually by adding a comment with the \\`@kody start-review\\` command at the root of your PR.\n\n- **Provide Feedback:** Help Kody learn and improve by reacting to its comments with a 👍 for helpful suggestions or a 👎 if improvements are needed.\n\n</details>\n\n<details>\n<summary>Current Kody Configuration</summary>\n\n<details>\n<summary>Review Options</summary>\n\nThe following review options are enabled or disabled:\n\n| Options                        | Enabled |\n|-------------------------------|---------|\n| **Bug** | ✅ |\n| **Performance** | ✅ |\n| **Security** | ✅ |\n| **Business Logic** | ✅ |\n\n</details>\n\n</details>\n\n**Kody Code Review** — 1 suggested fix.\nPaste the prompt below to your agent and all review fixed at once!\n\n<details>\n<summary>🛠️ Open Agent Prompt</summary>\n\n```\nA code review identified the following issues in this pull request.\nEach section describes what was found and includes a reference implementation where available.\n\nFiles involved:\n- libs/core/observability/observability.spec.ts:6\n\n---\n\n### [1/1] libs/core/observability/observability.spec.ts:6\nIssue identified during code review:\nNew signal spec leaks process-global error handlers that throw on fake exporter\n\ncreateSystem() builds a real `ObservabilitySystem`, whose constructor installs process-global `uncaughtException`/`unhandledRejection`/`SIGTERM`/`SIGINT` listeners, but the suite only deletes `__kodusObsHandlersInstalled` in `afterEach` and never calls `process.removeListener`, so those handlers (and the fake `{ name, shutdown }` exporter that lacks `exportLog`) survive for the rest of the jest worker's lifetime, which jest reuses across test files. `handleGlobalError` fans the caught error out to `exporter.exportLog(...)`, so any unhandled rejection or uncaught exception raised later in that worker throws a TypeError inside the handler — a fatal error in a global handler — instead of being reported, and clearing the production idempotency guard lets later specs stack duplicate handlers that each call `shutdown()`/`process.exit(1)`. Capture the listeners installed by `createSystem()` and remove them in `afterEach` (or stub `setupErrorProcessors`), and give the fake exporter an `exportLog: jest.fn()` so the leaked handler cannot throw.\n\n---\n\nReview each issue in context, use the reference implementations as guidance, and apply fixes that are consistent with the surrounding codebase.\n```\n\n</details>\n\n**[Access your configuration settings here.](https://app.kodus.io/settings/code-review/global/general)**\n\n</details>\n\n> ⚠️ Note: some checks couldn't be completed in this run, so auto-approval (when enabled) was skipped. Check the details at https://app.kodus.io/pull-requests and then comment `@kody review` on this PR to retry once the issue is resolved.\n\n\n**Automatic approval held:** The review is not clean."
+  }
+ ]
+}

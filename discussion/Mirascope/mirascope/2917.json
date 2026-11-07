@@ -1,0 +1,45 @@
+{
+ "repo": "Mirascope/mirascope",
+ "number": 2917,
+ "url": "https://github.com/Mirascope/mirascope/pull/2917",
+ "state": "open",
+ "reviews": [],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "collaborator",
+   "created_at": "2026-10-21T16:03:31Z",
+   "body": "Thanks for tackling this. The nested container case is useful, but I found two regressions on this branch: `Partial[Node]` raises `RecursionError` when `Node.children` is `list[list[Node]]`, and a nested discriminated union fails with `PydanticUserError` because its discriminator becomes optional. Both construct successfully on `main`. Could you add regression tests and handle these cases before we merge?"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-21T16:31:32Z",
+   "body": "Thanks, both reproduced and fixed in fac9900 and df893d7.\n\n1. A model that contains itself (`list[list[Node]]`, `list[Self]`, or two models containing each other) now gets a forward reference to the partial model being built, and the partial models are rebuilt together once they all exist, so there's no infinite recursion. This also works on Python 3.10, where forward references nested in builtin generics stay strings (bpo-41370): they are resolved against the model's module before recursing.\n2. When a discriminated union inside a container turns into a union of partial models, its discriminator is dropped (the discriminator field is optional in a partial model), so pydantic validates it as a plain union.\n\nRegression tests for both pass on main, fail on the previous commit, and pass now on Python 3.10 through 3.13. A failed rebuild no longer leaves half-built partial models in the cache, and construction is guarded by a lock."
+  },
+  {
+   "role": "collaborator",
+   "created_at": "2026-10-22T15:47:00Z",
+   "body": "Thanks for addressing the recursive and discriminated-union cases. I have one concern before merging: `_resolve_forward_reference` now uses `eval` on annotation strings with access to the model module's globals and builtins. The `try/except` and lint suppression don't make that safe if an annotation is untrusted. Could we resolve only the supported forward-reference forms without evaluating arbitrary expressions? I'd prefer to keep this open until we remove that `eval`."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-22T22:34:52Z",
+   "body": "Done in 27e7a0f. `_resolve_forward_reference` no longer uses `eval`: the annotation string is parsed with `ast` and only a fixed set of forms is resolved, namely names (from the model's module or builtin classes), dotted names on modules and classes, subscripts of classes and typing generics, `|` unions, `None` and nested string references. Calls and any other expression are never run, and a string that can't be resolved is left as it was, which is what the old `except` branch did.\n\nTests added: one with a callable in the namespace that must not be called by `\"boom()\"`, `\"list[boom()]\"` or `\"__import__('os').getcwd()\"`, one for the supported forms, and a parametrized one for the unsupported ones. The partial model tests pass (82).\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-24T05:00:10Z",
+   "body": "One more regression turned up while re-checking this branch: string members of a `Literal` (e.g. `Literal[\"int\", \"None\"]`) were being resolved as forward references, so `Partial[Model]` rejected valid values with a `literal_error` (main accepts them). 4bbb09b leaves `Literal` annotations untouched and adds a regression test.\n\nThis comment was prepared with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-25T10:46:09Z",
+   "body": "CI's pyright flagged the new `Literal` test: `Partial[Column]` is typed as `type[Partial[...]]`, so `model_fields` and `model_validate` were not accessible on it. This is a test-only follow-up that casts it to `type[Column]`, the same way the other tests in this file do. pyright is clean and `test_partial.py` passes locally.\n\nThis comment was prepared with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-02T15:03:46Z",
+   "body": "Hi @willbakst, friendly ping: the points above should be addressed now. Could you take another look when you have a moment? Happy to change anything else."
+  }
+ ]
+}

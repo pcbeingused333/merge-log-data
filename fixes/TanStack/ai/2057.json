@@ -1,0 +1,48 @@
+{
+ "repo": "TanStack/ai",
+ "number": 2057,
+ "url": "https://github.com/TanStack/ai/pull/2057",
+ "title": "fix(ai-bedrock): map guardrail_intervened stopReason to content_filter",
+ "merged_at": "2026-11-07T01:56:14Z",
+ "files": [
+  {
+   "filename": ".changeset/bedrock-guardrail-finish-reason.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@tanstack/ai-bedrock': patch\n+---\n+\n+A Bedrock Converse chat stream that ends with `stopReason: 'guardrail_intervened'` now reports `finishReason: 'content_filter'` on `RUN_FINISHED`. Before, it was a normal `stop`. The structured-output stream uses the same finish reason when the body is valid JSON. When a guardrail leaves no JSON, that stream reports `RUN_ERROR` with code `content_filter` instead of `empty-response` or `parse-error`."
+  },
+  {
+   "filename": "packages/ai-bedrock/src/adapters/converse-text.ts",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 11,
+   "patch": "@@ -476,7 +476,8 @@ export class BedrockConverseTextAdapter<\n           finishReason =\n             stopReason === 'max_tokens'\n               ? 'length'\n-              : stopReason === 'content_filtered'\n+              : stopReason === 'content_filtered' ||\n+                  stopReason === 'guardrail_intervened'\n                 ? 'content_filter'\n                 : 'stop'\n           continue\n@@ -532,18 +533,20 @@ export class BedrockConverseTextAdapter<\n       }\n \n       if (accumulatedRaw.length === 0) {\n+        const blocked = finishReason === 'content_filter'\n+        const message = blocked\n+          ? `${this.name}.structuredOutputStream: the response was blocked by a content filter`\n+          : `${this.name}.structuredOutputStream: response contained no content`\n+        const code = blocked ? 'content_filter' : 'empty-response'\n         yield {\n           type: EventType.RUN_ERROR,\n           metadata: this.sourceMetadata(chatOptions.model),\n           runId,\n           model: chatOptions.model,\n           timestamp: Date.now(),\n-          message: `${this.name}.structuredOutputStream: response contained no content`,\n-          code: 'empty-response',\n-          error: {\n-            message: `${this.name}.structuredOutputStream: response contained no content`,\n-            code: 'empty-response',\n-          },\n+          message,\n+          code,\n+          error: { message, code },\n           ...(usage && { usage }),\n         }\n         return\n@@ -553,17 +556,24 @@ export class BedrockConverseTextAdapter<\n       try {\n         parsed = JSON.parse(accumulatedRaw)\n       } catch {\n+        const blocked = finishReason === 'content_filter'\n+        const message = blocked\n+          ? `${this.name}.structuredOutputStream: the response was blocked by a content filter`\n+          : `Failed to parse structured output as JSON. Content: ${accumulatedRaw.slice(0, 200)}${accumulatedRaw.length > 200 ? '...' : ''}`\n+        const code = blocked ? 'content_filter' : 'parse-error'\n         yield {\n           type: EventType.RUN_ERROR,\n           metadata: this.sourceMetadata(chatOptions.model),\n           runId,\n           model: chatOptions.model,\n           timestamp: Date.now(),\n-          message: `Failed to parse structured output as JSON. Content: ${accumulatedRaw.slice(0, 200)}${accumulatedRaw.length > 200 ? '...' : ''}`,\n-          code: 'parse-error',\n+          message,\n+          code,\n           error: {\n-            message: 'Failed to parse structured output as JSON',\n-            code: 'parse-error',\n+            message: blocked\n+              ? message\n+              : 'Failed to parse structured output as JSON',\n+            code,\n           },\n           ...(usage && { usage }),\n         }"
+  },
+  {
+   "filename": "packages/ai-bedrock/src/converse/stream-processor.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -289,7 +289,8 @@ export async function* processConverseStream(\n           ? 'tool_calls'\n           : stopReason === 'max_tokens'\n             ? 'length'\n-            : stopReason === 'content_filtered'\n+            : stopReason === 'content_filtered' ||\n+                stopReason === 'guardrail_intervened'\n               ? 'content_filter'\n               : 'stop'\n       continue"
+  },
+  {
+   "filename": "packages/ai-bedrock/tests/converse/adapter.test.ts",
+   "status": "modified",
+   "additions": 75,
+   "deletions": 0,
+   "patch": "@@ -629,6 +629,81 @@ describe('BedrockConverseTextAdapter', () => {\n     expect(errors[0]?.code).toBe('parse-error')\n   })\n \n+  it('reports guardrail_intervened as content_filter when structured JSON is complete', async () => {\n+    const a = new StubAdapter({ apiKey: 'k' }, 'us.amazon.nova-pro-v1:0')\n+    a.streamEvents = [\n+      { messageStart: { role: 'assistant' } },\n+      {\n+        contentBlockStart: {\n+          start: { toolUse: { toolUseId: 's', name: 'structured_output' } },\n+          contentBlockIndex: 0,\n+        },\n+      },\n+      {\n+        contentBlockDelta: {\n+          delta: { toolUse: { input: '{\"n\":5}' } },\n+          contentBlockIndex: 0,\n+        },\n+      },\n+      { messageStop: { stopReason: 'guardrail_intervened' } },\n+    ]\n+    const events: Array<AdapterYieldChunk> = []\n+    for await (const c of a.structuredOutputStream({\n+      chatOptions: textOptions({ messages: [{ role: 'user', content: 'go' }] }),\n+      outputSchema: { type: 'object', properties: { n: { type: 'number' } } },\n+    })) {\n+      events.push(c)\n+    }\n+    const finished = events.find((e) => e.type === EventType.RUN_FINISHED)\n+    expect(\n+      (finished as { finishReason?: string } | undefined)?.finishReason,\n+    ).toBe('content_filter')\n+  })\n+\n+  it.each(['', '{\"n\":'] as const)(\n+    'reports guardrail_intervened as content_filter when structured output is %j',\n+    async (input) => {\n+      const a = new StubAdapter({ apiKey: 'k' }, 'us.amazon.nova-pro-v1:0')\n+      a.streamEvents = [\n+        { messageStart: { role: 'assistant' } },\n+        ...(input\n+          ? [\n+              {\n+                contentBlockStart: {\n+                  start: {\n+                    toolUse: { toolUseId: 's', name: 'structured_output' },\n+                  },\n+                  contentBlockIndex: 0,\n+                },\n+              },\n+              {\n+                contentBlockDelta: {\n+                  delta: { toolUse: { input } },\n+                  contentBlockIndex: 0,\n+                },\n+              },\n+            ]\n+          : []),\n+        { messageStop: { stopReason: 'guardrail_intervened' } },\n+      ]\n+      const errors = [] as Array<{ code?: string }>\n+      for await (const c of a.structuredOutputStream({\n+        chatOptions: textOptions({\n+          messages: [{ role: 'user', content: 'go' }],\n+        }),\n+        outputSchema: {\n+          type: 'object',\n+          properties: { n: { type: 'number' } },\n+        },\n+      })) {\n+        if (c.type === EventType.RUN_ERROR)\n+          errors.push(c as unknown as { code?: string })\n+      }\n+      expect(errors).toHaveLength(1)\n+      expect(errors[0]?.code).toBe('content_filter')\n+    },\n+  )\n+\n   describe('reports the provider usage when structured output fails', () => {\n     // SDK boundary: the metadata event requires `metrics` too.\n     const metadataEvent = {"
+  },
+  {
+   "filename": "packages/ai-bedrock/tests/converse/stream-processor.test.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -150,6 +150,7 @@ describe('processConverseStream', () => {\n       ['tool_use', 'tool_calls'],\n       ['max_tokens', 'length'],\n       ['content_filtered', 'content_filter'],\n+      ['guardrail_intervened', 'content_filter'],\n       ['end_turn', 'stop'],\n       ['some_unknown_reason', 'stop'],\n     ]"
+  }
+ ],
+ "test_files": [
+  "packages/ai-bedrock/tests/converse/adapter.test.ts",
+  "packages/ai-bedrock/tests/converse/stream-processor.test.ts"
+ ]
+}

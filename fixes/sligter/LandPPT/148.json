@@ -1,0 +1,26 @@
+{
+ "repo": "sligter/LandPPT",
+ "number": 148,
+ "url": "https://github.com/sligter/LandPPT/pull/148",
+ "title": "fix(google): report blocked REST prompts with SDK safety notices",
+ "merged_at": "2026-11-07T00:56:41Z",
+ "files": [
+  {
+   "filename": "src/landppt/ai/providers.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -1341,6 +1341,11 @@ def _extract_rest_text(self, data: Dict[str, Any]) -> tuple[str, str, Dict[str,\n             + int(usage_meta.get(\"thoughtsTokenCount\") or 0),\n             \"total_tokens\": int(usage_meta.get(\"totalTokenCount\") or 0),\n         }\n+        prompt_feedback = data.get(\"promptFeedback\") or {}\n+        block_reason = prompt_feedback.get(\"blockReason\")\n+        if block_reason:\n+            return \"[内容被安全过滤器阻止]\", str(block_reason), usage\n+\n         return content, str(finish_reason), usage\n \n     @staticmethod"
+  },
+  {
+   "filename": "tests/test_google_provider_rest_base_url.py",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 0,
+   "patch": "@@ -313,3 +313,31 @@ async def test_google_provider_rest_round_trip_omits_synthetic_ids(monkeypatch):\n         {\"functionResponse\": {\"name\": \"a\", \"response\": {\"r\": 1}}},\n         {\"functionResponse\": {\"name\": \"b\", \"response\": {\"result\": \"plain\"}}},\n     ]\n+\n+\n+@pytest.mark.asyncio\n+@pytest.mark.parametrize(\"block_reason\", [\"SAFETY\", \"BLOCKLIST\", \"PROHIBITED_CONTENT\", \"OTHER\"])\n+async def test_google_provider_rest_reports_blocked_prompt(monkeypatch, block_reason):\n+    _fake_rest_session(monkeypatch, [{\"promptFeedback\": {\"blockReason\": block_reason}}])\n+\n+    response = await _rest_provider().text_completion(\"hello\")\n+\n+    assert response.content == \"[内容被安全过滤器阻止]\"\n+    assert response.finish_reason == block_reason\n+\n+\n+@pytest.mark.asyncio\n+@pytest.mark.parametrize(\"feedback\", [{}, {\"safetyRatings\": []}])\n+async def test_google_provider_rest_allows_unblocked_prompt_feedback(monkeypatch, feedback):\n+    _fake_rest_session(\n+        monkeypatch,\n+        [{\n+            \"promptFeedback\": feedback,\n+            \"candidates\": [{\"content\": {\"parts\": [{\"text\": \"ok\"}]}, \"finishReason\": \"STOP\"}],\n+        }],\n+    )\n+\n+    response = await _rest_provider().text_completion(\"hello\")\n+\n+    assert response.content == \"ok\"\n+    assert response.finish_reason == \"STOP\""
+  }
+ ],
+ "test_files": [
+  "tests/test_google_provider_rest_base_url.py"
+ ]
+}

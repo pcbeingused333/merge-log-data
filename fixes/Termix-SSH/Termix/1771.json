@@ -1,0 +1,33 @@
+{
+ "repo": "Termix-SSH/Termix",
+ "number": 1771,
+ "url": "https://github.com/Termix-SSH/Termix/pull/1771",
+ "title": "fix(build): ship the arm64 and armv7l sharp binaries in the Linux builds",
+ "merged_at": "2026-11-07T02:47:12Z",
+ "files": [
+  {
+   "filename": ".github/workflows/electron.yml",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -301,6 +301,7 @@ jobs:\n           npm install --force @rollup/rollup-linux-x64-gnu\n           npm install --force @rollup/rollup-linux-arm64-gnu\n           npm install --force @rollup/rollup-linux-arm-gnueabihf\n+          node scripts/install-linux-sharp.cjs\n \n       # Bundled plugins are counted as downloads in the plugin store, so a\n       # build only fetches them when the pins change."
+  },
+  {
+   "filename": "scripts/install-linux-sharp.cjs",
+   "status": "added",
+   "additions": 40,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,40 @@\n+const fs = require(\"node:fs\");\n+const path = require(\"node:path\");\n+const { execFileSync } = require(\"node:child_process\");\n+\n+function findPackage(start) {\n+  let directory = path.dirname(start);\n+  while (directory !== path.dirname(directory)) {\n+    const manifest = path.join(directory, \"package.json\");\n+    if (fs.existsSync(manifest)) return JSON.parse(fs.readFileSync(manifest));\n+    directory = path.dirname(directory);\n+  }\n+  throw new Error(\"Could not locate the installed sharp package manifest\");\n+}\n+\n+// The build runs on x64 but ships arm64 and armv7l too, so npm ci alone\n+// only installs the x64 binaries.\n+function linuxSharpPackages(sharpPackage) {\n+  return [\"x64\", \"arm64\", \"arm\"].flatMap((arch) =>\n+    [`@img/sharp-linux-${arch}`, `@img/sharp-libvips-linux-${arch}`].map(\n+      (name) => {\n+        const version = sharpPackage.optionalDependencies?.[name];\n+        if (!version) {\n+          throw new Error(`sharp does not declare ${name} as a dependency`);\n+        }\n+        return `${name}@${version}`;\n+      },\n+    ),\n+  );\n+}\n+\n+module.exports = { linuxSharpPackages };\n+\n+if (require.main === module) {\n+  const sharpPackage = findPackage(require.resolve(\"sharp\"));\n+  execFileSync(\n+    \"npm\",\n+    [\"install\", \"--force\", \"--no-save\", ...linuxSharpPackages(sharpPackage)],\n+    { stdio: \"inherit\" },\n+  );\n+}"
+  },
+  {
+   "filename": "scripts/install-linux-sharp.test.ts",
+   "status": "added",
+   "additions": 58,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,58 @@\n+import fs from \"node:fs\";\n+import { createRequire } from \"node:module\";\n+import path from \"node:path\";\n+import { describe, expect, it } from \"vitest\";\n+\n+const require = createRequire(import.meta.url);\n+const { linuxSharpPackages } = require(\"./install-linux-sharp.cjs\");\n+\n+const lock = JSON.parse(\n+  fs.readFileSync(path.join(__dirname, \"../package-lock.json\"), \"utf8\"),\n+);\n+const sharpManifest = lock.packages[\"node_modules/sharp\"];\n+\n+describe(\"Linux sharp packaging\", () => {\n+  // The build runs on x64 but ships arm64 and armv7l too, so npm ci alone\n+  // only installs the x64 binaries and the arm AppImages cannot load sharp.\n+  it(\"pins the sharp and libvips binaries of every shipped Linux architecture\", () => {\n+    const packages = linuxSharpPackages({\n+      optionalDependencies: {\n+        \"@img/sharp-linux-x64\": \"1.0.0\",\n+        \"@img/sharp-linux-arm64\": \"1.0.1\",\n+        \"@img/sharp-linux-arm\": \"1.0.2\",\n+        \"@img/sharp-libvips-linux-x64\": \"2.0.0\",\n+        \"@img/sharp-libvips-linux-arm64\": \"2.0.1\",\n+        \"@img/sharp-libvips-linux-arm\": \"2.0.2\",\n+        \"@img/sharp-win32-x64\": \"9.9.9\",\n+      },\n+    });\n+\n+    expect([...packages].sort()).toEqual([\n+      \"@img/sharp-libvips-linux-arm64@2.0.1\",\n+      \"@img/sharp-libvips-linux-arm@2.0.2\",\n+      \"@img/sharp-libvips-linux-x64@2.0.0\",\n+      \"@img/sharp-linux-arm64@1.0.1\",\n+      \"@img/sharp-linux-arm@1.0.2\",\n+      \"@img/sharp-linux-x64@1.0.0\",\n+    ]);\n+  });\n+\n+  it(\"only names packages the installed sharp really declares\", () => {\n+    const packages = linuxSharpPackages(sharpManifest);\n+    expect(packages).toHaveLength(6);\n+    for (const spec of packages) {\n+      expect(spec).toMatch(/^@img\\/sharp-[a-z0-9-]+@\\d+\\.\\d+\\.\\d+$/);\n+    }\n+  });\n+\n+  it(\"fails loudly when sharp stops declaring one of them\", () => {\n+    expect(() =>\n+      linuxSharpPackages({\n+        optionalDependencies: {\n+          \"@img/sharp-linux-x64\": \"1.0.0\",\n+          \"@img/sharp-libvips-linux-x64\": \"2.0.0\",\n+        },\n+      }),\n+    ).toThrow(/sharp-linux-arm64/);\n+  });\n+});"
+  }
+ ],
+ "test_files": [
+  "scripts/install-linux-sharp.test.ts"
+ ]
+}

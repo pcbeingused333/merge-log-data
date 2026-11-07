@@ -1,0 +1,20 @@
+{
+ "repo": "StarTrail-org/LEANN",
+ "number": 454,
+ "url": "https://github.com/StarTrail-org/LEANN/pull/454",
+ "state": "open",
+ "reviews": [],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-02T15:30:41Z",
+   "body": "Note on the red macOS builds: they fail in the faiss/OpenMP build step on the macOS runner, which also hit another PR on 10-28. This PR only changes `chat.py` and adds `tests/test_anthropic_default_model.py`. Happy to merge `main` in to re-run if that helps."
+  },
+  {
+   "role": "collaborator",
+   "created_at": "2026-11-03T11:25:45Z",
+   "body": "Verified the bug and the test. Reverting the one-line change makes the new test fail:\n\n```\nE   AssertionError: assert 'claude-3-5-sonnet-20241022' == 'claude-haiku-4-5'\n```\n\nSo the report is accurate: `get_llm({\"type\": \"anthropic\"})` with no model was building a model Anthropic has retired.\n\n**On the red macOS jobs — they are not a faiss/OpenMP build failure, and they are not pre-existing.** `main` is currently 75/75 green. This branch was 3 commits behind, and one of those commits is the fix:\n\n```\n85fc9893  test: skip native HNSW append on macOS\n```\n\nIt widens a skip from `darwin and platform.machine() == \"x86_64\"` to plain `darwin`, because the native `index.add()` call aborts inside the FAISS bindings and takes the pytest session with it. This branch still had the Intel-only condition, so the ARM runners ran the test and died — which is why `macos-15-intel` passed while every ARM runner failed. (ARM Python 3.10 passing is the one thing that does not fit that explanation; I did not chase it down.)\n\n**I pushed two things:** a merge of `main`, and one follow-up change.\n\nThe follow-up: rather than syncing the two copies of the default, I removed the duplication. The factory now passes `model` only when the config sets one, so `AnthropicChat`'s signature default is the single place the default is written:\n\n```python\nanthropic_kwargs: dict[str, Any] = {\n    \"api_key\": llm_config.get(\"api_key\"),\n    \"base_url\": llm_config.get(\"base_url\"),\n}\nif model:\n    anthropic_kwargs[\"model\"] = model\nreturn AnthropicChat(**anthropic_kwargs)\n```\n\nThe bug existed *because* the string was written twice; syncing them leaves the drift free to recur, and `CLAUDE.md` asks for one implementation per feature. Your tests still earn their place after the change — I re-introduced a divergent literal in the new structure and they still failed, so they guard the regression rather than becoming tautological.\n\nCI's exact lint command and `ty check` both pass.\n\nWorth noting for later: the other seven providers in `get_llm` have the same duplication. They are all in sync today, so nothing is broken — Anthropic is just where the drift happened to fire.\n"
+  }
+ ]
+}

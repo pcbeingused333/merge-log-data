@@ -1,0 +1,61 @@
+{
+ "repo": "Arize-ai/phoenix",
+ "number": 17085,
+ "url": "https://github.com/Arize-ai/phoenix/pull/17085",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-31T03:42:35Z",
+   "body": "## Factory review of 4a5d4a6: Approve\n\nThe fix does what it claims, the checks pass, its new test fails on `main` for the reported reason, and there are no blocking findings.\n\n| Criterion | Result | Notes |\n|---|---|---|\n| Fit | Pass | does what it claims |\n| Checks | Pass | ruff format/lint, mypy, test_playground_clients.py (SQLite) |\n| Tests | Pass | new test fails on base (`'Hello' == 'Hello world'`) |\n| Blocking findings | 0 | |\n| Non-blocking findings | 1 | span output not asserted `tests/unit/server/api/helpers/test_playground_clients.py:358` |\n| Risk | Low | side effects: finish-chunk deltas now processed for every OpenAI-compatible provider |\n| Review depth | Focused | small internal server change, no API/schema/migration/auth |\n\n<details><summary>Details</summary>\n\n**Intent:** In `OpenAICompatibleClient._chat_completion_create`'s streaming path, read the text and tool-call delta from every chunk, including the one that carries `finish_reason`. This stops the playground output and the span from losing the last fragment on servers that send it in that chunk.\n**Fit:** The diff removes the `if choice.finish_reason is None:` guard and dedents the block. Nothing else changes. No other client in `playground_clients.py` has the same guard, so the claim is complete. The overlapping PR #16947 changes tool-call indexing, not this guard, so the two PRs don't duplicate each other. The fix is not on `main` yet.\n**Verified:** `ruff format --check` and `ruff check` are clean on both changed files. `mypy` (the `typecheck-python` target) reports no issues in 1129 files. `tests/unit/server/api/helpers/test_playground_clients.py`: 77 passed, 13 skipped (the skips are Postgres-only). With the base `playground_clients.py` restored, the new test fails with `AssertionError: 'Hello' == 'Hello world'`. The area reviewer ran base and PR code side by side and found the same for the tool-call case and for span attributes. It also found the OpenAI SDK's own stream accumulator applies the delta on the finish chunk too. A typical empty final chunk gives identical output on base and PR.\n**Not verified:** The Postgres variants of the test file did not run, because PostgreSQL won't run as root in the sandbox. They don't exercise the changed code. `typecheck-python-ty` reports 55 unexpected files in this sandbox; neither changed file is among them, so this looks like a tool-version mismatch. No real OpenAI-compatible provider was called. Whether some non-conforming server repeats already-streamed content in the finish chunk, which would now be duplicated, is unconfirmed.\n**Findings without a diff line:** none\n**Risk:** side effects low, performance none, backwards compatibility low, from the area reviewers. Side effects: a server that sends an id-less tool-call fragment in the finish chunk, with no earlier chunk at that position, now hits the existing `KeyError` lookup instead of being silently dropped. A non-conforming server that repeats content in the finish chunk would see it duplicated. Neither is known to happen with the listed providers.\n\nGraded against the [review criteria](https://github.com/Arize-ai/phoenix/blob/main/factory/agents/pr-reviewer.md#verdict).\n\n</details>"
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-02T17:39:15Z",
+   "body": "## Factory review of 4a5d4a6: Approve\n\nThe fix does what it claims, checks pass, the new test fails without the fix for the reported reason, and there are no blocking findings.\n\n| Criterion | Result | Notes |\n|---|---|---|\n| Fit | Pass | does what it claims |\n| Checks | Pass | ruff format/lint, mypy (no new errors), test_playground_clients.py (SQLite) |\n| Tests | Pass | new test fails without the fix (`'Hello' == 'Hello world'`) |\n| Blocking findings | 0 | |\n| Non-blocking findings | 1 | span output not asserted `tests/unit/server/api/helpers/test_playground_clients.py:358` |\n| Risk | Low | side effects: finish-chunk deltas now processed for all OpenAI-compatible providers |\n| Review depth | Focused | small internal server change; no API, schema, migration or auth |\n\n<details><summary>Details</summary>\n\n**Intent:** In the streaming path of `OpenAICompatibleClient._chat_completion_create`, read the text and tool-call delta from every chunk, including the one that carries `finish_reason`. Servers that send their last fragment in that chunk then no longer lose it from the playground output or the span.\n**Fit:** The diff removes the `if choice.finish_reason is None:` guard and dedents the block under it. Nothing else changes in the server code. No other client in `playground_clients.py` has a similar guard, so the fix is complete. The two Responses clients override `_chat_completion_create` and are unaffected. The fix is not on `main` (`main` at 1de6e83 still has the guard at line 767), and the PR still merges cleanly into `main`. Open PR #16947 edits the same tool-call lines, so whichever merges second needs a rebase, as the PR body says.\n**Verified:** `ruff format --check` and `ruff check` are clean on both changed files. `mypy` reports 67 errors in this sandbox, all from dependency drift. The 6 in `playground_clients.py` (`_HttpxClient` assignment) also appear at the merge base on unchanged lines, and the test file has none, so the diff adds no type errors. `pytest tests/unit/server/api/helpers/test_playground_clients.py`: 77 passed, 13 skipped (all Postgres-only). With the merge-base `playground_clients.py` restored and the PR's test kept, the new test fails at line 345 with `AssertionError: assert 'Hello' == 'Hello world'`. The area reviewer got the same result by putting the guard back.\n**Not verified:** The Postgres variants did not run because PostgreSQL won't run as root here; the changed code doesn't touch the DB. The test's tool-call half was not run separately without the fix: the text assertion fails first. Reading the base code, that half would also fail, because the guard dropped the whole delta. No real OpenAI-compatible provider was called. Two cases are unconfirmed and have no known provider that triggers them: a server that repeats already-streamed content in the finish chunk would now get it duplicated, and an id-less tool-call fragment in the finish chunk would now reach the existing `tool_call_ids[...]` `KeyError`.\n**Findings without a diff line:** none\n**Risk:** side effects low, performance none, backwards compatibility low, from the area reviewers. The finish chunk's delta is now yielded and recorded like any other chunk. The usual empty final chunk gives identical output. Only a non-conforming server that repeats content in the finish chunk would see a change, and that change is a duplicate.\n\nGraded against the [review criteria](https://github.com/Arize-ai/phoenix/blob/main/factory/agents/pr-reviewer.md#verdict).\n\n</details>"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "tests/unit/server/api/helpers/test_playground_clients.py",
+   "created_at": "2026-10-31T03:42:21Z",
+   "body": "**Problem:** The PR says the span also lost the end of the response, but the test never checks span output. It only counts the spans (`assert len(spans) == 2`). If the span-attribute path (`_llm_output_messages` / `_output_attributes`) stopped receiving the finish-chunk fragment, this test would still pass.\n\n**Evidence:** Lines 355-358 read the finished spans and assert only their count. Nothing in the test reads `llm.output_messages.0.message.content`, the tool-call arguments attribute or `output.value`. The span fix does work: with the same fake chunks, base gives `message.content='Hello'` and the PR gives `'Hello world'`. But only the reviewer's scratch run shows that, not this test.\n\n**Fix:** Assert the span attributes for both cases. For example: `spans[0].attributes[f\"{LLM_OUTPUT_MESSAGES}.0.{MESSAGE_CONTENT}\"] == \"Hello world\"`, and for `spans[1]` check that the tool-call function arguments attribute equals `'{\"city\": \"Paris\"}'`. Splitting the two scenarios with `pytest.mark.parametrize` would also make clear which span belongs to which case.\n\n**Non-blocking**"
+  },
+  {
+   "role": "bot",
+   "path": "tests/unit/server/api/helpers/test_playground_clients.py",
+   "created_at": "2026-11-02T17:39:01Z",
+   "body": "**Problem:** The PR says the span also lost the end of the response, but the test doesn't check the span's output. Its only span assertion is `assert len(spans) == 2`, and that holds with or without the fix, because each call creates a span either way.\n\n**Evidence:** Lines 357-358 only count the finished spans. Nothing reads `llm.output_messages.0.message.content`, the tool-call arguments attribute or `output.value`. If `_llm_output_messages` / `_output_attributes` stopped getting the fragment from the finish chunk, this test would still pass. The yielded-chunk assertions do fail without the fix: with the base `playground_clients.py` restored, line 345 fails with `assert 'Hello' == 'Hello world'`. That covers the subscription output, not the span.\n\n**Fix:** Assert the span output for both cases, using the constants the file already imports. For example, `spans[0].attributes[f\"{LLM_OUTPUT_MESSAGES}.0.{MESSAGE_CONTENT}\"] == \"Hello world\"`, and the tool-call function arguments on `spans[1]` equal to `'{\"city\": \"Paris\"}'`. Splitting the text and tool-call scenarios with `pytest.mark.parametrize` would also make it clear which span belongs to which case.\n\n**Non-blocking**"
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-10-21T15:07:49Z",
+   "body": "<!-- mintlify-fork-preview-approval -->\n### Preview approval required\n\nThis pull request comes from a fork, so Mintlify won't build a preview until someone with write access approves commit `4a5d4a6`.\n\n[Approve preview](https://github.com/Arize-ai/phoenix/pull/17085/checks?check_run_id=120786547680)"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-31T03:34:10Z",
+   "body": "The factory started a **review** of 4a5d4a6e00 (session [`sesn_01212ZFqQYYk6XgxKiSPdJmp`](https://platform.claude.com/workspaces/wrkspc_019uQCzw86YfY8Li79ZLtsom/sessions/sesn_01212ZFqQYYk6XgxKiSPdJmp)). It reports back here when the session ends."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-31T03:43:17Z",
+   "body": "The factory recommends **Approve** for 4a5d4a6e00. [Read the review](https://github.com/Arize-ai/phoenix/pull/17085#pullrequestreview-5720982845)."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-02T17:22:53Z",
+   "body": "The factory started a **review** of 4a5d4a6e00 (session [`sesn_01MkxjQrUqpJi8pNF4CcQMg2`](https://platform.claude.com/workspaces/wrkspc_019uQCzw86YfY8Li79ZLtsom/sessions/sesn_01MkxjQrUqpJi8pNF4CcQMg2)). It reports back here when the session ends."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-02T17:40:01Z",
+   "body": "The factory recommends **Approve** for 4a5d4a6e00 and labeled this pull request `factory-approved`. [Read the review](https://github.com/Arize-ai/phoenix/pull/17085#pullrequestreview-5740724141)."
+  }
+ ]
+}

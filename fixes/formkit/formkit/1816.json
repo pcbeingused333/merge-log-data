@@ -1,0 +1,26 @@
+{
+ "repo": "formkit/formkit",
+ "number": 1816,
+ "url": "https://github.com/formkit/formkit/pull/1816",
+ "title": "fix(addons): honor control field in localStorage plugin",
+ "merged_at": "2026-11-06T22:25:35Z",
+ "files": [
+  {
+   "filename": "packages/addons/__tests__/localStorage.spec.ts",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -88,4 +88,39 @@ describe('localStorage plugin', () => {\n     expect(wrapper.find('.formkit-file-name').exists()).toBe(false)\n     wrapper.unmount()\n   })\n+  it('does not save while the control field is off', async () => {\n+    const wrapper = mount(\n+      {\n+        template: `\n+          <FormKit type=\"form\" name=\"ctlForm\" use-local-storage=\"true\">\n+            <FormKit type=\"checkbox\" name=\"remember\" :value=\"false\" />\n+            <FormKit id=\"ctl-name\" type=\"text\" name=\"name\" value=\"Ada\" />\n+          </FormKit>\n+        `,\n+      },\n+      {\n+        global: {\n+          plugins: [\n+            [\n+              plugin,\n+              defaultConfig({\n+                plugins: [\n+                  createLocalStoragePlugin({\n+                    debounce: 0,\n+                    key: 'local-storage-test',\n+                    control: 'remember',\n+                  }),\n+                ],\n+              }),\n+            ],\n+          ],\n+        },\n+      }\n+    )\n+    await new Promise((r) => setTimeout(r, 20))\n+    await getNode('ctl-name')!.input('secret', false)\n+    await new Promise((r) => setTimeout(r, 20))\n+    expect(localStorage.getItem('formkit-local-storage-test-ctlForm')).toBeNull()\n+    wrapper.unmount()\n+  })\n })"
+  },
+  {
+   "filename": "packages/addons/src/plugins/localStoragePlugin.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 4,
+   "patch": "@@ -106,10 +106,11 @@ export function createLocalStoragePlugin(\n       const controlField = localStorageOptions?.control ?? undefined\n       let controlNode: FormKitNode | undefined\n       if (typeof controlField === 'string') {\n-        const controlNode = node.at(controlField)\n-        if (controlNode) {\n-          controlNode.on('commit', () => {\n-            useLocalStorage = shouldUseLocalStorage(controlNode)\n+        controlNode = node.at(controlField)\n+        const control = controlNode\n+        if (control) {\n+          control.on('commit', () => {\n+            useLocalStorage = shouldUseLocalStorage(control)\n             if (!useLocalStorage) {\n               localStorage.removeItem(storageKey)\n             }"
+  }
+ ],
+ "test_files": [
+  "packages/addons/__tests__/localStorage.spec.ts"
+ ]
+}

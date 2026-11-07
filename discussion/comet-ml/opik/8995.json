@@ -1,0 +1,198 @@
+{
+ "repo": "comet-ml/opik",
+ "number": 8995,
+ "url": "https://github.com/comet-ml/opik/pull/8995",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-16T20:36:55Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-16T22:23:05Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-16T22:26:25Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-17T03:33:36Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-17T03:33:38Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "APPROVED",
+   "submitted_at": "2026-10-20T08:06:28Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-10-21T08:09:27Z",
+   "body": "Thanks for the fix and the detailed write-up, @pcbeingused333, and for the quick follow-ups on index ordering and key resolution. I reproduced #8994 on main and confirmed the branch keeps the tool calls and reasoning for Groq, Together and Cerebras.\n\n1. `cerebras/chat_completion_chunks_aggregator.py:60` and `groq/chat_completion_chunks_aggregator.py:60` read `delta.tool_calls` directly, while `reasoning` uses `getattr` because the SDKs are unpinned. On a version without that attribute, the blanket `except` in `aggregate()` drops the whole span output. Please use `getattr(delta, \"tool_calls\", None) or []`.\n2. Tests: compare the whole aggregated message to a fully built expected one instead of `message[\"tool_calls\"]` plus `not in` checks, so a wrong `content`, `role` or `finish_reason` is caught too.\n\nMinor:\n- `StreamedToolCalls` is now a third copy of the merge logic. OpenAI's aggregator could use it directly and drop `_merge_tool_call` (Mistral can stay, its `index` defaults to `0`).\n- A tool-call version of `test_together_chat_completions_create__stream__happyflow` (respx + `assert_equal`) would cover the SSE parsing and span output end to end.\n- `_FloatIndexToolCall` could be Together's real `together.types.tool_choice.ToolChoice`, so the test follows the SDK.\n- Heads-up: #8239 also touches the Cerebras aggregator and tests, so whichever lands second needs a rebase; yours uses `message[\"reasoning\"]`, which matches Together on main.\n\nThanks again for working through the streaming integrations!\n"
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-21T08:09:47Z",
+   "body": "Thanks for the fix and the detailed write-up, @pcbeingused333. The logic looks right to me. I reproduced #8994 on main and confirmed the branch keeps the tool calls and reasoning for Groq, Together and Cerebras. A few nits:\n\n1. nit: `StreamedToolCalls` is now a third copy of the merge logic, after `_merge_tool_call` in `openai/chat_completion_chunks_aggregator.py` and the one in the Mistral aggregator. OpenAI's tool-call `index` is always an int, so its aggregator could use the helper directly and drop its private copy. Mistral can stay as it is, since its SDK defaults a missing `index` to `0`.\n2. nit: the new aggregator tests check `message[\"tool_calls\"]` plus `\"... not in message\"`. Comparing the whole aggregated object to a fully built expected one would also catch a wrong `content`, `role` or `finish_reason`.\n3. nit: `test_together.py` already drives a real stream through `create(stream=True)` with respx and checks the trace tree with `assert_equal` (`test_together_chat_completions_create__stream__happyflow`). A tool-call version of that test would cover the SSE parsing and the span output end to end, not just `aggregate()`.\n4. nit: `_FloatIndexToolCall` in `test_streamed_tool_calls.py` could be Together's real `together.types.tool_choice.ToolChoice` (its `index` is a `float`), so the test follows any change in the SDK.\n\nThanks again for the contribution!\n"
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-21T08:20:18Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-22T22:27:36Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-03T10:02:43Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-03T10:49:20Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-06T09:19:38Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "sdks/python/src/opik/integrations/cerebras/_streamed_tool_calls.py",
+   "created_at": "2026-10-16T20:36:55Z",
+   "body": "### Reassembly branches lack regression test coverage\n\nChanges to the ID map or integer cast could split or merge tool calls while the existing Groq, Cerebras, and Together tests still pass; add focused tests for ID-only continuations and float indices across multiple calls.\n<!--\n_Finding type:_ `AI Coding Guidelines`\n-->\n\n<picture><img src=\"https://baz.co/api/v2/badges?type=reviewer&content=AI%20Coding%20Guidelines&severity=low\" alt=\"Severity\" height=\"24\" /></picture> <picture><img src=\"https://baz.co/api/v2/badges?type=guidelines&content=sdks%2Fpython%2FAGENTS.md%20%C2%B7%20.agents%2Fskills%2Fopik-integrations\" alt=\"guidelines\" height=\"24\" /></picture>\n\nWant Baz to fix this for you? [Activate Fixer](https://baz.co/agents/baz) You can also update your AI coding guidelines based on this comment by `apply pr to [branch name]`\n\n<details>\n<summary>Other fix methods</summary>\n\n\n<a href=\"https://cursor.com/link/prompt?text=Before%20applying%2C%20verify%20this%20suggestion%20against%20the%20current%20code.%0AIn%20%60sdks%2Fpython%2Fsrc%2Fopik%2Fintegrations%2F_streamed_tool_calls.py%60%20around%20lines%2024-26%2C%20add%20focused%20regression%20tests%20for%20the%20%60StreamedToolCalls.add%60%20key-resolution%20logic.%20Test%20that%20a%20continuation%20with%20a%20known%20call%20ID%20and%20no%20%60index%60%20is%20merged%20into%20the%20original%20call%2C%20and%20test%20that%20distinct%20float%20indices%20are%20converted%20to%20integer%20keys%20without%20incorrectly%20merging%20calls.%20Place%20the%20tests%20in%20the%20relevant%20Python%20test%20module%20and%20assert%20the%20final%20reassembled%20call%20list.\" target=\"_blank\" rel=\"noopener noreferrer\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/fix-in-cursor-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/fix-in-cursor-light.svg\"><img alt=\"Fix in Cursor\" src=\"https://cursor.com/fix-in-cursor.svg\"></picture></a>\n\n<details>\n<summary>Prompt for AI Agents</summary>\n\n```text\nBefore applying, verify this suggestion against the current code. In\n`sdks/python/src/opik/integrations/_streamed_tool_calls.py` around lines 24-26, add\nfocused regression tests for the `StreamedToolCalls.add` key-resolution logic. Test that\na continuation with a known call ID and no `index` is merged into the original call, and\ntest that distinct float indices are converted to integer keys without incorrectly\nmerging calls. Place the tests in the relevant Python test module and assert the final\nreassembled call list.\n```\n\n</details>\n</details>"
+  },
+  {
+   "role": "author",
+   "path": "sdks/python/src/opik/integrations/cerebras/_streamed_tool_calls.py",
+   "created_at": "2026-10-16T22:23:05Z",
+   "body": "Added focused unit tests for `StreamedToolCalls` in 33334ea: an id-only continuation without `index` joins its call, float indices (as Together sends them) keep calls apart and continue by index, and an unknown id without an index opens a new call."
+  },
+  {
+   "role": "bot",
+   "path": "sdks/python/tests/library_integration/groq/test_streamed_tool_calls.py",
+   "created_at": "2026-10-16T22:26:25Z",
+   "body": "### Reverse-arrival tool calls recorded out of index order\n\nWhen fragments arrive out of order, `StreamedToolCalls.to_list()` returns arrival order instead of index order, so Groq, Together, and Cerebras diverge from OpenAI; sort by index in the shared helper and add an out-of-order test.\n<!--\n_Finding type:_ `Logical Bugs`\n-->\n\n<picture><img src=\"https://baz.co/api/v2/badges?type=reviewer&content=Logical%20Bugs&severity=low\" alt=\"Severity\" height=\"24\" /></picture>\n\nWant Baz to fix this for you? [Activate Fixer](https://baz.co/agents/baz)\n\n<details>\n<summary>Other fix methods</summary>\n\n\n<a href=\"https://cursor.com/link/prompt?text=Before%20applying%2C%20verify%20this%20suggestion%20against%20the%20current%20code.%0AIn%20%60sdks%2Fpython%2Ftests%2Funit%2Fintegrations%2Ftest_streamed_tool_calls.py%60%20around%20lines%2076-76%2C%20extend%20the%20streamed%20tool-call%20test%20to%20cover%20index-1%20arriving%20before%20index-0%20and%20assert%20that%20%60to_list%28%29%60%20returns%20calls%20in%20index%20order.%20Then%20update%20the%20shared%20%60StreamedToolCalls%60%20implementation%20in%20%60opik%2Fintegrations%2F_streamed_tool_calls.py%60%20so%20results%20are%20ordered%20by%20numeric%20tool-call%20index%20rather%20than%20first-arrival%20order%2C%20while%20preserving%20continuation%20and%20unindexed-call%20behavior%20for%20Groq%2C%20Together%2C%20and%20Cerebras.\" target=\"_blank\" rel=\"noopener noreferrer\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/fix-in-cursor-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/fix-in-cursor-light.svg\"><img alt=\"Fix in Cursor\" src=\"https://cursor.com/fix-in-cursor.svg\"></picture></a>\n\n<details>\n<summary>Prompt for AI Agents</summary>\n\n```text\nBefore applying, verify this suggestion against the current code. In\n`sdks/python/tests/unit/integrations/test_streamed_tool_calls.py` around lines 76-76,\nextend the streamed tool-call test to cover index-1 arriving before index-0 and assert\nthat `to_list()` returns calls in index order. Then update the shared\n`StreamedToolCalls` implementation in `opik/integrations/_streamed_tool_calls.py` so\nresults are ordered by numeric tool-call index rather than first-arrival order, while\npreserving continuation and unindexed-call behavior for Groq, Together, and Cerebras.\n```\n\n</details>\n</details>"
+  },
+  {
+   "role": "bot",
+   "path": "sdks/python/tests/unit/integrations/test_streamed_tool_calls.py",
+   "created_at": "2026-10-16T22:26:25Z",
+   "body": "### New tool call payload fields escape verification\n\nThe test checks only IDs, so it would pass if `call_2` lost its function payload; assert the full `to_list()` result, including `type`, function `name`, and `arguments`, as in the other tests.\n<!--\n_Finding type:_ `Assert expected behavior`\n-->\n\n<picture><img src=\"https://baz.co/api/v2/badges?type=reviewer&content=Assert%20expected%20behavior&severity=low\" alt=\"Severity\" height=\"24\" /></picture>\n\nWant Baz to fix this for you? [Activate Fixer](https://baz.co/agents/baz)\n\n<details>\n<summary>Other fix methods</summary>\n\n\n<a href=\"https://cursor.com/link/prompt?text=Before%20applying%2C%20verify%20this%20suggestion%20against%20the%20current%20code.%0AIn%20%60sdks%2Fpython%2Ftests%2Funit%2Fintegrations%2Ftest_streamed_tool_calls.py%60%20around%20lines%2090-96%2C%20strengthen%20%60test_add__fragment_without_index_or_known_id__opens_a_new_call%60%20so%20it%20verifies%20the%20complete%20tool-call%20output%20rather%20than%20only%20the%20IDs.%20Replace%20the%20ID-only%20assertion%20with%20a%20full%20%60to_list%28%29%60%20expectation%20that%20includes%20%60call_2%60%E2%80%99s%20%60type%60%2C%20function%20%60name%60%2C%20and%20%60arguments%60%2C%20matching%20the%20structure%20asserted%20by%20the%20other%20tests.\" target=\"_blank\" rel=\"noopener noreferrer\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/fix-in-cursor-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/fix-in-cursor-light.svg\"><img alt=\"Fix in Cursor\" src=\"https://cursor.com/fix-in-cursor.svg\"></picture></a>\n\n<details>\n<summary>Prompt for AI Agents</summary>\n\n```text\nBefore applying, verify this suggestion against the current code. In\n`sdks/python/tests/unit/integrations/test_streamed_tool_calls.py` around lines 90-96,\nstrengthen `test_add__fragment_without_index_or_known_id__opens_a_new_call` so it\nverifies the complete tool-call output rather than only the IDs. Replace the ID-only\nassertion with a full `to_list()` expectation that includes `call_2`’s `type`,\nfunction `name`, and `arguments`, matching the structure asserted by the other tests.\n```\n\n</details>\n</details>"
+  },
+  {
+   "role": "author",
+   "path": "sdks/python/tests/library_integration/groq/test_streamed_tool_calls.py",
+   "created_at": "2026-10-17T03:33:36Z",
+   "body": "Thanks, fixed in 4ad17ede1: `to_list()` now returns the calls in index order (as the OpenAI aggregator does), then any call opened without an index in arrival order, with a test where index 1 arrives before index 0."
+  },
+  {
+   "role": "author",
+   "path": "sdks/python/tests/unit/integrations/test_streamed_tool_calls.py",
+   "created_at": "2026-10-17T03:33:38Z",
+   "body": "Done in 4ad17ede1: the test now asserts the full `to_list()` result, including each call's `type`, `name` and `arguments`."
+  },
+  {
+   "role": "bot",
+   "path": "sdks/python/tests/library_integration/cerebras/test_cerebras.py",
+   "created_at": "2026-10-21T08:20:18Z",
+   "body": "### Streamed Cerebras tool calls lack trace-level test\n\nThe new Cerebras test only aggregates hand-built `ChatChunkResponse` objects, so it does not verify that `create(stream=True)` produces span output containing `message.tool_calls`. Add a `fake_backend` end-to-end test like the Together test; this is a coverage gap, not an observed runtime defect.\n<!--\n_Finding type:_ `AI Coding Guidelines`\n-->\n\n<picture><img src=\"https://baz.co/api/v2/badges?type=reviewer&content=AI%20Coding%20Guidelines&severity=low\" alt=\"Severity\" height=\"24\" /></picture> <picture><img src=\"https://baz.co/api/v2/badges?type=guidelines&content=sdks%2Fpython%2FAGENTS.md%20%C2%B7%20.agents%2Fskills%2Fopik-integrations\" alt=\"guidelines\" height=\"24\" /></picture>\n\nWant Baz to fix this for you? [Activate Fixer](https://baz.co/agents/baz) You can also update your AI coding guidelines based on this comment by `apply pr to [branch name]`\n\n<details>\n<summary>Other fix methods</summary>\n\n\n<a href=\"https://cursor.com/link/prompt?text=Before%20applying%2C%20verify%20this%20suggestion%20against%20the%20current%20code.%0AIn%20%60sdks%2Fpython%2Ftests%2Flibrary_integration%2Fcerebras%2Ftest_cerebras.py%60%20around%20lines%20180-231%2C%20extend%20the%20streamed%20tool-call%20coverage%20beyond%20the%20direct%20%60chat_completion_chunks_aggregator.aggregate%28%29%60%20test.%20Add%20an%20end-to-end%20test%20that%20uses%20%60fake_backend%60%20with%20%60track_cerebras%28...%29.chat.completions.create%28stream%3DTrue%29%60%2C%20consumes%20the%20stream%2C%20and%20asserts%20the%20resulting%20span%20output%20contains%20the%20reconstructed%20%60message.tool_calls%60%20payload.%20Follow%20the%20sibling%20Together%20integration%20test%20pattern%20so%20the%20Cerebras%20stream%20finalizer%20and%20user-visible%20span%20serialization%20are%20verified.\" target=\"_blank\" rel=\"noopener noreferrer\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/fix-in-cursor-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/fix-in-cursor-light.svg\"><img alt=\"Fix in Cursor\" src=\"https://cursor.com/fix-in-cursor.svg\"></picture></a>\n\n<details>\n<summary>Prompt for AI Agents</summary>\n\n```text\nBefore applying, verify this suggestion against the current code. In\n`sdks/python/tests/library_integration/cerebras/test_cerebras.py` around lines 180-231,\nextend the streamed tool-call coverage beyond the direct\n`chat_completion_chunks_aggregator.aggregate()` test. Add an end-to-end test that uses\n`fake_backend` with `track_cerebras(...).chat.completions.create(stream=True)`, consumes\nthe stream, and asserts the resulting span output contains the reconstructed\n`message.tool_calls` payload. Follow the sibling Together integration test pattern so\nthe Cerebras stream finalizer and user-visible span serialization are verified.\n```\n\n</details>\n</details>"
+  },
+  {
+   "role": "author",
+   "path": "sdks/python/tests/library_integration/cerebras/test_cerebras.py",
+   "created_at": "2026-10-22T22:27:36Z",
+   "body": "Added `test_cerebras_chat_completions_create__stream_with_tool_call__tool_call_in_span_output` in 13ce249: it serves a streamed tool call over `respx`, drives it through `create(stream=True)` with the real SSE parser, and compares the whole choice in the recorded span output (role, content, finish reason and the reassembled tool call). It fails with the aggregator from before this PR. The other Cerebras tests stub `_post`, so `respx` is now listed in the Cerebras test requirements, as for Together.\n"
+  },
+  {
+   "role": "contributor",
+   "path": "sdks/python/src/opik/integrations/groq/chat_completion_chunks_aggregator.py",
+   "created_at": "2026-11-03T10:02:43Z",
+   "body": "Please move the tool call merging into each integration's own package (Groq, Together and Cerebras) instead of a shared `opik/integrations/_streamed_tool_calls.py`. Each integration keeps its own logic in its own package; we asked for the same change in #9092. We accept some duplication across integrations here, because each provider can change its format on its own. This replaces the earlier suggestion to have the OpenAI aggregator use the shared helper."
+  },
+  {
+   "role": "bot",
+   "path": "sdks/python/tests/unit/integrations/groq/test_streamed_tool_calls.py",
+   "created_at": "2026-11-03T10:49:21Z",
+   "body": "### Unit tests import undeclared Together SDK\n\nUnit-test collection fails with `ImportError` because the Groq and Cerebras modules import `together.types` at module scope, while CI installs none of `together`, `groq`, or `cerebras-cloud-sdk`; remove the cross-provider import with a local Pydantic model, then add the provider SDKs to `tests/unit/test_requirements.txt` or move these tests to `tests/library_integration`.\n<!--\n_Finding type:_ `AI Coding Guidelines`\n-->\n\n<picture><img src=\"https://baz.co/api/v2/badges?type=reviewer&content=AI%20Coding%20Guidelines&severity=high\" alt=\"Severity\" height=\"24\" /></picture> <picture><img src=\"https://baz.co/api/v2/badges?type=web_search&content=pytest\" alt=\"web_search\" height=\"24\" /></picture>\n\nWant Baz to fix this for you? [Activate Fixer](https://baz.co/agents/baz) You can also update your AI coding guidelines based on this comment by `apply pr to [branch name]`\n\n<details>\n<summary>Other fix methods</summary>\n\n\n<a href=\"https://cursor.com/link/prompt?text=Before%20applying%2C%20verify%20this%20suggestion%20against%20the%20current%20code.%0AIn%20%60sdks%2Fpython%2Ftests%2Funit%2Fintegrations%2Fgroq%2Ftest_streamed_tool_calls.py%60%20around%20line%205%2C%20remove%20the%20module-level%20%60together.types%60%20import%20used%20to%20construct%20float-index%20fragments%20and%20replace%20it%20with%20a%20minimal%20local%20Pydantic%20test%20model%20matching%20the%20required%20shape.%20Ensure%20the%20corresponding%20Groq%20and%20Cerebras%20unit-test%20modules%20have%20their%20provider%20SDKs%20declared%20in%20%60tests%2Funit%2Ftest_requirements.txt%60%2C%20or%20move%20these%20tests%20to%20%60tests%2Flibrary_integration%60%2C%20so%20pytest%20collection%20does%20not%20fail%20on%20undeclared%20imports.\" target=\"_blank\" rel=\"noopener noreferrer\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/fix-in-cursor-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/fix-in-cursor-light.svg\"><img alt=\"Fix in Cursor\" src=\"https://cursor.com/fix-in-cursor.svg\"></picture></a>\n\n<details>\n<summary>Prompt for AI Agents</summary>\n\n```text\nBefore applying, verify this suggestion against the current code. In\n`sdks/python/tests/unit/integrations/groq/test_streamed_tool_calls.py` around line 5,\nremove the module-level `together.types` import used to construct float-index fragments\nand replace it with a minimal local Pydantic test model matching the required shape.\nEnsure the corresponding Groq and Cerebras unit-test modules have their provider SDKs\ndeclared in `tests/unit/test_requirements.txt`, or move these tests to\n`tests/library_integration`, so pytest collection does not fail on undeclared imports.\n```\n\n</details>\n</details>"
+  },
+  {
+   "role": "bot",
+   "path": "sdks/python/src/opik/integrations/groq/_streamed_tool_calls.py",
+   "created_at": "2026-11-03T10:49:21Z",
+   "body": "Duplicating `StreamedToolCalls` across the Groq, Together, and Cerebras integrations lets fixes to fragment association, payload merging, ID mapping, ordering, or malformed-input handling drift between providers. Move it to a shared module such as `opik.integrations._streamed_tool_calls` and import it from all three aggregators.\n<!--\n_Finding types:_ `Organize code logically` `Centralize error handling` `Stable public APIs`\n-->\n\n<picture><img src=\"https://baz.co/api/v2/badges?type=reviewer&content=Organize%20code%20logically%20%C2%B7%20Centralize%20error%20handling%20%C2%B7%20%2B1%20more&severity=low\" alt=\"Severity\" height=\"24\" /></picture>\n\nWant Baz to fix this for you? [Activate Fixer](https://baz.co/agents/baz)\n\n<details>\n<summary>Other fix methods</summary>\n\n\n<a href=\"https://cursor.com/link/prompt?text=Before%20applying%2C%20verify%20this%20suggestion%20against%20the%20current%20code.%0AIn%20%60sdks%2Fpython%2Fsrc%2Fopik%2Fintegrations%2Fgroq%2F_streamed_tool_calls.py%60%20%28around%20lines%201-46%29%2C%20the%20provider-independent%20%60StreamedToolCalls%60%20implementation%20is%20duplicated%20in%20the%20Groq%2C%20Together%2C%20and%20Cerebras%20integrations.%20Move%20the%20class%20and%20its%20fragment-association%2C%20payload-merging%2C%20identifier-mapping%2C%20call-ordering%2C%20and%20argument-assembly%20logic%20into%20a%20shared%20module%20such%20as%20%60opik.integrations._streamed_tool_calls%60.%20Remove%20the%20provider-local%20copies%20and%20update%20each%20aggregator%27s%20imports%20to%20use%20the%20shared%20class.%20Update%20or%20add%20tests%20to%20confirm%20all%20three%20integrations%20behave%20the%20same%2C%20including%20indexed%2C%20unindexed%2C%20and%20repeated-ID%20fragments.\" target=\"_blank\" rel=\"noopener noreferrer\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/fix-in-cursor-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/fix-in-cursor-light.svg\"><img alt=\"Fix in Cursor\" src=\"https://cursor.com/fix-in-cursor.svg\"></picture></a>\n\n<details>\n<summary>Prompt for AI Agents</summary>\n\n```text\nBefore applying, verify this suggestion against the current code. In\n`sdks/python/src/opik/integrations/groq/_streamed_tool_calls.py` (around lines 1-46),\nthe provider-independent `StreamedToolCalls` implementation is duplicated in the Groq,\nTogether, and Cerebras integrations. Move the class and its fragment-association,\npayload-merging, identifier-mapping, call-ordering, and argument-assembly logic into a\nshared module such as `opik.integrations._streamed_tool_calls`. Remove the\nprovider-local copies and update each aggregator's imports to use the shared class.\nUpdate or add tests to confirm all three integrations behave the same, including\nindexed, unindexed, and repeated-ID fragments.\n```\n\n</details>\n</details>"
+  },
+  {
+   "role": "bot",
+   "path": "sdks/python/src/opik/integrations/cerebras/_streamed_tool_calls.py",
+   "created_at": "2026-11-03T10:49:21Z",
+   "body": "### `index` comments misstate fragment association semantics\n\nMislabeling `index` as only an ordering field can cause maintainers to break fragment grouping, since it identifies a call within the stream when no known call ID exists and is then removed from the stored payload. Update this comment and the matching comments in `sdks/python/src/opik/integrations/groq/_streamed_tool_calls.py` and `sdks/python/src/opik/integrations/together/_streamed_tool_calls.py`.\n<!--\n_Finding type:_ `Document behavior and context`\n-->\n\n<picture><img src=\"https://baz.co/api/v2/badges?type=reviewer&content=Document%20behavior%20and%20context&severity=low\" alt=\"Severity\" height=\"24\" /></picture>\n\nWant Baz to fix this for you? [Activate Fixer](https://baz.co/agents/baz)\n\n<details>\n<summary>Other fix methods</summary>\n\n\n<a href=\"https://cursor.com/link/prompt?text=Before%20applying%2C%20verify%20this%20suggestion%20against%20the%20current%20code.%0AIn%20%60sdks%2Fpython%2Fsrc%2Fopik%2Fintegrations%2Fcerebras%2F_streamed_tool_calls.py%60%20around%20lines%2019-20%2C%20update%20the%20comment%20in%20%60StreamedToolCalls.add%60%20to%20explain%20that%20%60index%60%20identifies%20a%20tool%20call%20within%20the%20stream%20and%20is%20removed%20from%20the%20stored%20payload%2C%20rather%20than%20saying%20it%20only%20orders%20fragments.%20Apply%20the%20same%20documentation%20correction%20to%20the%20corresponding%20comments%20in%20%60sdks%2Fpython%2Fsrc%2Fopik%2Fintegrations%2Fgroq%2F_streamed_tool_calls.py%60%20and%20%60sdks%2Fpython%2Fsrc%2Fopik%2Fintegrations%2Ftogether%2F_streamed_tool_calls.py%60%2C%20preserving%20the%20existing%20grouping%20logic.\" target=\"_blank\" rel=\"noopener noreferrer\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cursor.com/fix-in-cursor-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://cursor.com/fix-in-cursor-light.svg\"><img alt=\"Fix in Cursor\" src=\"https://cursor.com/fix-in-cursor.svg\"></picture></a>\n\n<details>\n<summary>Prompt for AI Agents</summary>\n\n```text\nBefore applying, verify this suggestion against the current code. In\n`sdks/python/src/opik/integrations/cerebras/_streamed_tool_calls.py` around lines 19-20,\nupdate the comment in `StreamedToolCalls.add` to explain that `index` identifies a tool\ncall within the stream and is removed from the stored payload, rather than saying it\nonly orders fragments. Apply the same documentation correction to the corresponding\ncomments in `sdks/python/src/opik/integrations/groq/_streamed_tool_calls.py` and\n`sdks/python/src/opik/integrations/together/_streamed_tool_calls.py`, preserving the\nexisting grouping logic.\n```\n\n</details>\n</details>"
+  },
+  {
+   "role": "contributor",
+   "path": "sdks/python/src/opik/integrations/groq/_streamed_tool_calls.py",
+   "created_at": "2026-11-06T09:19:38Z",
+   "body": "Accepted, as state above."
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-10-21T08:16:52Z",
+   "body": "Thanks for the review. Pushed c1d681d08d on top of the branch.\n\n1. `delta.tool_calls` is now read with `getattr(delta, \"tool_calls\", None) or []` in the Groq and Cerebras aggregators, and in the Together one for parity. Groq and Cerebras each got a test with a delta that has no `tool_calls` attribute; it raised `AttributeError` before and now keeps the content.\n2. Understood on the overlap with #8239. The Cerebras reasoning here is stored under `message[\"reasoning\"]`, the same key the Together aggregator on main uses, so the SDK team can pick the order and whoever lands second adjusts the key.\n\nNits:\n- 2: the tool-call aggregator tests for Groq, Cerebras and Together now compare the whole choice (role, content, finish reason and tool calls).\n- 3: added a Together test that drives a tool-call stream through `create(stream=True)` with respx and checks the span output.\n- 4: the float-index unit test now builds its fragments from `together.types.tool_choice.ToolChoice` (via `model_construct`, since a continuation fragment lacks most of the required fields) instead of the local stand-in class.\n- 1: not changed in this PR. Moving the OpenAI aggregator onto `StreamedToolCalls` touches a different integration, so it is better as a separate change if wanted.\n\nThe updated Groq, Cerebras and Together aggregator tests and the helper unit tests pass locally; the Groq end-to-end tests that need a Groq key were not run.\n"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-03T10:03:22Z",
+   "body": "<!-- baz-pr-header -->\n<a href=\"https://baz.co/changes/comet-ml/opik/8995?tool=ast&amp;src=pr_comment&amp;cta=review\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://baz.co/api/v2/badges?type=announcement&amp;content=Review&amp;theme=dark\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://baz.co/api/v2/badges?type=announcement&amp;content=Review&amp;theme=light\"><img alt=\"Review this PR on Baz\" src=\"https://baz.co/api/v2/badges?type=announcement&amp;content=Review&amp;theme=light\" height=\"24\" align=\"right\" /></picture></a>\n\n<!-- baz-merge-verdict -->\n<details><summary><h4>Merger&nbsp;&nbsp;&nbsp;<small>🟠 Needs Review</small></h4></summary>\n\nNot ready to merge: PR has unresolved findings that need to be addressed.\n\n</details>\n\n<hr>"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-03T10:44:16Z",
+   "body": "Done in 42227bd: `_streamed_tool_calls.py` now lives in each of the groq, together and cerebras packages (duplicated as discussed), the aggregators import it from their own package, and the unit test is split per package. The OpenAI aggregator is untouched.\n\nTests: unit/integrations for groq, together, cerebras and openai pass (23 passed).\n\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-11-06T09:27:16Z",
+   "body": "Thanks for all the work on this, @pcbeingused333, and for the quick turnarounds on each round of feedback. We're almost there to merge this.\n\nA couple of last things:\n\n1. **Please rebase on `main`.** The Together integration changed there in #9202 (support for together 3.x). `BASE_URL` was removed from `test_together.py`, so the new streamed tool-call test fails lint on the merged code (`F821 Undefined name BASE_URL`). Please adapt the test to the new setup and re-run the Together tests after the rebase.\n2. **Please go through the open Baz comments** and either apply the suggestion or reply with why not.\n\nThanks again!\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-07T01:46:38Z",
+   "body": "Merged current `main` into the branch (instead of rebasing, to keep the review history) and adapted the Together streamed tool-call test: `BASE_URL` is gone, so it now uses `@respx.mock()` + `post(path=COMPLETIONS_ROUTE)` like the rest of the file (7e074fe). Together tests re-run on together 3.x: 25 passed with the groq/cerebras streamed tool-call tests, ruff check/format clean.\n\nBaz: the unit-test import comment no longer applies (those tests live under `tests/library_integration`, where the provider SDKs are installed); the `index` comment is corrected in the groq, together and cerebras helpers.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-07T01:46:55Z",
+   "body": "Thanks for the clarification and updates."
+  }
+ ]
+}

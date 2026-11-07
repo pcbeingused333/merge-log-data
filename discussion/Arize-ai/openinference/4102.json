@@ -1,0 +1,45 @@
+{
+ "repo": "Arize-ai/openinference",
+ "number": 4102,
+ "url": "https://github.com/Arize-ai/openinference/pull/4102",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-31T03:35:20Z",
+   "body": "## Factory review of d9e2e5f: Request changes\n\nChecks fail: mypy rejects the new test file in `ci-openai` and `ci-openai-latest`, so CI will fail before pytest runs.\n\n| Criterion | Result | Notes |\n|---|---|---|\n| Fit | Pass | does what it claims |\n| Checks | Fail | mypy fails in `ci-openai` and `ci-openai-latest` |\n| Tests | Pass | incomplete and failed cases fail without the change |\n| Blocking findings | 1 | mypy `attr-defined` on `model_validate`, `test_responses_accumulator.py:67` |\n| Non-blocking findings | 1 | test skips the instrumented client and spans, `test_responses_accumulator.py:98` |\n| Risk | Low | side effects and backwards compatibility: spans from incomplete or failed streams gain attributes |\n| Review depth | Focused | small instrumentor-internal change, no public API or dependency change |\n\n<details><summary>Details</summary>\n\n**Intent:** make `_ResponsesAccumulator` keep `ResponseIncompleteEvent` and `ResponseFailedEvent` as well as `ResponseCompletedEvent`, so Responses API streams that end incomplete or failed still record output and token counts. Span status handling stays the same.\n**Fit:** the diff widens the terminal-event match to the three class names and widens the type of `_values`. Nothing else changes and nothing claimed is missing. Both classes exist in the floor SDK (openai 2.8.0) and in 3.40.0, and the new imports are under `TYPE_CHECKING`.\n**Verified:** `tox run -e ci-openai` (openai 2.8.0) and `ci-openai-latest` (openai 3.40.0): ruff format and ruff check pass, and mypy fails with one error at `test_responses_accumulator.py:67`. Pytest run directly in both tox venvs: 534 passed / 27 skipped on 2.8.0, 561 passed on 3.40.0. With main's `_response_accumulator.py` swapped in, the new test's incomplete and failed cases fail with `KeyError: 'output.value'` and the completed case passes. The suggested `Dict[str, Type[BaseModel]]` annotation passes mypy with the package config. The area reviewer also ran a respx-mocked `responses.create(stream=True)` through the instrumentor. Incomplete and failed streams, including failed with `usage=None` and `output=[]`, export the expected attributes without errors.\n**Not verified:** the async streaming path and the `responses.stream()` helper. Both share the same accumulator, but neither was run. Python 3.10 and 3.14 tox factors were not run; only the sandbox's 3.11 was used.\n**Findings without a diff line:** none\n**Risk:** side effects low, performance none, backwards compatibility low, from the language reviewers. Not introduced here: failed and incomplete streams still end with span status OK, and their `output.value` can now include the response's `error` object.\n\nGraded against the [review criteria](https://github.com/Arize-ai/openinference/blob/main/factory/agents/pr-reviewer.md#verdict).\n\n</details>"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "python/instrumentation/openinference-instrumentation-openai/tests/openinference/instrumentation/openai/test_responses_accumulator.py",
+   "created_at": "2026-10-31T03:35:05Z",
+   "body": "**What's wrong:** mypy fails on this line, so `tox run -e ci-openai` and `ci-openai-latest` stop at the mypy step and never reach pytest. CI will fail the same way.\n\n**Evidence:** both environments report:\n```\ntests/openinference/instrumentation/openai/test_responses_accumulator.py:67: error: \"ModelMetaclass\" has no attribute \"model_validate\"  [attr-defined]\n```\nmypy infers the dict literal's value type as the join of the three event classes, which is `ModelMetaclass`, not `type[BaseModel]`.\n\n**Fix:** annotate the mapping. I checked that this version passes mypy with the package config:\n```python\nfrom typing import Any, Dict, List, Type\nfrom pydantic import BaseModel\n...\n    classes: Dict[str, Type[BaseModel]] = {\n        \"response.completed\": ResponseCompletedEvent,\n        \"response.incomplete\": ResponseIncompleteEvent,\n        \"response.failed\": ResponseFailedEvent,\n    }\n    return classes[event_type].model_validate(\n        {\"type\": event_type, \"sequence_number\": 9, \"response\": response}\n    )\n```\n\n**Blocking**"
+  },
+  {
+   "role": "bot",
+   "path": "python/instrumentation/openinference-instrumentation-openai/tests/openinference/instrumentation/openai/test_responses_accumulator.py",
+   "created_at": "2026-10-31T03:35:07Z",
+   "body": "**What's wrong:** the test builds `_ResponsesAccumulator` by hand and never goes through the instrumented client. The path from `responses.create(stream=True)` through `_stream.py` to the accumulator, and the exported span, stay untested. The fix matches events by class name (`_response_accumulator.py:60-62`), so only a test through the client would catch an SDK rename or a change in how stream events are yielded. The test also covers only the happy shape. A real `response.failed` usually has `usage: null` and `output: []`.\n\n**Evidence:** the test does fail without the change. With main's accumulator, the incomplete and failed cases fail with `KeyError: 'output.value'` and the completed case passes. So it is a real regression test, just one level below the instrumentor. A manual respx run through `OpenAI().responses.create(stream=True)` showed the wiring works today, including `response.failed` with `usage=None` and `output=[]`, which gave no token counts and no exception.\n\n**Fix:** add one respx-based streaming test in the style of the `response.completed` SSE tests in `test_instrumentor.py`. Mock `POST /v1/responses` with `text/event-stream`. Parametrize over `response.completed`, `response.incomplete`, and `response.failed` with `usage: null, output: []`. Assert on the exported span's `output.value`, token counts (absent when usage is null) and status.\n\n**Non-blocking**"
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-10-31T03:30:33Z",
+   "body": "The factory started a **review** of d9e2e5f957 (session [`sesn_01Jo56q4QTQnne4xx3geStda`](https://platform.claude.com/workspaces/wrkspc_01P7k888EhFQdCHm2iyi4ThZ/sessions/sesn_01Jo56q4QTQnne4xx3geStda)). It reports back here when the session ends."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-31T03:35:39Z",
+   "body": "The factory recommends **Request changes** for d9e2e5f957. [Read the review](https://github.com/Arize-ai/openinference/pull/4102#pullrequestreview-5720941999)."
+  },
+  {
+   "role": "none",
+   "created_at": "2026-11-05T17:30:33Z",
+   "body": "We hit the same gap and checked this branch on current `main`. Streams that end with `response.incomplete` or `response.failed` now keep their output and token counts. The factory's `Dict[str, Type[BaseModel]]` annotation is still needed for mypy, or `ci-openai` fails before pytest runs.\n\nThis PR leaves the span status as it is. I've opened #4240 for that part: ERROR for a failed reply and for the stream `error` event, non-streaming replies included, plus `llm.finish_reason`. It doesn't conflict with this PR, and both can be merged in either order. With both applied, a failed stream gets status ERROR along with its output and token counts.\n"
+  }
+ ]
+}

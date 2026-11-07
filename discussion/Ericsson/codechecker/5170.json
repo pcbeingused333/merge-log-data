@@ -1,0 +1,32 @@
+{
+ "repo": "Ericsson/codechecker",
+ "number": 5170,
+ "url": "https://github.com/Ericsson/codechecker/pull/5170",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-10-29T16:54:22Z",
+   "body": "Hi @pcbeingused333,\n\nThanks for the improvement. However, in CodeChecker we would like to ensure that only those checkers (error types) are handled that are returned by `CodeChecker checkers` command. One reason for this decision is that this list should be the single source of truth for every other sub-commands. For example, if `get_analyzer_checkers()` doesn't return a checker name, then it can't be disabled with `CodeChecker analyze --disable <checker_name>`.\n\nI would say, that the solution should be ensuring that `get_analyzer_checkers()` returns the checkers from addons, too.\nThank you!"
+  }
+ ],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-10-30T01:37:56Z",
+   "body": "Thanks @bruntib, that makes sense: if `CodeChecker checkers` is the single source of truth, the addon checkers have to be in it.\n\nBefore I change the PR, one question about how to get them there. `get_analyzer_checkers()` builds the list from `cppcheck --errorlist`, and that output does not include addon checkers: misra, y2038, threadsafety and namingng report their ids from the addon scripts, and misra builds its ids from the rule texts at run time. `config/labels/analyzers/cppcheck.json` does not list them either.\n\nThe way I see to do it: add the addon checker ids to `cppcheck.json` (with labels, as for the other checkers) and have `get_analyzer_checkers()` also return the ids from that file that belong to an addon, so they show up in `CodeChecker checkers` and can be passed to `--enable`/`--disable`. For misra this would be the fixed list of rule ids (`misra-c2012-X.Y`), not the rule texts.\n\nWould that work for you, or would you rather the list come from somewhere else? I will update the PR once you confirm the approach.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-11-04T13:50:29Z",
+   "body": "Hi @pcbeingused333,\r\n\r\nUnfortunately, this is a known problem with several analyzer tools, too. If the analyzer can't expose its supported checkers, then I can't see what could be a good solution. If we add all checkers manually to `cppcheck.json`, and expose them at `CodeChecker checkers`, then they will be potentially forwarded to an analyzer either because a user enables them explicitly or implicitly through some checker group (e.g. `--enable-all`). If the analyzer tool crashes due to an unknown checker, then we cause a regression in many CI systems where group-based enabling is used.\r\n\r\nA similar situation occurs when we add a checker that didn't exist in an old CppCheck version. If someone uses this old version on their machine, then the same problem happens.\r\n\r\nI haven't tried a CppCheck plugin, yet. Can `cppcheck --errorlist` list the available checkers when used together with `--addon`?"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-04T14:27:23Z",
+   "body": "Thanks @bruntib. I checked it: `cppcheck --errorlist` does not list addon checkers even when combined with `--addon`. With cppcheck 2.14.0, `cppcheck --errorlist --addon=misra` (and `threadsafety`, `y2038`, `namingng`) prints the same 312 `<error>` entries as plain `--errorlist`, and none of them has an addon id. The addons only produce their ids when they run on source code.\n\nSo the analyzer gives no reliable way to get the addon checker list, and your concern about forwarding unknown checkers through `--enable-all` or a checker group applies. I'll drop the idea of adding them to `cppcheck.json` / `CodeChecker checkers`.\n\nThat leaves the question of this PR as it is: it keeps the reports the enabled addons emit, even though their ids are not in `CodeChecker checkers`. Is that acceptable to you as a limited fix, or would you rather close it until there is a way to list addon checkers?\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
+}

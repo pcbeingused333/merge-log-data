@@ -1,0 +1,58 @@
+{
+ "repo": "livekit/agents",
+ "number": 8048,
+ "url": "https://github.com/livekit/agents/pull/8048",
+ "state": "closed",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-21T22:18:18Z",
+   "body": "> [!NOTE]\n> **Newer findings are available below.** Devin Review posted a newer report on this PR, in addition to the findings presented here.\n\n**Devin Review** found 1 potential issue.\n\n<!-- devin-review-badge-begin -->\n<a href=\"https://livekit.devinenterprise.com/review/livekit/agents/pull/8048\" target=\"_blank\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://static.devin.ai/assets/gh-devin-review-dark.svg?v=4\"><img src=\"https://static.devin.ai/assets/gh-devin-review-light.svg?v=4\" alt=\"Devin Review\"></picture></a>\n<!-- devin-review-badge-end -->"
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-21T23:00:39Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-21T23:00:45Z",
+   "body": "**Devin Review** found 1 new potential issue.\n\n2 flags not posted on this PR by your GitHub settings — view them in Devin Review. ([Configure](https://livekit.devinenterprise.com/org/live-kit/settings/review))\n\n<!-- devin-review-badge-begin -->\n<a href=\"https://livekit.devinenterprise.com/review/livekit/agents/pull/8048\" target=\"_blank\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://static.devin.ai/assets/gh-devin-review-dark.svg?v=4\"><img src=\"https://static.devin.ai/assets/gh-devin-review-light.svg?v=4\" alt=\"Devin Review\"></picture></a>\n<!-- devin-review-badge-end -->"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "livekit-agents/livekit/agents/inference/llm.py",
+   "created_at": "2026-10-21T22:18:16Z",
+   "body": "<!-- devin-review-comment {\"id\": \"BUG_pr-review-job-ca623edec0ec4189b1be0fa2c35a4796_0001\", \"file_path\": \"livekit-agents/livekit/agents/inference/llm.py\", \"start_line\": 664, \"end_line\": 668, \"side\": \"RIGHT\", \"based_on_repo_rules\": false, \"kind\": \"bug\"} -->\n\n🔴 **Interleaved tool calls abort the stream**\n\nWhen unindexed calls alternate argument deltas with different IDs, `_parse_choice` clears the active argument buffer. The next argument-only delta appends to `None`, aborting the stream before either call completes.\n\n<details>\n<summary>Learn more</summary>\n\nThe parser keeps only one active tool call. A change in id now finalizes that call even when its arguments are incomplete. If the previous call sends another argument delta with its id and no function name, the parser clears the buffer again, then [the argument append](https://github.com/livekit/agents/blob/2296625c1006b38510e40049c9d3e268604c3da7/livekit-agents/livekit/agents/inference/llm.py#L687-L688 \"livekit-agents/livekit/agents/inference/llm.py:687-688\") adds text to `None`. [The stream error handler](https://github.com/livekit/agents/blob/2296625c1006b38510e40049c9d3e268604c3da7/livekit-agents/livekit/agents/inference/llm.py#L626-L627 \"livekit-agents/livekit/agents/inference/llm.py:626-627\") turns that failure into `APIConnectionError`.\n\n**Example:** A begins with id `a`, name `get_weather`, arguments `{\"city\":`; B begins with id `b` and the same argument prefix. A then sends id `a`, no name, arguments `\"Paris\"}`. B is emitted unfinished and appending A's suffix raises an error instead of completing both calls.\n\n**Recommended fix:** Track in-progress call buffers by id or index and append each continuation to its own buffer. Emit each call only when it is complete, including at the finish reason; cover alternating partial calls with repeated ids in a test.\n\n</details>\n\n<!-- devin-review-badge-begin -->\n<a href=\"https://livekit.devinenterprise.com/review/livekit/agents/pull/8048\" target=\"_blank\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://static.devin.ai/assets/gh-devin-review-dark.svg?v=4\"><img src=\"https://static.devin.ai/assets/gh-devin-review-light.svg?v=4\" alt=\"Devin Review\"></picture></a>\n<!-- devin-review-badge-end -->\n\n---\n*Was this helpful? React with 👍 or 👎 to provide feedback.*"
+  },
+  {
+   "role": "bot",
+   "path": "livekit-agents/livekit/agents/inference/llm.py",
+   "created_at": "2026-10-21T23:00:38Z",
+   "body": "✅ **Resolved**: The parser now retains per-call buffers keyed by (index, id), so alternating argument deltas for either call append to the correct buffer; the prior failure no longer applies."
+  },
+  {
+   "role": "bot",
+   "path": "livekit-agents/livekit/agents/inference/llm.py",
+   "created_at": "2026-10-21T23:00:44Z",
+   "body": "<!-- devin-review-comment {\"id\": \"BUG_pr-review-job-fa813f76c1374448bc4b32df1f4883f2_0001\", \"file_path\": \"livekit-agents/livekit/agents/inference/llm.py\", \"start_line\": 492, \"end_line\": 492, \"side\": \"RIGHT\", \"based_on_repo_rules\": true, \"kind\": \"bug\"} -->\n\n🟡 **Streaming tool-call class lacks documentation**\n\nThe new `_StreamingToolCall` class has no docstring. Repository guidelines require documentation for every new class.\n\n```suggestion\nclass _StreamingToolCall:\n    \"\"\"Accumulate a tool call's arguments until its stream emits the call.\"\"\"\n```\n\n<!-- devin-review-badge-begin -->\n<a href=\"https://livekit.devinenterprise.com/review/livekit/agents/pull/8048\" target=\"_blank\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://static.devin.ai/assets/gh-devin-review-dark.svg?v=4\"><img src=\"https://static.devin.ai/assets/gh-devin-review-light.svg?v=4\" alt=\"Devin Review\"></picture></a>\n<!-- devin-review-badge-end -->\n\n---\n*Was this helpful? React with 👍 or 👎 to provide feedback.*"
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-03T07:46:34Z",
+   "body": "Merged main into this branch. Main now keeps the tool-call state in scalar fields and (#8249) also handles arguments that arrive before the name or id. This merge keeps the per-call state keyed by (index, id) and takes over those cases: arguments that come first are held with their call and joined once the name/id arrive; a call that never got a name is dropped instead of raising. Main's new tests pass unchanged against it, plus the tests of this PR (37 passed in tests/test_inference_llm_parallel_tool_calls.py and tests/test_llm_utils.py; on main's implementation the two interleaved-call tests of this PR fail).\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-11-03T08:25:08Z",
+   "body": "Thanks for tracking this down — the diagnosis was right.\r\n\r\n#8249 has since landed on `main` and adds the same check: a new `id` that differs from the current call's starts a new call, even when `index` is missing. Parallel Gemini calls with no `index` now come out separately, in one chunk or across chunks."
+  }
+ ]
+}

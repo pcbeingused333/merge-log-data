@@ -1,0 +1,83 @@
+{
+ "repo": "TanStack/ai",
+ "number": 2056,
+ "url": "https://github.com/TanStack/ai/pull/2056",
+ "title": "fix(ai-compaction): hash messages by value so key order does not break checkpoint reuse",
+ "merged_at": "2026-11-07T02:05:32Z",
+ "files": [
+  {
+   "filename": ".changeset/compaction-hash-key-order.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@tanstack/ai-compaction': patch\n+---\n+\n+A compaction checkpoint is now reused when the message store gives messages back with their object keys in another order, as PostgreSQL `jsonb` and schema parsing do. `hashMessages` hashes the messages with `stableJson`, so an equal history no longer looks changed and the summarizer does not run again over it. After the upgrade, saved checkpoints, saved usage counts and ready background summaries whose messages were not stored in sorted key order miss until the next compaction replaces them. Each such thread pays for one summarizer run."
+  },
+  {
+   "filename": ".changeset/stable-json-export.md",
+   "status": "added",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,6 @@\n+---\n+'@tanstack/ai': patch\n+'@tanstack/ai-harness': patch\n+---\n+\n+`@tanstack/ai` exports `stableJson`: JSON text with the keys of every object in sorted order, for values that come back from a store with their keys reordered. `@tanstack/ai-harness` now imports it and no longer keeps its own copy."
+  },
+  {
+   "filename": "packages/ai-compaction/src/index.test.ts",
+   "status": "modified",
+   "additions": 37,
+   "deletions": 0,
+   "patch": "@@ -292,6 +292,43 @@ describe('withCompaction', () => {\n     expect(appended).toHaveLength(5)\n   })\n \n+  it('reuses a persisted checkpoint when the store gives keys back in another order', async () => {\n+    const store = memoryStore()\n+    const summarize = vi.fn(async () => 'the gist')\n+    const messages = [\n+      big('user'),\n+      big('assistant'),\n+      big('user'),\n+      big('assistant'),\n+    ]\n+    const options = {\n+      maxTokens: 100,\n+      strategy: summarizeOldest({ summarize, keepRecentTokens: 50 }),\n+      strategyKey: 'summary-v1',\n+    }\n+\n+    await runOnConfig(\n+      withCompaction(options),\n+      messages,\n+      checkpointContext(store),\n+    )\n+    // As PostgreSQL jsonb gives them back: equal messages, keys reordered.\n+    const loaded = messages.map(\n+      ({ role, content, ...rest }): ModelMessage => ({\n+        content,\n+        ...rest,\n+        role,\n+      }),\n+    )\n+    await runOnConfig(\n+      withCompaction(options),\n+      [...loaded, text('user', 'new')],\n+      checkpointContext(store),\n+    )\n+\n+    expect(summarize).toHaveBeenCalledOnce()\n+  })\n+\n   it('rejects a checkpoint when the canonical prefix changes', async () => {\n     const store = memoryStore()\n     const summarize = vi.fn(async () => 'the gist')"
+  },
+  {
+   "filename": "packages/ai-compaction/src/usage-count.test.ts",
+   "status": "added",
+   "additions": 32,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,32 @@\n+import { describe, expect, it } from 'vitest'\n+import type { ModelMessage } from '@tanstack/ai'\n+import { hashMessages } from './usage-count'\n+\n+describe('hashMessages', () => {\n+  it('gives the same hash for a message whose keys come back in another order', async () => {\n+    const saved: ModelMessage = {\n+      role: 'assistant',\n+      content: 'hi',\n+      metadata: { b: 1, a: { y: 2, x: 3 } },\n+      id: 'm1',\n+    }\n+    const loaded: ModelMessage = {\n+      id: 'm1',\n+      role: 'assistant',\n+      content: 'hi',\n+      metadata: { a: { x: 3, y: 2 }, b: 1 },\n+    }\n+\n+    expect(await hashMessages([loaded])).toBe(await hashMessages([saved]))\n+  })\n+\n+  it('still tells a changed message and a reordered list apart', async () => {\n+    const one: ModelMessage = { role: 'user', content: 'one' }\n+    const two: ModelMessage = { role: 'user', content: 'two' }\n+\n+    expect(await hashMessages([one])).not.toBe(await hashMessages([two]))\n+    expect(await hashMessages([one, two])).not.toBe(\n+      await hashMessages([two, one]),\n+    )\n+  })\n+})"
+  },
+  {
+   "filename": "packages/ai-compaction/src/usage-count.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -1,3 +1,4 @@\n+import { stableJson } from '@tanstack/ai'\n import type { MetadataStore, ModelMessage, TokenUsage } from '@tanstack/ai'\n \n /** The MetadataStore namespace of the saved usage. The key is the thread id. */\n@@ -16,10 +17,11 @@ export interface UsageCount {\n   compacted: boolean\n }\n \n+/** The hash of `messages` by value: the order of an object's keys does not change it. */\n export async function hashMessages(\n   messages: ReadonlyArray<ModelMessage>,\n ): Promise<string> {\n-  const bytes = new TextEncoder().encode(JSON.stringify(messages))\n+  const bytes = new TextEncoder().encode(stableJson(messages))\n   const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes)\n   return Array.from(new Uint8Array(digest), (byte) =>\n     byte.toString(16).padStart(2, '0'),"
+  },
+  {
+   "filename": "packages/ai-harness/src/log.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 11,
+   "patch": "@@ -1,4 +1,4 @@\n-import { ConsoleLogger, EventType } from '@tanstack/ai'\n+import { ConsoleLogger, EventType, stableJson } from '@tanstack/ai'\n import {\n   LogConflictError,\n   LogTruncatedError,\n@@ -466,16 +466,6 @@ const isSameMessage = (\n   b: ModelMessage | undefined,\n ) => a === b || sameJson(a, b)\n \n-/** JSON text with sorted object keys. A store (jsonb) can reorder keys. */\n-export const stableJson = (value: unknown) =>\n-  JSON.stringify(value, (_key, item: unknown) =>\n-    isRecord(item) && !Array.isArray(item)\n-      ? Object.fromEntries(\n-          Object.entries(item).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),\n-        )\n-      : item,\n-  )\n-\n /**\n  * Run a host fold (`project` or `reduce`). One that throws skips its record\n  * with a warning to `logger`. The record is in the log already, so failing"
+  },
+  {
+   "filename": "packages/ai-harness/src/session/helpers.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -5,9 +5,9 @@ import {\n   genericInterruptContinuationFromDescriptor,\n   provideDetachableRun,\n   readInterruptBinding,\n+  stableJson,\n   wrapGenericInterruptContinuation,\n } from '@tanstack/ai'\n-import { stableJson } from '../log'\n import { isRecord, jsonCopy } from '../utils'\n import { interruptExpiry, signInOf, snapshotWaits } from '../waits'\n import type {"
+  },
+  {
+   "filename": "packages/ai-harness/src/session/state.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -1,6 +1,7 @@\n import {\n   INTERRUPT_BINDING_METADATA_KEY,\n   convertSchemaToJsonSchema,\n+  stableJson,\n   validateJsonSchema,\n   validateWithStandardSchema,\n } from '@tanstack/ai'\n@@ -11,7 +12,7 @@ import { transcriptText } from '../first-party/session-tools'\n import { LogOwnedElsewhereError } from '../ownership'\n import { isRecord } from '../utils'\n import { changedEntry } from '../session-entry'\n-import { messageIdsOfUser, stableJson, visibleMessages } from '../log'\n+import { messageIdsOfUser, visibleMessages } from '../log'\n import { agentRunThread, isHumanTarget } from '../log-records'\n import { mediaIdOf, mediaOfMessage, mediaPart } from '../media-ref'\n import {"
+  },
+  {
+   "filename": "packages/ai/src/index.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -172,6 +172,7 @@ export {\n   cloneAndDeepFreezeJson,\n   digestInterruptJson,\n } from './interrupt-serialization'\n+export { stableJson } from './utilities/stable-json'\n export {\n   INTERRUPT_BINDING_METADATA_KEY,\n   InterruptResumeValidationError,"
+  },
+  {
+   "filename": "packages/ai/src/utilities/stable-json.ts",
+   "status": "added",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,14 @@\n+/**\n+ * JSON text with the keys of every object in sorted order. Arrays keep their\n+ * order. A store can give a value back with its keys in another order\n+ * (PostgreSQL `jsonb` does, and so does a schema parse), so compare or hash\n+ * this, not `JSON.stringify`, when the value went through a store.\n+ */\n+export const stableJson = (value: unknown): string =>\n+  JSON.stringify(value, (_key, item: unknown) =>\n+    typeof item === 'object' && item !== null && !Array.isArray(item)\n+      ? Object.fromEntries(\n+          Object.entries(item).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),\n+        )\n+      : item,\n+  )"
+  }
+ ],
+ "test_files": [
+  "packages/ai-compaction/src/index.test.ts",
+  "packages/ai-compaction/src/usage-count.test.ts"
+ ]
+}

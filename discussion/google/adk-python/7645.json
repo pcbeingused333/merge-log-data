@@ -1,0 +1,27 @@
+{
+ "repo": "google/adk-python",
+ "number": 7645,
+ "url": "https://github.com/google/adk-python/pull/7645",
+ "state": "closed",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-21T06:55:31Z",
+   "body": "At `45ee65a21157295cdc0e31825760fa497dc3537e`, I ran `PYTHONPATH=src python -m pytest tests/unittests/models/test_apigee_llm.py -q`: **76 passed** on Python 3.13.16. Both added tests fail against base `1daa0eca989f5f19c8081107c1d1f9767929ba6b`, confirming the reported fix. I checked the existing reviews and discussion before reviewing; there was no prior feedback. Validation used synthetic responses, without a live Apigee proxy.\n\n**[P2] Follow the last resolved call when an ID-bearing fragment returns to an earlier slot** (`src/google/adk/models/apigee_llm.py:1331`).\n\nThe new ID lookup can return an earlier slot, but the following fragment without an ID is always assigned to `max(self.tool_call_parts)`. That is the newest allocated call, rather than the previous call promised by the helper's docstring. For example, start `call_a`, start `call_b`, receive another fragment explicitly identifying `call_a`, then receive its continuation without an ID. That continuation is labeled `call_b`, contaminating the other call's argument buffer and leaving `call_a` incomplete.\n\nThis reproduces on the exact head above:\n\n```python\nfrom google.adk.models.apigee_llm import ChatCompletionsResponseHandler\n\nhandler = ChatCompletionsResponseHandler()\ndef send(call):\n    responses = list(handler.process_chunk(\n        {\"choices\": [{\"delta\": {\"tool_calls\": [call]}}]}\n    ))\n    return responses[0].content.parts[0].function_call\n\nsend({\"id\": \"call_a\", \"function\": {\"name\": \"weather\", \"arguments\": '{\"city\": '}})\nsend({\"id\": \"call_b\", \"function\": {\"name\": \"clock\", \"arguments\": '{\"zone\": '}})\nassert send({\"id\": \"call_a\", \"function\": {\"arguments\": '\"Pa'}}).id == \"call_a\"\nassert send({\"function\": {\"arguments\": 'ris\"}'}}).id == \"call_a\"\n# Fails: the last fragment has id='call_b', name='clock'.\n```\n\nPlease track the most recently resolved slot, including when the ID lookup selects an existing call, and add a regression case for returning to an earlier call before an ID-less continuation. This would make the fallback follow the previous identified call consistently.\n"
+  }
+ ],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-10-21T07:10:13Z",
+   "body": "Thanks, good catch. The handler now remembers the slot it resolved last, including when the id lookup picks an existing slot, and a fragment without an id continues that slot instead of the highest one.\n\nAdded `test_streaming_fragment_without_id_follows_last_resolved_call`, which uses the sequence from the review (call_a, call_b, a fragment for call_a, then a fragment without an id). On the previous commit it fails with `call_b` instead of `call_a`; with the change `tests/unittests/models/test_apigee_llm.py` passes (77 tests) and pyink is clean.\n\nThis follow-up was prepared with Claude Code.\n"
+  },
+  {
+   "role": "collaborator",
+   "created_at": "2026-10-28T19:02:47Z",
+   "body": "Thank you @pcbeingused333 for your contribution! 🎉\n\nYour changes have been successfully imported and merged via Copybara in commit d563d80.\n\nClosing this PR as the changes are now in the main branch."
+  }
+ ]
+}

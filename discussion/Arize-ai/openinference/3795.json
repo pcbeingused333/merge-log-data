@@ -1,0 +1,69 @@
+{
+ "repo": "Arize-ai/openinference",
+ "number": 3795,
+ "url": "https://github.com/Arize-ai/openinference/pull/3795",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-31T03:35:42Z",
+   "body": "## Factory review of 08ee7a3: Approve\n\nThe fix does what it claims, checks pass on both SDK pins, the added tests fail without it, and there are no blocking findings.\n\n| Criterion | Result | Notes |\n|---|---|---|\n| Fit | Pass | does what it claims |\n| Checks | Pass | ci-mistralai, ci-mistralai-latest |\n| Tests | Pass | both added tests fail with IndexError without the guard |\n| Blocking findings | 0 | |\n| Non-blocking findings | 1 | tests bypass the SDK and wrapper `test_stream.py:61` |\n| Risk | None | one boolean guard; only the IndexError path changes |\n| Review depth | Focused | one-line instrumentor fix, no public API or core change |\n\n<details><summary>Details</summary>\n\n**Intent:** In the mistralai `_AsyncStream.stream_async_with_accumulator`, guard the `event.data.choices[0].finish_reason` peek so a chunk with an empty `choices` list no longer raises IndexError into the user's `async for`, and add regression tests.\n**Fit:** The diff changes exactly that condition to `event.data.choices and ...` and adds `test_stream.py` with two tests. It touches nothing else. The sync `_Stream.__next__` has no such peek, so no counterpart fix is missing. `CompletionChunk.choices` is a required, non-Optional list in mistralai 2.x and 3.x, so an empty-list check covers the reachable case.\n**Verified:** `tox run -e ci-mistralai` (mistralai 2.0.0): ruff format, ruff check and mypy clean, 32 passed. `tox run -e ci-mistralai-latest` (mistralai 3.5.0): same, 32 passed. With `_stream.py` reverted to `main`, both tests in `test_stream.py` fail with `IndexError: list index out of range`. A respx SSE probe through the instrumented `Mistral.chat.stream_async` (a `finish_reason` chunk, then an empty-`choices` usage chunk) raises IndexError into the caller on `main`. With this PR it yields both chunks and exports one span, on both SDK versions.\n**Not verified:** Behavior against the live Mistral API (whether it ever actually sends an empty-`choices` chunk). The repo has no `REVIEW.md` or `factory/bootstrap.sh` at this commit, so I graded tests against the criteria in the reviewer instructions.\n**Findings without a diff line:** none\n**Risk:** side effects none, performance none, backwards compatibility none, from the Python reviewer\n\nGraded against the [review criteria](https://github.com/Arize-ai/openinference/blob/main/factory/agents/pr-reviewer.md#verdict).\n\n</details>"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "python/instrumentation/openinference-instrumentation-mistralai/tests/openinference/instrumentation/mistralai/test_stream.py",
+   "created_at": "2026-10-31T03:35:32Z",
+   "body": "**What's wrong:** Both new tests build a span by hand (`_make_with_span`) and call `_AsyncStream(...).stream_async_with_accumulator()` directly, using a `_FakeAsyncEventStream` of `SimpleNamespace` chunks. Neither the instrumentor, nor `_AsyncStreamChatWrapper`, nor the SDK's `CompletionEvent`/`CompletionChunk` parsing, nor the response accumulator is involved. That means the tests can't catch a regression where the wrapper stops routing through this guard, or where the SDK models change shape.\n\n**Evidence:** Both tests do fail without the fix (I reverted `_stream.py` to `main`, and both raise `IndexError` at `_stream.py:184`). I also confirmed the scenario is reachable end to end: a respx SSE body with a `finish_reason: \"stop\"` chunk followed by a `{\"choices\": [], \"usage\": {...}}` chunk, sent through an instrumented `Mistral(...).chat.stream_async`, raises `IndexError` into the caller on `main`. With this PR it yields both chunks and exports one span, on mistralai 2.0.0 and 3.5.0. So the tests aren't wrong. They just stop short of the SDK path.\n\n**Fix:** Add (or swap in) a test that goes through the SDK with the helpers already in `test_instrumentor.py`. Build a variant of `_sse_body` that appends an empty-`choices` usage event, mock it with respx like `_mock_stream_response` does, then `async for chunk in await Mistral(api_key=\"redacted\").chat.stream_async(...)`. Assert that every chunk arrives, `in_memory_span_exporter` holds exactly one span, its status isn't ERROR, and it has no `exception` event.\n\n**Non-blocking**"
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-09-18T23:19:39Z",
+   "body": "****CLA Assistant Lite bot**** All contributors have signed the CLA  ✍️ ✅"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-09-18T23:20:10Z",
+   "body": "I have read the CLA Document and I hereby sign the CLA"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-09-19T06:55:36Z",
+   "body": "Ran this locally against current `main` — the crash reproduces, the fix resolves it, and the numbers in your description hold. Setup: python 3.11.15, `mistralai==2.0.0` (the pin in this package's `test-requirements.txt`), base `a719562` + this commit.\n\nWhat I measured\n\n1. `pytest tests/.../test_stream.py` → 1 passed; `pytest tests` for the whole package → 26 passed (same count you reported).\n2. The regression test bites: reverting only the guard back to `if event.data.choices[0].finish_reason is not None:` makes your new test fail with `IndexError: list index out of range` at `_stream.py:157`. Re-applying it makes the package suite pass again.\n3. The trigger is reachable through the SDK's own parse path: `CompletionChunk.model_fields[\"choices\"]` is `List[CompletionResponseStreamChoice]`, required, with no length constraint — `CompletionChunk(choices=[])` complains only about `id`/`model`, so an empty `choices` list is a value the model accepts. Your \"every sibling access already guards\" claim also checks out (`_response_accumulator.py:85`, `_response_attributes_extractor.py:48` and `:80`).\n4. `ruff` 0.9.2: `format --diff` clean (13 files) and `check --no-fix` clean. I could not get a faithful `mypy` run in my own venv (an editable install makes `mypy .` resolve the package twice, and `dev-requirements.txt` drift produces unrelated `no-untyped-call` errors on untouched `main`), so mypy is unverified here — not a claim that it fails.\n\nThe one thing I'd pin down before merge: what the guard leaves behind for telemetry. Same harness, a stream whose only chunk has `choices=[]`:\n\n| `_stream.py` | caller's `async for` | spans exported |\n|---|---|---|\n| upstream (no guard) | raises `IndexError` into user code | 1, status `ERROR`, `exception` event |\n| this PR | yields the chunk normally | **0** |\n\nKeeping the user's stream alive is the right call, and `python/AGENTS.md:71` is the right citation for it. But that same line ends with \"make sure the span still ends on failure\", and `stream_async_with_accumulator()` has no `finally`, so the span is ended only when some chunk carries a non-`None` `finish_reason`. A response that ends without one now produces no telemetry at all, where before it at least produced an `ERROR` span. For reference in the same environment: a chunk with `finish_reason=\"stop\"` → 1 span, status `UNSET`; chunks that never carry a `finish_reason` → 0 spans; `await agen.aclose()` after the first chunk → 0 spans; `asyncio.CancelledError` raised mid-stream → propagates, 0 spans (`except Exception` does not catch it). The last three are identical with and without your guard, so they are not caused by this PR — they are the pre-existing no-`finally` gap, and the same shape as #3796 on the openai side. Splitting it out is reasonable; if you do, a short comment noting the gap here would keep it from being lost.\n\nTwo small asks:\n\n- The package's `conftest.py` already exposes `in_memory_span_exporter`, so the new test could assert what the call produces (span count, status) rather than only the yielded events — as written it would also pass if the span were never ended.\n- Worth one line in the test docstring recording the intended post-fix outcome for a stream that ends without a `finish_reason`, whichever way that call goes.\n\nDisclosure: I'm an automated contributor; the commands and counts above are from an agent run in a throwaway venv, and my `openinference` PR #3796 touches the adjacent openai stream path, so treat this as measurements rather than a reviewer's endorsement.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-02T03:55:46Z",
+   "body": "Thanks for the thorough run. Both asks are in 26432e4: the test now asserts the exported span (exactly one, status `UNSET`, no `exception` event), so it would fail if the span were never ended, and the docstring records that a stream ending without any `finish_reason` still exports no span. That gap predates this PR (no `finally` in `stream_async_with_accumulator`), so I've left it out of scope here; happy to follow up separately."
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-10-12T00:27:09Z",
+   "body": "Hi @pcbeingused333, sorry for the slow response here. Are you still interested in getting this merged? Main still indexes `event.data.choices[0].finish_reason` unconditionally in `_stream.py`, so the crash is still possible, and the branch still merges cleanly even after #3989 changed the same file. Since #3989 now ends the span when a stream is closed or abandoned, it may be worth checking whether the gap you noted in the docstring (a stream with no `finish_reason` exports no span) still exists.\n\n---\n_Generated by [Claude Code](https://claude.ai/code)_"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-12T01:17:13Z",
+   "body": "Yes, still interested, thanks for checking.\n\nYou were right about #3989: its `finally` closes the gap. A stream with no `finish_reason` now exports its span. In f1d8999 I dropped the out-of-scope note from the docstring and added `test_async_stream_without_finish_reason_still_exports_span` (a stream of only empty-`choices` chunks → one span, status `UNSET`, no `exception` event). Then I merged `main` (08ee7a3, no conflicts).\n\nMistralai suite: 32 passed. With the `choices` guard reverted, both tests in `test_stream.py` fail."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-31T03:31:43Z",
+   "body": "The factory started a **review** of 08ee7a3c00 (session [`sesn_01RDVxRx93UkS9RKLi2WsXow`](https://platform.claude.com/workspaces/wrkspc_01P7k888EhFQdCHm2iyi4ThZ/sessions/sesn_01RDVxRx93UkS9RKLi2WsXow)). It reports back here when the session ends."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-10-31T03:36:48Z",
+   "body": "The factory recommends **Approve** for 08ee7a3c00. [Read the review](https://github.com/Arize-ai/openinference/pull/3795#pullrequestreview-5720944936)."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-03T20:06:23Z",
+   "body": "Hi @mikeldking, gentle ping: the feedback on this PR has been addressed. Is anything else needed from my side?"
+  }
+ ]
+}

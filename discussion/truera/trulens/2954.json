@@ -1,0 +1,53 @@
+{
+ "repo": "truera/trulens",
+ "number": 2954,
+ "url": "https://github.com/truera/trulens/pull/2954",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-19T16:34:10Z",
+   "body": "Correct fix for Anthropic prompt-cache token counting and pricing. The implementation properly extracts cache tokens from the response and prices them using LiteLLM's cache rates with sensible fallback. One test fragility: `test_cache_tokens_count_as_prompt_tokens_and_are_priced` directly accesses `LITELLM_MODEL_COSTS_TABLE[model]` and assumes cache pricing keys exist, which risks KeyError on version changes; call `_get_model_pricing(model)` instead to match the implementation's fallback behavior. Otherwise ready."
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-20T02:03:31Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-20T02:03:37Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "tests/unit/providers/test_anthropic_cost.py",
+   "created_at": "2026-10-19T16:34:10Z",
+   "body": "Call `_get_model_pricing(model)` instead of directly accessing `LITELLM_MODEL_COSTS_TABLE[model]`. The implementation uses `_get_model_pricing()` which falls back to `input_price` when cache keys are missing; this test will KeyError if the table drops those keys. Match the pattern in `test_anthropic_capabilities.py:525`:\n```python\nfrom trulens.providers.anthropic.endpoint import _get_model_pricing\n\ninput_price, output_price, cache_read_price, cache_write_price = _get_model_pricing(model)\nexpected_cost = (\n    100 * input_price\n    + 1000 * cache_read_price\n    + 200 * cache_write_price\n    + 50 * output_price\n)\n```\nThen the test verifies the actual prices the implementation computes (whether real cache prices or fallback)."
+  },
+  {
+   "role": "contributor",
+   "path": "tests/unit/providers/test_anthropic_cost.py",
+   "created_at": "2026-10-19T16:34:10Z",
+   "body": "Add a cost assertion here to fully verify backward-compat behavior — the test only checks token counts. Something like `self.assertIn(SpanAttributes.COST.COST, cost_info)` and `self.assertGreater(cost_info[SpanAttributes.COST.COST], 0)` to confirm a known model still gets priced when cache fields are absent."
+  },
+  {
+   "role": "author",
+   "path": "tests/unit/providers/test_anthropic_cost.py",
+   "created_at": "2026-10-20T02:03:31Z",
+   "body": "Done in df9c108: the expected cost now comes from `_get_model_pricing(model)`, so the test follows the same fallback as the implementation."
+  },
+  {
+   "role": "author",
+   "path": "tests/unit/providers/test_anthropic_cost.py",
+   "created_at": "2026-10-20T02:03:37Z",
+   "body": "Added in df9c108: the test now also checks that `COST.COST` is recorded and positive when the usage has no cache fields."
+  }
+ ],
+ "comments": []
+}

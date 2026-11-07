@@ -1,0 +1,46 @@
+{
+ "repo": "truera/trulens",
+ "number": 2983,
+ "url": "https://github.com/truera/trulens/pull/2983",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-26T12:19:08Z",
+   "body": "I reproduced the new regression case at `d7c6e2f927ed777dde8f83c48f329db3ede7b2f8` using the versions in `poetry.lock` (LiteLLM 1.80.0 and Pydantic 2.13.4). The new test currently fails at `tests/unit/providers/test_litellm_cost.py:79`: constructing `litellm.ModelResponse(...)` without a `usage` argument creates a zero-valued `Usage(...)` object, so `response.usage` is not `None`.\n\nThat means the test does not exercise the missing-usage branch it claims to cover. Please set `response.usage = None` explicitly before calling the callback. The cost-computer test should also leave `completion_cost` unmocked: with a genuinely `None` usage, LiteLLM 1.80.0 returns `0.0`, so this can cover the production path directly.\n\nI also checked the implementation with `usage` forced to `None`; both new code paths return zero token counts, and the real `completion_cost(response)` returns `0.0`. The implementation looks sound for the intended case; the requested change is to make the regression tests actually construct and verify that case."
+  },
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-10-26T13:30:29Z",
+   "body": "Duo-ee's test finding is correct; the implementation itself is sound, but both new tests fail to exercise the missing-usage case. Request changes: 2 blockers. The fix logic (getattr with or-empty-dict guards) will handle None correctly once the tests construct that case. Set response.usage = None explicitly after construction and unmock completion_cost as suggested."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "tests/unit/providers/test_litellm_cost.py",
+   "created_at": "2026-10-26T13:30:29Z",
+   "body": "Set `response.usage = None` explicitly after construction. LiteLLM 1.80.0 auto-creates a zero-valued `Usage` object when the argument is omitted, so the test doesn't exercise the None branch. Add `response.usage = None` before calling the callback to force the missing-usage case:\n```python\nresponse = litellm.ModelResponse(\n    model=_MODEL,\n    choices=[{\"message\": {\"role\": \"assistant\", \"content\": \"ok\"}}],\n)\nresponse.usage = None\nself.callback.handle_generation(response)\n```"
+  },
+  {
+   "role": "contributor",
+   "path": "tests/unit/providers/test_litellm_cost.py",
+   "created_at": "2026-10-26T13:30:29Z",
+   "body": "Drop the `completion_cost` mock and set `response.usage = None` before calling `handle_response`. With genuinely None usage, the real `completion_cost(response)` returns 0.0 in LiteLLM 1.80.0, so this can verify the production path directly instead of stubbing it out."
+  }
+ ],
+ "comments": [
+  {
+   "role": "contributor",
+   "created_at": "2026-10-26T13:43:12Z",
+   "body": "Agreed on both points - that is the same gap I was pointing at from the test side. Letting the constructor default `usage` means the test exercises the zero-valued object rather than the missing-usage path, so setting `response.usage = None` explicitly is what makes the assertion meaningful. The same reasoning applies to dropping the `completion_cost` stub: with genuinely `None` usage the real call has to produce the 0.0 the fix claims, and stubbing it out tests the stub instead."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-26T14:25:32Z",
+   "body": "Thanks both, addressed in 60bb90d: both tests now set `response.usage = None` explicitly after constructing the `ModelResponse`, and the cost-computer test calls the real `completion_cost` instead of a stub. With the fix in place the file passes (4 tests); with the `endpoint.py` from `main` the two new tests fail with the original `TypeError` / `AttributeError`. One note: on litellm 1.104.2 a `ModelResponse` built without `usage` has no `usage` attribute at all (rather than a zero-valued `Usage`), so the explicit `None` keeps the tests meaningful on both versions.\n\n"
+  }
+ ]
+}

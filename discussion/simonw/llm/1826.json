@@ -1,0 +1,37 @@
+{
+ "repo": "simonw/llm",
+ "number": 1826,
+ "url": "https://github.com/simonw/llm/pull/1826",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "none",
+   "state": "COMMENTED",
+   "submitted_at": "2026-10-27T16:05:44Z",
+   "body": "Would it be worth guarding against a key collision if a compatible endpoint mixes indexed and unindexed calls? For example, if the accumulator already has a call at index `1` and a new unindexed call arrives with a different id, `len(tool_calls)` is also `1`. `_tool_call_key` returns that occupied key, so the caller appends the new arguments to the existing call.\n\nI reproduced the collision by executing the exact helper from `4445d4a` with those inputs and checked the sync/async accumulation paths. I don't know whether Gemini emits mixed streams; this is a defensive case rather than a claim about its behavior. A distinct key for the unindexed call and a mixed-stream regression test could make the fallback safer. I haven't run the full branch test suite."
+  }
+ ],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-10-27T21:45:51Z",
+   "body": "Good catch, @Muguett-DBY, thanks for reproducing it. Added 036bad7: when a call arrives without an index, the key now skips any slot already taken by an indexed call, so a mixed stream (indexed calls plus an unindexed one) no longer merges the unindexed call into an existing one. There's a regression test for the mixed case (`test_unindexed_call_does_not_reuse_taken_index`), which fails without the change and passes with it."
+  },
+  {
+   "role": "none",
+   "created_at": "2026-10-28T03:23:05Z",
+   "body": "Thanks for fixing that! The new test covers an indexed call followed by an unindexed one. I checked the opposite order too: if an unindexed call with id `call_1` arrives first, it takes key `0`; a new indexed call with id `call_2` and index `0` then returns the same key. The accumulator joins their arguments and loses the second call.\n\nI reproduced this with the exact `036bad7` helper and the same accumulation logic; I don't know whether a real provider sends mixed streams in this order. Would separate key namespaces for explicit indices and unindexed calls, while retaining continuation handling, be worth considering?"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-10-28T06:54:37Z",
+   "body": "Thanks. Done in ca1d22a: indexed and unindexed calls now accumulate under separate keys, so neither order can merge two calls; added a test for the unindexed-then-indexed order. Like you, I don't know of a provider that mixes both in one stream; this is defensive."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-05T03:03:39Z",
+   "body": "Hi, friendly ping: the feedback here should be addressed in the latest push. Let me know if anything else is needed. Thanks!"
+  }
+ ]
+}
