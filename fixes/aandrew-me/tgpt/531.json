@@ -1,0 +1,26 @@
+{
+ "repo": "aandrew-me/tgpt",
+ "number": 531,
+ "url": "https://github.com/aandrew-me/tgpt/pull/531",
+ "title": "fix(minimax): send tools to the MiniMax provider",
+ "merged_at": "2026-11-08T06:56:32Z",
+ "files": [
+  {
+   "filename": "src/providers/minimax/minimax.go",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 22,
+   "patch": "@@ -20,6 +20,33 @@ type RequestBody struct {\n \tMessages    []any    `json:\"messages\"`\n \tTemperature *float64 `json:\"temperature,omitempty\"`\n \tTopP        *float64 `json:\"top_p,omitempty\"`\n+\tTools       []any    `json:\"tools,omitempty\"`\n+}\n+\n+func buildRequestBody(input string, params structs.Params, model string) RequestBody {\n+\trequestInfo := RequestBody{\n+\t\tModel:  model,\n+\t\tStream: true,\n+\t\tMessages: []any{\n+\t\t\tstructs.DefaultMessage{\n+\t\t\t\tContent: params.SystemPrompt,\n+\t\t\t\tRole:    \"system\",\n+\t\t\t},\n+\t\t},\n+\t\tTools: params.Tools,\n+\t}\n+\trequestInfo.Temperature, requestInfo.TopP = params.SamplingOptions()\n+\n+\tif len(params.PrevMessages) > 0 {\n+\t\trequestInfo.Messages = append(requestInfo.Messages, params.PrevMessages...)\n+\t}\n+\n+\trequestInfo.Messages = append(requestInfo.Messages, structs.DefaultMessage{\n+\t\tRole:    \"user\",\n+\t\tContent: input,\n+\t})\n+\n+\treturn requestInfo\n }\n \n func NewRequest(input string, params structs.Params) (*http.Response, error) {\n@@ -46,28 +73,7 @@ func NewRequest(input string, params structs.Params) (*http.Response, error) {\n \n \turl := \"https://api.minimax.io/v1/chat/completions\"\n \n-\trequestInfo := RequestBody{\n-\t\tModel:  model,\n-\t\tStream: true,\n-\t\tMessages: []any{\n-\t\t\tstructs.DefaultMessage{\n-\t\t\t\tContent: params.SystemPrompt,\n-\t\t\t\tRole:    \"system\",\n-\t\t\t},\n-\t\t},\n-\t}\n-\trequestInfo.Temperature, requestInfo.TopP = params.SamplingOptions()\n-\n-\tif len(params.PrevMessages) > 0 {\n-\t\trequestInfo.Messages = append(requestInfo.Messages, params.PrevMessages...)\n-\t}\n-\n-\trequestInfo.Messages = append(requestInfo.Messages, structs.DefaultMessage{\n-\t\tRole:    \"user\",\n-\t\tContent: input,\n-\t})\n-\n-\tjsonRequest, err := json.Marshal(requestInfo)\n+\tjsonRequest, err := json.Marshal(buildRequestBody(input, params, model))\n \n \tif err != nil {\n \t\tlog.Fatal(\"Failed to build user request\")"
+  },
+  {
+   "filename": "src/providers/minimax/minimax_test.go",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -349,3 +349,19 @@ func TestRequestIntegrationStreaming(t *testing.T) {\n \n \tassert.NotEmpty(t, fullText.String(), \"Should have extracted text from streaming response\")\n }\n+\n+func TestBuildRequestBodyTools(t *testing.T) {\n+\ttools := []any{map[string]any{\"type\": \"function\", \"function\": map[string]any{\"name\": \"run\"}}}\n+\tencoded, err := json.Marshal(buildRequestBody(\"hi\", structs.Params{Tools: tools}, \"MiniMax-M2.7\"))\n+\tassert.NoError(t, err)\n+\n+\tvar decoded map[string]any\n+\tassert.NoError(t, json.Unmarshal(encoded, &decoded))\n+\tassert.Len(t, decoded[\"tools\"], 1)\n+\n+\tencoded, err = json.Marshal(buildRequestBody(\"hi\", structs.Params{}, \"MiniMax-M2.7\"))\n+\tassert.NoError(t, err)\n+\tdecoded = nil\n+\tassert.NoError(t, json.Unmarshal(encoded, &decoded))\n+\tassert.NotContains(t, decoded, \"tools\")\n+}"
+  }
+ ],
+ "test_files": [
+  "src/providers/minimax/minimax_test.go"
+ ]
+}

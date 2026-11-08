@@ -1,0 +1,26 @@
+{
+ "repo": "TriliumNext/Trilium",
+ "number": 12517,
+ "url": "https://github.com/TriliumNext/Trilium/pull/12517",
+ "title": "fix(etapi): honor orderDirection on note search",
+ "merged_at": "2026-11-08T10:23:12Z",
+ "files": [
+  {
+   "filename": "apps/server/spec/etapi/search.spec.ts",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -76,6 +76,25 @@ describe(\"etapi/search\", () => {\n                 .expect(200);\n         });\n \n+        it(\"orders notes by title according to orderDirection\", async () => {\n+            const marker = randomUUID();\n+            const earlier = `AAA ${marker}`;\n+            const later = `ZZZ ${marker}`;\n+            await createTitledNote(app, token, earlier, marker);\n+            await createTitledNote(app, token, later, marker);\n+\n+            const titles = async (direction: string) => {\n+                const response = await supertest(app)\n+                    .get(`/etapi/notes?search=${marker}&orderBy=title&orderDirection=${direction}`)\n+                    .auth(USER, token, { \"type\": \"basic\"})\n+                    .expect(200);\n+                return response.body.results.map((note: { title: string }) => note.title);\n+            };\n+\n+            expect(await titles(\"asc\")).toEqual([earlier, later]);\n+            expect(await titles(\"desc\")).toEqual([later, earlier]);\n+        });\n+\n         it(\"rejects a non-boolean flag\", async () => {\n             const response = await supertest(app)\n                 .get(\"/etapi/notes?search=root&fastSearch=maybe\")\n@@ -113,6 +132,21 @@ describe(\"etapi/search\", () => {\n     });\n });\n \n+async function createTitledNote(app: Application, token: string, title: string, content: string) {\n+    const response = await supertest(app)\n+        .post(\"/etapi/create-note\")\n+        .auth(USER, token, { \"type\": \"basic\" })\n+        .send({\n+            parentNoteId: \"root\",\n+            title,\n+            type: \"text\",\n+            content\n+        })\n+        .expect(201);\n+\n+    return response.body.note.noteId as string;\n+}\n+\n async function createNoteWithLabel(app: Application, token: string, name: string, value: string) {\n     const noteId = await createNote(app, token, randomUUID());\n     const attributeId = `label${randomUUID().replace(/-/g, \"\")}`.substring(0, 32);"
+  },
+  {
+   "filename": "apps/server/src/etapi/notes.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 5,
+   "patch": "@@ -223,8 +223,7 @@ function parseSearchParams(req: Request) {\n         ancestorNoteId: parseString(req.query[\"ancestorNoteId\"]),\n         ancestorDepth: parseString(req.query[\"ancestorDepth\"]), // e.g. \"eq5\"\n         orderBy: parseString(req.query[\"orderBy\"]),\n-        // TODO: Check why the order direction was provided as a number, but it's a string everywhere else.\n-        orderDirection: parseOrderDirection(req.query, \"orderDirection\") as unknown as string,\n+        orderDirection: parseOrderDirection(req.query, \"orderDirection\"),\n         limit: parseInteger(req.query, \"limit\"),\n         debug: parseBoolean(req.query, \"debug\")\n     };\n@@ -267,13 +266,11 @@ function parseOrderDirection(obj: any, name: string) {\n         return undefined;\n     }\n \n-    const integer = parseInt(obj[name]);\n-\n     if (![\"asc\", \"desc\"].includes(obj[name])) {\n         throw new eu.EtapiError(400, SEARCH_PARAM_ERROR, `Cannot parse order direction value '${obj[name]}, allowed values are 'asc' and 'desc'.`);\n     }\n \n-    return integer;\n+    return obj[name];\n }\n \n function parseInteger(obj: any, name: string) {"
+  }
+ ],
+ "test_files": [
+  "apps/server/spec/etapi/search.spec.ts"
+ ]
+}

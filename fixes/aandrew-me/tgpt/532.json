@@ -1,0 +1,26 @@
+{
+ "repo": "aandrew-me/tgpt",
+ "number": 532,
+ "url": "https://github.com/aandrew-me/tgpt/pull/532",
+ "title": "fix(stdin): keep newlines between piped lines",
+ "merged_at": "2026-11-08T06:54:07Z",
+ "files": [
+  {
+   "filename": "main.go",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 6,
+   "patch": "@@ -7,6 +7,7 @@ import (\n \t\"errors\"\n \t\"flag\"\n \t\"fmt\"\n+\t\"io\"\n \t\"log\"\n \t\"os\"\n \t\"os/signal\"\n@@ -534,11 +535,8 @@ func main() {\n \n \t// Checking for piped text\n \tif (stat.Mode() & os.ModeCharDevice) == 0 {\n-\t\tscanner := bufio.NewScanner(os.Stdin)\n-\t\tfor scanner.Scan() {\n-\t\t\tpipedInput += scanner.Text()\n-\t\t}\n-\t\tif err := scanner.Err(); err != nil {\n+\t\tpipedInput, err = readPiped(os.Stdin)\n+\t\tif err != nil {\n \t\t\tutils.PrintError(fmt.Sprintf(\"Error reading standard input: %v\", err))\n \t\t\treturn\n \t\t}\n@@ -896,9 +894,25 @@ func main() {\n \t}\n }\n \n+// readPiped reads all of r. bufio.Scanner.Text drops the line ending, so lines\n+// are joined with '\\n'; otherwise \"cat file | tgpt ...\" reaches the model as\n+// one line. The 1 MiB ceiling matches the SSE scanner in helper.HandleEachPart\n+// (the default 64 KiB token limit fails on a long line).\n+func readPiped(r io.Reader) (string, error) {\n+\tscanner := bufio.NewScanner(r)\n+\tscanner.Buffer(make([]byte, 32*1024), 1024*1024)\n+\tvar lines []string\n+\tfor scanner.Scan() {\n+\t\tlines = append(lines, scanner.Text())\n+\t}\n+\tif err := scanner.Err(); err != nil {\n+\t\treturn \"\", err\n+\t}\n+\treturn strings.Join(lines, \"\\n\"), nil\n+}\n+\n func handleExit() {\n \tbold.Println(\"Exiting...\")\n \trestoreTerminal()\n \tos.Exit(130)\n }\n-"
+  },
+  {
+   "filename": "piped_test.go",
+   "status": "added",
+   "additions": 78,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,78 @@\n+package main\n+\n+import (\n+\t\"bufio\"\n+\t\"errors\"\n+\t\"strings\"\n+\t\"testing\"\n+)\n+\n+func TestReadPipedKeepsNewlinesBetweenLines(t *testing.T) {\n+\tgot, err := readPiped(strings.NewReader(\"alpha\\nbeta\\ngamma\\n\"))\n+\tif err != nil {\n+\t\tt.Fatalf(\"readPiped: %v\", err)\n+\t}\n+\tif got != \"alpha\\nbeta\\ngamma\" {\n+\t\tt.Fatalf(\"readPiped = %q, want lines separated by newlines\", got)\n+\t}\n+}\n+\n+func TestReadPipedSingleLineUnchanged(t *testing.T) {\n+\tgot, err := readPiped(strings.NewReader(\"only\"))\n+\tif err != nil {\n+\t\tt.Fatalf(\"readPiped: %v\", err)\n+\t}\n+\tif got != \"only\" {\n+\t\tt.Fatalf(\"readPiped = %q, want %q\", got, \"only\")\n+\t}\n+}\n+\n+func TestReadPipedEmpty(t *testing.T) {\n+\tgot, err := readPiped(strings.NewReader(\"\"))\n+\tif err != nil {\n+\t\tt.Fatalf(\"readPiped: %v\", err)\n+\t}\n+\tif got != \"\" {\n+\t\tt.Fatalf(\"readPiped = %q, want empty\", got)\n+\t}\n+}\n+\n+func TestReadPipedPreservesBlankLine(t *testing.T) {\n+\tgot, err := readPiped(strings.NewReader(\"a\\n\\nb\\n\"))\n+\tif err != nil {\n+\t\tt.Fatalf(\"readPiped: %v\", err)\n+\t}\n+\tif got != \"a\\n\\nb\" {\n+\t\tt.Fatalf(\"readPiped = %q, want a blank line preserved\", got)\n+\t}\n+}\n+\n+func TestReadPipedCRLF(t *testing.T) {\n+\tgot, err := readPiped(strings.NewReader(\"a\\r\\nb\\r\\n\"))\n+\tif err != nil {\n+\t\tt.Fatalf(\"readPiped: %v\", err)\n+\t}\n+\tif got != \"a\\nb\" {\n+\t\tt.Fatalf(\"readPiped = %q, want %q\", got, \"a\\nb\")\n+\t}\n+}\n+\n+func TestReadPipedLongLine(t *testing.T) {\n+\tline := strings.Repeat(\"A\", 80*1024)\n+\tgot, err := readPiped(strings.NewReader(line + \"\\nnext\\n\"))\n+\tif err != nil {\n+\t\tt.Fatalf(\"readPiped: %v\", err)\n+\t}\n+\twant := line + \"\\nnext\"\n+\tif got != want {\n+\t\tt.Fatalf(\"readPiped length %d, want %d\", len(got), len(want))\n+\t}\n+}\n+\n+func TestReadPipedLineOver1MiB(t *testing.T) {\n+\tline := strings.Repeat(\"B\", 1024*1024+1)\n+\t_, err := readPiped(strings.NewReader(line + \"\\n\"))\n+\tif !errors.Is(err, bufio.ErrTooLong) {\n+\t\tt.Fatalf(\"err = %v, want bufio.ErrTooLong\", err)\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "piped_test.go"
+ ]
+}

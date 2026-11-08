@@ -1,0 +1,26 @@
+{
+ "repo": "ag2ai/ag2",
+ "number": 3608,
+ "url": "https://github.com/ag2ai/ag2/pull/3608",
+ "title": "fix(mcp): read path-like MCP app documents as UTF-8",
+ "merged_at": "2026-11-08T11:33:36Z",
+ "files": [
+  {
+   "filename": "ag2/mcp/apps.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -568,9 +568,11 @@ async def _resolve_content(content: AppContent, context: MCPExecutionContext) ->\n         return resolved\n     if isinstance(resolved, os.PathLike):\n         try:\n-            return Path(resolved).read_text()\n+            return Path(resolved).read_text(encoding=\"utf-8-sig\")\n         except OSError as e:\n             raise ValueError(f\"Could not read MCP app document from {resolved!s}: {e.strerror or e}\") from e\n+        except UnicodeDecodeError as e:\n+            raise ValueError(f\"Could not read MCP app document from {resolved!s}: not valid UTF-8 ({e})\") from e\n     if callable(resolved):\n         value = await call_with_context(resolved, context)\n         if isinstance(value, str):"
+  },
+  {
+   "filename": "test/mcp/test_apps.py",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -215,6 +215,35 @@ async def test_a_pathlike_body_is_reread_per_request(self, tmp_path: Path) -> No\n         assert _body(first.contents[0]) == \"<p>first</p>\"\n         assert _body(second.contents[0]) == \"<p>second</p>\"\n \n+    async def test_a_pathlike_body_is_read_as_utf8(self, tmp_path: Path) -> None:\n+        document = tmp_path / \"card.html\"\n+        document.write_bytes(\"<p>café – 日本語</p>\".encode())\n+        server = MCPServer(make_agent(), apps=[_card_app(document, inject_runtime=False)])\n+\n+        async with connect(server) as session:\n+            read = await session.read_resource(\"ui://shop/card\")\n+\n+        assert _body(read.contents[0]) == \"<p>café – 日本語</p>\"\n+\n+    async def test_a_pathlike_body_saved_with_a_bom_is_served_without_it(self, tmp_path: Path) -> None:\n+        document = tmp_path / \"card.html\"\n+        document.write_bytes(\"\\ufeff<p>café</p>\".encode())\n+        server = MCPServer(make_agent(), apps=[_card_app(document, inject_runtime=False)])\n+\n+        async with connect(server) as session:\n+            read = await session.read_resource(\"ui://shop/card\")\n+\n+        assert _body(read.contents[0]) == \"<p>café</p>\"\n+\n+    async def test_a_non_utf8_pathlike_body_fails_on_read(self, tmp_path: Path) -> None:\n+        document = tmp_path / \"card.html\"\n+        document.write_bytes(b\"<p>calf\\xe9</p>\")\n+        server = MCPServer(make_agent(), apps=[_card_app(document, inject_runtime=False)])\n+\n+        async with connect(server, raise_exceptions=False) as session:\n+            with pytest.raises(MCPError, match=\"Could not read MCP app document .*: not valid UTF-8\"):\n+                await session.read_resource(\"ui://shop/card\")\n+\n     async def test_a_missing_pathlike_body_fails_on_read(self, tmp_path: Path) -> None:\n         server = MCPServer(make_agent(), apps=[_card_app(tmp_path / \"missing.html\")])\n "
+  }
+ ],
+ "test_files": [
+  "test/mcp/test_apps.py"
+ ]
+}

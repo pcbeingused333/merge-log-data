@@ -1,0 +1,48 @@
+{
+ "repo": "archestra-ai/archestra",
+ "number": 10446,
+ "url": "https://github.com/archestra-ai/archestra/pull/10446",
+ "title": "fix(llm-observability): count Gemini toolUsePromptTokenCount as input tokens",
+ "merged_at": "2026-11-08T12:35:35Z",
+ "files": [
+  {
+   "filename": "platform/backend/src/observability/metrics/llm-usage.ts",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -30,6 +30,7 @@ export function geminiUsageTokens(usage: {\n   candidatesTokenCount?: number;\n   cachedContentTokenCount?: number;\n   thoughtsTokenCount?: number;\n+  toolUsePromptTokenCount?: number;\n }) {\n   // Gemini's cachedContentTokenCount is a SUBSET already inside promptTokenCount,\n   // so subtract it to get the uncached input and avoid double-counting.\n@@ -38,8 +39,12 @@ export function geminiUsageTokens(usage: {\n   // and are billed as output. Fold them in so output includes reasoning, as\n   // it does for every other provider.\n   const reasoning = usage.thoughtsTokenCount ?? 0;\n+  // Tokens fed back from built-in tools (Google Search, URL context, code\n+  // execution) are billed as input but reported beside promptTokenCount.\n+  const toolUsePrompt = usage.toolUsePromptTokenCount ?? 0;\n   return {\n-    input: Math.max(0, (usage.promptTokenCount ?? 0) - cacheRead),\n+    input:\n+      Math.max(0, (usage.promptTokenCount ?? 0) - cacheRead) + toolUsePrompt,\n     output: (usage.candidatesTokenCount ?? 0) + reasoning,\n     cacheRead,\n     cacheWrite: 0,"
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/gemini-openai-translator.ts",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -369,11 +369,17 @@ export function geminiUsageViewToOpenai(\n  * would make a streamed turn report a smaller prompt — and a smaller total,\n  * since `totalTokenCount` also counts thinking tokens — than the non-streaming\n  * reply for the identical request on the same route.\n+ *\n+ * Built-in tool tokens (`toolUsePromptTokenCount`) are billed input reported\n+ * beside `promptTokenCount`, so they count toward `prompt_tokens`, as they do\n+ * in the stream accumulator (see `geminiUsageTokens`).\n  */\n export function geminiUsageToOpenai(\n   response: GeminiResponse,\n ): OpenAiStreamUsage {\n-  const promptTokens = response.usageMetadata?.promptTokenCount ?? 0;\n+  const promptTokens =\n+    (response.usageMetadata?.promptTokenCount ?? 0) +\n+    (response.usageMetadata?.toolUsePromptTokenCount ?? 0);\n   const reasoningTokens = response.usageMetadata?.thoughtsTokenCount ?? 0;\n   const completionTokens =\n     (response.usageMetadata?.candidatesTokenCount ?? 0) + reasoningTokens;"
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/gemini-reasoning-usage.test.ts",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -129,6 +129,42 @@ describe(\"Gemini reasoning usage reaches OpenAI clients\", () => {\n     expect(completions[0].response.usage).toMatchObject(responsesUsage);\n   });\n \n+  test(\"built-in tool tokens count as prompt tokens, streamed or not\", () => {\n+    // Gemini reports tokens fed back from Google Search, URL context and code\n+    // execution beside promptTokenCount; its total includes them.\n+    const withToolUse: Gemini.Types.GenerateContentResponse = {\n+      ...response,\n+      usageMetadata: {\n+        ...response.usageMetadata,\n+        toolUsePromptTokenCount: 300,\n+        totalTokenCount: 2900,\n+      },\n+    };\n+    const expected = {\n+      prompt_tokens: 2300,\n+      completion_tokens: 600,\n+      total_tokens: 2900,\n+    };\n+\n+    const factory = makeFactory(\"chat\");\n+    expect(\n+      factory.createResponseAdapter(withToolUse).getOriginalResponse(),\n+    ).toMatchObject({ usage: expected });\n+\n+    const stream = factory.createStreamAdapter();\n+    stream.processChunk(\n+      withToolUse as unknown as Parameters<typeof stream.processChunk>[0],\n+    );\n+    const end = stream.formatEndSSE();\n+    const wire = typeof end === \"string\" ? end : new TextDecoder().decode(end);\n+    const streamed = wire\n+      .split(\"\\n\\n\")\n+      .filter((part) => part.startsWith(\"data: {\"))\n+      .map((part) => JSON.parse(part.slice(6)))\n+      .find((event) => event.usage)?.usage;\n+    expect(streamed).toMatchObject(expected);\n+  });\n+\n   test(\"missing provider total still counts reasoning once\", () => {\n     expect(\n       geminiUsageToOpenai({"
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/gemini.rollback.test.ts",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -41,6 +41,9 @@ function createMockResponse(\n       ...(usage?.thoughtsTokenCount !== undefined\n         ? { thoughtsTokenCount: usage.thoughtsTokenCount }\n         : {}),\n+      ...(usage?.toolUsePromptTokenCount !== undefined\n+        ? { toolUsePromptTokenCount: usage.toolUsePromptTokenCount }\n+        : {}),\n     },\n     modelVersion: \"gemini-2.5-pro\",\n     responseId: \"gemini-test-response\",\n@@ -373,6 +376,18 @@ describe(\"GeminiResponseAdapter\", () => {\n \n       expect(adapter.getUsage().reasoningTokens).toBe(60);\n     });\n+\n+    test(\"counts toolUsePromptTokenCount as input\", () => {\n+      const response = createMockResponse([{ text: \"Test\" }], {\n+        promptTokenCount: 150,\n+        candidatesTokenCount: 75,\n+        toolUsePromptTokenCount: 40,\n+      });\n+\n+      const adapter = geminiAdapterFactory.createResponseAdapter(response);\n+\n+      expect(adapter.getUsage().inputTokens).toBe(190);\n+    });\n   });\n \n   describe(\"toRefusalResponse\", () => {"
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/gemini.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -1159,7 +1159,9 @@ class GeminiStreamAdapter\n       // above, which subtracts `cachedContentTokenCount`), so this recombines\n       // it into a gross `promptTokenCount` and republishes the cache read via\n       // `cachedContentTokenCount` — otherwise a heavily cached turn reports\n-      // only the uncached remainder as its entire prompt.\n+      // only the uncached remainder as its entire prompt. Built-in tool\n+      // tokens (`toolUsePromptTokenCount`) are folded into the input too, so\n+      // they land in `promptTokenCount` here and `totalTokenCount` stays whole.\n       usageMetadata: this.state.usage\n         ? {\n             ...(this.trafficType ? { trafficType: this.trafficType } : {}),"
+  }
+ ],
+ "test_files": [
+  "platform/backend/src/routes/proxy/adapters/gemini-reasoning-usage.test.ts",
+  "platform/backend/src/routes/proxy/adapters/gemini.rollback.test.ts"
+ ]
+}

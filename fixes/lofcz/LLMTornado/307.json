@@ -1,0 +1,61 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 307,
+ "url": "https://github.com/lofcz/LLMTornado/pull/307",
+ "title": "Microsoft.Extensions.AI: pass the cancellation token to embedding and image requests",
+ "merged_at": "2026-11-08T08:04:25Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Microsoft.Extensions.AI/TornadoEmbeddingGenerator.cs",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 26,
+   "patch": "@@ -75,36 +75,18 @@ public async Task<GeneratedEmbeddings<Embedding<float>>> GenerateAsync(\n \n             activity?.SetTag(\"llm.embedding.dimensions\", dimensions);\n \n-            // Create request\n-            EmbeddingResult? result;\n-\n+            // Create request. A single string stays a scalar input; a list stays a vector.\n+            EmbeddingRequest request = valuesList.Count == 1\n+                ? new EmbeddingRequest(model, valuesList[0])\n+                : new EmbeddingRequest(model, valuesList);\n             if (dimensions.HasValue)\n             {\n-                if (valuesList.Count == 1)\n-                {\n-                    result = await _api.Embeddings.CreateEmbedding(model, valuesList[0], dimensions.Value);\n-                }\n-                else\n-                {\n-                    EmbeddingRequest request = new EmbeddingRequest(model, valuesList)\n-                    {\n-                        Dimensions = dimensions.Value\n-                    };\n-                    result = await _api.Embeddings.CreateEmbedding(request);\n-                }\n-            }\n-            else\n-            {\n-                if (valuesList.Count == 1)\n-                {\n-                    result = await _api.Embeddings.CreateEmbedding(model, valuesList[0]);\n-                }\n-                else\n-                {\n-                    result = await _api.Embeddings.CreateEmbedding(model, valuesList);\n-                }\n+                request.Dimensions = dimensions.Value;\n             }\n \n+            request.CancellationToken = cancellationToken;\n+            EmbeddingResult? result = await _api.Embeddings.CreateEmbedding(request);\n+\n             if (result?.Data == null)\n             {\n                 throw new InvalidOperationException(\"Embedding generation returned null result.\");"
+  },
+  {
+   "filename": "src/LlmTornado.Microsoft.Extensions.AI/TornadoImageGenerator.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -50,6 +50,7 @@ public async Task<ImageGenerationResponse> GenerateAsync(\n         try\n         {\n             Images.ImageGenerationRequest tornadoRequest = request.ToLlmTornado(model, options);\n+            tornadoRequest.CancellationToken = cancellationToken;\n             ImageGenerationResult? result = await _api.ImageGenerations.CreateImage(tornadoRequest);\n \n             if (result == null)"
+  },
+  {
+   "filename": "src/LlmTornado.Tests/MeaiCancellationTests.cs",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -46,12 +46,50 @@ public void GetStreamingResponseAsync_AbortsTheRequestWhenTheTokenIsCanceled()\n         Assert.That(watch.Elapsed, Is.LessThan(TimeSpan.FromSeconds(5)));\n     }\n \n+    [Test]\n+    public void GenerateEmbeddingAsync_AbortsTheRequestWhenTheTokenIsCanceled()\n+    {\n+        using SlowServer server = new SlowServer(ServerDelay);\n+        IEmbeddingGenerator<string, Embedding<float>> generator = CreateEmbeddingGenerator(server.Port);\n+        using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));\n+\n+        Stopwatch watch = Stopwatch.StartNew();\n+\n+        Assert.CatchAsync<OperationCanceledException>(async () => await generator.GenerateAsync([\"hello\"], cancellationToken: cts.Token));\n+        Assert.That(watch.Elapsed, Is.LessThan(TimeSpan.FromSeconds(5)));\n+    }\n+\n+    [Test]\n+    public void GenerateImageAsync_AbortsTheRequestWhenTheTokenIsCanceled()\n+    {\n+        using SlowServer server = new SlowServer(ServerDelay);\n+        IImageGenerator generator = CreateImageGenerator(server.Port);\n+        using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));\n+\n+        Stopwatch watch = Stopwatch.StartNew();\n+\n+        Assert.CatchAsync<OperationCanceledException>(async () => await generator.GenerateAsync(new ImageGenerationRequest(\"a red fox\"), cancellationToken: cts.Token));\n+        Assert.That(watch.Elapsed, Is.LessThan(TimeSpan.FromSeconds(5)));\n+    }\n+\n     private static IChatClient CreateClient(int port)\n     {\n         TornadoApi api = new TornadoApi(new Uri($\"http://127.0.0.1:{port}/v1\"), \"test-key\", LLmProviders.OpenAi);\n         return api.AsChatClient(new ChatModel(\"gpt-test\", LLmProviders.OpenAi));\n     }\n \n+    private static IEmbeddingGenerator<string, Embedding<float>> CreateEmbeddingGenerator(int port)\n+    {\n+        TornadoApi api = new TornadoApi(new Uri($\"http://127.0.0.1:{port}/v1\"), \"test-key\", LLmProviders.OpenAi);\n+        return api.AsEmbeddingGenerator(\"text-embedding-3-small\");\n+    }\n+\n+    private static IImageGenerator CreateImageGenerator(int port)\n+    {\n+        TornadoApi api = new TornadoApi(new Uri($\"http://127.0.0.1:{port}/v1\"), \"test-key\", LLmProviders.OpenAi);\n+        return api.AsImageGenerator(\"dall-e-3\");\n+    }\n+\n     private static List<global::Microsoft.Extensions.AI.ChatMessage> Prompt() =>\n     [\n         new global::Microsoft.Extensions.AI.ChatMessage(ChatRole.User, \"hello\")"
+  },
+  {
+   "filename": "src/LlmTornado/Embedding/EmbeddingEndpoint.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -201,6 +201,6 @@ public async Task<List<float[]>> GetEmbeddings(EmbeddingModel model, IEnumerable\n     {\n \t    IEndpointProvider provider = Api.GetProvider(request.Model);\n \t    TornadoRequestContent requestBody = request.Serialize(provider);\n-        return await HttpPost1<EmbeddingResult>(provider, Endpoint, requestBody.Url, requestBody.Body);\n+        return await HttpPost1<EmbeddingResult>(provider, Endpoint, requestBody.Url, requestBody.Body, ct: request.CancellationToken);\n     }\n }\n\\ No newline at end of file"
+  },
+  {
+   "filename": "src/LlmTornado/Embedding/EmbeddingRequest.cs",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -1,6 +1,7 @@\n ﻿using System;\n using System.Collections.Generic;\n using System.Linq;\n+using System.Threading;\n using LlmTornado.Chat.Vendors.Anthropic;\n using LlmTornado.Chat.Vendors.Cohere;\n using LlmTornado.Code;\n@@ -257,6 +258,12 @@ public EmbeddingRequest(EmbeddingModel model, IList<string> input, int dimension\n \t\n \t[JsonIgnore]\n \tinternal string? UrlOverride { get; set; }\n+\n+\t/// <summary>\n+\t///\t\tCancellation token to use with the request.\n+\t/// </summary>\n+\t[JsonIgnore]\n+\tpublic CancellationToken CancellationToken { get; set; } = CancellationToken.None;\n \t\n \t/// <summary>\n \t///\t\tSerializes the embedding request into the request body, based on the conventions used by the LLM provider."
+  },
+  {
+   "filename": "src/LlmTornado/Images/ImageGenerationEndpoint.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -45,6 +45,6 @@ internal ImageGenerationEndpoint(TornadoApi api) : base(api)\n \t    IEndpointProvider provider = Api.GetProvider(request.Model ?? ImageModelOpenAiGpt.Default);\n \t    TornadoRequestContent requestBody = request.Serialize(provider);\n \t    \n-        return HttpPost1<ImageGenerationResult>(provider, Endpoint, requestBody.Url, postData: requestBody.Body);\n+        return HttpPost1<ImageGenerationResult>(provider, Endpoint, requestBody.Url, postData: requestBody.Body, ct: request.CancellationToken);\n     }\n }\n\\ No newline at end of file"
+  },
+  {
+   "filename": "src/LlmTornado/Images/ImageGenerationRequest.cs",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -3,6 +3,7 @@\n using System.Collections.Generic;\n using System.Reflection;\n using System.Runtime.Serialization;\n+using System.Threading;\n using LlmTornado.Code;\n using LlmTornado.Images.Models;\n using LlmTornado.Images.Models.OpenAi;\n@@ -222,6 +223,12 @@ public ImageGenerationRequest(string prompt, int? numOfImages = 1, TornadoImageS\n \t/// </summary>\n \t[JsonIgnore]\n \tpublic ImageGenerationRequestVendorExtensions? VendorExtensions { get; set; }\n+\n+\t/// <summary>\n+\t///\t\tCancellation token to use with the request.\n+\t/// </summary>\n+\t[JsonIgnore]\n+\tpublic CancellationToken CancellationToken { get; set; } = CancellationToken.None;\n \t\n \t[JsonIgnore]\n \tinternal string? UrlOverride { get; set; }\n@@ -253,6 +260,7 @@ private void CopyData(ImageGenerationRequest basedOn)\n \t\tQuality = basedOn.Quality;\n \t\tStyle = basedOn.Style;\n \t\tVendorExtensions = basedOn.VendorExtensions;\n+\t\tCancellationToken = basedOn.CancellationToken;\n \t\tUrlOverride = basedOn.UrlOverride;\n \t}\n \t"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/MeaiCancellationTests.cs"
+ ]
+}

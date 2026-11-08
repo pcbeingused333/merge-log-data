@@ -1,0 +1,63 @@
+{
+ "repo": "oceanbase/powercontext",
+ "number": 2430,
+ "url": "https://github.com/oceanbase/powercontext/pull/2430",
+ "title": "fix(cli): update default Anthropic model to claude-sonnet-5-5",
+ "merged_at": "2026-11-08T12:29:06Z",
+ "files": [
+  {
+   "filename": ".env.example",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -210,7 +210,7 @@ POWERCONTEXT_SERVER_INFERENCE_EMBEDDING_DIMENSION=1536\n \n # Provider D: Anthropic or an Anthropic-compatible Messages API (Generation only).\n # Anthropic does not provide Embeddings; keep an OpenAI-compatible or OpenRouter Embedding configuration.\n-# POWERCONTEXT_SERVER_INFERENCE_GENERATION_MODEL=anthropic:claude-sonnet-4-5\n+# POWERCONTEXT_SERVER_INFERENCE_GENERATION_MODEL=anthropic:claude-sonnet-5-5\n # ANTHROPIC_BASE_URL=https://your-anthropic-compatible-service.example\n # Set ANTHROPIC_API_KEY in the Server shell.\n "
+  },
+  {
+   "filename": "src/powercontext/builtin/inference/pydantic_ai.py",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 1,
+   "patch": "@@ -118,12 +118,22 @@ def __init__(self, code: str, detail: object | None = None) -> None:\n logger = logging.getLogger(__name__)\n \n \n+# Sampling settings the Anthropic adapter drops for models that reject them (pydantic_ai ANTHROPIC_SAMPLING_PARAMS).\n+_ANTHROPIC_SAMPLING_PARAMS = (\"temperature\", \"top_p\", \"top_k\")\n+\n+\n def _receipt_model_settings(model: Model, settings: ModelSettings | None) -> dict[str, object]:\n     \"\"\"Return settings that the pinned provider will pass to its request builder.\"\"\"\n \n     effective = dict(settings or {})\n     profile = getattr(model, \"profile\", None)\n-    if not hasattr(profile, \"get\") or not profile.get(\"openai_supports_reasoning\", False):\n+    if not hasattr(profile, \"get\"):\n+        return effective\n+    if profile.get(\"anthropic_disallows_sampling_settings\", False):\n+        for setting in _ANTHROPIC_SAMPLING_PARAMS:\n+            effective.pop(setting, None)\n+        return effective\n+    if not profile.get(\"openai_supports_reasoning\", False):\n         return effective\n \n     reasoning_effort = effective.get(\"openai_reasoning_effort\")"
+  },
+  {
+   "filename": "src/powercontext/cli/config.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -132,7 +132,7 @@ class ApiProtocol:\n         credential_name=\"ANTHROPIC_API_KEY\",\n         base_url_name=\"ANTHROPIC_BASE_URL\",\n         default_base_url=\"https://api.anthropic.com\",\n-        default_generation_model=\"claude-sonnet-4-5\",\n+        default_generation_model=\"claude-sonnet-5-5\",\n         default_embedding_model=None,\n     ),\n )"
+  },
+  {
+   "filename": "src/powercontext/cli/config_wizard_models.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -79,7 +79,7 @@ class _Provider:\n         \"Anthropic\",\n         \"anthropic\",\n         \"https://api.anthropic.com\",\n-        \"claude-sonnet-4-5\",\n+        \"claude-sonnet-5-5\",\n     ),\n     _Provider(\n         \"openrouter\","
+  },
+  {
+   "filename": "tests/builtin/inference/test_pydantic_ai.py",
+   "status": "modified",
+   "additions": 54,
+   "deletions": 0,
+   "patch": "@@ -53,10 +53,12 @@\n     UserPromptPart,\n )\n from pydantic_ai.models import Model, ModelRequestParameters, ModelResponseState, StreamedResponse\n+from pydantic_ai.models.anthropic import AnthropicModel\n from pydantic_ai.models.function import AgentInfo, FunctionModel\n from pydantic_ai.models.instrumented import InstrumentationSettings, InstrumentedModel\n from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings\n from pydantic_ai.models.test import TestModel\n+from pydantic_ai.providers.anthropic import AnthropicProvider\n from pydantic_ai.providers.openai import OpenAIProvider\n from pydantic_ai.settings import ModelSettings\n from pydantic_ai.usage import RequestUsage\n@@ -295,6 +297,58 @@ async def scenario() -> None:\n     asyncio.run(scenario())\n \n \n+@pytest.mark.parametrize(\n+    (\"model_name\", \"sends_sampling\"),\n+    [(\"claude-sonnet-5-5\", False), (\"claude-sonnet-4-5\", True)],\n+)\n+@pytest.mark.filterwarnings(\"ignore:Sampling parameters.*:UserWarning\")\n+def test_structured_generator_receipt_uses_anthropic_adapter_settings(model_name: str, sends_sampling: bool) -> None:\n+    # Use whichever HTTP library the installed Anthropic SDK builds its clients on\n+    # (``httpx`` for 0.117, ``httpx2`` for newer releases); importability alone is\n+    # not enough because other packages can pull in ``httpx2`` too.\n+    import anthropic._base_client as _anthropic_client\n+\n+    _http = vars(_anthropic_client).get(\"httpx\") or vars(_anthropic_client)[\"httpx2\"]\n+    requests: list[dict[str, object]] = []\n+\n+    def respond(request: _http.Request) -> _http.Response:\n+        requests.append(json.loads(request.content))\n+        return _http.Response(\n+            200,\n+            json={\n+                \"id\": \"msg_receipt\",\n+                \"type\": \"message\",\n+                \"role\": \"assistant\",\n+                \"model\": model_name,\n+                \"content\": [{\"type\": \"text\", \"text\": '{\"value\":\"stable\"}'}],\n+                \"stop_reason\": \"end_turn\",\n+                \"stop_sequence\": None,\n+                \"usage\": {\"input_tokens\": 1, \"output_tokens\": 1},\n+            },\n+        )\n+\n+    async def scenario() -> None:\n+        async with _http.AsyncClient(transport=_http.MockTransport(respond)) as client:\n+            generator = PydanticAIStructuredGenerator(\n+                model=AnthropicModel(model_name, provider=AnthropicProvider(api_key=\"test\", http_client=client)),\n+                instructions=\"Return a value.\",\n+                input_type=Question,\n+                output_type=Answer,\n+                model_settings={\"temperature\": 0.0, \"top_p\": 0.2, \"max_tokens\": 512},\n+            )\n+            result = await generator.generate(Question(\"settings evidence\"))\n+            assert result.output == Answer(\"stable\")\n+            effective = cast(dict[str, object], generator.receipt_configuration()[\"effective_settings\"])\n+            sent = requests[0]\n+            for key in (\"temperature\", \"top_p\"):\n+                assert (key in sent) == sends_sampling\n+                assert (key in effective) == (key in sent)\n+                assert effective.get(key) == sent.get(key)\n+            assert effective[\"max_tokens\"] == sent[\"max_tokens\"] == 512\n+\n+    asyncio.run(scenario())\n+\n+\n def test_structured_generator_enforces_wire_and_cumulative_output_limits() -> None:\n     observed_max_tokens: list[int | None] = []\n "
+  },
+  {
+   "filename": "tests/e2e/test_prepared_context_receipt.py",
+   "status": "modified",
+   "additions": 40,
+   "deletions": 0,
+   "patch": "@@ -26,6 +26,7 @@\n from pydantic import SecretStr\n from pydantic_ai.models import Model\n from pydantic_ai.models.test import TestModel\n+from pydantic_ai.profiles.anthropic import AnthropicModelProfile\n \n from powercontext.builtin.artifacts.atomic_memory import AtomicMemoryContent\n from powercontext.builtin.artifacts.memory.canonical import normalize_query\n@@ -320,6 +321,45 @@ def test_builtin_model_rerank_captures_effective_settings_and_bound_prompt(tmp_p\n     assert receipt[\"retrieval\"][\"reranks\"][0][\"config_id\"] == config[\"config_digest\"]\n \n \n+def test_inherited_rerank_receipt_omits_sampling_the_anthropic_adapter_drops(tmp_path, monkeypatch):\n+    monkeypatch.setattr(\n+        \"pydantic_ai.models.infer_model\",\n+        lambda model, **_kwargs: (\n+            model\n+            if isinstance(model, Model)\n+            else TestModel(\n+                custom_output_text='{\"selected_ranks\":[1]}',\n+                settings={\"temperature\": 0.4},\n+                profile=AnthropicModelProfile(anthropic_disallows_sampling_settings=True),\n+            )\n+        ),\n+    )\n+    app = create_server_app(\n+        settings=ServerSettings(\n+            database=SQLiteConfig(url=f\"sqlite+aiosqlite:///{tmp_path / 'model.db'}\"),\n+            runtime=RuntimeConfig(memory_rerank_enabled=True),\n+            inference=InferenceConfig(generation_model=\"test\"),\n+            mcp=McpConfig(enabled=False),\n+        ),\n+    )\n+    with TestClient(app) as client:\n+        scope_id = client.get(\"/v1/scopes/default\").json()[\"scope_id\"]\n+        remembered = client.post(\n+            \"/v1/memory/remember\",\n+            json={\"scope_id\": scope_id, \"kind\": \"fact\", \"text\": \"Budget review is on Thursday.\"},\n+        )\n+        assert remembered.status_code == 200\n+        response = client.post(\n+            \"/v1/context/prepare\", json={\"scope_id\": scope_id, \"query\": \"budget review\", \"include_receipt\": True}\n+        )\n+    assert response.status_code == 200, response.text\n+    receipt = response.json().get(\"receipt\")\n+    assert receipt is not None\n+    (config,) = receipt[\"retrieval\"][\"rerank_configs\"]\n+    assert config[\"model\"] is not None\n+    assert \"temperature\" not in config[\"effective_settings\"]\n+\n+\n def test_empty_rerank_fallback_accounts_for_candidates_dropped_before_assembly(tmp_path, monkeypatch):\n     monkeypatch.setattr(\n         \"pydantic_ai.models.infer_model\","
+  },
+  {
+   "filename": "tests/test_config_wizard_models.py",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 4,
+   "patch": "@@ -179,12 +179,28 @@ def test_reconfigure_clears_old_workload_settings_and_replaces_credentials() ->\n     assert any(\"previous\" in prompt and \"settings\" in prompt for prompt in ui.prompts)\n \n \n+def test_anthropic_default_generation_model_is_a_current_claude_model() -> None:\n+    ui = Answers(\"anthropic\", \"\", \"\", \"anthropic-key\")\n+\n+    updates = collect_models(ui, {}, generation=True, embedding=False)\n+\n+    assert updates[PREFIX + \"GENERATION_MODEL\"] == \"anthropic:claude-sonnet-5-5\"\n+\n+\n+def test_anthropic_protocol_default_matches_the_wizard_default() -> None:\n+    from powercontext.cli.config import API_PROTOCOLS\n+\n+    protocol = next(protocol for protocol in API_PROTOCOLS if protocol.identifier == \"anthropic\")\n+\n+    assert protocol.default_generation_model == \"claude-sonnet-5-5\"\n+\n+\n def test_anthropic_uses_runtime_supported_api_key_header() -> None:\n-    ui = Answers(\"anthropic\", \"\", \"claude-sonnet-4-5\", \"anthropic-key\")\n+    ui = Answers(\"anthropic\", \"\", \"claude-sonnet-5-5\", \"anthropic-key\")\n \n     updates = collect_models(ui, {}, generation=True, embedding=False)\n \n-    assert updates[PREFIX + \"GENERATION_MODEL\"] == \"anthropic:claude-sonnet-4-5\"\n+    assert updates[PREFIX + \"GENERATION_MODEL\"] == \"anthropic:claude-sonnet-5-5\"\n     assert json.loads(updates[PREFIX + \"GENERATION_HEADERS\"] or \"\") == {\"x-api-key\": \"anthropic-key\"}\n \n \n@@ -237,7 +253,7 @@ def test_anthropic_generation_does_not_offer_unsupported_embedding_connection_sh\n     ui = Answers(\n         \"anthropic\",\n         \"\",\n-        \"claude-sonnet-4-5\",\n+        \"claude-sonnet-5-5\",\n         \"generation-key\",\n         \"bailian\",\n         \"\",\n@@ -247,7 +263,7 @@ def test_anthropic_generation_does_not_offer_unsupported_embedding_connection_sh\n \n     updates = collect_models(ui, {}, generation=True, embedding=True)\n \n-    assert updates[PREFIX + \"GENERATION_MODEL\"] == \"anthropic:claude-sonnet-4-5\"\n+    assert updates[PREFIX + \"GENERATION_MODEL\"] == \"anthropic:claude-sonnet-5-5\"\n     assert updates[PREFIX + \"EMBEDDING_MODEL\"] == \"openai:text-embedding-v4\"\n     assert updates[PREFIX + \"EMBEDDING_PROFILE_ID\"] == \"openai-text-embedding-v4-1024-unit-v1\"\n     assert not any(\"same API\" in prompt for prompt in ui.prompts)"
+  }
+ ],
+ "test_files": [
+  "tests/builtin/inference/test_pydantic_ai.py",
+  "tests/e2e/test_prepared_context_receipt.py",
+  "tests/test_config_wizard_models.py"
+ ]
+}

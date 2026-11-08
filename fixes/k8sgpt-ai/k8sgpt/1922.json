@@ -1,0 +1,40 @@
+{
+ "repo": "k8sgpt-ai/k8sgpt",
+ "number": 1922,
+ "url": "https://github.com/k8sgpt-ai/k8sgpt/pull/1922",
+ "title": "fix: reject empty completions from ollama, cohere and huggingface",
+ "merged_at": "2026-11-08T07:14:49Z",
+ "files": [
+  {
+   "filename": "pkg/ai/cohere.go",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -72,6 +72,13 @@ func (c *CohereClient) GetCompletion(ctx context.Context, prompt string) (string\n \tif err != nil {\n \t\treturn \"\", err\n \t}\n+\tfinishReason := \"\"\n+\tif response.FinishReason != nil {\n+\t\tfinishReason = string(*response.FinishReason)\n+\t}\n+\tif err := checkCompletionContent(response.Text, finishReason); err != nil {\n+\t\treturn \"\", err\n+\t}\n \treturn response.Text, nil\n }\n "
+  },
+  {
+   "filename": "pkg/ai/empty_completion_local_test.go",
+   "status": "added",
+   "additions": 55,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,55 @@\n+package ai\n+\n+import (\n+\t\"context\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"testing\"\n+\n+\t\"github.com/stretchr/testify/assert\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+// Ollama, Cohere and Huggingface used to return a blank completion as if it\n+// were a successful analysis (and the caller cached it).\n+func TestGetCompletion_EmptyContentIsAnError_OllamaCohere(t *testing.T) {\n+\tt.Run(\"ollama\", func(t *testing.T) {\n+\t\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t\tif r.URL.Path == \"/api/tags\" {\n+\t\t\t\t_, _ = w.Write([]byte(`{\"models\": [{\"name\": \"m:latest\"}]}`))\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t\t_, _ = w.Write([]byte(`{\"model\": \"m\", \"response\": \"  \", \"done\": true, \"done_reason\": \"length\"}`))\n+\t\t}))\n+\t\tdefer server.Close()\n+\n+\t\tc := &OllamaClient{}\n+\t\trequire.NoError(t, c.Configure(&mockIAIConfig{baseURL: server.URL, model: \"m\", temperature: 0.7, topP: 1.0}))\n+\n+\t\tout, err := c.GetCompletion(context.Background(), \"prompt\")\n+\n+\t\trequire.Error(t, err)\n+\t\tassert.Empty(t, out)\n+\t\tassert.Contains(t, err.Error(), \"empty completion\")\n+\t\tassert.Contains(t, err.Error(), \"finish reason: length\")\n+\t})\n+\n+\tt.Run(\"cohere\", func(t *testing.T) {\n+\t\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {\n+\t\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t\t_, _ = w.Write([]byte(`{\"text\": \"  \", \"generation_id\": \"g\", \"finish_reason\": \"MAX_TOKENS\"}`))\n+\t\t}))\n+\t\tdefer server.Close()\n+\n+\t\tc := &CohereClient{}\n+\t\trequire.NoError(t, c.Configure(&mockIAIConfig{baseURL: server.URL, model: \"command\", temperature: 0.7, topP: 1.0}))\n+\n+\t\tout, err := c.GetCompletion(context.Background(), \"prompt\")\n+\n+\t\trequire.Error(t, err)\n+\t\tassert.Empty(t, out)\n+\t\tassert.Contains(t, err.Error(), \"empty completion\")\n+\t\tassert.Contains(t, err.Error(), \"finish reason: MAX_TOKENS\")\n+\t})\n+}"
+  },
+  {
+   "filename": "pkg/ai/huggingface.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -57,6 +57,9 @@ func (c *HuggingfaceClient) GetCompletion(ctx context.Context, prompt string) (s\n \tif err != nil {\n \t\treturn \"\", err\n \t}\n+\tif err := checkCompletionContent(resp.GeneratedText, \"\"); err != nil {\n+\t\treturn \"\", err\n+\t}\n \treturn resp.GeneratedText, nil\n }\n "
+  },
+  {
+   "filename": "pkg/ai/ollama.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -136,14 +136,19 @@ func (c *OllamaClient) GetCompletion(ctx context.Context, prompt string) (string\n \t\tOptions: options,\n \t}\n \tcompletion := \"\"\n+\tdoneReason := \"\"\n \trespFunc := func(resp ollama.GenerateResponse) error {\n \t\tcompletion = resp.Response\n+\t\tdoneReason = resp.DoneReason\n \t\treturn nil\n \t}\n \terr = c.client.Generate(ctx, req, respFunc)\n \tif err != nil {\n \t\treturn \"\", err\n \t}\n+\tif err := checkCompletionContent(completion, doneReason); err != nil {\n+\t\treturn \"\", err\n+\t}\n \treturn completion, nil\n }\n func (a *OllamaClient) GetName() string {"
+  }
+ ],
+ "test_files": [
+  "pkg/ai/empty_completion_local_test.go"
+ ]
+}
