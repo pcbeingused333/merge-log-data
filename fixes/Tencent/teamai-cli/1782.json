@@ -1,0 +1,33 @@
+{
+ "repo": "Tencent/teamai-cli",
+ "number": 1782,
+ "url": "https://github.com/Tencent/teamai-cli/pull/1782",
+ "title": "fix(cli): reject a non-numeric --port or --project-id instead of passing NaN",
+ "merged_at": "2026-11-08T19:36:28Z",
+ "files": [
+  {
+   "filename": "src/__tests__/cli-int.test.ts",
+   "status": "added",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,19 @@\n+// -*- coding: utf-8 -*-\n+import { describe, it, expect } from 'vitest';\n+import { parseIntOption } from '../cli-int.js';\n+\n+describe('parseIntOption', () => {\n+    it('accepts in-range integers', () => {\n+        expect(parseIntOption('--port', '3721', 0, 65535)).toBe(3721);\n+        expect(parseIntOption('--port', '0', 0, 65535)).toBe(0);\n+        expect(parseIntOption('--project-id', '42', 1)).toBe(42);\n+    });\n+\n+    it.each(['abc', '', '1.5', '-3', '70000', '1e3', '0x10'])('rejects --port %j instead of returning NaN', (value) => {\n+        expect(() => parseIntOption('--port', value, 0, 65535)).toThrow('--port must be an integer between 0 and 65535');\n+    });\n+\n+    it.each(['abc', ''])('rejects a non-integer --project-id %j', (value) => {\n+        expect(() => parseIntOption('--project-id', value, 1)).toThrow('--project-id must be an integer >= 1');\n+    });\n+});"
+  },
+  {
+   "filename": "src/cli-int.ts",
+   "status": "added",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,16 @@\n+// -*- coding: utf-8 -*-\n+\n+/**\n+ * Parse an integer CLI option such as --port or --project-id.\n+ * Throws a readable error instead of letting NaN or a fractional value reach the caller.\n+ */\n+export function parseIntOption(name: string, value: string, min: number, max = Number.MAX_SAFE_INTEGER): number {\n+  const parsed = /^\\s*\\d+\\s*$/.test(value) ? Number(value) : NaN;\n+\n+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {\n+    const range = max === Number.MAX_SAFE_INTEGER ? `an integer >= ${min}` : `an integer between ${min} and ${max}`;\n+    throw new Error(`${name} must be ${range}`);\n+  }\n+\n+  return parsed;\n+}"
+  },
+  {
+   "filename": "src/index.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 2,
+   "patch": "@@ -14,6 +14,7 @@ import { ATTEMPT_ENV } from './launch-context.js';\n import { useInstallHome } from './utils/home.js';\n import { TEAMAI_HOOK_SUBCOMMANDS } from './hooks.js';\n import { dryRunRefusal } from './dry-run-guard.js';\n+import { parseIntOption } from './cli-int.js';\n import { registerPackagesCommand } from './pkg/register-command.js';\n import { shouldRegisterSessionFlowCommands } from './session-flow/register-gate.js';\n \n@@ -1423,7 +1424,7 @@ program\n   .option('-p, --port <port>', 'Port number', String(3721))\n   .action(async (cmdOpts) => {\n     const { startDashboard } = await import('./dashboard.js');\n-    await startDashboard(Number(cmdOpts.port));\n+    await startDashboard(parseIntOption('--port', String(cmdOpts.port), 0, 65535));\n   });\n \n program\n@@ -1543,7 +1544,7 @@ program\n   .action(async (cmdOpts) => {\n     const { bindCurrentProject } = await import('./local-agent.js');\n     await bindCurrentProject({\n-      projectId: cmdOpts.projectId ? Number.parseInt(cmdOpts.projectId, 10) : undefined,\n+      projectId: cmdOpts.projectId !== undefined ? parseIntOption('--project-id', String(cmdOpts.projectId), 1) : undefined,\n       skip: !!cmdOpts.skip,\n     });\n   });"
+  }
+ ],
+ "test_files": [
+  "src/__tests__/cli-int.test.ts"
+ ]
+}

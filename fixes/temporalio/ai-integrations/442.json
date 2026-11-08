@@ -1,0 +1,26 @@
+{
+ "repo": "temporalio/ai-integrations",
+ "number": 442,
+ "url": "https://github.com/temporalio/ai-integrations/pull/442",
+ "title": "google_genai: resolve quoted annotations of function activity tools",
+ "merged_at": "2026-11-08T19:53:58Z",
+ "files": [
+  {
+   "filename": "python/google_genai/src/temporalio/google_genai/workflow.py",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -244,6 +244,23 @@ class whose ``__call__`` is not a function, staticmethod,\n         sig = inspect.signature(schema_fn)\n         annotations = getattr(schema_fn, \"__annotations__\", {})\n         doc = schema_fn.__doc__\n+        # A quoted annotation (or `from __future__ import annotations`) can\n+        # only be resolved in the function's own module: the wrapper has other\n+        # globals, so Gemini would leave it a string and fail on it.\n+        try:\n+            hints = typing.get_type_hints(fn, include_extras=True)\n+        except Exception as e:\n+            raise ValueError(\n+                f\"Cannot read the parameters of {getattr(fn, '__name__', fn)}: {e}\"\n+            ) from e\n+        sig = sig.replace(\n+            parameters=[\n+                p.replace(annotation=hints.get(p.name, p.annotation))\n+                for p in sig.parameters.values()\n+            ],\n+            return_annotation=hints.get(\"return\", sig.return_annotation),\n+        )\n+        annotations = {**annotations, **hints}\n \n     activity_name: str = ret.name\n "
+  },
+  {
+   "filename": "python/google_genai/tests/test_gemini.py",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -1846,6 +1846,26 @@ async def lookup_city(self, city: str) -> str:\n         return f\"{city} is great\"\n \n \n+@activity.defn\n+async def quoted_parcel_status(parcel_id: \"str\", note: \"list[str]\") -> \"str\":\n+    \"\"\"Report a parcel's status.\"\"\"\n+    return f\"{parcel_id}: {', '.join(note)}\"\n+\n+\n+def test_activity_as_tool_resolves_quoted_annotations():\n+    \"\"\"A quoted annotation on a function activity is resolved in its own module.\"\"\"\n+    from google.genai._extra_utils import convert_argument_from_function\n+\n+    tool = activity_as_tool(\n+        quoted_parcel_status,\n+        activity_config=ActivityConfig(start_to_close_timeout=timedelta(seconds=5)),\n+    )\n+    args = convert_argument_from_function(\n+        {\"parcel_id\": \"P-1\", \"note\": [\"a\", \"b\"]}, tool\n+    )\n+    assert args == {\"parcel_id\": \"P-1\", \"note\": [\"a\", \"b\"]}\n+\n+\n async def test_closure_if_bound_method_unbinds_and_mutates_original():\n     \"\"\"A bound method becomes a plain function that still mutates the real instance.\"\"\"\n     obj = _StatefulTool()"
+  }
+ ],
+ "test_files": [
+  "python/google_genai/tests/test_gemini.py"
+ ]
+}

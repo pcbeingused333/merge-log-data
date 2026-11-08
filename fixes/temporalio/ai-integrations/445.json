@@ -1,0 +1,41 @@
+{
+ "repo": "temporalio/ai-integrations",
+ "number": 445,
+ "url": "https://github.com/temporalio/ai-integrations/pull/445",
+ "title": "fix(vercel-ai-sdk): preserve streaming finish and response metadata",
+ "merged_at": "2026-11-08T19:44:29Z",
+ "files": [
+  {
+   "filename": "typescript/vercel-ai-sdk/src/__tests__/test-ai-sdk-streaming.ts",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -202,3 +202,12 @@ test('invokeModelStreaming throws when the stream emits an error even if a finis\n   t.regex(err!.message, /mid-stream provider failure/);\n   t.notRegex(err!.message, /without a finish part/);\n });\n+\n+test('invokeModelStreaming retains finish provider metadata', async (t) => {\n+  const providerMetadata = { test: { cachedTokens: 7 } };\n+  const { result } = await runStreamingActivity([\n+    { type: 'finish', finishReason: { unified: 'stop', raw: undefined }, usage, providerMetadata },\n+  ]);\n+\n+  t.deepEqual(result.providerMetadata, providerMetadata);\n+});"
+  },
+  {
+   "filename": "typescript/vercel-ai-sdk/src/__tests__/test-ai-sdk.ts",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 2,
+   "patch": "@@ -402,14 +402,17 @@ test('Image tool results are converted inside the workflow sandbox', async (t) =\n   });\n });\n \n-test('Streaming text provider metadata survives activity execution and workflow replay', async (t) => {\n+test('Streaming text, finish and response metadata survive activity execution and workflow replay', async (t) => {\n   const providerMetadata = { test: { source: 'delta' } };\n+  const finishMetadata = { test: { cachedTokens: 7 } };\n+  const responseMetadata = { id: 'response-1', modelId: 'test-model', timestamp: new Date('2026-01-01T00:00:00Z') };\n   const provider = new StreamingTestProvider([\n     { type: 'stream-start', warnings: [] },\n+    { type: 'response-metadata', ...responseMetadata },\n     { type: 'text-start', id: 'provider-part' },\n     { type: 'text-delta', id: 'provider-part', delta: 'hello', providerMetadata },\n     { type: 'text-end', id: 'provider-part' },\n-    { type: 'finish', finishReason: createFinishReason('stop'), usage: createUsage() },\n+    { type: 'finish', finishReason: createFinishReason('stop'), usage: createUsage(), providerMetadata: finishMetadata },\n   ]);\n   const { createWorker, executeWorkflow } = helpers(t);\n   const worker = await createWorker({ plugins: [new AiSdkPlugin({ modelProvider: provider })] });\n@@ -421,11 +424,13 @@ test('Streaming text provider metadata survives activity execution and workflow\n \n     t.deepEqual(parts, [\n       { type: 'stream-start', warnings: [] },\n+      { type: 'response-metadata', ...responseMetadata, timestamp: responseMetadata.timestamp.toISOString() },\n       { type: 'text-start', id: 'part-0', providerMetadata },\n       { type: 'text-delta', id: 'part-0', delta: 'hello' },\n       { type: 'text-end', id: 'part-0' },\n       {\n         type: 'finish',\n+        providerMetadata: finishMetadata,\n         finishReason: { unified: 'stop' },\n         usage: { inputTokens: { total: 10 }, outputTokens: { total: 20 } },\n       },"
+  },
+  {
+   "filename": "typescript/vercel-ai-sdk/src/activities.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -266,6 +266,7 @@ export function createActivities(\n       };\n       const warnings: SharedV4Warning[] = [];\n       let responseMetadata: Record<string, unknown> | undefined;\n+      let providerMetadata: SharedV4ProviderMetadata | undefined;\n       let sawFinish = false;\n       let sawError = false;\n       let streamError: unknown;\n@@ -334,6 +335,7 @@ export function createActivities(\n           case 'finish':\n             finishReason = part.finishReason;\n             usage = part.usage;\n+            providerMetadata = part.providerMetadata;\n             sawFinish = true;\n             break;\n           case 'raw':\n@@ -379,6 +381,7 @@ export function createActivities(\n         finishReason,\n         usage,\n         warnings,\n+        providerMetadata,\n         request: streamResult.request,\n         response: responseMetadata ? { ...responseMetadata, ...streamResult.response } : streamResult.response,\n       };"
+  },
+  {
+   "filename": "typescript/vercel-ai-sdk/src/provider.ts",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -126,6 +126,14 @@ export class TemporalLanguageModel implements LanguageModelV4 {\n     const stream = new ReadableStream({\n       start(controller: ReadableStreamDefaultController) {\n         controller.enqueue({ type: 'stream-start', warnings: result.warnings ?? [] });\n+        if (result.response !== undefined) {\n+          controller.enqueue({\n+            type: 'response-metadata',\n+            id: result.response.id,\n+            modelId: result.response.modelId,\n+            timestamp: result.response.timestamp ? new Date(result.response.timestamp) : undefined,\n+          });\n+        }\n         let partIndex = 0;\n         for (const item of result.content ?? []) {\n           const id = `part-${partIndex++}`;\n@@ -145,6 +153,7 @@ export class TemporalLanguageModel implements LanguageModelV4 {\n           type: 'finish',\n           finishReason: result.finishReason,\n           usage: result.usage,\n+          providerMetadata: result.providerMetadata,\n         });\n         controller.close();\n       },"
+  }
+ ],
+ "test_files": [
+  "typescript/vercel-ai-sdk/src/__tests__/test-ai-sdk-streaming.ts",
+  "typescript/vercel-ai-sdk/src/__tests__/test-ai-sdk.ts"
+ ]
+}
