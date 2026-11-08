@@ -1,0 +1,41 @@
+{
+ "repo": "archestra-ai/archestra",
+ "number": 10418,
+ "url": "https://github.com/archestra-ai/archestra/pull/10418",
+ "title": "fix(proxy): honor max_completion_tokens for Cohere and Bedrock",
+ "merged_at": "2026-11-07T22:56:37Z",
+ "files": [
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/bedrock-openai-translator.ts",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -753,7 +753,10 @@ function buildInferenceConfig(loose: Loose): BedrockRequest[\"inferenceConfig\"] {\n   if (typeof loose.temperature === \"number\")\n     cfg.temperature = loose.temperature;\n   if (typeof loose.top_p === \"number\") cfg.topP = loose.top_p;\n-  if (typeof loose.max_tokens === \"number\") cfg.maxTokens = loose.max_tokens;\n+  // Newer clients send max_completion_tokens and omit max_tokens. Same\n+  // precedence as the Gemini translator: the completion cap wins.\n+  const maxTokens = loose.max_completion_tokens ?? loose.max_tokens;\n+  if (typeof maxTokens === \"number\") cfg.maxTokens = maxTokens;\n   if (typeof loose.stop === \"string\") cfg.stopSequences = [loose.stop];\n   else if (Array.isArray(loose.stop))\n     cfg.stopSequences = loose.stop.map(String);"
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/bedrock-openai-translator.unit.test.ts",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -502,6 +502,19 @@ describe(\"openaiToConverse — inference config\", () => {\n     const { converseBody } = openaiToConverse(req());\n     expect(converseBody.inferenceConfig).toBeUndefined();\n   });\n+\n+  test.each([\n+    [undefined, 32, 32],\n+    [64, 32, 32],\n+    [64, null, 64],\n+    [64, undefined, 64],\n+  ])(\"maps max_tokens %s and max_completion_tokens %s to maxTokens %s\", (max_tokens, max_completion_tokens, expected) => {\n+    const { converseBody } = openaiToConverse(\n+      // biome-ignore lint/suspicious/noExplicitAny: extension params, same as the cases above\n+      req({ max_tokens, max_completion_tokens } as any),\n+    );\n+    expect(converseBody.inferenceConfig?.maxTokens).toBe(expected);\n+  });\n });\n \n describe(\"openaiToConverse — images\", () => {"
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/cohere-openai-translator.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -88,8 +88,11 @@ export function openaiToCohere(req: OpenAiRequest): {\n     cohereBody.temperature = req.temperature;\n   }\n \n-  if (req.max_tokens !== undefined && req.max_tokens !== null) {\n-    cohereBody.max_tokens = req.max_tokens;\n+  // Newer clients send max_completion_tokens and omit max_tokens. Same\n+  // precedence as the Gemini translator: the completion cap wins.\n+  const maxTokens = req.max_completion_tokens ?? req.max_tokens;\n+  if (maxTokens !== undefined && maxTokens !== null) {\n+    cohereBody.max_tokens = maxTokens;\n   }\n \n   if (loose.top_p !== undefined && loose.top_p !== null) {"
+  },
+  {
+   "filename": "platform/backend/src/routes/proxy/adapters/cohere-openai-translator.unit.test.ts",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -73,6 +73,25 @@ describe(\"openaiToCohere — multimodal user content\", () => {\n   });\n });\n \n+describe(\"openaiToCohere — output cap\", () => {\n+  test.each([\n+    [undefined, 32, 32],\n+    [64, 32, 32],\n+    [64, null, 64],\n+    [64, undefined, 64],\n+  ])(\"maps max_tokens %s and max_completion_tokens %s to %s\", (max_tokens, max_completion_tokens, expected) => {\n+    const { cohereBody } = openaiToCohere(\n+      req({ max_tokens, max_completion_tokens }),\n+    );\n+    expect(cohereBody.max_tokens).toBe(expected);\n+  });\n+\n+  test(\"omits max_tokens when neither cap is set\", () => {\n+    const { cohereBody } = openaiToCohere(req());\n+    expect(cohereBody.max_tokens).toBeUndefined();\n+  });\n+});\n+\n describe(\"mapCohereFinishReason\", () => {\n   test.each([\n     [\"COMPLETE\", \"stop\"],"
+  }
+ ],
+ "test_files": [
+  "platform/backend/src/routes/proxy/adapters/bedrock-openai-translator.unit.test.ts",
+  "platform/backend/src/routes/proxy/adapters/cohere-openai-translator.unit.test.ts"
+ ]
+}

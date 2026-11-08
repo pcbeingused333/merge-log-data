@@ -1,0 +1,22 @@
+{
+ "repo": "vercel/ai",
+ "number": 24726,
+ "url": "https://github.com/vercel/ai/pull/24726",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-07T23:00:18Z",
+   "body": "Thanks for picking this up, and for spelling out in the PR body exactly what you could and couldn't verify without AWS access. That made it easy to know what to check.\n\nThe mapping looks right to me. Red/green holds on node and edge, and both `doGenerate` and `doStream` go through `mapAmazonBedrockFinishReason` (`amazon-bedrock-chat-language-model.ts:969` and `:1124`), so the one-line change covers both paths. I couldn't get Bedrock to actually return this stop reason live; the attempts are below in case they save someone the same search.\n\n| Check (PR head `364aa57`, main `6d21e8e`) | main mapper | this PR |\n|---|---|---|\n| `doGenerate`, mocked Converse body with `stopReason: 'model_context_window_exceeded'` | `{ unified: 'other' }` | `{ unified: 'length' }` |\n| `doStream`, same value in `messageStop` | `{ unified: 'other' }` | `{ unified: 'length' }` |\n| `finishReason.raw` | `model_context_window_exceeded` | unchanged |\n| new mapper test (node / edge) | 1 failed, 2 passed | 3 passed |\n| `@ai-sdk/amazon-bedrock` full suite (node / edge) | | 819 / 819 passed |\n\n```\n× maps model_context_window_exceeded to length\nAssertionError: expected 'other' to be 'length' // Object.is equality\nTests  1 failed | 2 passed (3)\n```\n\n<details><summary>Live Bedrock attempts (us-east-1): none returned this stop reason</summary>\n\nThe value is a real Converse enum member: `@aws-sdk/client-bedrock-runtime` 3.1127.0 lists `MODEL_CONTEXT_WINDOW_EXCEEDED: \"model_context_window_exceeded\"` next to `malformed_model_output` and `malformed_tool_use`. I tried to trigger it with raw Converse calls. The rows that generated text used `maxTokens` far above what was left in the window (64,000 for Haiku 4.5, 2,048 for Llama 3 8B):\n\n| Model | Input tokens | Output tokens | Reported total | Result |\n|---|---|---|---|---|\n| Claude Haiku 4.5 (`us.` profile), Converse | 198,803 | 2,505 | 201,308 | `end_turn` |\n| same, ConverseStream | 198,803 | 5,750 | 204,553 | `end_turn` |\n| Converse, plus `anthropic_beta: [\"model-context-window-exceeded-2025-08-26\"]` | 198,803 | 3,340 | 202,143 | `end_turn` |\n| Converse, input alone over the window | 205,726 | - | - | 400 `prompt is too long: 205726 tokens > 200000 maximum` |\n| Llama 3 8B Instruct | 7,642 | 550 | 8,192 | `max_tokens` |\n\nSo Haiku 4.5 finishes with `end_turn` even when the reported total passes 200K, and Llama 3 8B stops at exactly 8,192 total tokens with `max_tokens`, which already maps to `length`. That doesn't argue against the change, since the value is in the API model and `@ai-sdk/anthropic` already maps it the same way (`map-anthropic-stop-reason.ts:23`). It only means the E2E gap in the PR body is hard to close right now.\n\nThe `doGenerate`/`doStream` rows come from two throwaway cases appended to `amazon-bedrock-chat-language-model.test.ts` (same `createTestServer` setup as the `guardrail_intervened` stream test), run once with `map-amazon-bedrock-finish-reason.ts` from main and once from this branch, then removed.\n\n</details>\n"
+  }
+ ],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-11-07T15:03:03Z",
+   "body": "@pcbeingused333 is attempting to deploy a commit to the **Vercel Labs** Team on [Vercel](https://vercel.com).\n\nA member of the Team first needs to [authorize it](https://vercel.com/git/authorize?team=Vercel%20Labs&slug=vercel-labs&teamId=team_nO2mCG4W8IxPIeKoSsqwAxxB&type=github&job=%7B%22headInfo%22%3A%7B%22sha%22%3A%22364aa57eca641bc608f659e75418e144f8ad7588%22%7D%2C%22id%22%3A%22QmdgGPrqEvwFhMZ2iN8s7SwgwAbxf4tPWHts3v7sQXGkEx%22%2C%22org%22%3A%22vercel%22%2C%22prId%22%3A24726%2C%22repo%22%3A%22ai%22%7D).\n\n"
+  }
+ ]
+}

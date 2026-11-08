@@ -1,0 +1,26 @@
+{
+ "repo": "prism-php/prism",
+ "number": 1051,
+ "url": "https://github.com/prism-php/prism/pull/1051",
+ "title": "fix(groq): key streamed tool calls by the delta's index, not its position in the chunk",
+ "merged_at": "2026-11-07T22:50:48Z",
+ "files": [
+  {
+   "filename": "src/Providers/Groq/Handlers/Stream.php",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -257,7 +257,11 @@ protected function parseNextDataLine(StreamInterface $stream): ?array\n      */\n     protected function extractToolCalls(array $data, array $toolCalls): array\n     {\n-        foreach (data_get($data, 'choices.0.delta.tool_calls', []) as $index => $toolCall) {\n+        foreach (data_get($data, 'choices.0.delta.tool_calls', []) as $position => $toolCall) {\n+            // Each chunk carries only the deltas that changed, so the position in this chunk\n+            // is not the call's identity: Groq sends the call's own index in the delta.\n+            $index = data_get($toolCall, 'index', $position);\n+\n             if ($name = data_get($toolCall, 'function.name')) {\n                 $toolCalls[$index]['name'] = $name;\n                 $toolCalls[$index]['arguments'] = '';"
+  },
+  {
+   "filename": "tests/Providers/Groq/StreamTest.php",
+   "status": "modified",
+   "additions": 32,
+   "deletions": 0,
+   "patch": "@@ -552,6 +552,38 @@ function groqGatingStream(int &$calls, int $maxSteps = 3): Collection\n         ->asStream(), false));\n }\n \n+/**\n+ * @param  array<string, mixed>  $toolCall\n+ * @return array<string, mixed>\n+ */\n+function groqToolCallDeltaChunk(array $toolCall): array\n+{\n+    return groqGatingDeltaChunk(['tool_calls' => [$toolCall]]);\n+}\n+\n+it('keeps parallel tool calls apart when their deltas arrive in separate chunks', function (): void {\n+    Http::fake([\n+        '*' => Http::sequence()\n+            ->push(groqGatingSse(\n+                groqToolCallDeltaChunk(['index' => 0, 'id' => 'call_detroit', 'type' => 'function', 'function' => ['name' => 'get_weather', 'arguments' => '']]),\n+                groqToolCallDeltaChunk(['index' => 0, 'function' => ['arguments' => '{\"city\":\"Detroit\"}']]),\n+                groqToolCallDeltaChunk(['index' => 1, 'id' => 'call_paris', 'type' => 'function', 'function' => ['name' => 'get_weather', 'arguments' => '']]),\n+                groqToolCallDeltaChunk(['index' => 1, 'function' => ['arguments' => '{\"city\":\"Paris\"}']]),\n+                groqGatingFinishChunk('tool_calls'),\n+            ), 200, ['Content-Type' => 'text/event-stream'])\n+            ->push(groqGatingSse(groqGatingFinishChunk('stop')), 200, ['Content-Type' => 'text/event-stream']),\n+    ])->preventStrayRequests();\n+\n+    $calls = 0;\n+    $events = groqGatingStream($calls);\n+    $toolCalls = $events->whereInstanceOf(ToolCallEvent::class)->map->toolCall->values();\n+\n+    expect($calls)->toBe(2)\n+        ->and($toolCalls->map->id->all())->toBe(['call_detroit', 'call_paris'])\n+        ->and($toolCalls->map(fn ($toolCall): array => $toolCall->arguments())->all())\n+        ->toBe([['city' => 'Detroit'], ['city' => 'Paris']]);\n+});\n+\n describe('tool execution gating', function (): void {\n     it('never runs buffered tool calls when the step does not finish with tool calls', function (array $chunks, FinishReason $finishReason): void {\n         Http::fake(["
+  }
+ ],
+ "test_files": [
+  "tests/Providers/Groq/StreamTest.php"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "nextlevelbuilder/goclaw",
+ "number": 1667,
+ "url": "https://github.com/nextlevelbuilder/goclaw/pull/1667",
+ "title": "fix(providers): read input and cache usage from Anthropic message_delta",
+ "merged_at": "2026-11-08T04:08:58Z",
+ "files": [
+  {
+   "filename": "internal/providers/anthropic_stream.go",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 2,
+   "patch": "@@ -141,11 +141,26 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req ChatRequest, onC\n \t\t\t\t\t\tresult.FinishReason = \"stop\"\n \t\t\t\t\t}\n \t\t\t\t}\n-\t\t\t\tif ev.Usage.OutputTokens > 0 {\n+\t\t\t\tif u := ev.Usage; u.OutputTokens > 0 || u.InputTokens > 0 ||\n+\t\t\t\t\tu.CacheCreationInputTokens > 0 || u.CacheReadInputTokens > 0 {\n \t\t\t\t\tif result.Usage == nil {\n \t\t\t\t\t\tresult.Usage = &Usage{}\n \t\t\t\t\t}\n-\t\t\t\t\tresult.Usage.CompletionTokens = ev.Usage.OutputTokens\n+\t\t\t\t\t// message_delta usage is cumulative. Some Anthropic-compatible\n+\t\t\t\t\t// endpoints report the real input/cache counts here instead of\n+\t\t\t\t\t// in message_start, so a non-zero value overrides it.\n+\t\t\t\t\tif u.InputTokens > 0 {\n+\t\t\t\t\t\tresult.Usage.PromptTokens = u.InputTokens\n+\t\t\t\t\t}\n+\t\t\t\t\tif u.CacheCreationInputTokens > 0 {\n+\t\t\t\t\t\tresult.Usage.CacheCreationTokens = u.CacheCreationInputTokens\n+\t\t\t\t\t}\n+\t\t\t\t\tif u.CacheReadInputTokens > 0 {\n+\t\t\t\t\t\tresult.Usage.CacheReadTokens = u.CacheReadInputTokens\n+\t\t\t\t\t}\n+\t\t\t\t\tif u.OutputTokens > 0 {\n+\t\t\t\t\t\tresult.Usage.CompletionTokens = u.OutputTokens\n+\t\t\t\t\t}\n \t\t\t\t}\n \t\t\t}\n "
+  },
+  {
+   "filename": "internal/providers/anthropic_stream_test.go",
+   "status": "modified",
+   "additions": 65,
+   "deletions": 0,
+   "patch": "@@ -301,3 +301,68 @@ func TestStreamChat_RedactedThinkingPassback(t *testing.T) {\n \t\tt.Errorf(\"data = %v, want encrypted-blob\", blocks[0][\"data\"])\n \t}\n }\n+\n+// TestStreamChat_MessageDeltaUsage verifies that input and cache token counts\n+// sent in message_delta (cumulative usage, as some Anthropic-compatible\n+// endpoints do) override the placeholder values from message_start, and that\n+// absent/zero fields in message_delta do not wipe the earlier counts.\n+func TestStreamChat_MessageDeltaUsage(t *testing.T) {\n+\trun := func(t *testing.T, startUsage, deltaUsage string) *ChatResponse {\n+\t\tt.Helper()\n+\t\tevents := []string{\n+\t\t\t\"event: message_start\\n\",\n+\t\t\t`data: {\"message\":{\"usage\":` + startUsage + `}}` + \"\\n\\n\",\n+\n+\t\t\t\"event: content_block_start\\n\",\n+\t\t\t`data: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}` + \"\\n\\n\",\n+\n+\t\t\t\"event: content_block_delta\\n\",\n+\t\t\t`data: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}` + \"\\n\\n\",\n+\n+\t\t\t\"event: content_block_stop\\n\",\n+\t\t\t\"data: {}\\n\\n\",\n+\n+\t\t\t\"event: message_delta\\n\",\n+\t\t\t`data: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":` + deltaUsage + `}` + \"\\n\\n\",\n+\n+\t\t\t\"event: message_stop\\n\",\n+\t\t\t\"data: {}\\n\\n\",\n+\t\t}\n+\t\tserver := newAnthropicSSEServer(t, events)\n+\t\tp := newTestAnthropicProvider(server.URL)\n+\t\tresult, err := p.ChatStream(context.Background(), ChatRequest{\n+\t\t\tModel:    \"claude-sonnet-4-5-20250929\",\n+\t\t\tMessages: []Message{{Role: \"user\", Content: \"hello\"}},\n+\t\t}, nil)\n+\t\tif err != nil {\n+\t\t\tt.Fatalf(\"unexpected error: %v\", err)\n+\t\t}\n+\t\tif result == nil || result.Usage == nil {\n+\t\t\tt.Fatal(\"expected non-nil result with usage\")\n+\t\t}\n+\t\treturn result\n+\t}\n+\n+\tt.Run(\"delta overrides start\", func(t *testing.T) {\n+\t\tr := run(t,\n+\t\t\t`{\"input_tokens\":1,\"output_tokens\":1}`,\n+\t\t\t`{\"input_tokens\":500,\"cache_creation_input_tokens\":40,\"cache_read_input_tokens\":300,\"output_tokens\":20}`)\n+\t\tu := r.Usage\n+\t\tif u.PromptTokens != 500 || u.CacheCreationTokens != 40 || u.CacheReadTokens != 300 || u.CompletionTokens != 20 {\n+\t\t\tt.Errorf(\"usage = %+v, want prompt=500 cacheCreate=40 cacheRead=300 completion=20\", u)\n+\t\t}\n+\t\tif u.TotalTokens != 520 {\n+\t\t\tt.Errorf(\"TotalTokens = %d, want 520\", u.TotalTokens)\n+\t\t}\n+\t})\n+\n+\tt.Run(\"delta without input keeps start\", func(t *testing.T) {\n+\t\tr := run(t,\n+\t\t\t`{\"input_tokens\":10,\"cache_creation_input_tokens\":4,\"cache_read_input_tokens\":6}`,\n+\t\t\t`{\"output_tokens\":20}`)\n+\t\tu := r.Usage\n+\t\tif u.PromptTokens != 10 || u.CacheCreationTokens != 4 || u.CacheReadTokens != 6 || u.CompletionTokens != 20 {\n+\t\t\tt.Errorf(\"usage = %+v, want prompt=10 cacheCreate=4 cacheRead=6 completion=20\", u)\n+\t\t}\n+\t})\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/providers/anthropic_stream_test.go"
+ ]
+}

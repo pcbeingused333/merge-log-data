@@ -1,0 +1,35 @@
+{
+ "repo": "stackql/stackql",
+ "number": 906,
+ "url": "https://github.com/stackql/stackql/pull/906",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-07T23:05:58Z",
+   "body": "<!-- ccr-overview-v2 -->\n\n### 🟡 Changes recommended\n\nThe timeout does not cancel reverse-proxy database calls, transport-level regression coverage is missing, and the permit-release test can pass despite a semaphore leak.\n\n<details open>\n<summary><strong>3 open issues</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Propagate request context to reverse-proxy database calls](https://github.com/stackql/stackql/pull/906#discussion_r4504088693) · New\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Assert follow-up calls reach the backend after permit release](https://github.com/stackql/stackql/pull/906#discussion_r4504088704) · New\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Add black-box timeout and cancellation tests for both transports](https://github.com/stackql/stackql/pull/906#discussion_r4504088709) · New\n</details>\n\n<details>\n<summary><strong>What changed in this PR</strong></summary>\n\nThis PR adds shared MCP tool-call admission limits and request deadlines, addressing part of #828. HTTP server timeouts and body limits remain deferred.\n\n**Changes:**\n- Registers middleware that acquires semaphore permits and applies request deadlines to `tools/call`.\n- Defines non-positive settings as disabling the corresponding control, leaving other methods unchanged.\n- Adds in-process tests for concurrency limits, timeouts, permit recovery, and disabled limits.\n\n| File | Description |\r\n| ---- | ----------- |\r\n| `pkg/​mcp_server/​server.go` | Wires the limits middleware and shared semaphore into server construction. |\r\n| `pkg/​mcp_server/​limits.go` | Implements cancellation-aware admission, deadlines, and deferred permit release. |\r\n| `pkg/​mcp_server/​limits_test.go` | Adds blocking-backend tests for the configured controls. |\n</details>\n\n<sub>Review effort: Balanced</sub>"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "pkg/mcp_server/limits.go",
+   "created_at": "2026-11-07T23:05:57Z",
+   "body": "The timeout remains ineffective for the `reverse_proxy` backend: `ExecQuery` and `query` discard the context and use `db.Exec`/`db.Query` in `internal/stackql/mcpbackend/mcp_reverse_proxy_backend_service.go:75–76,110–111`. A stalled database call can therefore keep `next` and its semaphore permit occupied after the deadline. Use `ExecContext`/`QueryContext` with the request context, and check row-iteration errors so cancellation is not returned as partial success."
+  },
+  {
+   "role": "bot",
+   "path": "pkg/mcp_server/limits_test.go",
+   "created_at": "2026-11-07T23:05:57Z",
+   "body": "This permit-release test still passes if `defer sem.Release(1)` is removed. After the first call, later calls simply expire inside `Acquire` at the 50ms server deadline, well before their 2s client deadlines; ignoring the returned error makes that indistinguishable from reaching the backend. Assert that each call returns a backend timeout as a tool result rather than an admission/transport error, so a leaked permit fails the test."
+  },
+  {
+   "role": "bot",
+   "path": "pkg/mcp_server/server.go",
+   "created_at": "2026-11-07T23:05:57Z",
+   "body": "The new admission and timeout behavior has only in-memory coverage with a cooperative backend, leaving deadline propagation and recovery through HTTP and stdio unverified. Add black-box scenarios in `test/robot/functional/mcp.robot` for overlapping slow calls, explicit cancellation of a queued waiter, and a successful follow-up request after timeout on both transports. These regressions are required by the repository's behavior-change testing guidelines."
+  }
+ ],
+ "comments": []
+}

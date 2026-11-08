@@ -1,0 +1,35 @@
+{
+ "repo": "bytedance/deer-flow",
+ "number": 7990,
+ "url": "https://github.com/bytedance/deer-flow/pull/7990",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-08T00:11:36Z",
+   "body": "Reviewed. The fix is correct on Telegram 429 semantics: the flood wait happens before retrying the *same* send (the closure re-invokes `bot.send_message` / `do_api_request` with the same kwargs), the hint never shortens the local backoff, the attempt bound and cancellation behavior are unchanged, and non-Telegram channels keep `2**attempt` because the base default ignores `exc`. The test pins the wait-then-retry sequencing with a mocked bot and patched sleep. Two findings below: the server-supplied hint is used unclamped even though the sleep runs on the shared outbound dispatch loop, and the new docstring overstates coverage because the 'Working on it...' send still has no retry."
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-08T01:51:14Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "backend/app/channels/telegram.py",
+   "created_at": "2026-11-08T00:11:36Z",
+   "body": "`hint` is used unclamped, but this sleep runs on the Gateway's outbound dispatch loop: `MessageBus.publish_outbound` awaits each listener sequentially, so a long wait here stalls outbound traffic for *every* channel, not just this chat. The old code capped the stall at 3s; Telegram really does return large flood waits (spam-flagged bots see minutes-to-hours). Two hazards: (1) a non-finite hint — `float('inf')` passes `hint > delay` and `asyncio.sleep(inf)` never returns, wedging the dispatcher; (2) a non-numeric hint makes `float(value)` in `_retry_after_seconds` raise *inside* the `except` handler in `_send_with_retry`, replacing the flood error, skipping the remaining attempts and the final `logger.error`. The repo already guards this class of server-supplied number with `math.isfinite` (see `backend/app/channels/service.py:130` and `wechat.py:1835` from the WeChat non-finite-timeout fix). Suggest clamping in this override: ignore non-finite hints, and cap the returned delay at a sane maximum so one pathological hint cannot monopolize the shared loop."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/app/channels/telegram.py",
+   "created_at": "2026-11-08T00:11:36Z",
+   "body": "The claim that fresh sends 'share `Channel._send_with_retry`' misses one: the 'Working on it...' preview in `_send_running_reply` calls `bot.send_message` directly with no retry, and its catch-all `except Exception` swallows a 429 silently — the same drop this PR fixes survives on that path. It is a once-per-turn send, not a hot streaming edit, so routing it through `_send_with_retry` (which now honors the hint) would match the final-edit precedent; otherwise consider narrowing this docstring so the boundary is documented."
+  }
+ ],
+ "comments": []
+}
