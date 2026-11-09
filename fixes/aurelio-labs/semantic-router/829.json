@@ -1,0 +1,26 @@
+{
+ "repo": "aurelio-labs/semantic-router",
+ "number": 829,
+ "url": "https://github.com/aurelio-labs/semantic-router/pull/829",
+ "title": "fix(encoders): raise on persistent 503 in HFEndpointEncoder.query",
+ "merged_at": "2026-11-09T02:33:23Z",
+ "files": [
+  {
+   "filename": "semantic_router/encoders/huggingface.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 4,
+   "patch": "@@ -274,14 +274,14 @@ def query(self, payload, max_retries=3, retry_interval=5):\n                 )\n                 if response.status_code == 503:\n                     estimated_time = response.json().get(\"estimated_time\", \"\")\n-                    if estimated_time:\n+                    if estimated_time and attempt < max_retries:\n                         logger.info(\n                             f\"Model Initializing wait for - {estimated_time:.2f}s \"\n                         )\n                         time.sleep(estimated_time)\n                         continue\n-                else:\n-                    response.raise_for_status()\n+                response.raise_for_status()\n+                return response.json()\n \n             except requests.exceptions.RequestException as e:\n                 if attempt < max_retries:\n@@ -297,4 +297,4 @@ def query(self, payload, max_retries=3, retry_interval=5):\n                     # no response at all, e.g. a DNS or connection error\n                     raise ValueError(f\"Query failed: {e}\") from e\n \n-        return response.json()\n+        raise ValueError(\"Query failed: no response received\")"
+  },
+  {
+   "filename": "tests/unit/encoders/test_huggingface_endpoint.py",
+   "status": "added",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,49 @@\n+from unittest.mock import MagicMock, patch\n+\n+import pytest\n+import requests\n+\n+from semantic_router.encoders.huggingface import HFEndpointEncoder\n+\n+\n+def _resp(status, body):\n+    r = MagicMock()\n+    r.status_code = status\n+    r.json.return_value = body\n+    r.text = str(body)\n+    if status >= 400:\n+        err = requests.exceptions.HTTPError(f\"{status}\")\n+        err.response = r\n+        r.raise_for_status.side_effect = err\n+    return r\n+\n+\n+@pytest.fixture\n+def encoder():\n+    with patch.object(HFEndpointEncoder, \"query\", return_value=[[0.0]]):\n+        return HFEndpointEncoder(\n+            huggingface_url=\"https://example.com\", huggingface_api_key=\"key\"\n+        )\n+\n+\n+class TestHuggingFaceEndpointQuery:\n+    def test_query_success(self, encoder):\n+        with patch(\"requests.post\", return_value=_resp(200, [[0.1, 0.2]])):\n+            assert encoder.query({\"inputs\": \"x\"}) == [[0.1, 0.2]]\n+\n+    def test_query_503_with_estimated_time_exhausted_raises(self, encoder):\n+        resp = _resp(503, {\"error\": \"loading\", \"estimated_time\": 0.0})\n+        with patch(\"requests.post\", return_value=resp), patch(\"time.sleep\"):\n+            with pytest.raises(ValueError):\n+                encoder.query({\"inputs\": \"x\"}, max_retries=2)\n+\n+    def test_query_503_without_estimated_time_raises(self, encoder):\n+        resp = _resp(503, {\"error\": \"unavailable\"})\n+        with patch(\"requests.post\", return_value=resp), patch(\"time.sleep\"):\n+            with pytest.raises(ValueError):\n+                encoder.query({\"inputs\": \"x\"}, max_retries=2)\n+\n+    def test_query_503_then_success(self, encoder):\n+        resps = [_resp(503, {\"estimated_time\": 0.0}), _resp(200, [[1.0]])]\n+        with patch(\"requests.post\", side_effect=resps), patch(\"time.sleep\"):\n+            assert encoder.query({\"inputs\": \"x\"}) == [[1.0]]"
+  }
+ ],
+ "test_files": [
+  "tests/unit/encoders/test_huggingface_endpoint.py"
+ ]
+}

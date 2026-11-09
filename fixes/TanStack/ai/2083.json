@@ -1,0 +1,33 @@
+{
+ "repo": "TanStack/ai",
+ "number": 2083,
+ "url": "https://github.com/TanStack/ai/pull/2083",
+ "title": "fix(ai-gemini): include thinking tokens in Gemini Live usage completionTokens",
+ "merged_at": "2026-11-09T03:07:45Z",
+ "files": [
+  {
+   "filename": ".changeset/gemini-live-thoughts-usage.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@tanstack/ai-gemini': patch\n+---\n+\n+Gemini Live (realtime) `usage` events now include `thoughtsTokenCount` in `completionTokens`, matching how the text adapters report usage."
+  },
+  {
+   "filename": "packages/ai-gemini/src/realtime/adapter.ts",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 5,
+   "patch": "@@ -2,6 +2,7 @@ import { createRealtimeEventEmitter } from '@tanstack/ai'\n import { AudioPlayer, AudioStreamer, base64ToArrayBuffer } from './utils'\n import { GeminiLiveClient } from './client'\n import type { LiveResponse } from './client'\n+import type { UsageMetadata } from '@google/genai'\n import type {\n   AnyClientTool,\n   AudioVisualization,\n@@ -13,6 +14,20 @@ import type {\n } from '@tanstack/ai'\n import type { GeminiRealtimeModel, GeminiRealtimeOptions } from './types'\n \n+/**\n+ * Map Gemini Live usage metadata to the realtime `usage` event payload.\n+ * Thinking tokens are reported apart from `responseTokenCount` but billed as\n+ * output, so completionTokens includes them (as buildGeminiUsage does).\n+ */\n+export function toRealtimeUsage(usage: UsageMetadata) {\n+  return {\n+    completionTokens:\n+      (usage.responseTokenCount ?? 0) + (usage.thoughtsTokenCount ?? 0),\n+    promptTokens: usage.promptTokenCount ?? 0,\n+    totalTokens: usage.totalTokenCount ?? 0,\n+  }\n+}\n+\n /**\n  * Creates a Gemini realtime adapter for client-side use.\n  *\n@@ -115,11 +130,7 @@ async function createWebSocketConnection(\n         emit('go_away', { timeLeft: response.data.timeLeft })\n         break\n       case 'usage_metadata':\n-        emit('usage', {\n-          completionTokens: response.data.responseTokenCount ?? 0,\n-          promptTokens: response.data.promptTokenCount ?? 0,\n-          totalTokens: response.data.totalTokenCount ?? 0,\n-        })\n+        emit('usage', toRealtimeUsage(response.data))\n         break\n       case 'input_transcription':\n         if (response.data.finished && currentMode !== 'thinking') {"
+  },
+  {
+   "filename": "packages/ai-gemini/tests/realtime-usage.test.ts",
+   "status": "added",
+   "additions": 23,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,23 @@\n+import { describe, expect, it } from 'vitest'\n+import { toRealtimeUsage } from '../src/realtime/adapter'\n+\n+describe('toRealtimeUsage', () => {\n+  it('folds thinking tokens into completionTokens', () => {\n+    expect(\n+      toRealtimeUsage({\n+        promptTokenCount: 10,\n+        responseTokenCount: 20,\n+        thoughtsTokenCount: 30,\n+        totalTokenCount: 60,\n+      }),\n+    ).toEqual({ promptTokens: 10, completionTokens: 50, totalTokens: 60 })\n+  })\n+\n+  it('defaults missing counts to 0', () => {\n+    expect(toRealtimeUsage({ totalTokenCount: 5 })).toEqual({\n+      promptTokens: 0,\n+      completionTokens: 0,\n+      totalTokens: 5,\n+    })\n+  })\n+})"
+  }
+ ],
+ "test_files": [
+  "packages/ai-gemini/tests/realtime-usage.test.ts"
+ ]
+}

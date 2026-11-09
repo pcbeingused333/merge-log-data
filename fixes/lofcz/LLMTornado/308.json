@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 308,
+ "url": "https://github.com/lofcz/LLMTornado/pull/308",
+ "title": "fix(cohere): encode raw chat image base64 as data URI",
+ "merged_at": "2026-11-08T23:56:15Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/CohereImageDataUriTests.cs",
+   "status": "added",
+   "additions": 32,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,32 @@\n+using LlmTornado.Images;\n+using LlmTornado.Chat;\n+using LlmTornado.Code;\n+using Newtonsoft.Json.Linq;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class CohereImageDataUriTests\n+{\n+    [TestCase(\"QUJD\", \"image/png\", \"data:image/png;base64,QUJD\")]\n+    [TestCase(\"QUJD\", \"image/jpeg\", \"data:image/jpeg;base64,QUJD\")]\n+    [TestCase(\"data:image/png;base64,QUJD\", \"image/png\", \"data:image/png;base64,QUJD\")]\n+    [TestCase(\"data:image/png;base64,QUJD\", null, \"data:image/png;base64,QUJD\")]\n+    [TestCase(\"https://example.com/image.png\", \"image/png\", \"https://example.com/image.png\")]\n+    [TestCase(\"http://example.com/image.png\", \"image/png\", \"http://example.com/image.png\")]\n+    [TestCase(\"QUJD\", null, \"QUJD\")]\n+    public void ImageUrl_EncodesRawBase64WithMimeType(string input, string? mimeType, string expected)\n+    {\n+        ChatRequest request = new()\n+        {\n+            Model = \"command-a-vision-07-2025\",\n+            Messages = [new ChatMessage(ChatMessageRoles.User,\n+                [new ChatMessagePart(new ChatImage(input) { MimeType = mimeType, Detail = ImageDetail.High })])]\n+        };\n+        IEndpointProvider provider = new TornadoApi(LLmProviders.Cohere, \"test-key\").GetProvider(LLmProviders.Cohere);\n+        JObject body = JObject.Parse(request.Serialize(provider).Body.ToString()!);\n+        JToken? image = body[\"messages\"]?[0]?[\"content\"]?[0]?[\"image_url\"];\n+        Assert.That(image?[\"url\"]?.ToString(), Is.EqualTo(expected));\n+        Assert.That(image?[\"detail\"]?.ToString(), Is.EqualTo(\"high\"));\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/Vendors/Cohere/VendorCohereChatRequest.cs",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -149,7 +149,12 @@ public VendorCohereChatRequest(ChatRequest request, IEndpointProvider provider)\n                                 {\n                                     ImageUrl = new VendorCohereImageUrl\n                                     {\n-                                        Url = p.Image!.Url,\n+                                        Url = !string.IsNullOrWhiteSpace(p.Image!.MimeType) &&\n+                                              !p.Image.Url.StartsWith(\"data:\", StringComparison.OrdinalIgnoreCase) &&\n+                                              !p.Image.Url.StartsWith(\"http://\", StringComparison.OrdinalIgnoreCase) &&\n+                                              !p.Image.Url.StartsWith(\"https://\", StringComparison.OrdinalIgnoreCase)\n+                                            ? $\"data:{p.Image.MimeType};base64,{p.Image.Url}\"\n+                                            : p.Image.Url,\n                                         Detail = p.Image!.Detail switch\n                                         {\n                                             ImageDetail.Auto => \"auto\","
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/CohereImageDataUriTests.cs"
+ ]
+}

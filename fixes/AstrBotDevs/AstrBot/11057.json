@@ -1,0 +1,26 @@
+{
+ "repo": "AstrBotDevs/AstrBot",
+ "number": 11057,
+ "url": "https://github.com/AstrBotDevs/AstrBot/pull/11057",
+ "title": "fix(anthropic): concatenate multiple text blocks in non-streaming responses",
+ "merged_at": "2026-11-09T03:06:44Z",
+ "files": [
+  {
+   "filename": "astrbot/core/provider/sources/anthropic_source.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 2,
+   "patch": "@@ -588,10 +588,12 @@ async def _query(\n \n         llm_response = LLMResponse(role=\"assistant\")\n \n+        text_parts: list[str] = []\n         for content_block in completion.content:\n             if content_block.type == \"text\":\n-                completion_text = str(content_block.text).strip()\n-                llm_response.completion_text = completion_text\n+                # Responses with web search/citations carry several text blocks;\n+                # concatenate them like the streaming path does.\n+                text_parts.append(str(content_block.text))\n \n             if content_block.type == \"thinking\":\n                 reasoning_content = str(content_block.thinking).strip()\n@@ -603,6 +605,9 @@ async def _query(\n                 llm_response.tools_call_name.append(content_block.name)\n                 llm_response.tools_call_ids.append(content_block.id)\n \n+        if text_parts:\n+            llm_response.completion_text = \"\".join(text_parts).strip()\n+\n         llm_response.id = completion.id\n         llm_response.usage = self._extract_usage(completion.usage)\n "
+  },
+  {
+   "filename": "tests/test_anthropic_source.py",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -505,3 +505,39 @@ def handle(request):\n     assert captured[0][\"tools\"][0][\"name\"] == \"get_time\"\n     assert captured[0][\"tools\"][1:] == custom_tools\n     assert provider.provider_config[\"custom_extra_body\"][\"tools\"] == custom_tools\n+\n+\n+@pytest.mark.asyncio\n+async def test_query_concatenates_multiple_text_blocks():\n+    provider = ProviderAnthropic(\n+        provider_config={\n+            \"id\": \"anthropic-test\",\n+            \"type\": \"anthropic_chat_completion\",\n+            \"model\": \"claude-test\",\n+            \"key\": [\"test-key\"],\n+        },\n+        provider_settings={},\n+    )\n+\n+    class FakeMessages:\n+        async def create(self, **kwargs):\n+            return Message(\n+                id=\"msg_1\",\n+                content=[\n+                    TextBlock(text=\"Let me search. \", type=\"text\"),\n+                    TextBlock(text=\"The answer is \", type=\"text\"),\n+                    TextBlock(text=\"42.\", type=\"text\"),\n+                ],\n+                model=\"claude-test\",\n+                role=\"assistant\",\n+                stop_reason=\"end_turn\",\n+                stop_sequence=None,\n+                type=\"message\",\n+                usage=Usage(input_tokens=1, output_tokens=1),\n+            )\n+\n+    provider.client = SimpleNamespace(messages=FakeMessages())\n+\n+    response = await provider._query({\"model\": \"claude-test\", \"messages\": []}, None)\n+\n+    assert response.completion_text == \"Let me search. The answer is 42.\""
+  }
+ ],
+ "test_files": [
+  "tests/test_anthropic_source.py"
+ ]
+}

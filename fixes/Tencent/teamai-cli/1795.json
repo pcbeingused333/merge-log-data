@@ -1,0 +1,62 @@
+{
+ "repo": "Tencent/teamai-cli",
+ "number": 1795,
+ "url": "https://github.com/Tencent/teamai-cli/pull/1795",
+ "title": "fix(workflow): align output bundle schema with admission",
+ "merged_at": "2026-11-08T23:28:46Z",
+ "files": [
+  {
+   "filename": "docs/guide/workflow-advanced.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -720,7 +720,7 @@ steps:\n \n | Output type | Holds |\n | --- | --- |\n-| `workflow` | A bundle: `definition`, the workflow to run, and optionally `workflows`, the named workflows it runs, `scorers`, generated scorer pins, and `teamRevision`, the team commit whose scorers it uses. |\n+| `workflow` | A bundle: `definition`, the workflow to run, and optionally `workflows`, the named workflows it runs. |\n | `json` | Any JSON value. Expressions cannot read into it; top-level `outputs` can pass it whole. |\n \n `workflow: { from: <step> }` runs the bundle of a step it `needs`. When that step reports, teamai checks the bundle as `workflow start` checks a file, pins it, and keeps it for the run. A bundle it cannot take, one that holds a secret value, a `from` step, a `prompt_file` step or `finally` steps, fails the producing step `invalid_output` with the reason. The producing step runs once, outside any loop or `for_each`. A run with a `from` step is [isolated](#isolated-runs)."
+  },
+  {
+   "filename": "docs/guide/zh-CN/workflow-advanced.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -720,7 +720,7 @@ steps:\n \n | 输出类型 | 包含 |\n | --- | --- |\n-| `workflow` | 一个 bundle：`definition`，即要运行的工作流；以及可选的 `workflows`，它运行的具名工作流；`scorers`，生成的评分器固定版本；`teamRevision`，它使用其评分器的团队提交。 |\n+| `workflow` | 一个 bundle：`definition`，即要运行的工作流；以及可选的 `workflows`，它运行的具名工作流。 |\n | `json` | 任意 JSON 值。表达式无法读取其内部；顶层 `outputs` 可以整个传递它。 |\n \n `workflow: { from: <step> }` 运行它 `needs` 的某个步骤的 bundle。该步骤报告时，teamai 像 `workflow start` 检查文件一样检查这个 bundle，固定它，并在运行期间保留它。无法接受的 bundle，例如包含秘密值、`from` 步骤、`prompt_file` 步骤或 `finally` 步骤的 bundle，会让产生它的步骤以 `invalid_output` 失败并给出原因。产生 bundle 的步骤只运行一次，不在任何循环或 `for_each` 中。带 `from` 步骤的运行是[隔离的](#隔离运行)。"
+  },
+  {
+   "filename": "src/__tests__/workflow-engine.test.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -333,7 +333,7 @@ describe('workflow engine', () => {\n     expect(expectedOutput({ type: 'object', fields: { verdict: { type: 'enum', values: ['pass', 'fail'] }, notes: { type: 'json' }, plan: { type: 'workflow' } } }))\n       .toBe('a value that matches this JSON Schema: `{\"type\":\"object\",\"properties\":{\"verdict\":{\"type\":\"string\",\"enum\":[\"pass\",\"fail\"]},\"notes\":{},'\n         + '\"plan\":{\"type\":\"object\",\"description\":\"A workflow bundle, where definition is a workflow file as JSON.\",'\n-        + '\"properties\":{\"definition\":{\"type\":\"object\"},\"workflows\":{\"type\":\"object\"},\"scorers\":{\"type\":\"object\"},\"teamRevision\":{\"type\":\"string\"}},'\n+        + '\"properties\":{\"definition\":{\"type\":\"object\"},\"workflows\":{\"type\":\"object\"}},'\n         + '\"required\":[\"definition\"],\"additionalProperties\":false}},'\n         + '\"required\":[\"verdict\",\"notes\",\"plan\"]}`');\n     // The example in docs/guide/workflow.md, as the guide quotes it."
+  },
+  {
+   "filename": "src/__tests__/workflow-output-instruction.test.ts",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -5,6 +5,7 @@ import type { StartDriver } from '../workflow/conformance-interpreter.js';\n import { runLocalDriver } from '../workflow/drivers/local/local-driver.js';\n import { createLocalToolAdapter, type ToolSpawn } from '../workflow/drivers/local/local-tool-adapter.js';\n import { startRun } from '../workflow/engine.js';\n+import { BundleSchema, expectedOutput } from '../workflow/output.js';\n import { RunIdSchema } from '../workflow/store.js';\n import { knownSecrets } from '../env-resolution.js';\n import { skillHarness } from './helpers/skill-harness.js';\n@@ -85,3 +86,11 @@ describe.each(Object.entries(handedToAgent))('a prompt step with an output under\n     expect(text).toContain(JSON.stringify(PLAN_SCHEMA));\n   });\n });\n+\n+it('renders exactly the workflow bundle keys admission accepts', () => {\n+  const rendered = JSON.parse(expectedOutput({ type: 'workflow' }).split('`')[1]);\n+\n+  expect(Object.keys(rendered.properties)).toEqual(Object.keys(BundleSchema.shape));\n+  expect(rendered.required).toEqual(['definition']);\n+  expect(rendered.additionalProperties).toBe(false);\n+});"
+  },
+  {
+   "filename": "src/workflow/admission.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 6,
+   "patch": "@@ -9,6 +9,7 @@ import { secretKey } from '../env-resolution.js';\n import type { LocalConfig } from '../types.js';\n import { redactJson } from '../utils/redact.js';\n import { workflowsRunBy } from './cache.js';\n+import { BundleSchema } from './output.js';\n import { formatDiagnostic, parseWorkflow } from './parse.js';\n import type { WorkflowFiles } from './parse-context.js';\n import { mergeRequirements, type InEffect } from './requirements.js';\n@@ -29,12 +30,6 @@ export type Candidate =\n   | { kind: 'cached'; definition: WorkflowDefinition; workflows: Record<string, WorkflowDefinition> }\n   | { kind: 'output'; step: string; field: string; output: AdmittedWorkflow['output']; runsUnder: readonly InEffect[] };\n \n-/** A workflow bundle as a step prints it: the definition, and the workflows it runs by name under the keys it names them by. */\n-const BundleSchema = z.object({\n-  definition: z.record(z.string(), z.unknown()),\n-  workflows: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),\n-}).strict();\n-\n type Bundle = z.infer<typeof BundleSchema>;\n \n /** Why a candidate was not admitted. */"
+  },
+  {
+   "filename": "src/workflow/output.ts",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -3,6 +3,12 @@ import type { JsonObject } from '../types.js';\n import { isRecord } from './expression.js';\n import type { OutputSchema } from './types.js';\n \n+/** A workflow bundle as a step prints it: the definition, and the workflows it runs by name under the keys it names them by. */\n+export const BundleSchema = z.object({\n+  definition: z.record(z.string(), z.unknown()),\n+  workflows: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),\n+}).strict();\n+\n /** A step's output as a lease carries it, the parsed shorthand. */\n export const OutputSchemaSchema: z.ZodType<OutputSchema> = z.lazy(() => z.union([\n   z.object({ type: z.enum(['string', 'number', 'boolean', 'json', 'workflow']) }),\n@@ -91,7 +97,7 @@ function jsonSchemaOf(schema: OutputSchema): JsonObject {\n       return {\n         type: 'object',\n         description: 'A workflow bundle, where definition is a workflow file as JSON.',\n-        properties: { definition: { type: 'object' }, workflows: { type: 'object' }, scorers: { type: 'object' }, teamRevision: { type: 'string' } },\n+        properties: Object.fromEntries(Object.keys(BundleSchema.shape).map((key) => [key, { type: 'object' }])),\n         required: ['definition'],\n         additionalProperties: false,\n       };"
+  },
+  {
+   "filename": "src/workflow/types.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -30,7 +30,7 @@ export type OutputSchema =\n   /** Any JSON value, which no expression reads into; a workflow's `outputs` may pass it whole. Step outputs only. */\n   | { type: 'json' }\n   /**\n-   * A workflow bundle, `{ definition, workflows?, scorers?, teamRevision? }`, admitted when its step reports, which a\n+   * A workflow bundle, `{ definition, workflows? }`, admitted when its step reports, which a\n    * `from` step runs. Only one field of a step's object output may have it.\n    */\n   | { type: 'workflow' };"
+  }
+ ],
+ "test_files": [
+  "src/__tests__/workflow-engine.test.ts",
+  "src/__tests__/workflow-output-instruction.test.ts"
+ ]
+}

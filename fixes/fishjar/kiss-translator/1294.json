@@ -1,0 +1,26 @@
+{
+ "repo": "fishjar/kiss-translator",
+ "number": 1294,
+ "url": "https://github.com/fishjar/kiss-translator/pull/1294",
+ "title": "fix: fall back on OpenAI-compatible stream errors",
+ "merged_at": "2026-11-09T03:22:17Z",
+ "files": [
+  {
+   "filename": "src/builtin-plugins/streamResponses.js",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -39,6 +39,13 @@ export function getStreamDelta(json, apiType) {\n     case OPT_TRANS_EPHONEAI:\n     case OPT_TRANS_APIMART:\n       // OpenAI 兼容协议的大模型 delta 提取逻辑\n+      if (json.error) {\n+        const error = new Error(\n+          json.error.message || \"OpenAI-compatible stream failed\"\n+        );\n+        error.isAIStreamTerminal = true;\n+        throw error;\n+      }\n       return json.choices?.[0]?.delta?.content || \"\";\n     case OPT_TRANS_GEMINI: {\n       // 两套 Gemini 协议共用同一接口类型：Interactions 带事件类型，generateContent 返回 candidates。"
+  },
+  {
+   "filename": "src/libs/stream.test.js",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -17,6 +17,8 @@ import {\n } from \"./stream\";\n import {\n   OPT_TRANS_CLAUDE,\n+  OPT_TRANS_OPENAI,\n+  OPT_TRANS_OPENROUTER,\n   OPT_TRANS_EPHONEAI,\n   OPT_TRANS_APIMART,\n   OPT_TRANS_GEMINI,\n@@ -108,6 +110,40 @@ describe(\"createSSEParser\", () => {\n });\n \n describe(\"getStreamDelta\", () => {\n+  test.each([OPT_TRANS_OPENAI, OPT_TRANS_OPENROUTER])(\n+    \"turns %s mid-stream errors into terminal fallback errors\",\n+    (apiType) => {\n+      expect(\n+        getStreamDelta(\n+          { choices: [{ delta: { content: \"partial\" } }] },\n+          apiType\n+        )\n+      ).toBe(\"partial\");\n+      expect(() =>\n+        getStreamDelta(\n+          { error: { message: \"Provider unavailable\", code: 503 } },\n+          apiType\n+        )\n+      ).toThrow(\n+        expect.objectContaining({\n+          message: \"Provider unavailable\",\n+          isAIStreamTerminal: true,\n+        })\n+      );\n+    }\n+  );\n+\n+  test(\"uses a fallback message for OpenAI-compatible errors without a message\", () => {\n+    expect(() =>\n+      getStreamDelta({ error: { code: 500 } }, OPT_TRANS_OPENAI)\n+    ).toThrow(\n+      expect.objectContaining({\n+        message: \"OpenAI-compatible stream failed\",\n+        isAIStreamTerminal: true,\n+      })\n+    );\n+  });\n+\n   test(\"extracts ePhoneAI as an OpenAI-compatible stream\", () => {\n     const chunk = {\n       choices: [{ delta: { content: \"hello\" } }],"
+  }
+ ],
+ "test_files": [
+  "src/libs/stream.test.js"
+ ]
+}

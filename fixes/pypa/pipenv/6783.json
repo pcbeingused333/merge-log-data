@@ -1,0 +1,33 @@
+{
+ "repo": "pypa/pipenv",
+ "number": 6783,
+ "url": "https://github.com/pypa/pipenv/pull/6783",
+ "title": "fix(scan): preserve Safety stderr on quiet failures",
+ "merged_at": "2026-11-09T02:36:08Z",
+ "files": [
+  {
+   "filename": "news/quiet-scan-stderr.bugfix.rst",
+   "status": "added",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,2 @@\n+Preserve Safety's error output when running ``pipenv --quiet check --scan``\n+if the scan fails, while keeping successful quiet scans free of stderr warnings."
+  },
+  {
+   "filename": "pipenv/routines/scan.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -496,6 +496,7 @@ def do_scan(  # noqa: PLR0913\n             parse_safety_output(output, quiet)\n         else:\n             sys.stdout.write(output)\n+        if not quiet or exit_code != 0:\n             sys.stderr.write(error)\n \n         sys.exit(exit_code)"
+  },
+  {
+   "filename": "tests/unit/test_scan_stderr.py",
+   "status": "added",
+   "additions": 54,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,54 @@\n+\"\"\"Safety diagnostics must remain visible when scan runs quietly.\"\"\"\n+\n+from unittest import mock\n+\n+import pytest\n+\n+from pipenv.routines import scan\n+\n+\n+@pytest.mark.parametrize(\"quiet\", [True, False])\n+@pytest.mark.parametrize(\n+    (\"output\", \"error\", \"returncode\"),\n+    [\n+        (\"\", \"Safety API key is invalid\\n\", 1),\n+        (\"\", \"Safety network error\\n\", 1),\n+        ('{\"report_meta\": {\"vulnerabilities_found\": 0}}', \"\", 0),\n+        ('{\"report_meta\": {\"vulnerabilities_found\": 0}}', \"AuthlibDeprecationWarning\\n\", 0),\n+        ('{\"report_meta\": {\"vulnerabilities_found\": 1}}', \"Safety warning\\n\", 64),\n+    ],\n+)\n+def test_scan_preserves_stderr(\n+    monkeypatch, tmp_path, capsys, quiet, output, error, returncode\n+):\n+    project = mock.MagicMock()\n+    project.lockfile.exists = True\n+    requirements = tmp_path / \"requirements.txt\"\n+    requirements.write_text(\"requests==2.0\\n\")\n+    replacements = {\n+        \"run_pep508_check\": {},\n+        \"check_pep508_requirements\": None,\n+        \"get_requirements\": mock.Mock(stdout=\"requests==2.0\\n\"),\n+        \"create_temp_requirements_file\": str(requirements),\n+        \"is_safety_installed\": True,\n+        \"project_python\": \"python\",\n+        \"build_safety_scan_options\": ([], []),\n+        \"run_safety_scan\": (output, error, returncode),\n+    }\n+    for name, result in replacements.items():\n+        monkeypatch.setattr(scan, name, mock.Mock(return_value=result))\n+\n+    with pytest.raises(SystemExit) as exc:\n+        scan.do_scan(project, system=True, quiet=quiet)\n+\n+    assert exc.value.code == returncode\n+    captured = capsys.readouterr()\n+    if error and (not quiet or returncode != 0):\n+        assert captured.err.count(error) == 1\n+    else:\n+        assert captured.err == \"\"\n+    if quiet and output:\n+        assert \"vulnerabilities found.\" in captured.out\n+    elif not quiet:\n+        assert captured.out == output\n+    assert not requirements.exists()"
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_scan_stderr.py"
+ ]
+}

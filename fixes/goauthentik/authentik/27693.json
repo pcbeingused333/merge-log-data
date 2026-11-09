@@ -1,0 +1,33 @@
+{
+ "repo": "goauthentik/authentik",
+ "number": 27693,
+ "url": "https://github.com/goauthentik/authentik/pull/27693",
+ "title": "core: exclude the edited object from unique attribute checks",
+ "merged_at": "2026-11-08T23:05:04Z",
+ "files": [
+  {
+   "filename": "authentik/core/api/object_attributes.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -27,7 +27,7 @@ def validate(self, data: dict[str, Any]) -> dict[str, Any]:\n             if any(path == key or path.startswith(f\"{key}.\") for key in hidden):\n                 continue\n             value = get_path_from_dict(attrs, attr.key)\n-            attr.run_validation(value)\n+            attr.run_validation(value, instance)\n         return data\n \n "
+  },
+  {
+   "filename": "authentik/core/models.py",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 2,
+   "patch": "@@ -1563,7 +1563,7 @@ class AttributeType(models.TextChoices):\n     # https://github.com/goauthentik/authentik/issues/24250\n     is_array = models.BooleanField(default=False)\n \n-    def run_validation(self, value: Any) -> None:\n+    def run_validation(self, value: Any, instance: models.Model | None = None) -> None:\n         err_key = f\"attributes_{self.key}\"\n \n         if self.is_required and value is None:\n@@ -1605,7 +1605,11 @@ def run_validation(self, value: Any) -> None:\n         if not self.is_array and self.is_unique:\n             model: type[models.Model] = self.object_type.model_class()\n             lookup_key = f\"attributes__{self.key.replace('.', '__')}\"\n-            if model.objects.filter(**{lookup_key: value}).exists():\n+            existing = model.objects.filter(**{lookup_key: value})\n+            # The row being saved already has this value; uniqueness is against other objects.\n+            if instance is not None and isinstance(instance, model) and instance.pk is not None:\n+                existing = existing.exclude(pk=instance.pk)\n+            if existing.exists():\n                 raise ValidationError({err_key: _(\"Value is not unique.\")})\n \n     @property"
+  },
+  {
+   "filename": "authentik/core/tests/test_object_attributes.py",
+   "status": "modified",
+   "additions": 32,
+   "deletions": 0,
+   "patch": "@@ -134,6 +134,38 @@ def test_user_attrib_validation_unique(self):\n         self.assertEqual(res.status_code, 400)\n         self.assertJSONEqual(res.content, {f\"attributes_{attr.key}\": [\"Value is not unique.\"]})\n \n+    def test_user_attrib_validation_unique_same_user(self):\n+        attr = ObjectAttribute.objects.create(\n+            object_type=ContentType.objects.get_for_model(User),\n+            label=\"foo\",\n+            key=generate_id(),\n+            type=ObjectAttribute.AttributeType.TEXT,\n+            is_unique=True,\n+        )\n+        self.user.attributes[attr.key] = \"foo\"\n+        self.user.save()\n+        res = self.client.patch(\n+            reverse(\"authentik_api:user-detail\", kwargs={\"pk\": self.user.pk}),\n+            data={\n+                \"name\": \"Renamed\",\n+                \"attributes\": {attr.key: \"foo\"},\n+            },\n+        )\n+        self.assertEqual(res.status_code, 200, res.content)\n+        self.user.refresh_from_db()\n+        self.assertEqual(self.user.name, \"Renamed\")\n+        self.assertEqual(self.user.attributes[attr.key], \"foo\")\n+\n+        other_user = create_test_user()\n+        res = self.client.patch(\n+            reverse(\"authentik_api:user-detail\", kwargs={\"pk\": other_user.pk}),\n+            data={\n+                \"attributes\": {attr.key: \"foo\"},\n+            },\n+        )\n+        self.assertEqual(res.status_code, 400)\n+        self.assertJSONEqual(res.content, {f\"attributes_{attr.key}\": [\"Value is not unique.\"]})\n+\n     def test_user_attrib_validation_regex(self):\n         attr = ObjectAttribute.objects.create(\n             object_type=ContentType.objects.get_for_model(User),"
+  }
+ ],
+ "test_files": [
+  "authentik/core/tests/test_object_attributes.py"
+ ]
+}

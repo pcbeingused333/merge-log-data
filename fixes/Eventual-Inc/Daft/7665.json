@@ -1,0 +1,26 @@
+{
+ "repo": "Eventual-Inc/Daft",
+ "number": 7665,
+ "url": "https://github.com/Eventual-Inc/Daft/pull/7665",
+ "title": "fix(ai): count Gemini thinking tokens in output token metrics",
+ "merged_at": "2026-11-09T00:28:27Z",
+ "files": [
+  {
+   "filename": "daft/ai/google/protocols/prompter.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -211,7 +211,9 @@ async def prompt(self, messages: tuple[Any, ...]) -> Any:\n         if response.usage_metadata:\n             self._record_usage_metrics(\n                 input_tokens=response.usage_metadata.prompt_token_count or 0,\n-                output_tokens=response.usage_metadata.candidates_token_count or 0,\n+                # Gemini thinking models report reasoning tokens separately from candidates\n+                output_tokens=(response.usage_metadata.candidates_token_count or 0)\n+                + (response.usage_metadata.thoughts_token_count or 0),\n                 total_tokens=response.usage_metadata.total_token_count or 0,\n             )\n "
+  },
+  {
+   "filename": "tests/ai/google/test_google_prompter.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 3,
+   "patch": "@@ -261,7 +261,8 @@ async def _test():\n             usage = Mock()\n             usage.prompt_token_count = 10\n             usage.candidates_token_count = 20\n-            usage.total_token_count = 30\n+            usage.thoughts_token_count = 5\n+            usage.total_token_count = 35\n             mock_response.usage_metadata = usage\n \n             mock_client_instance.aio.models.generate_content = AsyncMock(return_value=mock_response)\n@@ -299,10 +300,10 @@ async def _test():\n                     assert val == 10\n                     has_input = True\n                 elif name == \"output tokens\":\n-                    assert val == 20\n+                    assert val == 25  # candidates (20) + thoughts (5)\n                     has_output = True\n                 elif name == \"total tokens\":\n-                    assert val == 30\n+                    assert val == 35\n                     has_total = True\n \n             assert has_input and has_output and has_total"
+  }
+ ],
+ "test_files": [
+  "tests/ai/google/test_google_prompter.py"
+ ]
+}

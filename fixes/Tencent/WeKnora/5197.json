@@ -1,0 +1,26 @@
+{
+ "repo": "Tencent/WeKnora",
+ "number": 5197,
+ "url": "https://github.com/Tencent/WeKnora/pull/5197",
+ "title": "fix(agent): point read-only guidance at the execution permission selector",
+ "merged_at": "2026-11-09T05:16:37Z",
+ "files": [
+  {
+   "filename": "internal/agent/tools/operations.go",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 2,
+   "patch": "@@ -71,15 +71,17 @@ const (\n \tapprovalPolicyAutoWrite = \"Operations with risk write run right away, except skill installs; destructive \" +\n \t\t\"ones and skill installs ask the user to confirm before they run.\"\n \tapprovalPolicyReadOnly = \"The user set the assistant to read-only, so only read and probe operations can run. \" +\n-\t\t\"If they ask for a change, say it is off and that they can allow changes in the assistant settings.\"\n+\t\t\"If they ask for a change, say it is off and that they can allow changes with the execution permission \" +\n+\t\t\"selector below the chat input.\"\n )\n \n // withheldReason tells the model, and through it the user, why an operation\n // is unavailable.\n func withheldReason(w operations.Withholding, access operations.Access) string {\n \tswitch {\n \tcase w.ReadOnly:\n-\t\treturn \"The user set the assistant to read-only; they can allow changes in the assistant settings.\"\n+\t\treturn \"The user set the assistant to read-only; they can allow changes with the execution permission \" +\n+\t\t\t\"selector below the chat input.\"\n \tcase w.SystemAdmin:\n \t\treturn \"Requires system administrator permission; \" +\n \t\t\t\"workspace owner/admin roles and cross-workspace access do not grant it.\""
+  },
+  {
+   "filename": "internal/agent/tools/operations_test.go",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -645,7 +645,10 @@ func TestFindOperationsExplainsWithheldMatches(t *testing.T) {\n \n \treadOnly := find(operations.Access{Level: types.AssistantAccessReadOnly}, \"knowledge.delete\")\n \trequire.Len(t, readOnly.Unavailable, 1)\n-\tassert.Contains(t, readOnly.Unavailable[0].Reason, \"assistant settings\")\n+\tassert.Contains(t, readOnly.Unavailable[0].Reason, \"selector below the chat input\")\n+\tassert.NotContains(t, readOnly.Unavailable[0].Reason, \"assistant settings\")\n+\tassert.Contains(t, approvalPolicy(types.AssistantAccessReadOnly), \"selector below the chat input\")\n+\tassert.NotContains(t, approvalPolicy(types.AssistantAccessReadOnly), \"assistant settings\")\n \n \tcontributor := find(operations.Access{Role: types.TenantRoleContributor, EnforceRole: true}, \"knowledge.delete\")\n \trequire.Len(t, contributor.Operations, 1)"
+  }
+ ],
+ "test_files": [
+  "internal/agent/tools/operations_test.go"
+ ]
+}

@@ -1,0 +1,47 @@
+{
+ "repo": "bytedance/deer-flow",
+ "number": 8038,
+ "url": "https://github.com/bytedance/deer-flow/pull/8038",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-09T00:32:09Z",
+   "body": "Reviewed at head 4dd46fce (static review). The fix is correctly placed: filtering runs before every early return (image-only pass-through, upload marker, already-framed), so the untyped bare-string parts can no longer survive any of the paths #8037 identified. The predicate (`not block`) matches `_extract_text_from_content`'s skip exactly, all-empty lists collapse to `\"\"` as documented, and the returned copies are built from `deepcopy` so the persisted message stays untouched (asserted). Coverage looks right: five insertion positions around typed/bare/image blocks plus image-only / upload / framed / all-empty shapes across sync and async, and the middlewares AGENTS.md is updated. Three non-blocking findings below; none block this fix."
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-09T01:27:20Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "backend/packages/harness/deerflow/agents/middlewares/input_sanitization_middleware.py",
+   "created_at": "2026-11-09T00:32:09Z",
+   "body": "**Important (residual path, same crash class):** when `original_user_content` is set and `rfind` fails (the extraction-disagreement branch around lines 387-407), the per-block fallback does `new_content.append(frame_untrusted_text(block))` — a bare string stays a bare string in the outgoing content list. A non-empty bare string there still reaches the provider as an untyped content part, i.e. exactly the Chat Completions 400 this PR removes everywhere else. Wrapping the framed result as `{\"type\": \"text\", \"text\": ...}` in that branch would close the class. Pre-existing and only reachable on the disagreement path, so fine to defer — but worth a follow-up issue or a sentence in the AGENTS.md note added here."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/packages/harness/deerflow/agents/middlewares/input_sanitization_middleware.py",
+   "created_at": "2026-11-09T00:32:09Z",
+   "body": "**Suggestion (scope of the predicate):** this removes empty *bare* strings only. `_extract_text_from_content` skips empty typed text blocks symmetrically (`{\"type\": \"text\", \"text\": \"\"}` — line 295, same \"matches message_content_to_text behaviour\" comment), but those still survive every path here: extraction skips them and `_rebuild_content` treats them as non-text blocks and re-inserts them (e.g. `[\"\", {\"type\": \"text\", \"text\": \"\"}, {\"type\": \"text\", \"text\": \"hi\"}]` → `[{\"type\": \"text\", \"text\": \"\"}, merged-text]`). Chat Completions accepts typed empty parts, but Anthropic rejects empty text blocks, so the request can still 400 there. If provider-safe content is the goal, consider extending the filter to empty typed text blocks too — or noting in the AGENTS.md paragraph why they intentionally stay."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/packages/harness/deerflow/agents/middlewares/input_sanitization_middleware.py",
+   "created_at": "2026-11-09T00:32:09Z",
+   "body": "**Nit / question on the all-empty shape:** `[\"\", \"\"]` → content `\"\"`. OpenAI accepts empty string user content, but Anthropic turns string content into a text block and rejects empty text, so an all-empty turn can still 400 on Anthropic-backed runs. Since this middleware replaces messages in place and cannot drop them, `\"\"` is the reasonable local choice — but is an all-empty-turn drop (or placeholder) handled anywhere upstream (Gateway / IM channels)? If not, worth a line in the PR body or the AGENTS.md note acknowledging the residual case."
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-09T00:45:52Z",
+   "body": "The middleware AGENTS.md now records all three residual cases. The upload\nextraction-disagreement fallback can retain non-empty untyped strings; empty\ntyped text blocks are outside this fix's empty-bare-string scope; and collapsing\nan all-empty list to an empty string does not guarantee Anthropic acceptance.\nNo upstream Gateway / IM empty-turn handling is assumed. The affected middleware\nsuite still passes all 225 tests.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
+}

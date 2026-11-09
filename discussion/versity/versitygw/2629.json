@@ -3,8 +3,58 @@
  "number": 2629,
  "url": "https://github.com/versity/versitygw/pull/2629",
  "state": "open",
- "reviews": [],
- "review_comments": [],
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-09T06:25:54Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "backend/azure/azure.go",
+   "created_at": "2026-11-09T06:19:43Z",
+   "body": "Rather than rebuilding a client (and pipeline) per request and re-applying the options in three places, derive these from the service client. It already carries the SAS query, the strip policy and the retry options, and the SDK escapes names the same way (`url.PathEscape` + `runtime.JoinPaths`, which keeps the query):\n\n```go\nfunc (az *Azure) getBlobClient(cntr, blb string) (*blob.Client, error) {\n\treturn az.client.ServiceClient().NewContainerClient(cntr).NewBlobClient(blb), nil\n}\n\nfunc (az *Azure) getContainerClient(cntr string) (*container.Client, error) {\n\treturn az.client.ServiceClient().NewContainerClient(cntr), nil\n}\n\nfunc (az *Azure) getBlockBlobClient(cntr, blb string) (*blockblob.Client, error) {\n\treturn az.client.ServiceClient().NewContainerClient(cntr).NewBlockBlobClient(blb), nil\n}\n```\n\nThis makes the fix structural (a future helper can't forget the options), drops the manual `+\"?\"+az.sasToken` concatenation, and shares one pipeline (including the bearer-token cache with default credentials). The exported `azblobclient.ClientOptions()` is then not needed. Your new test and the full `backend/azure` suite pass with this change."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/azure/sas_transport_test.go",
+   "created_at": "2026-11-09T06:20:16Z",
+   "body": "This test takes ~9s. `backend/azure` can't set `azblobclient.retryOptions`, so every subtest goes through the SDK default retries (3 retries, 0.8s/1.6s/3.2s backoff). Override retries per call:\n\n```go\nctx := policy.WithRetryOptions(context.Background(), policy.RetryOptions{MaxRetries: -1})\n```\n\n(import `github.com/Azure/azure-sdk-for-go/sdk/azcore/policy`). It runs in ~0.7s with that."
+  },
+  {
+   "role": "contributor",
+   "path": "internal/azblobclient/azblobclient.go",
+   "created_at": "2026-11-09T06:20:59Z",
+   "body": "`ClientOptions()` now runs on every request, and its result depends on a mutable package global that only exists for tests. Since `policy.WithRetryOptions(ctx, ...)` overrides retries per call, please drop `retryOptions`: switch `TestNewKeepsSASOutOfTransportErrors` to the context override and remove `Retry` here. That keeps the exported function pure, avoids a latent data race if a test ever runs in parallel, and removes the duplicated \"zero value / tests\" note in both doc comments."
+  },
+  {
+   "role": "contributor",
+   "path": "internal/azblobclient/azblobclient.go",
+   "created_at": "2026-11-09T06:21:21Z",
+   "body": "Nit: the added sentence documents caller obligations of another package on an unexported type, and repeats the `ClientOptions` doc. Please keep the original comment."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/azure/azure.go",
+   "created_at": "2026-11-09T06:21:45Z",
+   "body": "Nit: this comment is on only one of the three helpers. Drop it or make it consistent (moot if the clients are derived from the service client)."
+  },
+  {
+   "role": "contributor",
+   "path": "internal/azblobclient/azblobclient.go",
+   "created_at": "2026-11-09T06:23:14Z",
+   "body": "Same leak through a different path, not covered by this policy (pre-existing): if the SAS token contains a control character, e.g. a trailing `\\n` from a Kubernetes secret in `AZ_SAS_TOKEN`, `http.NewRequestWithContext` fails before the pipeline runs and every request logs:\n\n`parse \"http://…/acct/testbucket?restype=container&sv=…&sig=SECRET\\n\": net/url: invalid control character in URL`\n\nReproduced on both the service client and the per-container client. Validate the token once in `New` (e.g. `url.ParseQuery`, rejecting control characters) with an error that doesn't echo the token."
+  },
+  {
+   "role": "contributor",
+   "path": "internal/azblobclient/azblobclient.go",
+   "created_at": "2026-11-09T06:25:34Z",
+   "body": "\"every blob client must use\" isn't true in the tree: `copySourceURL` still builds `service.NewClient(az.serviceURL, az.defaultCreds, nil)` (`backend/azure/copy.go:66`). It can't leak a SAS (no query there), but either use `az.client.ServiceClient()` there (same credentials) or soften the wording."
+  }
+ ],
  "comments": [
   {
    "role": "collaborator",

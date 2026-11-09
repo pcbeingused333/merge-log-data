@@ -1,0 +1,26 @@
+{
+ "repo": "aurelio-labs/semantic-router",
+ "number": 821,
+ "url": "https://github.com/aurelio-labs/semantic-router/pull/821",
+ "title": "fix(encoders): fall back to cl100k_base for models unknown to tiktoken",
+ "merged_at": "2026-11-09T02:32:59Z",
+ "files": [
+  {
+   "filename": "semantic_router/encoders/openai.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -97,7 +97,11 @@ def __init__(\n         if name in model_configs:\n             self.token_limit = model_configs[name].token_limit\n         # get token encoder\n-        self._token_encoder = tiktoken.encoding_for_model(name)\n+        # models served through openai_base_url may not be known to tiktoken\n+        try:\n+            self._token_encoder = tiktoken.encoding_for_model(name)\n+        except KeyError:\n+            self._token_encoder = tiktoken.get_encoding(\"cl100k_base\")\n \n     def __call__(self, docs: List[str], truncate: bool = True) -> List[List[float]]:\n         \"\"\"Encode a list of text documents into embeddings using OpenAI API."
+  },
+  {
+   "filename": "tests/unit/encoders/test_openai.py",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -33,6 +33,19 @@ def test_openai_encoder_init_success(self, mocker):\n         encoder = OpenAIEncoder()\n         assert encoder._client is not None\n \n+    def test_openai_encoder_init_unknown_model_name(\n+        self, mock_openai_client, mock_openai_async_client\n+    ):\n+        # a model served through openai_base_url (not an OpenAI model) has no\n+        # tiktoken mapping; the encoder must still build and truncate\n+        encoder = OpenAIEncoder(\n+            name=\"nomic-embed-text\",\n+            openai_api_key=\"fake_key\",\n+            openai_base_url=\"http://localhost:11434/v1\",\n+        )\n+        assert encoder.name == \"nomic-embed-text\"\n+        assert encoder._truncate(\"hello world\") == \"hello world\"\n+\n     def test_openai_encoder_init_no_api_key(self, mocker):\n         mocker.patch(\"os.getenv\", return_value=None)\n         with pytest.raises(ValueError) as _:"
+  }
+ ],
+ "test_files": [
+  "tests/unit/encoders/test_openai.py"
+ ]
+}

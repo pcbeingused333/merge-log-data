@@ -1,0 +1,26 @@
+{
+ "repo": "microsoft/PyRIT",
+ "number": 4023,
+ "url": "https://github.com/microsoft/PyRIT/pull/4023",
+ "title": "FIX: composite transparent tiles onto white in GridCompositeConverter",
+ "merged_at": "2026-11-09T01:13:08Z",
+ "files": [
+  {
+   "filename": "pyrit/converter/grid_composite_converter.py",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -214,12 +214,20 @@ def _fit_tile(self, image: Image.Image) -> Image.Image:\n         \"\"\"\n         Resize an image to the configured tile size.\n \n+        Transparent pixels are composited onto a white background so that their hidden RGB values\n+        do not leak into the tile.\n+\n         Args:\n             image (Image.Image): The image to resize.\n \n         Returns:\n             Image.Image: The resized RGB image.\n         \"\"\"\n+        if image.has_transparency_data:\n+            rgba = image.convert(\"RGBA\")\n+            flattened = Image.new(\"RGB\", rgba.size, (255, 255, 255))\n+            flattened.paste(rgba, mask=rgba.split()[-1])\n+            image = flattened\n         return image.convert(\"RGB\").resize(self._tile_size, Image.Resampling.LANCZOS)\n \n     def _build_payload_tile(self, *, text: str, background: Image.Image | None) -> Image.Image:"
+  },
+  {
+   "filename": "tests/unit/converter/test_grid_composite_converter.py",
+   "status": "modified",
+   "additions": 46,
+   "deletions": 0,
+   "patch": "@@ -3,6 +3,7 @@\n \n import os\n import pathlib\n+from io import BytesIO\n \n import pytest\n from PIL import Image\n@@ -217,3 +218,48 @@ async def test_convert_async_warns_when_text_overflows(self, innocuous_images, c\n             result = await converter.convert_async(prompt=\"word \" * 200, input_type=\"text\")\n         assert os.path.exists(result.output_text)\n         assert any(\"does not fit\" in message for message in caplog.messages)\n+\n+\n+def test_fit_tile_composites_transparency_onto_white(innocuous_images):\n+    converter = GridCompositeConverter(innocuous_images=innocuous_images, tile_size=(32, 32), random_seed=1)\n+    # Fully transparent pixels whose hidden RGB is black must not render as black.\n+    transparent = Image.new(\"RGBA\", (16, 16), (0, 0, 0, 0))\n+    tile = converter._fit_tile(transparent)\n+    assert tile.mode == \"RGB\"\n+    assert tile.getpixel((16, 16)) == (255, 255, 255)\n+\n+\n+@pytest.mark.parametrize(\n+    (\"mode\", \"transparency\", \"expected_pixels\"),\n+    [\n+        (\"RGBA\", None, [(255, 255, 255), (255, 127, 127), (255, 0, 0)]),\n+        (\"LA\", None, [(255, 255, 255), (127, 127, 127), (0, 0, 0)]),\n+        (\"P\", bytes([0, 128, 255]), [(255, 255, 255), (127, 255, 127), (0, 0, 255)]),\n+        (\"P\", 0, [(255, 255, 255), (0, 255, 0), (0, 0, 255)]),\n+    ],\n+)\n+def test_fit_tile_preserves_visible_pixels_when_compositing_transparency(\n+    *,\n+    innocuous_images: list[str],\n+    mode: str,\n+    transparency: int | bytes | None,\n+    expected_pixels: list[tuple[int, int, int]],\n+) -> None:\n+    image = Image.new(mode, (3, 1))\n+    if mode == \"P\":\n+        image.putpalette([255, 0, 0, 0, 255, 0, 0, 0, 255])\n+        image.putdata([0, 1, 2])\n+        image.info[\"transparency\"] = transparency\n+    else:\n+        image.putdata([(0, alpha) if mode == \"LA\" else (255, 0, 0, alpha) for alpha in (0, 128, 255)])\n+    image_bytes = BytesIO()\n+    image.save(image_bytes, format=\"PNG\")\n+    image_bytes.seek(0)\n+    converter = GridCompositeConverter(innocuous_images=innocuous_images, tile_size=(3, 1))\n+\n+    with Image.open(image_bytes) as source:\n+        tile = converter._fit_tile(source)\n+\n+    assert tile.mode == \"RGB\"\n+    assert tile.size == (3, 1)\n+    assert [tile.getpixel((x, 0)) for x in range(3)] == expected_pixels"
+  }
+ ],
+ "test_files": [
+  "tests/unit/converter/test_grid_composite_converter.py"
+ ]
+}

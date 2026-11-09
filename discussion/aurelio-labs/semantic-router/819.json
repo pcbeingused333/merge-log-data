@@ -5,5 +5,16 @@
  "state": "open",
  "reviews": [],
  "review_comments": [],
- "comments": []
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-11-09T02:25:32Z",
+   "body": "Thanks for this. Review found one regression in the Ollama half before it can merge.\n\nThe new cached `AsyncClient` binds to the event loop it was first used on. Calling `asyncio.run(router.acall(...))` a second time then fails with `RuntimeError: Event loop is closed`. This reproduces with real `ollama`/`httpx` against a local keep-alive server. Current `main` succeeds there, because it falls back to the sync client.\n\nPlease make the async client safe across event loops: create it per loop (for example keyed on `asyncio.get_running_loop()`), or don't cache it. Add a regression test that runs `acall` under two separate `asyncio.run(...)` calls. The Google half looks fine."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-09T02:48:18Z",
+   "body": "Thanks for the catch. The Ollama `AsyncClient` is now kept per running event loop (a dict keyed on `asyncio.get_running_loop()`; entries whose loop is closed are dropped when a new client is created, so repeated `asyncio.run(...)` calls don't accumulate clients), so a second `asyncio.run(...)` gets a fresh client instead of reusing one bound to a closed loop. Added a regression test that runs `acall` under two separate `asyncio.run(...)` calls (fails before, passes after).\n\nDisclosure: this change was prepared with an AI coding assistant.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
 }

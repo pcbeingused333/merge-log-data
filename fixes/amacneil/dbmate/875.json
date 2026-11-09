@@ -1,0 +1,40 @@
+{
+ "repo": "amacneil/dbmate",
+ "number": 875,
+ "url": "https://github.com/amacneil/dbmate/pull/875",
+ "title": "fix: fail npm CLI when the binary cannot complete",
+ "merged_at": "2026-11-09T01:02:56Z",
+ "files": [
+  {
+   "filename": ".github/workflows/ci.yml",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -228,6 +228,9 @@ jobs:\n       - run: npm run lint:ci\n         working-directory: typescript\n \n+      - run: npm run test:cli\n+        working-directory: typescript\n+\n       - run: npm run generate\n         working-directory: typescript\n "
+  },
+  {
+   "filename": "typescript/cli.test.ts",
+   "status": "added",
+   "additions": 61,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,61 @@\n+import assert from \"node:assert/strict\";\n+import { spawnSync } from \"node:child_process\";\n+import {\n+  chmodSync,\n+  mkdirSync,\n+  mkdtempSync,\n+  readFileSync,\n+  rmSync,\n+  writeFileSync,\n+} from \"node:fs\";\n+import { tmpdir } from \"node:os\";\n+import { join } from \"node:path\";\n+import { test } from \"node:test\";\n+import ts from \"typescript\";\n+\n+for (const scenario of [\n+  { name: \"success\", body: \"exit 0\", mode: 0o755, status: 0 },\n+  { name: \"failure\", body: \"exit 42\", mode: 0o755, status: 42 },\n+  { name: \"EACCES\", body: \"exit 0\", mode: 0o644, status: 1 },\n+  { name: \"SIGTERM\", body: \"kill -TERM $$\", mode: 0o755, status: 1 },\n+]) {\n+  void test(scenario.name, { skip: process.platform === \"win32\" }, () => {\n+    const dir = mkdtempSync(join(tmpdir(), \"dbmate-cli-\"));\n+    try {\n+      writeFileSync(\n+        join(dir, \"package.json\"),\n+        JSON.stringify({ type: \"module\" }),\n+      );\n+      for (const name of [\"cli\", \"resolveBinary\"]) {\n+        const source = readFileSync(\n+          new URL(`./packages/dbmate/src/${name}.ts`, import.meta.url),\n+          \"utf8\",\n+        );\n+        writeFileSync(\n+          join(dir, `${name}.js`),\n+          ts.transpile(source, { module: ts.ModuleKind.ESNext }),\n+        );\n+      }\n+      const binDir = join(\n+        dir,\n+        \"node_modules\",\n+        \"@dbmate\",\n+        `${process.platform}-${process.arch}`,\n+        \"bin\",\n+      );\n+      mkdirSync(binDir, { recursive: true });\n+      const binary = join(binDir, \"dbmate\");\n+      writeFileSync(binary, `#!/bin/sh\\n${scenario.body}\\n`);\n+      chmodSync(binary, scenario.mode);\n+      const child = spawnSync(process.execPath, [join(dir, \"cli.js\")], {\n+        encoding: \"utf8\",\n+      });\n+      assert.equal(child.status, scenario.status);\n+      if (scenario.name === \"EACCES\") {\n+        assert.match(child.stderr, /EACCES/);\n+      }\n+    } finally {\n+      rmSync(dir, { recursive: true, force: true });\n+    }\n+  });\n+}"
+  },
+  {
+   "filename": "typescript/package.json",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -3,6 +3,7 @@\n   \"type\": \"module\",\n   \"packageManager\": \"npm@11.13.0\",\n   \"scripts\": {\n+    \"test:cli\": \"tsx --test cli.test.ts\",\n     \"clean\": \"rimraf dist packages/dbmate/dist\",\n     \"lint\": \"eslint --report-unused-disable-directives --fix .\",\n     \"lint:ci\": \"eslint --report-unused-disable-directives .\","
+  },
+  {
+   "filename": "typescript/packages/dbmate/src/cli.ts",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -6,4 +6,7 @@ import { resolveBinary } from \"./resolveBinary.js\";\n const child = spawnSync(resolveBinary(), process.argv.slice(2), {\n   stdio: \"inherit\",\n });\n-process.exit(child.status ?? 0);\n+if (child.error) {\n+  console.error(child.error);\n+}\n+process.exit(child.status ?? 1);"
+  }
+ ],
+ "test_files": [
+  "typescript/cli.test.ts"
+ ]
+}

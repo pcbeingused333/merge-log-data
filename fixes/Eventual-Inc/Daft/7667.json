@@ -1,0 +1,26 @@
+{
+ "repo": "Eventual-Inc/Daft",
+ "number": 7667,
+ "url": "https://github.com/Eventual-Inc/Daft/pull/7667",
+ "title": "fix(paimon): read catalog options from pypaimon Options objects",
+ "merged_at": "2026-11-09T00:57:14Z",
+ "files": [
+  {
+   "filename": "daft/io/paimon/_paimon.py",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 2,
+   "patch": "@@ -13,6 +13,22 @@\n     from pypaimon.table.table import Table as PaimonTable\n \n \n+def _get_catalog_options(table: \"PaimonTable\") -> dict[str, str]:\n+    \"\"\"Return the table's catalog options as a plain dict.\n+\n+    pypaimon >= 1.4.1 exposes ``file_io.properties`` as an ``Options`` object (whose ``get`` takes a\n+    ``ConfigOption``) instead of a dict, so normalize it through ``to_map()`` when present.\n+    \"\"\"\n+    file_io = getattr(table, \"file_io\", None)\n+    properties = getattr(file_io, \"properties\", None) if file_io is not None else None\n+    if properties is None:\n+        return {}\n+    to_map = getattr(properties, \"to_map\", None)\n+    if callable(to_map):\n+        properties = to_map()\n+    return properties or {}\n+\n+\n def _convert_paimon_catalog_options_to_io_config(catalog_options: dict[str, str]) -> IOConfig | None:\n     \"\"\"Convert pypaimon catalog options to Daft IOConfig.\n \n@@ -137,8 +153,7 @@ def read_paimon(\n \n     from daft.io.paimon.paimon_scan import PaimonDataSource\n \n-    file_io = getattr(table, \"file_io\", None)\n-    catalog_options = (getattr(file_io, \"properties\", None) or {}) if file_io is not None else {}\n+    catalog_options = _get_catalog_options(table)\n \n     # Infer IO config: user-provided > catalog options > default\n     io_config = io_config or _convert_paimon_catalog_options_to_io_config(catalog_options)"
+  },
+  {
+   "filename": "tests/io/paimon/test_paimon_read.py",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 0,
+   "patch": "@@ -561,3 +561,26 @@ def test_read_composite_pk_table(self, local_paimon_catalog):\n         result = df.to_pydict()\n \n         assert len(result[\"pk1\"]) == 3\n+\n+\n+def test_get_catalog_options_accepts_options_object():\n+    \"\"\"Pypaimon >= 1.4.1 exposes file_io.properties as an Options object, not a dict.\"\"\"\n+    from types import SimpleNamespace\n+\n+    from daft.io.paimon._paimon import _get_catalog_options\n+\n+    class _Options:\n+        def __init__(self, data):\n+            self.data = data\n+\n+        def to_map(self):\n+            return self.data\n+\n+        def get(self, key, default=None):\n+            return self.data.get(key.key, default)\n+\n+    options = {\"warehouse\": \"oss://bucket/wh\"}\n+    assert _get_catalog_options(SimpleNamespace(file_io=SimpleNamespace(properties=_Options(options)))) == options\n+    assert _get_catalog_options(SimpleNamespace(file_io=SimpleNamespace(properties=options))) == options\n+    assert _get_catalog_options(SimpleNamespace(file_io=SimpleNamespace(properties=None))) == {}\n+    assert _get_catalog_options(SimpleNamespace()) == {}"
+  }
+ ],
+ "test_files": [
+  "tests/io/paimon/test_paimon_read.py"
+ ]
+}

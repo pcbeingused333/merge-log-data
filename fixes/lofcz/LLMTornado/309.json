@@ -1,0 +1,33 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 309,
+ "url": "https://github.com/lofcz/LLMTornado/pull/309",
+ "title": "fix(faiss): implement deletion of all collection documents",
+ "merged_at": "2026-11-08T23:56:50Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/VectorDB/FaissDeleteAllTests.cs",
+   "status": "added",
+   "additions": 67,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,67 @@\n+using System.IO;\n+using LlmTornado.VectorDatabases;\n+using LlmTornado.VectorDatabases.Faiss.Integrations;\n+\n+namespace LlmTornado.Tests.VectorDB;\n+\n+[TestFixture]\n+public class FaissDeleteAllTests\n+{\n+    [Test]\n+    public void DeleteAllDocuments_WithoutCollection_ThrowsInvalidOperationException()\n+    {\n+        string directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString(\"N\"));\n+        try\n+        {\n+            FaissVectorDatabase db = new(directory, vectorDimension: 3);\n+            Assert.ThrowsAsync<InvalidOperationException>(async () => await db.DeleteAllDocumentsAsync());\n+        }\n+        finally\n+        {\n+            Directory.Delete(directory, recursive: true);\n+        }\n+    }\n+\n+    [Test]\n+    [Platform(\"Win\", Reason = \"FaissNet 1.1.0 ships native libraries for Windows only\")]\n+    public async Task DeleteAllDocuments_ClearsAndPersistsCollection_AndAllowsNewDocuments()\n+    {\n+        string directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString(\"N\"));\n+        FaissVectorDatabase db = new(directory, vectorDimension: 3);\n+        FaissVectorDatabase? reopened = null;\n+        try\n+        {\n+            await db.InitializeCollection(\"delete-all\");\n+            await db.AddDocumentsAsync([\n+                new VectorDocument(\"a\", \"first\") { Embedding = [1f, 0f, 0f] },\n+                new VectorDocument(\"b\", \"second\") { Embedding = [0f, 1f, 0f] }\n+            ]);\n+            Assert.That(await db.CollectionClient!.CountAsync(), Is.EqualTo(2));\n+\n+            await db.DeleteAllDocumentsAsync();\n+\n+            Assert.That(await db.CollectionClient.CountAsync(), Is.Zero);\n+            Assert.That(await db.GetDocumentsAsync([\"a\", \"b\"]), Is.Empty);\n+            Assert.That(await db.QueryByEmbeddingAsync([1f, 0f, 0f]), Is.Empty);\n+            Assert.That(await db.FaissClient.GetCollectionAsync(\"delete-all\"), Is.Not.Null);\n+\n+            // Reload before disposing the original client: deletion must persist immediately.\n+            reopened = new(directory, vectorDimension: 3);\n+            await reopened.InitializeCollection(\"delete-all\");\n+            Assert.That(await reopened.CollectionClient!.CountAsync(), Is.Zero);\n+            Assert.That(await reopened.QueryByEmbeddingAsync([1f, 0f, 0f]), Is.Empty);\n+            reopened.CollectionClient.Dispose();\n+            reopened = null;\n+\n+            await db.DeleteAllDocumentsAsync();\n+            await db.AddDocumentsAsync([new VectorDocument(\"c\", \"third\") { Embedding = [0f, 0f, 1f] }]);\n+            Assert.That((await db.QueryByEmbeddingAsync([0f, 0f, 1f])).Select(d => d.Id), Is.EqualTo(new[] { \"c\" }));\n+        }\n+        finally\n+        {\n+            reopened?.CollectionClient?.Dispose();\n+            db.CollectionClient?.Dispose();\n+            Directory.Delete(directory, recursive: true);\n+        }\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado.VectorDatabases.Faiss/FaissCollectionClient.cs",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -397,6 +397,20 @@ public Task DeleteAsync(List<string> ids)\n         }\n     }\n \n+    /// <summary>\n+    /// Deletes all entries while preserving the collection.\n+    /// </summary>\n+    public Task DeleteAllAsync()\n+    {\n+        lock (_lock)\n+        {\n+            _index?.Dispose();\n+            InitializeNewIndex();\n+            SaveIndex();\n+            return Task.CompletedTask;\n+        }\n+    }\n+\n     private void RebuildIndex()\n     {\n         // Dispose old index"
+  },
+  {
+   "filename": "src/LlmTornado.VectorDatabases.Faiss/Integrations/FaissVectorDatabase.cs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -204,7 +204,8 @@ public async Task DeleteDocumentsAsync(string[] ids)\n \n     public Task DeleteAllDocumentsAsync()\n     {\n-        throw new NotImplementedException();\n+        ThrowIfCollectionNotInitialized();\n+        return CollectionClient!.DeleteAllAsync();\n     }\n \n     public VectorDocument[] QueryByEmbedding(float[] embedding, TornadoWhereOperator? where = null, int topK = 5, bool includeScore = true)"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/VectorDB/FaissDeleteAllTests.cs"
+ ]
+}
