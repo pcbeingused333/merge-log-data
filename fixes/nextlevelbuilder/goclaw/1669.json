@@ -1,0 +1,33 @@
+{
+ "repo": "nextlevelbuilder/goclaw",
+ "number": 1669,
+ "url": "https://github.com/nextlevelbuilder/goclaw/pull/1669",
+ "title": "fix(providers): keep Codex streamed tool calls in model order",
+ "merged_at": "2026-11-09T07:09:25Z",
+ "files": [
+  {
+   "filename": "internal/providers/codex.go",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 2,
+   "patch": "@@ -6,6 +6,7 @@ import (\n \t\"errors\"\n \t\"fmt\"\n \t\"net/http\"\n+\t\"sort\"\n \t\"strings\"\n \t\"time\"\n )\n@@ -219,7 +220,13 @@ func (p *CodexProvider) chatStreamOnce(ctx context.Context, req ChatRequest, onC\n \timageState.appendToResponse(result)\n \n \t// Build tool calls from accumulators\n+\t// Emit in the order the model produced them, not map iteration order.\n+\tordered := make([]*codexToolCallAcc, 0, len(toolCalls))\n \tfor _, acc := range toolCalls {\n+\t\tordered = append(ordered, acc)\n+\t}\n+\tsort.Slice(ordered, func(i, j int) bool { return ordered[i].seq < ordered[j].seq })\n+\tfor _, acc := range ordered {\n \t\tif acc.name == \"\" {\n \t\t\tcontinue\n \t\t}\n@@ -294,7 +301,7 @@ func (p *CodexProvider) processSSEEvent(event *codexSSEEvent, result *ChatRespon\n \t\tif event.ItemID != \"\" {\n \t\t\tacc := toolCalls[event.ItemID]\n \t\t\tif acc == nil {\n-\t\t\t\tacc = &codexToolCallAcc{}\n+\t\t\t\tacc = &codexToolCallAcc{seq: len(toolCalls)}\n \t\t\t\ttoolCalls[event.ItemID] = acc\n \t\t\t}\n \t\t\tacc.rawArgs += event.Delta\n@@ -310,7 +317,7 @@ func (p *CodexProvider) processSSEEvent(event *codexSSEEvent, result *ChatRespon\n \t\t\tcase \"function_call\":\n \t\t\t\tacc := toolCalls[event.Item.ID]\n \t\t\t\tif acc == nil {\n-\t\t\t\t\tacc = &codexToolCallAcc{}\n+\t\t\t\t\tacc = &codexToolCallAcc{seq: len(toolCalls)}\n \t\t\t\t}\n \t\t\t\tacc.callID = event.Item.CallID\n \t\t\t\tacc.name = event.Item.Name"
+  },
+  {
+   "filename": "internal/providers/codex_test.go",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -748,6 +748,42 @@ func TestCodexProviderChatStreamToolCalls(t *testing.T) {\n \t}\n }\n \n+func TestCodexProviderChatStreamToolCallsKeepStreamOrder(t *testing.T) {\n+\tconst n = 12\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tw.Header().Set(\"Content-Type\", \"text/event-stream\")\n+\t\tflusher := w.(http.Flusher)\n+\n+\t\tfor i := 0; i < n; i++ {\n+\t\t\tfmt.Fprintf(w, \"data: %s\\n\\n\", fmt.Sprintf(`{\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"item_%d\",\"delta\":\"{}\"}`, i))\n+\t\t}\n+\t\tfor i := 0; i < n; i++ {\n+\t\t\tfmt.Fprintf(w, \"data: %s\\n\\n\", fmt.Sprintf(`{\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"id\":\"item_%d\",\"call_id\":\"call_%d\",\"name\":\"tool_%d\",\"arguments\":\"{}\"}}`, i, i, i))\n+\t\t}\n+\t\tfmt.Fprint(w, \"data: {\\\"type\\\":\\\"response.completed\\\",\\\"response\\\":{}}\\n\\n\")\n+\t\tflusher.Flush()\n+\t}))\n+\tdefer server.Close()\n+\n+\tp := NewCodexProvider(\"test\", &staticTokenSource{token: \"test\"}, server.URL, \"gpt-4o\")\n+\tp.retryConfig.Attempts = 1\n+\n+\tresult, err := p.ChatStream(context.Background(), ChatRequest{\n+\t\tMessages: []Message{{Role: \"user\", Content: \"go\"}},\n+\t}, nil)\n+\tif err != nil {\n+\t\tt.Fatalf(\"ChatStream: %v\", err)\n+\t}\n+\tif len(result.ToolCalls) != n {\n+\t\tt.Fatalf(\"ToolCalls length = %d, want %d\", len(result.ToolCalls), n)\n+\t}\n+\tfor i, tc := range result.ToolCalls {\n+\t\tif want := fmt.Sprintf(\"call_%d\", i); tc.ID != want {\n+\t\t\tt.Errorf(\"ToolCalls[%d].ID = %q, want %q\", i, tc.ID, want)\n+\t\t}\n+\t}\n+}\n+\n func TestCodexProviderChatToolCallsNonStream(t *testing.T) {\n \tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n \t\tw.Header().Set(\"Content-Type\", \"text/event-stream\")"
+  },
+  {
+   "filename": "internal/providers/codex_types.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -76,6 +76,7 @@ type codexSSEEvent struct {\n }\n \n type codexToolCallAcc struct {\n+\tseq     int // order in which the item was first seen in the stream\n \tcallID  string\n \tname    string\n \trawArgs string"
+  }
+ ],
+ "test_files": [
+  "internal/providers/codex_test.go"
+ ]
+}

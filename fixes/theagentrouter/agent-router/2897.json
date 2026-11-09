@@ -1,0 +1,26 @@
+{
+ "repo": "theagentrouter/agent-router",
+ "number": 2897,
+ "url": "https://github.com/theagentrouter/agent-router/pull/2897",
+ "title": "translator: map Bedrock guardrail_intervened to finish_reason content_filter",
+ "merged_at": "2026-11-09T16:05:24Z",
+ "files": [
+  {
+   "filename": "internal/translator/openai_awsbedrock.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -313,7 +313,7 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) bedrockStopReasonToOpenAI\n \t\treturn openai.ChatCompletionChoicesFinishReasonStop\n \tcase awsbedrock.StopReasonMaxTokens:\n \t\treturn openai.ChatCompletionChoicesFinishReasonLength\n-\tcase awsbedrock.StopReasonContentFiltered:\n+\tcase awsbedrock.StopReasonContentFiltered, awsbedrock.StopReasonGuardrailIntervened:\n \t\treturn openai.ChatCompletionChoicesFinishReasonContentFilter\n \tcase awsbedrock.StopReasonToolUse:\n \t\treturn openai.ChatCompletionChoicesFinishReasonToolCalls"
+  },
+  {
+   "filename": "internal/translator/openai_awsbedrock_test.go",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 0,
+   "patch": "@@ -2961,3 +2961,26 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_ResponseBody_NullContentBl\n \trequire.Contains(t, string(body), \"Hello!\")\n \trequire.Equal(t, tokenUsageFrom(10, -1, -1, 20, 30, -1), tokenUsage)\n }\n+\n+func TestBedrockStopReasonToOpenAIStopReason(t *testing.T) {\n+\ttests := []struct {\n+\t\tname       string\n+\t\tstopReason *string\n+\t\twant       openai.ChatCompletionChoicesFinishReason\n+\t}{\n+\t\t{\"missing stop reason\", nil, openai.ChatCompletionChoicesFinishReasonStop},\n+\t\t{\"end turn\", ptr.To(awsbedrock.StopReasonEndTurn), openai.ChatCompletionChoicesFinishReasonStop},\n+\t\t{\"stop sequence\", ptr.To(awsbedrock.StopReasonStopSequence), openai.ChatCompletionChoicesFinishReasonStop},\n+\t\t{\"max tokens\", ptr.To(awsbedrock.StopReasonMaxTokens), openai.ChatCompletionChoicesFinishReasonLength},\n+\t\t{\"tool use\", ptr.To(awsbedrock.StopReasonToolUse), openai.ChatCompletionChoicesFinishReasonToolCalls},\n+\t\t{\"content filtered\", ptr.To(awsbedrock.StopReasonContentFiltered), openai.ChatCompletionChoicesFinishReasonContentFilter},\n+\t\t{\"guardrail intervened\", ptr.To(awsbedrock.StopReasonGuardrailIntervened), openai.ChatCompletionChoicesFinishReasonContentFilter},\n+\t\t{\"unknown stop reason\", ptr.To(\"something_new\"), openai.ChatCompletionChoicesFinishReasonStop},\n+\t}\n+\ttranslator := &openAIToAWSBedrockTranslatorV1ChatCompletion{}\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\trequire.Equal(t, tt.want, translator.bedrockStopReasonToOpenAIStopReason(tt.stopReason))\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/translator/openai_awsbedrock_test.go"
+ ]
+}

@@ -1,0 +1,54 @@
+{
+ "repo": "grafana/sigma-rule-deployment",
+ "number": 450,
+ "url": "https://github.com/grafana/sigma-rule-deployment/pull/450",
+ "title": "fix(integrate): align default query window with evaluation interval",
+ "merged_at": "2026-11-09T10:03:19Z",
+ "files": [
+  {
+   "filename": "actions/integrate/README.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -99,6 +99,7 @@ jobs:\n - The integration config file must specify data source connections and alert rule templates.\n - The config file must include `folders.conversion_path` and `folders.deployment_path` settings.\n - Data source configurations should include connection details and authentication.\n+- When `time_window` is unset in both the configuration and defaults, alert queries look back `5m`, matching the default rule group evaluation interval.\n - Alert rule templates define the structure and default values for generated rules.\n - Labels and annotations can be templated from Sigma rule metadata. Refer to [Alert rule labels and annotations](../../docs/configure/labels-and-annotations.md).\n "
+  },
+  {
+   "filename": "config/config-example-v2.yml",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -23,7 +23,7 @@ defaults:\n     data_source: grafanacloud-logs # The UID of a data source\n     # data_source_type: elasticsearch # The data source plugin type, to select a built-in query model. Defaults to the conversion target\n     rule_group: Every 5 Minutes\n-    time_window: 5m\n+    time_window: 5m # Query window and rule group evaluation interval; defaults to 5m when unset\n     folder_id: XXXX\n     org_id: 1\n     test_queries: true # Whether to test the queries against the datasource"
+  },
+  {
+   "filename": "config/schema-v2.json",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -317,7 +317,7 @@\n                 },\n                 \"time_window\": {\n                     \"$ref\": \"#/$defs/timeWindow\",\n-                    \"description\": \"Time window for alert evaluation\",\n+                    \"description\": \"Query lookback window and rule group evaluation interval; defaults to 5m when unset\",\n                     \"examples\": [\n                         \"5m\",\n                         \"1h\","
+  },
+  {
+   "filename": "docs/configure/configuration-reference.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -64,7 +64,7 @@ These settings control the alert rules the integrate stage builds, and how it te\n | `folder_id`            | string  | None       | UID of the Grafana folder the alert rules go in. Every configuration must resolve a value, here or in `defaults`.                                                                                  |\n | `org_id`               | integer | None       | ID of the Grafana organization. Every configuration must resolve a value, here or in `defaults`.                                                                                                   |\n | `rule_group`           | string  | `Default`  | Name of the alert rule group in Grafana.                                                                                                                                                            |\n-| `time_window`          | duration | Refer to the description | How far back each query looks, and how often the rule group is evaluated. Set it explicitly: when it isn't set, queries look back `1m` but the rule group is evaluated every `5m`. |\n+| `time_window`          | duration | `5m`       | How far back each query looks, and how often the rule group is evaluated. |\n | `lookback`             | duration | `0s`      | Shifts the query time range back by this amount, to allow for ingestion delay. For example, a `5m` window with a `1m` lookback queries from 6 minutes ago to 1 minute ago.                         |\n | `test_queries`         | boolean | `false`    | Run each query against the data source and report the results on the pull request.                                                                                                                  |\n | `from`                 | string  | `now-1h`   | Start of the query testing time range, for example, `now-24h`.                                                                                                                                       |"
+  },
+  {
+   "filename": "internal/integrate/integrator.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -735,7 +735,7 @@ func validateAlertDestinations(config model.Configuration) error {\n \n func (i *Integrator) ConvertToAlert(rule *model.ProvisionedAlertRule, queries []string, titles string, cfg model.NamedConfigBlock, conversionFile string, integrateFile string, conversionObject model.ConversionOutput) error {\n \tdatasource := shared.GetConfigValue(cfg.Integration.DataSource, i.config.Defaults.Integration.DataSource, \"nil\")\n-\ttimewindow := shared.GetConfigValue(cfg.Integration.TimeWindow, i.config.Defaults.Integration.TimeWindow, \"1m\")\n+\ttimewindow := shared.GetConfigValue(cfg.Integration.TimeWindow, i.config.Defaults.Integration.TimeWindow, \"5m\")\n \tduration, err := shared.ParseDuration(timewindow)\n \tif err != nil {\n \t\treturn fmt.Errorf(\"error parsing time window: %v\", err)"
+  },
+  {
+   "filename": "internal/integrate/integrator_test.go",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -50,6 +50,21 @@ func TestConvertToAlert(t *testing.T) {\n \t\t\twantDuration:  model.Duration(300 * time.Second),\n \t\t\twantError:     false,\n \t\t},\n+\t\t{\n+\t\t\tname:    \"unset time window matches default evaluation interval\",\n+\t\t\tqueries: []string{\"{job=`.+`} | json | test=`true`\"},\n+\t\t\ttitles:  \"Default Time Window\",\n+\t\t\trule:    &model.ProvisionedAlertRule{UID: \"default-window\"},\n+\t\t\tconvConfig: model.NamedConfigBlock{\n+\t\t\t\tName: \"conv\",\n+\t\t\t\tConfigBlock: model.ConfigBlock{\n+\t\t\t\t\tConversion:  model.ConversionConfig{Target: \"loki\"},\n+\t\t\t\t\tIntegration: model.IntegrationConfig{DataSource: \"my_data_source\", RuleGroup: \"Default\"},\n+\t\t\t\t},\n+\t\t\t},\n+\t\t\twantQueryText: \"sum(count_over_time({job=`.+`} | json | test=`true`[$__auto]))\",\n+\t\t\twantDuration:  model.Duration(5 * time.Minute),\n+\t\t},\n \t\t{\n \t\t\tname:    \"valid new loki query\",\n \t\t\tqueries: []string{\"{job=`.+`} | json | test=`true`\"},"
+  }
+ ],
+ "test_files": [
+  "internal/integrate/integrator_test.go"
+ ]
+}

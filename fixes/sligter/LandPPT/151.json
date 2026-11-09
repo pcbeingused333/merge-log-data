@@ -1,0 +1,26 @@
+{
+ "repo": "sligter/LandPPT",
+ "number": 151,
+ "url": "https://github.com/sligter/LandPPT/pull/151",
+ "title": "fix(ollama): send images via the images field instead of a placeholder",
+ "merged_at": "2026-11-09T11:52:19Z",
+ "files": [
+  {
+   "filename": "src/landppt/ai/providers.py",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 6,
+   "patch": "@@ -1801,22 +1801,25 @@ async def chat_completion(self, messages: List[AIMessage], **kwargs) -> AIRespon\n                     message[\"tool_calls\"] = msg.tool_calls\n                 ollama_messages.append(message)\n             elif isinstance(msg.content, list):\n-                # Multimodal message - convert to text description for Ollama\n+                # Multimodal message - Ollama takes base64 images in a separate \"images\" list\n                 content_parts = []\n+                images = []\n                 for part in msg.content:\n                     if isinstance(part, TextContent):\n                         content_parts.append(part.text)\n                     elif isinstance(part, ImageContent):\n-                        # Ollama doesn't support images directly, add text description\n                         image_url = part.image_url.get(\"url\", \"\")\n-                        if image_url.startswith(\"data:image/\"):\n-                            content_parts.append(\"[Image provided - base64 data]\")\n+                        if image_url.startswith(\"data:image/\") and \",\" in image_url:\n+                            images.append(image_url.split(\",\", 1)[1])\n                         else:\n                             content_parts.append(f\"[Image: {image_url}]\")\n-                ollama_messages.append({\n+                message = {\n                     \"role\": msg.role.value,\n                     \"content\": \" \".join(content_parts)\n-                })\n+                }\n+                if images:\n+                    message[\"images\"] = images\n+                ollama_messages.append(message)\n             else:\n                 # Fallback to string representation\n                 ollama_messages.append({\"role\": msg.role.value, \"content\": str(msg.content)})"
+  },
+  {
+   "filename": "tests/test_ollama_provider_usage.py",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 0,
+   "patch": "@@ -38,3 +38,26 @@ def test_falls_back_when_ollama_omits_counts():\n \n     assert result.usage[\"completion_tokens\"] == 2\n     assert result.finish_reason == \"stop\"\n+\n+\n+def test_images_are_sent_as_ollama_images_not_placeholder_text():\n+    from landppt.ai.base import ImageContent, TextContent\n+\n+    captured = {}\n+\n+    class _Capture:\n+        async def chat(self, **kwargs):\n+            captured.update(kwargs)\n+            return {\"message\": {\"content\": \"ok\"}}\n+\n+    provider = OllamaProvider({\"model\": \"llava\", \"base_url\": \"http://localhost:11434\"})\n+    provider.client = _Capture()\n+    messages = [AIMessage(role=MessageRole.USER, content=[\n+        TextContent(text=\"describe this\"),\n+        ImageContent(image_url={\"url\": \"data:image/png;base64,QUJD\"}),\n+    ])]\n+    asyncio.run(provider.chat_completion(messages))\n+\n+    sent = captured[\"messages\"][0]\n+    assert sent[\"images\"] == [\"QUJD\"]\n+    assert sent[\"content\"] == \"describe this\""
+  }
+ ],
+ "test_files": [
+  "tests/test_ollama_provider_usage.py"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "dynamiq-ai/dynamiq",
+ "number": 1115,
+ "url": "https://github.com/dynamiq-ai/dynamiq/pull/1115",
+ "title": "fix(memory): keep the most recent messages in Weaviate filter-only search",
+ "merged_at": "2026-11-09T15:26:14Z",
+ "files": [
+  {
+   "filename": "dynamiq/memory/backends/weaviate.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 3,
+   "patch": "@@ -313,8 +313,7 @@ def search(\n \n         Returns:\n             List of matching messages sorted by relevance (if query provided)\n-            or potentially unsorted/timestamp-sorted (if only filters provided).\n-            Note: Sorting for filter-only results happens in the Memory class if needed.\n+            or the most recent matches, oldest first (if only filters provided).\n         \"\"\"\n         if self._vector_store is None:\n             raise WeaviateMemoryError(\"Weaviate vector store not initialized.\")\n@@ -350,8 +349,11 @@ def search(\n                     filters=prepared_filters, content_key=self.content_property_name\n                 )\n                 retrieved_messages = [self._document_to_message(doc) for doc in documents]\n+                # filter_documents has no ordering, so truncating it would keep an arbitrary\n+                # subset. Keep the most recent messages, oldest first, like get_all and InMemory.search.\n+                retrieved_messages.sort(key=lambda msg: msg.metadata.get(\"timestamp\", 0))\n                 if effective_limit > 0:\n-                    retrieved_messages = retrieved_messages[:effective_limit]\n+                    retrieved_messages = retrieved_messages[-effective_limit:]\n \n             else:\n                 logger.debug("
+  },
+  {
+   "filename": "tests/unit/memory/test_backend_retrieval_contract.py",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -16,6 +16,7 @@\n \n from dynamiq.memory.backends import InMemory, SQLite\n from dynamiq.prompts import Message, MessageRole\n+from dynamiq.types import Document\n \n TOTAL = 10\n LIMIT = 3\n@@ -148,3 +149,27 @@ def test_postgres_backends_of_one_process_create_their_table_once(mocker):\n \n     assert executed.call_count == 4  # the lock, the table and its two indices\n     assert \"pg_advisory_xact_lock\" in executed.call_args_list[0].args[0]\n+\n+\n+def test_weaviate_filter_only_search_with_limit_returns_the_most_recent(mocker):\n+    \"\"\"filter_documents returns an unordered set; the limit must keep the newest, oldest first.\"\"\"\n+    from dynamiq.memory.backends.weaviate import Weaviate\n+\n+    mocker.patch.object(Weaviate, \"model_post_init\", lambda self, __context: None)\n+    backend = Weaviate.model_construct(collection_name=\"c\", content_property_name=\"message_content\")\n+    store = mocker.Mock()\n+    # Stored out of order, as a vector DB is free to return them.\n+    order = [5, 1, 9, 0, 7, 3, 8, 2, 6, 4]\n+    store.filter_documents.return_value = [\n+        Document(\n+            id=str(i),\n+            content=f\"msg-{i}\",\n+            metadata={\"message_role\": \"user\", \"message_timestamp\": float(i), \"message_id\": str(i)},\n+        )\n+        for i in order\n+    ]\n+    backend._vector_store = store\n+\n+    result = backend.search(query=None, filters={\"field\": \"user_id\", \"operator\": \"==\", \"value\": \"u\"}, limit=LIMIT)\n+\n+    assert [m.content for m in result] == [\"msg-7\", \"msg-8\", \"msg-9\"]"
+  }
+ ],
+ "test_files": [
+  "tests/unit/memory/test_backend_retrieval_contract.py"
+ ]
+}

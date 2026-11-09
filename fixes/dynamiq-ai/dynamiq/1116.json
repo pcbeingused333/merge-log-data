@@ -1,0 +1,56 @@
+{
+ "repo": "dynamiq-ai/dynamiq",
+ "number": 1116,
+ "url": "https://github.com/dynamiq-ai/dynamiq/pull/1116",
+ "title": "fix(cli): read and write CLI JSON files as UTF-8",
+ "merged_at": "2026-11-09T13:58:58Z",
+ "files": [
+  {
+   "filename": "dynamiq/cli/commands/dataset.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -120,7 +120,7 @@ def download_version(*, api: ApiClient, settings: Settings, dataset_version_id:\n     if not ok(response):\n         raise click.ClickException(f\"HTTP {response.status_code}: {response.text.strip()[:2000]}\")\n     if out_path:\n-        with open(out_path, \"w\") as f:\n+        with open(out_path, \"w\", encoding=\"utf-8\") as f:\n             f.write(response.text)\n         click.echo(f\"wrote {out_path}\")\n     else:"
+  },
+  {
+   "filename": "dynamiq/cli/commands/evaluation.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -124,7 +124,7 @@ def download_results(*, api: ApiClient, settings: Settings, evaluation_id: str,\n     if not ok(response):\n         raise click.ClickException(f\"HTTP {response.status_code}: {response.text.strip()[:2000]}\")\n     if out_path:\n-        with open(out_path, \"w\") as f:\n+        with open(out_path, \"w\", encoding=\"utf-8\") as f:\n             f.write(response.text)\n         click.echo(f\"wrote {out_path}\")\n     else:"
+  },
+  {
+   "filename": "dynamiq/cli/commands/workflow.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -16,11 +16,13 @@ def read_json_arg(value: str):\n     \"\"\"Accept inline JSON or @path/to/file.json.\"\"\"\n     try:\n         if value.startswith(\"@\"):\n-            with open(value[1:]) as f:\n+            with open(value[1:], encoding=\"utf-8\") as f:\n                 return json.load(f)\n         return json.loads(value)\n     except FileNotFoundError:\n         raise click.ClickException(f\"file not found: {value[1:]}\")\n+    except UnicodeDecodeError as e:\n+        raise click.ClickException(f\"file is not valid UTF-8: {value[1:]}: {e}\")\n     except json.JSONDecodeError as e:\n         raise click.ClickException(f\"invalid JSON in {value[:60]}: {e}\")\n "
+  },
+  {
+   "filename": "tests/unit/cli/test_dataset_command.py",
+   "status": "added",
+   "additions": 21,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,21 @@\n+from click.testing import CliRunner\n+\n+import dynamiq.cli.commands.dataset as module\n+from dynamiq.cli.commands.dataset import dataset\n+\n+\n+def test_dataset_download_writes_utf8_file(cli_ctx, recording_api, tmp_path, monkeypatch):\n+    real_open = open\n+\n+    def cp1252_default_open(file, mode=\"r\", *args, encoding=None, **kwargs):\n+        return real_open(file, mode, *args, encoding=encoding or \"cp1252\", **kwargs)\n+\n+    monkeypatch.setattr(module, \"open\", cp1252_default_open, raising=False)\n+    text = '{\"question\": \"日本語 – résumé\"}'\n+    recording_api.get = lambda path, **kw: type(\"R\", (), {\"status_code\": 200, \"text\": text})()\n+    out = tmp_path / \"version.json\"\n+\n+    result = CliRunner().invoke(dataset, [\"download\", \"v1\", \"--out\", str(out)], obj=cli_ctx)\n+\n+    assert result.exit_code == 0, result.output\n+    assert out.read_text(encoding=\"utf-8\") == text"
+  },
+  {
+   "filename": "tests/unit/cli/test_evaluation_command.py",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -27,3 +27,27 @@ def test_app_attach_keeps_explicit_values(cli_ctx, recording_api, overrides):\n     sent = recording_api.calls[0][2][\"json\"]\n     for key, value in overrides.items():\n         assert sent[key] == value\n+\n+\n+def _cp1252_default_open(monkeypatch, module):\n+    \"\"\"Make open() without an explicit encoding behave like a cp1252 locale (e.g. Windows).\"\"\"\n+    real_open = open\n+\n+    def fake_open(file, mode=\"r\", *args, encoding=None, **kwargs):\n+        return real_open(file, mode, *args, encoding=encoding or \"cp1252\", **kwargs)\n+\n+    monkeypatch.setattr(module, \"open\", fake_open, raising=False)\n+\n+\n+def test_results_download_writes_utf8_file(cli_ctx, recording_api, tmp_path, monkeypatch):\n+    import dynamiq.cli.commands.evaluation as module\n+\n+    _cp1252_default_open(monkeypatch, module)\n+    text = '{\"output\": \"日本語 – résumé\"}'\n+    recording_api.get = lambda path, **kw: type(\"R\", (), {\"status_code\": 200, \"text\": text})()\n+    out = tmp_path / \"results.json\"\n+\n+    result = CliRunner().invoke(evaluation, [\"results-download\", \"e1\", \"--out\", str(out)], obj=cli_ctx)\n+\n+    assert result.exit_code == 0, result.output\n+    assert out.read_text(encoding=\"utf-8\") == text"
+  },
+  {
+   "filename": "tests/unit/cli/test_read_json_arg.py",
+   "status": "added",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,30 @@\n+import click\n+import pytest\n+\n+import dynamiq.cli.commands.workflow as module\n+from dynamiq.cli.commands.workflow import read_json_arg\n+\n+\n+def _cp1252_default_open(monkeypatch):\n+    real_open = open\n+\n+    def fake_open(file, mode=\"r\", *args, encoding=None, **kwargs):\n+        return real_open(file, mode, *args, encoding=encoding or \"cp1252\", **kwargs)\n+\n+    monkeypatch.setattr(module, \"open\", fake_open, raising=False)\n+\n+\n+def test_read_json_arg_reads_file_as_utf8(tmp_path, monkeypatch):\n+    _cp1252_default_open(monkeypatch)\n+    path = tmp_path / \"items.json\"\n+    path.write_text('[{\"q\": \"日本語 – résumé\"}]', encoding=\"utf-8\")\n+\n+    assert read_json_arg(f\"@{path}\") == [{\"q\": \"日本語 – résumé\"}]\n+\n+\n+def test_read_json_arg_non_utf8_file_is_click_exception(tmp_path):\n+    path = tmp_path / \"items.json\"\n+    path.write_bytes('[\"résumé\"]'.encode(\"cp1252\"))\n+\n+    with pytest.raises(click.ClickException, match=\"not valid UTF-8\"):\n+        read_json_arg(f\"@{path}\")"
+  }
+ ],
+ "test_files": [
+  "tests/unit/cli/test_dataset_command.py",
+  "tests/unit/cli/test_evaluation_command.py",
+  "tests/unit/cli/test_read_json_arg.py"
+ ]
+}

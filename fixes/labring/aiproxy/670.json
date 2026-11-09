@@ -1,0 +1,26 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 670,
+ "url": "https://github.com/labring/aiproxy/pull/670",
+ "title": "fix(ollama): report finish_reason tool_calls when the model calls tools",
+ "merged_at": "2026-11-09T12:46:46Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/ollama/finish_reason_test.go",
+   "status": "added",
+   "additions": 69,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,69 @@\n+//nolint:testpackage\n+package ollama\n+\n+import (\n+\t\"context\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"strings\"\n+\t\"testing\"\n+\n+\t\"github.com/gin-gonic/gin\"\n+\t\"github.com/labring/aiproxy/core/relay/meta\"\n+\t\"github.com/stretchr/testify/assert\"\n+)\n+\n+func toolCallMessage() *Message {\n+\treturn &Message{\n+\t\tRole: \"assistant\",\n+\t\tToolCalls: []*Tool{\n+\t\t\t{Function: Function{Name: \"get_weather\", Arguments: map[string]any{\"city\": \"Paris\"}}},\n+\t\t},\n+\t}\n+}\n+\n+func TestResponse2OpenAI_FinishReason(t *testing.T) {\n+\tm := &meta.Meta{OriginModel: \"llama3\"}\n+\n+\twithTools := response2OpenAI(\n+\t\tm,\n+\t\t&ChatResponse{Message: toolCallMessage(), Done: true, DoneReason: \"stop\"},\n+\t)\n+\tassert.Equal(t, \"tool_calls\", withTools.Choices[0].FinishReason)\n+\n+\tplain := response2OpenAI(m, &ChatResponse{\n+\t\tMessage: &Message{Role: \"assistant\", Content: \"hi\"}, Done: true, DoneReason: \"stop\",\n+\t})\n+\tassert.Equal(t, \"stop\", plain.Choices[0].FinishReason)\n+\n+\tlength := response2OpenAI(m, &ChatResponse{\n+\t\tMessage: toolCallMessage(), Done: true, DoneReason: \"length\",\n+\t})\n+\tassert.Equal(t, \"length\", length.Choices[0].FinishReason)\n+}\n+\n+func TestStreamHandler_FinishReasonToolCalls(t *testing.T) {\n+\tgin.SetMode(gin.TestMode)\n+\n+\tbody := `{\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"function\":{\"name\":\"get_weather\",\"arguments\":{\"city\":\"Paris\"}}}]},\"done\":false}\n+{\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"done_reason\":\"stop\",\"prompt_eval_count\":3,\"eval_count\":2}\n+`\n+\tw := httptest.NewRecorder()\n+\tc, _ := gin.CreateTestContext(w)\n+\tc.Request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, \"/\", nil)\n+\n+\tresp := &http.Response{\n+\t\tStatusCode: http.StatusOK,\n+\t\tBody:       http.NoBody,\n+\t}\n+\tresp.Body = readCloser{strings.NewReader(body)}\n+\n+\t_, err := StreamHandler(&meta.Meta{OriginModel: \"llama3\"}, c, resp)\n+\tassert.Nil(t, err)\n+\tassert.Contains(t, w.Body.String(), `\"finish_reason\":\"tool_calls\"`)\n+\tassert.NotContains(t, w.Body.String(), `\"finish_reason\":\"stop\"`)\n+}\n+\n+type readCloser struct{ *strings.Reader }\n+\n+func (readCloser) Close() error { return nil }"
+  },
+  {
+   "filename": "core/relay/adaptor/ollama/main.go",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 2,
+   "patch": "@@ -168,7 +168,7 @@ func response2OpenAI(meta *meta.Meta, response *ChatResponse) *relaymodel.TextRe\n \t}\n \n \tif response.Done {\n-\t\tchoice.FinishReason = response.DoneReason\n+\t\tchoice.FinishReason = finishReason(response.DoneReason, len(choice.Message.ToolCalls) > 0)\n \t}\n \n \tfullTextResponse := relaymodel.TextResponse{\n@@ -187,6 +187,17 @@ func response2OpenAI(meta *meta.Meta, response *ChatResponse) *relaymodel.TextRe\n \treturn &fullTextResponse\n }\n \n+// finishReason maps Ollama's done_reason to the OpenAI finish_reason.\n+// Ollama reports \"stop\" even when the model ended its turn with tool calls,\n+// while OpenAI clients expect \"tool_calls\" in that case.\n+func finishReason(doneReason string, hasToolCalls bool) string {\n+\tif hasToolCalls && (doneReason == \"\" || doneReason == \"stop\") {\n+\t\treturn relaymodel.FinishReasonToolCalls\n+\t}\n+\n+\treturn doneReason\n+}\n+\n func streamResponse2OpenAI(\n \tmeta *meta.Meta,\n \tollamaResponse *ChatResponse,\n@@ -205,7 +216,10 @@ func streamResponse2OpenAI(\n \t}\n \n \tif ollamaResponse.Done {\n-\t\tchoice.FinishReason = ollamaResponse.DoneReason\n+\t\tchoice.FinishReason = finishReason(\n+\t\t\tollamaResponse.DoneReason,\n+\t\t\ttoolCallOffset > 0 || len(choice.Delta.ToolCalls) > 0,\n+\t\t)\n \t}\n \n \tresponse := relaymodel.ChatCompletionsStreamResponse{"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/ollama/finish_reason_test.go"
+ ]
+}

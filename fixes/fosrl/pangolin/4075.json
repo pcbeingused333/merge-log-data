@@ -1,0 +1,26 @@
+{
+ "repo": "fosrl/pangolin",
+ "number": 4075,
+ "url": "https://github.com/fosrl/pangolin/pull/4075",
+ "title": "fix(ai): read usage from response.incomplete in OpenAI Responses streams",
+ "merged_at": "2026-11-09T14:54:02Z",
+ "files": [
+  {
+   "filename": "server/lib/aiUsageExtraction.test.ts",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 0,
+   "patch": "@@ -101,11 +101,34 @@ function testGeminiToolUsePromptTokens() {\n     );\n }\n \n+// A Responses API stream that stops early (max_output_tokens) ends with\n+// `response.incomplete`, which carries the same `response.usage` as\n+// `response.completed`.\n+function testOpenAiResponsesIncompleteStream() {\n+    console.log(\"Running OpenAI Responses incomplete stream test...\");\n+    const body =\n+        'data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hi\"}\\n\\n' +\n+        'data: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\",\"usage\":{\"input_tokens\":50,\"input_tokens_details\":{\"cached_tokens\":10},\"output_tokens\":30,\"output_tokens_details\":{\"reasoning_tokens\":5}}}}\\n\\n';\n+    assertEqualsObj(\n+        extractUsage(\"openai_responses\", body, true, headers),\n+        {\n+            promptTokens: 40,\n+            cacheReadTokens: 10,\n+            cacheWriteTokens: 0,\n+            completionTokens: 25,\n+            reasoningTokens: 5,\n+            estimated: false\n+        },\n+        \"usage is read from response.incomplete\"\n+    );\n+}\n+\n try {\n     testConverseJsonWithCache();\n     testConverseStreamWithCache();\n     testConverseWithoutCache();\n     testGeminiToolUsePromptTokens();\n+    testOpenAiResponsesIncompleteStream();\n     console.log(\"All aiUsageExtraction tests passed!\");\n } catch (error) {\n     console.error(\"Test failed:\", error);"
+  },
+  {
+   "filename": "server/lib/aiUsageExtraction.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 4,
+   "patch": "@@ -118,10 +118,9 @@ function extractOpenAiResponses(\n     if (isStream) {\n         for (const frame of sseDataFrames(text)) {\n             const parsed = tryParseJson(frame);\n-            if (\n-                parsed?.type === \"response.completed\" &&\n-                parsed?.response?.usage\n-            ) {\n+            // response.completed and response.incomplete (e.g. max_output_tokens)\n+            // carry the final usage in `response`.\n+            if (parsed?.response?.usage) {\n                 usage = parsed.response.usage;\n             } else if (parsed?.usage) {\n                 usage = parsed.usage;"
+  }
+ ],
+ "test_files": [
+  "server/lib/aiUsageExtraction.test.ts"
+ ]
+}

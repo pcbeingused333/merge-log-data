@@ -1,0 +1,26 @@
+{
+ "repo": "sligter/LandPPT",
+ "number": 150,
+ "url": "https://github.com/sligter/LandPPT/pull/150",
+ "title": "fix: preserve Anthropic outline completion usage and stop reason",
+ "merged_at": "2026-11-09T11:52:01Z",
+ "files": [
+  {
+   "filename": "src/landppt/services/runtime/runtime_provider_service.py",
+   "status": "modified",
+   "additions": 0,
+   "deletions": 6,
+   "patch": "@@ -177,12 +177,6 @@ def record_completion(response):\n             ])\n             return record_completion(await provider.chat_completion(messages=messages, **kwargs))\n         prompt = SystemPrompts.with_text_cache_prefix(prompt)\n-        if role == 'outline' and settings.get('provider') == 'anthropic':\n-            full_response = ''\n-            async for chunk in provider.stream_text_completion(prompt=prompt, **kwargs):\n-                full_response += chunk\n-            from ...ai.base import AIResponse\n-            return AIResponse(content=full_response, model=settings.get('model', 'anthropic'), usage={'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}, finish_reason='stop', metadata={'provider': 'anthropic', 'streamed': True})\n         return record_completion(await provider.text_completion(prompt=prompt, **kwargs))\n \n     async def _stream_text_completion_for_role(self, role: str, *, prompt: str, **kwargs):"
+  },
+  {
+   "filename": "tests/test_runtime_provider_and_outline_streaming.py",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -170,6 +170,40 @@ async def _fake_user_generation_config():\n     assert kwargs[\"model\"] == \"fake-model\"\n \n \n+@pytest.mark.asyncio\n+async def test_anthropic_outline_preserves_provider_response(monkeypatch):\n+    provider = _FakeProvider()\n+    response = AIResponse(\n+        content=\"partial outline\",\n+        model=\"claude-sonnet-test\",\n+        usage={\"prompt_tokens\": 12, \"completion_tokens\": 34, \"total_tokens\": 46},\n+        finish_reason=\"max_tokens\",\n+        metadata={\"provider\": \"anthropic\"},\n+    )\n+\n+    async def text_completion(prompt, **kwargs):\n+        provider.text_calls.append((prompt, kwargs))\n+        return response\n+\n+    service = RuntimeProviderService(_RuntimeStubService())\n+\n+    async def get_provider(role):\n+        return provider, {\"provider\": \"anthropic\", \"model\": \"claude-sonnet-test\"}\n+\n+    monkeypatch.setattr(provider, \"text_completion\", text_completion)\n+    monkeypatch.setattr(service, \"_get_role_provider_async\", get_provider)\n+    result = await service._text_completion_for_role(\n+        \"outline\", prompt=\"Generate an outline\", temperature=0.2, top_p=0.9,\n+    )\n+\n+    assert result is response\n+    assert not provider.stream_text_calls\n+    assert len(provider.text_calls) == 1\n+    prompt, kwargs = provider.text_calls[0]\n+    assert prompt == SystemPrompts.with_text_cache_prefix(\"Generate an outline\")\n+    assert kwargs[\"model\"] == \"claude-sonnet-test\"\n+\n+\n @pytest.mark.asyncio\n async def test_runtime_provider_service_streaming_passes_system_prompt_to_chat_completion(monkeypatch):\n     provider = _FakeProvider()"
+  }
+ ],
+ "test_files": [
+  "tests/test_runtime_provider_and_outline_streaming.py"
+ ]
+}

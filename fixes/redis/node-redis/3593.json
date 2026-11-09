@@ -1,0 +1,26 @@
+{
+ "repo": "redis/node-redis",
+ "number": 3593,
+ "url": "https://github.com/redis/node-redis/pull/3593",
+ "title": "fix(time-series): flatten RESP2 map-as-Array replies to match RESP3",
+ "merged_at": "2026-11-09T12:04:24Z",
+ "files": [
+  {
+   "filename": "packages/time-series/lib/commands/MGET.spec.ts",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -1,6 +1,7 @@\n import { strict as assert } from 'node:assert';\n import testUtils, { GLOBAL } from '../test-utils';\n import MGET from './MGET';\n+import { RESP_TYPES } from '@redis/client';\n import { parseArgs } from '@redis/client/lib/commands/generic-transformers';\n \n describe('TS.MGET', () => {\n@@ -22,6 +23,24 @@ describe('TS.MGET', () => {\n     });\n   });\n \n+  describe('transformReply', () => {\n+    it('RESP2 with Array type mapping matches RESP3 shape', () => {\n+      const resp2 = MGET.transformReply[2](\n+        [\n+          ['sensor:1', [], [1000, '12.5']],\n+          ['sensor:2', [], [1001, '25']]\n+        ] as never,\n+        undefined,\n+        { [RESP_TYPES.MAP]: Array }\n+      );\n+      const resp3 = MGET.transformReply[3]([\n+        'sensor:1', [[], [1000, 12.5]],\n+        'sensor:2', [[], [1001, 25]]\n+      ] as never);\n+      assert.deepEqual(resp2, resp3);\n+    });\n+  });\n+\n   testUtils.testWithClient('client.ts.mGet', async client => {\n     const [, reply] = await Promise.all([\n       client.ts.add('key', 0, 0, {"
+  },
+  {
+   "filename": "packages/time-series/lib/commands/helpers.ts",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 2,
+   "patch": "@@ -280,11 +280,13 @@ export function resp2MapToValue<\n       return ret as never;\n     }\n     case Array: {\n+      // Flat [key, value, key, value, ...] to match the RESP3 MAP-as-Array shape\n+      const ret: Array<BlobStringReply | TRANSFORMED> = [];\n       for (const wrappedTuple of reply) {\n         const tuple = wrappedTuple as unknown as UnwrapReply<typeof wrappedTuple>;\n-        (tuple[1] as unknown as TRANSFORMED) = parseFunc(tuple);\n+        ret.push(tuple[0], parseFunc(tuple));\n       }\n-      return reply as never;\n+      return ret as never;\n     }\n     default: {\n       const ret: Record<string, TRANSFORMED> = {};"
+  }
+ ],
+ "test_files": [
+  "packages/time-series/lib/commands/MGET.spec.ts"
+ ]
+}

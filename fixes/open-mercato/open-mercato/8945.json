@@ -1,0 +1,26 @@
+{
+ "repo": "open-mercato/open-mercato",
+ "number": 8945,
+ "url": "https://github.com/open-mercato/open-mercato/pull/8945",
+ "title": "fix(search): do not gate full-text indexing on the vector auto-indexing switch",
+ "merged_at": "2026-11-09T22:06:42Z",
+ "files": [
+  {
+   "filename": "packages/search/src/modules/search/subscribers/__tests__/fulltext-upsert-autoindexing.test.ts",
+   "status": "added",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,34 @@\n+jest.mock('../../lib/auto-indexing', () => ({\n+  resolveAutoIndexingEnabled: jest.fn().mockResolvedValue(false),\n+}))\n+\n+import fulltextUpsert from '../fulltext_upsert'\n+\n+/**\n+ * The auto-indexing switch (OM_DISABLE_VECTOR_SEARCH_AUTOINDEXING) only controls the vector\n+ * strategy. With it on, new and restored records must still reach the full-text queue.\n+ */\n+describe('fulltext_upsert with vector auto-indexing disabled', () => {\n+  it('still enqueues the full-text index job', async () => {\n+    const enqueue = jest.fn().mockResolvedValue(undefined)\n+    const ctx = {\n+      resolve: jest.fn((name: string) => {\n+        if (name === 'fulltextIndexQueue') return { enqueue }\n+        throw new Error(`[internal] not registered: ${name}`)\n+      }),\n+    }\n+\n+    await fulltextUpsert(\n+      { entityId: 'customers:customer_person', recordId: 'r1', tenantId: 'tenant-1', organizationId: 'org-1' },\n+      ctx,\n+    )\n+\n+    expect(enqueue).toHaveBeenCalledWith({\n+      jobType: 'index',\n+      entityType: 'customers:customer_person',\n+      recordId: 'r1',\n+      tenantId: 'tenant-1',\n+      organizationId: 'org-1',\n+    })\n+  })\n+})"
+  },
+  {
+   "filename": "packages/search/src/modules/search/subscribers/fulltext_upsert.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 6,
+   "patch": "@@ -1,7 +1,6 @@\n import { loadEntityRecordScope } from '@open-mercato/shared/lib/db/recordScope'\n import type { Queue } from '@open-mercato/queue'\n import type { FulltextIndexJobPayload } from '../../../queue/fulltext-indexing'\n-import { resolveAutoIndexingEnabled } from '../lib/auto-indexing'\n import { searchDebugWarn, searchError } from '../../../lib/debug'\n \n export const metadata = { event: 'search.index_record', persistent: false }\n@@ -50,11 +49,8 @@ export default async function handle(payload: Payload, ctx: HandlerContext) {\n     return\n   }\n \n-  const autoIndexingEnabled = await resolveAutoIndexingEnabled(ctx, { defaultValue: true })\n-  if (!autoIndexingEnabled) {\n-    return\n-  }\n-\n+  // The auto-indexing switch (OM_DISABLE_VECTOR_SEARCH_AUTOINDEXING and its tenant setting)\n+  // is vector-only, so it must not stop full-text records from being queued.\n   let queue: Queue<FulltextIndexJobPayload>\n   try {\n     queue = ctx.resolve<Queue<FulltextIndexJobPayload>>('fulltextIndexQueue')"
+  }
+ ],
+ "test_files": [
+  "packages/search/src/modules/search/subscribers/__tests__/fulltext-upsert-autoindexing.test.ts"
+ ]
+}

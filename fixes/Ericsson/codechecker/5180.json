@@ -1,0 +1,26 @@
+{
+ "repo": "Ericsson/codechecker",
+ "number": 5180,
+ "url": "https://github.com/Ericsson/codechecker/pull/5180",
+ "title": "fix(gcc): use os.devnull for the analyzer output file",
+ "merged_at": "2026-11-09T18:04:41Z",
+ "files": [
+  {
+   "filename": "analyzer/codechecker_analyzer/analyzers/gcc/analyzer.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -6,6 +6,7 @@\n #\n # -------------------------------------------------------------------------\n from semver.version import Version\n+import os\n import shlex\n import subprocess\n import sys\n@@ -62,7 +63,7 @@ def construct_analyzer_cmd(self, result_handler):\n         # We don't want GCC do start linking, but -fsyntax-only stops the\n         # compilation process too early for proper diagnostics generation.\n         analyzer_cmd = [Gcc.analyzer_binary(), '-fanalyzer', '-c',\n-                        '-o/dev/null']\n+                        f'-o{os.devnull}']\n \n         # Add extra arguments.\n         analyzer_cmd.extend(config.analyzer_extra_arguments)"
+  },
+  {
+   "filename": "analyzer/tests/unit/test_analyzer_command.py",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -7,8 +7,13 @@\n # -------------------------------------------------------------------------\n \n import argparse\n+import os\n import unittest\n+from unittest import mock\n from codechecker_analyzer.analyzers.clangsa.analyzer import ClangSA\n+from codechecker_analyzer.analyzers.gcc.analyzer import Gcc\n+from codechecker_analyzer.analyzers.gcc.config_handler import \\\n+    GccConfigHandler\n from codechecker_analyzer.buildlog import log_parser\n from codechecker_analyzer.cli import analyze\n from libtest.cmd_line import create_analyze_argparse\n@@ -139,3 +144,28 @@ def test_implicit_std_flag_still_added_when_missing(self):\n \n         std_flags = [x for x in cmd if x.startswith(('-std=', '--std='))]\n         self.assertEqual(len(std_flags), 1)\n+\n+\n+class AnalyzerCommandGccTest(unittest.TestCase):\n+    def test_output_is_os_devnull(self):\n+        \"\"\"\n+        The GCC analyzer must discard the object file through os.devnull, so\n+        that it also works on Windows, where /dev/null can't be created.\n+        \"\"\"\n+        action = {\n+            'file': 'main.cpp',\n+            'command': 'g++ -o main main.cpp',\n+            'directory': '/'}\n+        build_action = log_parser.parse_options(action)\n+        analyzer = Gcc(GccConfigHandler(), build_action)\n+\n+        with mock.patch.object(Gcc, 'analyzer_binary',\n+                               return_value='gcc'):\n+            cmd = analyzer.construct_analyzer_cmd(None)\n+\n+        self.assertIn(f'-o{os.devnull}', cmd)\n+        with mock.patch('os.devnull', 'NUL'), \\\n+                mock.patch.object(Gcc, 'analyzer_binary',\n+                                  return_value='gcc'):\n+            cmd = analyzer.construct_analyzer_cmd(None)\n+        self.assertIn('-oNUL', cmd)"
+  }
+ ],
+ "test_files": [
+  "analyzer/tests/unit/test_analyzer_command.py"
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 674,
+ "url": "https://github.com/labring/aiproxy/pull/674",
+ "title": "fix(anthropic): map refusal, pause_turn and context-window stop reasons to OpenAI finish_reason",
+ "merged_at": "2026-11-09T12:44:07Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/anthropic/openai.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 2,
+   "patch": "@@ -30,10 +30,14 @@ const (\n \n func stopReasonClaude2OpenAI(reason string) string {\n \tswitch reason {\n-\tcase relaymodel.ClaudeStopReasonEndTurn, relaymodel.ClaudeStopReasonStopSequence:\n+\tcase relaymodel.ClaudeStopReasonEndTurn,\n+\t\trelaymodel.ClaudeStopReasonStopSequence,\n+\t\trelaymodel.ClaudeStopReasonPauseTurn:\n \t\treturn relaymodel.FinishReasonStop\n-\tcase relaymodel.ClaudeStopReasonMaxTokens:\n+\tcase relaymodel.ClaudeStopReasonMaxTokens, relaymodel.ClaudeStopReasonContextLimit:\n \t\treturn relaymodel.FinishReasonLength\n+\tcase relaymodel.ClaudeStopReasonRefusal:\n+\t\treturn relaymodel.FinishReasonContentFilter\n \tcase relaymodel.ClaudeStopReasonToolUse:\n \t\treturn relaymodel.FinishReasonToolCalls\n \tcase \"null\":"
+  },
+  {
+   "filename": "core/relay/adaptor/anthropic/openai_test.go",
+   "status": "modified",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -609,3 +609,36 @@ func TestOpenAIConvertRequest_UsesOriginModelNameFirst(t *testing.T) {\n \trequire.NotNil(t, claudeReq.OutputConfig.Effort)\n \tassert.Equal(t, \"low\", *claudeReq.OutputConfig.Effort)\n }\n+\n+func TestResponse2OpenAI_StopReasonMapping(t *testing.T) {\n+\tcases := map[string]string{\n+\t\t\"end_turn\":                      \"stop\",\n+\t\t\"stop_sequence\":                 \"stop\",\n+\t\t\"max_tokens\":                    \"length\",\n+\t\t\"tool_use\":                      \"tool_calls\",\n+\t\t\"model_context_window_exceeded\": \"length\",\n+\t\t\"refusal\":                       \"content_filter\",\n+\t\t\"pause_turn\":                    \"stop\",\n+\t}\n+\n+\tfor stopReason, want := range cases {\n+\t\tt.Run(stopReason, func(t *testing.T) {\n+\t\t\tdata := []byte(`{\n+\t\t\t\t\"id\": \"msg_1\",\n+\t\t\t\t\"type\": \"message\",\n+\t\t\t\t\"role\": \"assistant\",\n+\t\t\t\t\"model\": \"claude-sonnet-4-5\",\n+\t\t\t\t\"content\": [{\"type\": \"text\", \"text\": \"hi\"}],\n+\t\t\t\t\"stop_reason\": \"` + stopReason + `\",\n+\t\t\t\t\"usage\": {\"input_tokens\": 1, \"output_tokens\": 1}\n+\t\t\t}`)\n+\n+\t\t\tresp, err := anthropic.Response2OpenAI(\n+\t\t\t\t&meta.Meta{OriginModel: \"claude-sonnet-4-5\"},\n+\t\t\t\tdata,\n+\t\t\t)\n+\t\t\trequire.NoError(t, err)\n+\t\t\tassert.Equal(t, want, resp.Choices[0].FinishReason)\n+\t\t})\n+\t}\n+}"
+  },
+  {
+   "filename": "core/relay/model/claude.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -303,6 +303,9 @@ const (\n \tClaudeStopReasonMaxTokens    = \"max_tokens\"\n \tClaudeStopReasonToolUse      = \"tool_use\"\n \tClaudeStopReasonStopSequence = \"stop_sequence\"\n+\tClaudeStopReasonPauseTurn    = \"pause_turn\"\n+\tClaudeStopReasonRefusal      = \"refusal\"\n+\tClaudeStopReasonContextLimit = \"model_context_window_exceeded\"\n )\n \n // Claude Type constants"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/anthropic/openai_test.go"
+ ]
+}

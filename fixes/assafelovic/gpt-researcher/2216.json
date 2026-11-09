@@ -1,0 +1,54 @@
+{
+ "repo": "assafelovic/gpt-researcher",
+ "number": 2216,
+ "url": "https://github.com/assafelovic/gpt-researcher/pull/2216",
+ "title": "fix: replace retired Google and Anthropic model defaults",
+ "merged_at": "2026-11-09T10:39:53Z",
+ "files": [
+  {
+   "filename": "docker-compose.yml",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -12,7 +12,7 @@ services:\n       # Image generation (optional - set to enable inline images in reports)\n       GOOGLE_API_KEY: ${GOOGLE_API_KEY}\n       IMAGE_GENERATION_ENABLED: ${IMAGE_GENERATION_ENABLED:-false}\n-      IMAGE_GENERATION_MODEL: ${IMAGE_GENERATION_MODEL:-gemini-2.0-flash-preview-image-generation}\n+      IMAGE_GENERATION_MODEL: ${IMAGE_GENERATION_MODEL:-models/gemini-2.5-flash-image}\n       IMAGE_GENERATION_MAX_IMAGES: ${IMAGE_GENERATION_MAX_IMAGES:-3}\n     volumes:\n       - ${PWD}/my-docs:/usr/src/app/my-docs:rw"
+  },
+  {
+   "filename": "docs/docs/gpt-researcher/gptr/image_generation.md",
+   "status": "modified",
+   "additions": 0,
+   "deletions": 1,
+   "patch": "@@ -104,7 +104,6 @@ Research Phase          Image Planning          Report Writing\n | Model | Description |\n |-------|-------------|\n | `models/gemini-2.5-flash-image` | Recommended - fast and free |\n-| `gemini-2.0-flash-exp-image-generation` | Experimental variant |\n \n **Paid Tier (Imagen) - requires Google Cloud billing:**\n | Model | Description |"
+  },
+  {
+   "filename": "docs/docs/gpt-researcher/llms/llms.md",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 8,
+   "patch": "@@ -172,9 +172,9 @@ __NOTE:__ As of the writing of this Doc (May 2024), the available Language Model\n Refer to Anthropic [Getting started page](https://docs.anthropic.com/en/api/getting-started) to obtain Anthropic API key. Update the corresponding env vars, for example:\n ```env\n ANTHROPIC_API_KEY=[Your Key]\n-FAST_LLM=anthropic:claude-2.1\n-SMART_LLM=anthropic:claude-3-opus-20240229\n-STRATEGIC_LLM=anthropic:claude-3-opus-20240229\n+FAST_LLM=anthropic:claude-haiku-4-5-20251001\n+SMART_LLM=anthropic:claude-opus-4-7\n+STRATEGIC_LLM=anthropic:claude-opus-4-7\n ```\n \n Add `langchain-anthropic` to [requirements.txt](https://github.com/assafelovic/gpt-researcher/blob/master/requirements.txt) for Docker Support or `pip install` it\n@@ -244,11 +244,11 @@ Add `langchain-huggingface` to [requirements.txt](https://github.com/assafelovic\n Sign up [here](https://ai.google.dev/gemini-api/docs/api-key) for obtaining a Google Gemini API Key and update the following env vars:\n ```env\n GOOGLE_API_KEY=[Your Key]\n-FAST_LLM=google_genai:gemini-1.5-flash\n-SMART_LLM=google_genai:gemini-1.5-pro\n-STRATEGIC_LLM=google_genai:gemini-1.5-pro\n+FAST_LLM=google_genai:gemini-3.5-flash-lite\n+SMART_LLM=google_genai:gemini-3.8-flash\n+STRATEGIC_LLM=google_genai:gemini-3.8-flash\n \n-EMBEDDING=google_genai:models/text-embedding-004\n+EMBEDDING=google_genai:models/gemini-embedding-2\n ```\n \n Add `langchain-google-genai` to [requirements.txt](https://github.com/assafelovic/gpt-researcher/blob/master/requirements.txt) for Docker Support or `pip install` it\n@@ -354,7 +354,7 @@ FAST_LLM=openrouter:google/gemini-2.0-flash-lite-001\n SMART_LLM=openrouter:google/gemini-2.0-flash-001\n STRATEGIC_LLM=openrouter:google/gemini-2.5-pro-exp-03-25\n OPENROUTER_LIMIT_RPS=1  # Ratelimit request per second\n-EMBEDDING=google_genai:models/text-embedding-004 # openrouter doesn't support embedding models, use google instead its free\n+EMBEDDING=google_genai:models/gemini-embedding-2 # openrouter doesn't support embedding models, use google instead its free\n GOOGLE_API_KEY=[Your *google gemini* key]\n ```\n ## Forge"
+  },
+  {
+   "filename": "gpt_researcher/config/config.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -113,7 +113,7 @@ def _handle_deprecated_attributes(self) -> None:\n             elif embedding_provider == \"gigachat\":\n                 self.embedding_model = \"Embeddings\"\n             elif embedding_provider == \"google_genai\":\n-                self.embedding_model = \"text-embedding-004\"\n+                self.embedding_model = \"gemini-embedding-2\"\n             else:\n                 raise Exception(\"Embedding provider not found.\")\n "
+  },
+  {
+   "filename": "gpt_researcher/config/variables/default.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -49,7 +49,7 @@\n     \"REASONING_EFFORT\": \"medium\",\n     \n     # Image generation settings (optional - requires GOOGLE_API_KEY)\n-    # Free tier models: gemini-2.5-flash-image, gemini-2.0-flash-exp-image-generation\n+    # Free tier models: gemini-2.5-flash-image\n     # Paid tier models: imagen-4.0-generate-001, imagen-4.0-fast-generate-001\n     \"IMAGE_GENERATION_MODEL\": \"models/gemini-2.5-flash-image\",\n     \"IMAGE_GENERATION_MAX_IMAGES\": 3,  # Maximum number of images to generate per report"
+  },
+  {
+   "filename": "tests/test_legacy_google_embedding_model.py",
+   "status": "added",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,27 @@\n+\"\"\"The deprecated EMBEDDING_PROVIDER=google_genai path must pick a served embedding model.\"\"\"\n+\n+import warnings\n+\n+import pytest\n+\n+from gpt_researcher.config.config import Config\n+from gpt_researcher.config.variables.default import DEFAULT_CONFIG\n+\n+\n+@pytest.fixture(autouse=True)\n+def clear_config_environment(monkeypatch):\n+    for key in DEFAULT_CONFIG:\n+        monkeypatch.delenv(key, raising=False)\n+    monkeypatch.delenv(\"CONFIG_PATH\", raising=False)\n+\n+\n+def test_google_genai_embedding_provider_uses_a_current_model(monkeypatch):\n+    # text-embedding-004 was shut down on 2026-01-14\n+    monkeypatch.setenv(\"EMBEDDING_PROVIDER\", \"google_genai\")\n+\n+    with warnings.catch_warnings():\n+        warnings.simplefilter(\"ignore\", FutureWarning)  # EMBEDDING_PROVIDER is deprecated\n+        config = Config()\n+\n+    assert config.embedding_provider == \"google_genai\"\n+    assert config.embedding_model == \"gemini-embedding-2\""
+  }
+ ],
+ "test_files": [
+  "tests/test_legacy_google_embedding_model.py"
+ ]
+}

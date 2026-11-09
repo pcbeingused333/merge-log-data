@@ -3,8 +3,34 @@
  "number": 1740,
  "url": "https://github.com/Nixtla/neuralforecast/pull/1740",
  "state": "open",
- "reviews": [],
- "review_comments": [],
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-09T19:59:22Z",
+   "body": "@pcbeingused333 thanks, this fixes the `KeyError` when `accelerator` isn't set, and `\"auto\"`, `\"gpu\"`, `\"cpu\"` and `CUDAAccelerator()` behave as before. I couldn't run a real Spark job (no Java runtime here), so I stubbed `TorchDistributor` and ran the captured training function locally. Changes requested, see the inline comments.\n\nWhile you're here, `is_gpu_accelerator` doesn't treat `accelerator=\"cuda\"`, which Lightning accepts as a GPU accelerator, as a GPU, so it gets `use_gpu=False` on any machine. Please add `\"cuda\"` to the check."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "neuralforecast/common/_base_model.py",
+   "created_at": "2026-11-09T19:59:22Z",
+   "body": "This only resolves the default on the driver. The workers still get `trainer_kwargs` without `accelerator`, so Lightning resolves `\"auto\"` again on each worker, and that can disagree with `use_gpu`. On an Apple-silicon machine in local mode it picks MPS and DDP fails (\"strategies from the DDP family are not supported on the MPS accelerator\"), while passing `accelerator=\"cpu\"` trains fine. Please resolve it once and pass the result to the workers, e.g.\n\n```python\nuse_gpu = is_gpu_accelerator(self.trainer_kwargs.get(\"accelerator\", \"auto\"))\ntrainer_kwargs = {\"accelerator\": \"gpu\" if use_gpu else \"cpu\", **self.trainer_kwargs}\n```\n\nand send that `trainer_kwargs` to `distributor.run`, so the driver and the workers always agree."
+  },
+  {
+   "role": "contributor",
+   "path": "tests/test_common/test_fit_distributed_accelerator.py",
+   "created_at": "2026-11-09T19:59:22Z",
+   "body": "Please move this into the existing `tests/test_distributed.py`, which already holds the `BaseModel` distributed tests."
+  },
+  {
+   "role": "contributor",
+   "path": "tests/test_common/test_fit_distributed_accelerator.py",
+   "created_at": "2026-11-09T19:59:22Z",
+   "body": "This only covers a missing key, on a `SimpleNamespace` instead of a model. Please parametrize over the accelerator settings (missing, `\"auto\"`, `\"cpu\"`, `\"gpu\"`, `\"cuda\"`) with `CUDAAccelerator.is_available` patched both ways. Use a real model (e.g. `NHITS(h=7, input_size=14, max_steps=1)`) so the test goes through `__init__`'s CUDA default, and check the `accelerator` in the `trainer_kwargs` passed to `distributor.run`, so the driver and the workers are pinned to agree.\n\nSince the `spark` extra provides pyspark, `monkeypatch.setattr(\"pyspark.ml.torch.distributor.TorchDistributor\", Fake)` (with `pytest.importorskip(\"pyspark\")`) is simpler than building fake modules in `sys.modules`."
+  }
+ ],
  "comments": [
   {
    "role": "none",

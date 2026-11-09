@@ -3,13 +3,104 @@
  "number": 2630,
  "url": "https://github.com/versity/versitygw/pull/2630",
  "state": "open",
- "reviews": [],
- "review_comments": [],
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-09T07:06:06Z",
+   "body": "Reproduced #2627 on main with a backend stress test on Linux: 23/1510 GETs had an ETag that wasn't MD5(body), and every If-Match hit in that window returned the wrong body. With this PR the xattr GET case drops to 0. Thanks! Before merge:\n1. CI: `TestGetObjectRemovedBeforeOpen` fails (inline).\n2. HeadObject has the same split (stat, then ETag by path): 309/4500 HEADs returned a ContentLength from a different version than the ETag. HEAD followed by ranged GETs with If-Match is a common client pattern. Please fix it here or open a follow-up.\n3. Sidecar is unchanged (~13% of GETs mismatched under the same load). `Fixes #2627` will close the issue, so please open a follow-up for sidecar/HEAD, or note in the issue that this fix is xattr-only."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-09T06:49:53Z",
+   "body": "This breaks `TestGetObjectRemovedBeforeOpen/versioned_directory_replaced_by_object` (fails on Linux and macOS). The open now runs before `liveObjVersionId`, so by the time `getAttrTags(bucket, object, versionId)` runs, `versionId` holds the live version's id. A versioned GET with no versionId that races a delete now returns `NoSuchVersion` instead of `NoSuchKey`. Commit 1 had this right with `getString(input.VersionId)`; 207a4b41 reverted it. Please restore it, or read the tags from `f`. The description says `go test ./backend/posix` passes, but it doesn't at HEAD."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-09T06:50:43Z",
+   "body": "The ETag now comes from `f`, but `x-amz-version-id` still comes from a path read in `liveObjVersionId` (L6291, and L6258 for the 304), and that read now happens *after* the open. In a 3-writer/3-reader stress test on a versioned bucket, GETs whose VersionId didn't match the returned body went from 6–16/1800 on main to 20–42/1800 with this PR. Reading `versionIdKey` from `f` (e.g. pass `f` into `liveObjVersionId`) brought it to 0."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-09T06:52:18Z",
+   "body": "Same root cause, still open: when `versionId` names the live version, L6124 resolves it by path, and this open can land on a newer version that a concurrent PUT just linked. About 2% of `GET ?versionId=` reads during an overwrite return another version's body. With this PR that body also gets its own ETag, while `VersionId` still names the requested version. If the request resolved to the live path, check `versionIdKey` on `f` after the open and reopen from the versioning dir if it differs (0 mismatches with that change)."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-09T06:52:58Z",
+   "body": "`TestGetObjectRemovedBeforeOpen` no longer reaches this branch. Its trigger reads (`etagkey` / `versionIdKey`) now happen after the open, so its \"removed\" cases pass through `getAttrTags` instead. Coverage shows 0 hits here on this PR, 1 on main. Please update the test so the object is still removed between the stat and this open; otherwise the ENOTDIR/ESTALE → NoSuchKey mapping from be69ca6f is untested."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-09T06:53:44Z",
+   "body": "With the fd read, any error (ESTALE on a shared FS, EIO, ...) silently becomes `p.defaultEtag`. That made-up ETag then decides If-Match/If-None-Match and is returned as the object's ETag, which is the kind of bug this PR fixes. Please fall back only on `meta.ErrNoSuchKey` and return other errors."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-09T06:54:12Z",
+   "body": "The 304 path still reads the parts count (and tags) by path in `notModifiedCounts` (L6263), while the 200 path now reads `mpMetaKey` from `f` (L6374), so a 304 can report another version's `PartsCount`. Pass `f` through for the mp metadata read."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-09T06:54:45Z",
+   "body": "`f.Stat()` on an open fd can't return ENOENT/ENOTDIR/ENAMETOOLONG, so these mappings are dead code. The ENOENT case also returns `InvalidArgument`, while the open above maps the same condition to `NoSuchVersion`. Since the block is moving anyway, reduce it to `if err != nil { return nil, fmt.Errorf(\"stat object: %w\", err) }`."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-09T06:55:18Z",
+   "body": "Nit: the open now runs before `liveObjVersionId`, so `versionId` is still the requested one here. Use `versionId`, as L6229 does, instead of `getString(input.VersionId)`."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-09T06:56:02Z",
+   "body": "Nit: swapping the `closeFile` closure (here, L6224, L6456) is harder to follow than a flag, e.g. `defer func() { if f != nil && !bodyOwned { f.Close() } }()` with `bodyOwned = true` after `buildGetObjectBody`. Note that this defer also fixes fd leaks on main's error returns after the open (416, InvalidPartNumber, tag/checksum errors); worth a line in the description."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-09T06:56:45Z",
+   "body": "Nit: this comment is long and describes PutObject and XattrMeta internals. Two lines are enough: \"Open before reading attributes so the ETag, preconditions and body come from one inode. Directory objects have no data file and stay path-based.\""
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/get_object_etag_test.go",
+   "created_at": "2026-11-09T06:57:22Z",
+   "body": "This only checks that the ETag is read through `f`. The PR also moved the mtime, the 304 metadata and the part map to `f`, and none of those are covered. Consider making the fake diverge for `mpMetaKey` too (a `partNumber` GET) and adding an `If-None-Match` → 304 case. Also, \"is the window a GET has\" reads oddly; describe what the fake returns."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/get_object_etag_test.go",
+   "created_at": "2026-11-09T06:57:51Z",
+   "body": "Nit: avoid `'` in subtest names; it makes `-run` patterns awkward."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/get_object_etag_test.go",
+   "created_at": "2026-11-09T07:05:27Z",
+   "body": "Please also add an integration test. The unit test above only checks that the ETag is read through `f`; a race test checks the S3 behavior end to end and catches any later change that moves a read back to the path. `HeadObject_GetObject_race_with_delete` in `tests/integration/posix.go` is a good model.\n\nSuggested shape: 4 writers PUT unique bodies to one key while 4 readers GET it (every other GET with `If-Match` of the previous ETag). Record ETag → MD5(body) from the PUT responses. After the run, check that each GET's body is the one put with its ETag, and that each If-Match 200 returned that ETag's body. Don't assume ETag == MD5, so it also works with `--data-integrity-etag`.\n\nI ran a draft of this against a real gateway: it failed 10/10 runs on main and passed 8/8 on this branch. A correct gateway can't fail it, so it isn't flaky.\n\nCatch: `runtests.sh --sidecar` runs the `posix` group against a sidecar gateway without a sidecar flag, and sidecar still fails this test (~30% of reads). Either add a `--sidecar` flag to the `posix` test subcommand and skip the test with it, or fix sidecar here too. If you fix the VersionId read (comment above), a versioned variant that also checks `VersionId` would cover that."
+  }
+ ],
  "comments": [
   {
    "role": "collaborator",
    "created_at": "2026-11-08T01:17:12Z",
    "body": "This won't automatically run in continuous integration without approval. A member of the Versity organization must allow it."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-09T15:32:38Z",
+   "body": "Thanks for the detailed review. The new commits on top address it:\n\n- **CI / `TestGetObjectRemovedBeforeOpen`**: tags are looked up with the requested version id again, so a versioned GET with no `versionId` that races a delete answers `NoSuchKey`. `go test ./backend/posix` passes at this HEAD.\n- **`x-amz-version-id`**: `liveObjVersionId` now takes `f`, for the 200 and the 304. `TestGetObjectLiveVersionIdFromOpenedFile` replaces the object after the open; reading the id by path turns it red.\n- **`?versionId=` naming the live version**: the id on the opened inode is checked, and the version is reopened from the versioning dir if a PUT moved it.\n- **Removed object test**: `TestGetObjectRemovedBeforeOpen` reaches the open branch again. It also covers a removed directory object.\n- **ETag read errors**: only a missing attribute falls back to the default ETag; anything else fails the GET.\n- **304**: the parts count now comes from `f`. The fake store diverges for `mpMetaKey` too, with a `partNumber` GET and a 304 case.\n- **Nits**: the `f.Stat()` mappings are gone, the open uses the requested version id, `closeFile` became a `bodyOwned` flag, the comment is two lines, and the subtest names have no `'`. That flag also fixes the fd leaks on main's error returns after the open.\n- **Integration test**: `GetObject_etag_race_with_put` follows your shape: 4 writers and 4 readers on one key, with ETag -> body recorded from the PUT responses and no ETag == MD5 assumption. With main's `posix.go` it failed 2/2. On this branch the `posix` suite passed 3/3 plain, 3/3 with `-vs` and 2/2 with `--data-integrity-etag`.\n- **Sidecar**: added `--sidecar-test-mode` to the `posix` test subcommand, and `runtests.sh` passes it on the four `posix` runs, so the test is skipped there (2/2 on a `--sidecar` gateway). `runtests.ps1` already gets it through `--windows-test-mode`.\n- **Scope**: this fixes the xattr GET only. HEAD and sidecar are not changed here, and #2627 now has a note saying so, with the numbers you measured. I can take HEAD next if you want it.\n\nThe versioned variant of the race test that also checks `VersionId` is not included; the unit test above covers that read.\n\n(Reply drafted with the help of an AI coding assistant.)\n"
   }
  ]
 }

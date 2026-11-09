@@ -3,7 +3,33 @@
  "number": 1745,
  "url": "https://github.com/Nixtla/neuralforecast/pull/1745",
  "state": "open",
- "reviews": [],
- "review_comments": [],
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-09T20:27:29Z",
+   "body": "@pcbeingused333 thanks, the fix is correct: `predict()` and `decompose()` now share one helper, so both get `devices=[0]` with `accelerator=\"gpu\"` on several GPUs, and `decompose_forecast` is reset when an error happens. NHITS/NBEATS/NBEATSx decompositions are identical to `main`. I checked the multi-GPU logic by patching `torch.cuda.device_count`, since I have no multi-GPU machine. A few changes, see the inline comments."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "neuralforecast/common/_base_model.py",
+   "created_at": "2026-11-09T20:27:29Z",
+   "body": "This only matches `accelerator == \"gpu\"`. With `\"auto\"`, `\"cuda\"` or a `CUDAAccelerator()` on a multi-GPU host, `predict()` and `decompose()` still get `devices=-1` and run multi-device (checked by patching `device_count`). Now that the guard lives in one helper, please use the same check as `is_gpu_accelerator` in `_fit_distributed`, moved to module level so both call it, and add `\"cuda\"` to it, so every GPU setting gets `devices=[0]`."
+  },
+  {
+   "role": "contributor",
+   "path": "tests/test_common/test_decompose_trainer.py",
+   "created_at": "2026-11-09T20:27:29Z",
+   "body": "`NLinear` has no decomposition, and the `Trainer` and the datamodule are stubbed, so nothing here runs a real `decompose()`, and no other test in the repo does either. Please add a CPU test with a real `NHITS`/`NBEATS` on AirPassengers. Check that the output shape is `[n_series, n_stacks + 1, h]` and that `d.sum(axis=1)` matches `predict()` (it does on this branch). Then make the model's `forward` raise and check that `decompose_forecast` is `False` afterwards."
+  },
+  {
+   "role": "contributor",
+   "path": "tests/test_common/test_decompose_trainer.py",
+   "created_at": "2026-11-09T20:27:29Z",
+   "body": "This checks two cases in one test by re-patching partway through. Please parametrize over `(accelerator, device_count, expected_devices)`, and include `\"auto\"` and `\"cuda\"` with 2 devices once the guard covers them."
+  }
+ ],
  "comments": []
 }

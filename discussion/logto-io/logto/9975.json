@@ -21,6 +21,24 @@
    "state": "COMMENTED",
    "submitted_at": "2026-11-06T06:35:18Z",
    "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-09T07:19:53Z",
+   "body": ""
+  },
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-09T08:53:28Z",
+   "body": ""
+  },
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-09T08:53:30Z",
+   "body": ""
   }
  ],
  "review_comments": [
@@ -53,6 +71,18 @@
    "path": "packages/connectors/connector-aws-ses/src/utils.ts",
    "created_at": "2026-11-06T06:35:18Z",
    "body": "Treating any rendered `sendFrom` that contains `@` as a full address is fragile: `sendFrom` is documented as the sender's name alias, so a name like `Support @ Acme` becomes an invalid From and the send fails. Since handlebars are rendered first, a template using a user-controlled value (e.g. `{{user.name}}`) also lets that user set the From to any address on the verified domain."
+  },
+  {
+   "role": "member",
+   "path": "packages/connectors/connector-aws-ses/src/utils.ts",
+   "created_at": "2026-11-09T08:53:28Z",
+   "body": "When the verification-code payload has no `user`, `replyTo: '{{user.primaryEmail}}'` renders to the literal placeholder. This check passes it to SES as a reply-to address. The existing SES connector ignores this field, so a template that currently sends can start failing after this change. Could we trim and validate the rendered value before including it in `ReplyToAddresses`?"
+  },
+  {
+   "role": "member",
+   "path": "packages/connectors/connector-aws-ses/src/utils.ts",
+   "created_at": "2026-11-09T08:53:30Z",
+   "body": "This encodes the entire display name as one MIME encoded-word. For example, `お客様サポートチームからのお知らせ` produces an 80-character word, above the [RFC 2047 limit of 75 characters](https://www.rfc-editor.org/rfc/rfc2047.html#section-2). Some clients may display the encoded text. Could we use an encoder that splits long names at UTF-8 character boundaries?"
   }
  ],
  "comments": [
@@ -65,6 +95,16 @@
    "role": "author",
    "created_at": "2026-11-06T06:51:17Z",
    "body": "Thanks both, these points are addressed in the new commit:\n\n- `sendFrom` is now parsed with `parseSendFrom` from `@logto/connector-kit` (as SMTP2GO and MailJunky do) instead of `includes('@')` and the angle-bracket regex. `Billing @ Acme Europe` stays a display name, and `\"Platform <EU>\" <noreply@example.com>` is read as name plus address. The same parser is applied to the configured `emailAddress`, so `Logto<noreply@logto.io>` still works.\n- An address that comes from the template is validated with `z.string().email()`; if it is not valid, the configured sender is used.\n- For a name-only `sendFrom`, the configured mailbox is kept and the name is quoted/escaped when needed (`\"Acme, Inc.\" <noreply@example.com>`). A non-ASCII name such as `Logto 团队` is sent as an RFC 2047 encoded-word.\n\nOn the point that a template value could set the From address: a full address in `sendFrom` is still honored, since that is what the i18n template field allows today. That means a template that interpolates a user-controlled field such as `{{user.name}}` can still pick another address on the verified domain. If you would rather keep the configured mailbox and use `sendFrom` only as the display name in this connector, say so and it will be changed in this PR.\n\nAdded tests for the quoting, the encoded-word, the bracketed name and the invalid-address fallback; the connector's vitest suite and eslint pass.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-11-09T07:22:18Z",
+   "body": "Keeping a full address in `sendFrom` is fine. It matches the SMTP connector, so no change needed here."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-09T09:12:53Z",
+   "body": "Thanks, both points are addressed in the new commit:\n\n- `ReplyToAddresses` is now only set when the rendered `replyTo` (trimmed) passes `z.string().email()`, so an unresolved placeholder such as `{{user.primaryEmail}}` on a payload without a user no longer reaches SES and the send behaves as before. A `Name <address>` value does not pass that check either, so it is skipped too.\n- The display name is now encoded as several RFC 2047 encoded-words, split at UTF-8 character boundaries (at most 45 bytes each, so every word stays within 75 characters) and separated by a space. `お客様サポートチームからのお知らせ` becomes two words.\n\nAdded a test for each case (the second one decodes the words and checks the length of each); the connector's vitest suite and eslint pass. The mock template's `replyTo` is now `{{to}}`, since the old `Reply-to {{to}}` is not an address.\n\nThis comment was drafted with Claude Code.\n"
   }
  ]
 }

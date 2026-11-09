@@ -1,0 +1,33 @@
+{
+ "repo": "electric-sql/pglite",
+ "number": 1208,
+ "url": "https://github.com/electric-sql/pglite/pull/1208",
+ "title": "fix(pglite): reset onData after execProtocolRawStream",
+ "merged_at": "2026-11-09T14:22:48Z",
+ "files": [
+  {
+   "filename": ".changeset/fix-raw-stream-ondata.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@electric-sql/pglite': patch\n+---\n+\n+reset the stream callback after execProtocolRawStream so later execProtocolRaw/execProtocolRawSync calls are not routed to it"
+  },
+  {
+   "filename": "packages/pglite/src/pglite.ts",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -1060,7 +1060,12 @@ export class PGlite\n       onRawData(bytes)\n       return bytes.length\n     }\n-    this.execProtocolRawSync(message)\n+    try {\n+      this.execProtocolRawSync(message)\n+    } finally {\n+      // don't leave the streaming callback installed for later raw/sync calls\n+      this.#onData = undefined\n+    }\n     if (syncToFs) {\n       await this.syncToFs()\n     }"
+  },
+  {
+   "filename": "packages/pglite/tests/exec-protocol.test.ts",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -67,4 +67,22 @@ describe('exec protocol', () => {\n       db.execProtocol(serialize.query('invalid sql')),\n     ).rejects.toThrow()\n   })\n+\n+  it('should not leave the stream callback installed after execProtocolRawStream', async () => {\n+    const chunks: Uint8Array[] = []\n+    await db.execProtocolRawStream(serialize.query('SELECT 1'), {\n+      onRawData: (bytes) => chunks.push(bytes),\n+    })\n+    expect(chunks.length).toBeGreaterThan(0)\n+    const seen = chunks.length\n+\n+    // A later sync call must return its own data instead of feeding the old callback\n+    const data = db.execProtocolRawSync(serialize.query('SELECT 2'))\n+    expect(data.length).toBeGreaterThan(0)\n+    expect(chunks.length).toEqual(seen)\n+\n+    const result = await db.execProtocolRaw(serialize.query('SELECT 3'))\n+    expect(result.length).toBeGreaterThan(0)\n+    expect(chunks.length).toEqual(seen)\n+  })\n })"
+  }
+ ],
+ "test_files": [
+  "packages/pglite/tests/exec-protocol.test.ts"
+ ]
+}

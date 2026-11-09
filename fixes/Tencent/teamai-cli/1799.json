@@ -1,0 +1,26 @@
+{
+ "repo": "Tencent/teamai-cli",
+ "number": 1799,
+ "url": "https://github.com/Tencent/teamai-cli/pull/1799",
+ "title": "fix(cli): reject a non-numeric recall maintenance --threshold",
+ "merged_at": "2026-11-09T07:54:16Z",
+ "files": [
+  {
+   "filename": "src/__tests__/maintenance-numeric-options-e2e.test.ts",
+   "status": "added",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,18 @@\n+import { spawnSync } from 'node:child_process';\n+import { resolve } from 'node:path';\n+import { describe, expect, it } from 'vitest';\n+\n+describe('knowledge CLI numeric options', () => {\n+  it.each(['abc', 'NaN', 'Infinity', '0.2abc'])('rejects threshold %s before maintenance', (value) => {\n+    const result = spawnSync(process.execPath, [resolve('dist/cli.js'), 'recall', 'maintenance', '--prune', '--threshold', value], { encoding: 'utf8' });\n+    expect(result.status).toBe(1);\n+    expect(result.stdout + result.stderr).toContain('--threshold must be a finite number');\n+  });\n+\n+  it('accepts a finite threshold', () => {\n+    const result = spawnSync(process.execPath, [resolve('dist/cli.js'), 'recall', 'maintenance', '--prune', '--threshold', '0.2'], { encoding: 'utf8' });\n+    expect(result.error).toBeUndefined();\n+    expect(result.status).not.toBeNull();\n+    expect(result.stdout + result.stderr).not.toContain('--threshold must be a finite number');\n+  });\n+});"
+  },
+  {
+   "filename": "src/index.ts",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -2250,7 +2250,13 @@ const maintenanceCmd = recallCmd\n   .command('maintenance')\n   .description('Automatic maintenance of team knowledge base')\n   .option('--prune', 'Remove low-confidence learnings')\n-  .option('--threshold <n>', 'Confidence threshold for pruning (default 0.15)', parseFloat)\n+  .option('--threshold <n>', 'Confidence threshold for pruning (default 0.15)', (value) => {\n+    const threshold = value.trim() === '' ? NaN : Number(value);\n+\n+    if (!Number.isFinite(threshold)) throw new Error('--threshold must be a finite number');\n+\n+    return threshold;\n+  })\n   .option('--archive', 'Move to archive/ instead of deleting')\n   .option('--confidence-writeback', 'Update frontmatter confidence scores')\n   .option('--update-quality', 'Find stale docs/rules/skills and write a .draft.md update beside each: starts the default workflow teamai-draft-learning-updates on the driver workflows.driver names, else local, prints what it drafted, and exits 1 when an entry could not be drafted. --dry-run only lists the entries')"
+  }
+ ],
+ "test_files": [
+  "src/__tests__/maintenance-numeric-options-e2e.test.ts"
+ ]
+}

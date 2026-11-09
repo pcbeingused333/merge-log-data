@@ -2,7 +2,7 @@
  "repo": "EverMind-AI/Raven",
  "number": 1196,
  "url": "https://github.com/EverMind-AI/Raven/pull/1196",
- "state": "open",
+ "state": "merged",
  "reviews": [
   {
    "role": "member",
@@ -27,6 +27,12 @@
    "state": "COMMENTED",
    "submitted_at": "2026-11-08T19:40:25Z",
    "body": "No blockers; this can merge as far as I am concerned.\n\nReviewed the full `github/main...HEAD` diff and the delta from `605a25657c73`, including the scheduler callers and wake/writeback behavior, commit history, backward compatibility, repository rules, runtime layer boundary, and whether the expanded tests weakened coverage. The previous frequent-cron blocker is fixed, its thread is resolved, the Windows guard remains appropriate, and the rewritten commit scope now passes commit-message CI. The branch also merges cleanly with the current `main`.\n\nVerification: `uv run --all-packages pytest tests/test_cron_service_validation.py tests/test_cron_service_wake.py tests/test_cron_service_claim.py tests/test_cron_service_reload.py tests/test_cron_service_dedup.py -x` passed 78 tests. Direct `TZ=America/New_York` probes for daily, 10-minute, 5-minute, minute, and second-level expressions all returned the exact expected future timestamps during the repeated hour. Some remote unit and Windows checks were still pending when this review was posted; the completed commit-message, lint, repository, pre-commit, and other checks were green.\n\n<!-- mrbot:s/0aa4958ba12f -->"
+  },
+  {
+   "role": "member",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-09T12:50:17Z",
+   "body": "Approved at 0aa4958ba12f. The full review and verification are in the PR-level comment."
   }
  ],
  "review_comments": [
@@ -79,6 +85,11 @@
    "role": "member",
    "created_at": "2026-11-08T20:02:06Z",
    "body": "## Windows compatibility review — PR #1196\n\nReviewed head `0aa4958ba12f818fdd0f6816f02449f790dca148` against base `8448cc6280923a7b20525af259a3b6d465844c42` (2 files, +78/−4), including the delta since the previously reviewed head `605a25657c73fe1bb48146cd6a7a3f3e4ddec9c8` (two commits: the `tzset` guard already reviewed, and the repeated-hour exhaustion fix). The diff and its new tests were read; no review threads are unresolved at this head.\n\n### Findings\n\n**Windows-specific: none — the earlier past-slot finding is fixed.** The bounded `for _ in range(3)` loop that could stop on a `next_ms <= now_ms` and return it is gone: `_compute_next_run` now scans up to 10,000 candidates and returns the first one after `now_ms`, and if the iterator cannot produce a future slot it logs and returns `None` (`raven/proactive_engine/schedulers/cron/service.py:72-87`). That covers the one-second and sub-hourly cases a three-step loop would have left in the past, and the fail-closed `None` is the same \"no next run\" answer the caller already handles. The behavior is platform-neutral; the new mock-based exhaustion test runs on Windows, and the two DST tests remain guarded by `hasattr(time, \"tzset\")`, so they skip rather than fail here.\n\n### Verification (native Windows 11, isolated detached worktree `D:/tmp/rv-1196c`)\n\n- `uv sync --frozen --offline --all-extras --no-extra segmenter --no-extra browser --dev`, then\n  `uv run --no-sync pytest tests/test_cron_service_validation.py -q` → **16 passed, 12 skipped**. The skips are the two `time.tzset`-guarded tests (parameterized to twelve cases), expected on Windows; `test_cron_stops_when_no_future_slot_is_found` and the non-DST validation cases all passed.\n\nGap: the DST mapping itself is still only exercised on a POSIX host with the process zone moved; this China-timezone Windows host cannot run it natively.\n\n<!-- raven-windows-review:pr=1196;head=0aa4958ba12f818fdd0f6816f02449f790dca148;reviewer=LivXue -->\n"
+  },
+  {
+   "role": "member",
+   "created_at": "2026-11-09T12:50:07Z",
+   "body": "No blockers in the reviewed scope.\n\nScope: this PR touches no files under `raven/agent/**`, so there is no in-fence slice to review and no inline note can be anchored; per the review fence, every observation is disclosed in this summary instead. I read the full diff -- 2 files, +78/-4: `raven/proactive_engine/schedulers/cron/service.py` and `tests/test_cron_service_validation.py`.\n\nWhat I examined: the changed `_compute_next_run` in full, its five call-site families (`_recompute_next_runs`, `_compute_wake_delay`, `_process_due`, `_execute_job`, and the add/update path), the model-facing claim in `raven/proactive_engine/schedulers/cron/tool.py:145-146`, the config claim in `raven/config/self_surface.py:668`, and the existing review rounds at earlier heads (the Windows `time.tzset` failure and the three-step repeated-hour blocker, both fixed at this head).\n\nConfirmed findings:\n\n- None. No Blocker, Nonblocking or Question grade finding survived review at this head.\n\nVerification:\n\n- `pytest tests/test_cron_service_validation.py` at head 0aa4958ba12f: 28 passed.\n- `pytest tests/test_cron_service_validation.py tests/test_cron_service_wake.py tests/test_cron_service_claim.py tests/test_cron_service_reload.py tests/test_cron_service_dedup.py`: 78 passed.\n- Direct probes of the head function with `TZ=America/New_York`: fall-back second pass `* * * * *`, `*/5 * * * *`, `*/10 * * * *`, `30 1 * * *` and `* * * * * *` all return exactly `2027-11-07T07:00:00Z` (the daily expression returns `2027-11-08T06:30:00Z`); the fall-back first pass returns the next minute; spring-forward `0 9 * * *` returns `2027-03-14T13:00:00Z`.\n- Direct probe with `TZ=Antarctica/Troll` (a 2-hour fall-back): `* * * * * *` escapes to `2027-10-31T03:00:00Z` in about 5,400 iterations, inside the 10,000 cap.\n- Explicit-zone path unchanged: `0 9 * * *` with `tz=Asia/Shanghai` returns 01:00Z and with `tz=UTC` returns 09:00Z, while the process zone is America/New_York.\n- CI at this head: 25 success, 3 skipped (`claude` x2, `docs deploy`), 0 failed.\n\nChecked and deliberately not reported: the `10_000` literal is not a named constant; the exhaustion test pins `call_count == 10_000`; the exhaustion path would make add validation say \"invalid cron expression\" (unreachable with real tzdata, whose largest repeated window is 2 hours); the second wall-clock pass of a repeated hour is skipped by design, as the PR description and the exact assertions state; a nonexistent spring-forward wall time maps to a future instant; the explicit-tz path has no new DST test because its semantics did not change.\n\n<!-- agentreview:s/0aa4958ba12f -->\n"
   }
  ]
 }

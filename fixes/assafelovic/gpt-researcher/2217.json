@@ -1,0 +1,33 @@
+{
+ "repo": "assafelovic/gpt-researcher",
+ "number": 2217,
+ "url": "https://github.com/assafelovic/gpt-researcher/pull/2217",
+ "title": "fix: don't send temperature to Claude models that reject it",
+ "merged_at": "2026-11-09T10:39:53Z",
+ "files": [
+  {
+   "filename": "gpt_researcher/llm_provider/generic/base.py",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -74,6 +74,26 @@\n     \"claude-haiku-4-5-20251001\",\n ]\n \n+# Claude Opus 4.7 and later, the Claude 5 family, Fable and Mythos reject temperature with a 400.\n+# Matched as prefixes so new versions are covered.\n+NO_SUPPORT_TEMPERATURE_MODEL_PREFIXES = (\n+    \"claude-opus-4-7\",\n+    \"claude-opus-4-8\",\n+    \"claude-opus-5\",\n+    \"claude-sonnet-5\",\n+    \"claude-haiku-5\",\n+    \"claude-fable\",\n+    \"claude-mythos\",\n+)\n+\n+\n+def supports_temperature(model: str) -> bool:\n+    if model in NO_SUPPORT_TEMPERATURE_MODELS:\n+        return False\n+    # drop provider prefixes: \"anthropic/claude-...\" (OpenRouter) and \"us.anthropic.claude-...\" (Bedrock)\n+    name = model.rsplit(\"/\", 1)[-1].split(\"anthropic.\", 1)[-1]\n+    return not name.startswith(NO_SUPPORT_TEMPERATURE_MODEL_PREFIXES)\n+\n SUPPORT_REASONING_EFFORT_MODELS = [\n     \"o3-mini\",\n     \"o3-mini-2025-01-31\","
+  },
+  {
+   "filename": "gpt_researcher/utils/llm.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -14,9 +14,9 @@\n from langchain_core.prompts import PromptTemplate\n \n from gpt_researcher.llm_provider.generic.base import (\n-    NO_SUPPORT_TEMPERATURE_MODELS,\n     SUPPORT_REASONING_EFFORT_MODELS,\n     ReasoningEfforts,\n+    supports_temperature,\n )\n \n from ..prompts import PromptFamily\n@@ -86,7 +86,7 @@ async def create_chat_completion(\n     if model in SUPPORT_REASONING_EFFORT_MODELS:\n         provider_kwargs['reasoning_effort'] = reasoning_effort\n \n-    if model not in NO_SUPPORT_TEMPERATURE_MODELS:\n+    if supports_temperature(model):\n         provider_kwargs['temperature'] = temperature\n     else:\n         # These models enforce their default temperature, but output limits"
+  },
+  {
+   "filename": "tests/test_claude_temperature.py",
+   "status": "added",
+   "additions": 46,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,46 @@\n+\"\"\"Claude Opus 4.7 and later, the Claude 5 family, Fable and Mythos reject ``temperature`` with a 400, so\n+``create_chat_completion`` must not send it for them, whatever prefix the provider puts on the model id.\"\"\"\n+from unittest.mock import AsyncMock, MagicMock, patch\n+\n+import pytest\n+\n+from gpt_researcher.utils.llm import create_chat_completion\n+\n+\n+async def _temperature_sent(monkeypatch, model):\n+    monkeypatch.delenv(\"LLM_KWARGS\", raising=False)\n+    provider = MagicMock()\n+    provider.get_chat_response = AsyncMock(return_value=\"ok\")\n+    with patch(\"gpt_researcher.utils.llm.get_llm\", return_value=provider) as mock_get_llm:\n+        await create_chat_completion(\n+            messages=[{\"role\": \"user\", \"content\": \"Generate a report\"}],\n+            model=model,\n+            llm_provider=\"anthropic\",\n+            temperature=0.4,\n+        )\n+    return mock_get_llm.call_args.kwargs[\"temperature\"]\n+\n+\n+@pytest.mark.asyncio\n+@pytest.mark.parametrize(\n+    \"model\",\n+    [\n+        \"claude-opus-4-8\",\n+        \"claude-opus-5\",\n+        \"claude-opus-5-5\",\n+        \"claude-sonnet-5\",\n+        \"claude-sonnet-5-5\",\n+        \"claude-haiku-5-5\",\n+        \"claude-fable-5-1\",\n+        \"anthropic.claude-opus-5-5\",\n+        \"us.anthropic.claude-opus-4-7-v1:0\",\n+        \"anthropic/claude-sonnet-5\",\n+    ],\n+)\n+async def test_claude_models_that_reject_temperature_get_none(monkeypatch, model):\n+    assert await _temperature_sent(monkeypatch, model) is None\n+\n+\n+@pytest.mark.asyncio\n+async def test_models_that_accept_temperature_still_get_it(monkeypatch):\n+    assert await _temperature_sent(monkeypatch, \"gpt-4.1\") == 0.4"
+  }
+ ],
+ "test_files": [
+  "tests/test_claude_temperature.py"
+ ]
+}

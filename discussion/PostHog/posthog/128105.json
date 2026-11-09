@@ -2,12 +2,18 @@
  "repo": "PostHog/posthog",
  "number": 128105,
  "url": "https://github.com/PostHog/posthog/pull/128105",
- "state": "open",
+ "state": "closed",
  "reviews": [
   {
    "role": "bot",
    "state": "COMMENTED",
    "submitted_at": "2026-11-03T11:03:30Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-09T17:42:52Z",
    "body": ""
   }
  ],
@@ -17,6 +23,12 @@
    "path": "common/hogvm/python/stl/__init__.py",
    "created_at": "2026-11-03T11:03:31Z",
    "body": "<a href=\"#\"><img src=\"https://app.parameter.ai/_static/icons/severity-low.svg\" height=\"16\" alt=\"🔵\" /></a> **arrayStringConcat now crashes on error objects and malformed date-like dicts instead of returning a string**\n\nThe change routes every element through `toString`, whose hog-error branch is broken: `common/hogvm/python/stl/__init__.py:69-71` reads `args[0]['name']`, but error dicts built by `new_hog_error` (`common/hogvm/python/objects.py:33-39`) carry `'type'`, and it passes `message`/`payload` unwrapped. The date branch also formats `month:02d` without checking the field is an int (`stl/__init__.py:67`). I reproduced both: `arrayStringConcat([Error('boom')], ',')` raises `KeyError: 'name'` and a `__hogDate__` dict with string fields raises `ValueError`. Previously `str(s)` never raised. The exception escapes `call_stl` (`common/hogvm/python/execute.py:201`) uncaught, so Hog `try/catch` cannot handle it and the query fails with an internal error.\n\n**How:**\n1. Send an event with a property list containing `{\"__hogError__\": true, \"type\": \"x\", \"message\": \"y\"}` (event properties are attacker-controlled via the public capture token).\n2. A user's HogQL/Hog expression calls `arrayStringConcat(properties.$list)` on it.\n3. The raw `KeyError` propagates out of the VM as an unexpected internal exception, breaking the query/insight.\n\nThe same crash was already reachable via a direct `toString(properties.x)` call, but this PR newly makes the previously never-raising `arrayStringConcat` throw.\n\n**Fix:** Correct `toString`'s error branch (use `args[0]['type']`, wrap message/payload in lists) and guard the date formatting, or fall back to `str(s)` in `arrayStringConcat` when `toString` raises.\n\n\n---\n <sub> React with 👍 if useful or 👎 if not </sub>\n\n<!-- hex-sentinel-finding-head:12b586104073c59976a3023c4611325c37487b5a -->"
+  },
+  {
+   "role": "contributor",
+   "path": "common/hogvm/python/stl/__init__.py",
+   "created_at": "2026-11-09T17:42:51Z",
+   "body": "@pcbeingused333 do you agree these make sense? im going to close this for now, but feel free to re-open once you've implemented these suggested changes!"
   }
  ],
  "comments": [

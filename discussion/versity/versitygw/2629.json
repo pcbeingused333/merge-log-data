@@ -9,6 +9,12 @@
    "state": "CHANGES_REQUESTED",
    "submitted_at": "2026-11-09T06:25:54Z",
    "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-09T12:51:13Z",
+   "body": ""
   }
  ],
  "review_comments": [
@@ -53,6 +59,24 @@
    "path": "internal/azblobclient/azblobclient.go",
    "created_at": "2026-11-09T06:25:34Z",
    "body": "\"every blob client must use\" isn't true in the tree: `copySourceURL` still builds `service.NewClient(az.serviceURL, az.defaultCreds, nil)` (`backend/azure/copy.go:66`). It can't leak a SAS (no query there), but either use `az.client.ServiceClient()` there (same credentials) or soften the wording."
+  },
+  {
+   "role": "contributor",
+   "path": "internal/azblobclient/azblobclient_test.go",
+   "created_at": "2026-11-09T12:48:32Z",
+   "body": "Nit: using the token as the subtest name produces `sig=SECRET_` and `sig=SECRET_#01` (Go renders both `\\n` and `\\r` as `_`), so the cases can't be told apart or targeted with `-run`. Named cases instead:\n\n```go\nfor _, tt := range []struct{ name, token string }{\n\t{\"newline\", \"sig=SECRET\\n\"},\n\t{\"carriage return\", \"sig=SECRET\\r\"},\n\t{\"nul\", \"sig=SECRET\\x00\"},\n\t{\"del\", \"sig=SECRET\\x7f\"},\n\t{\"bad escape\", \"sig=SECRET%zz\"},\n\t{\"semicolon\", \"sig=SECRET;bad\"},\n} {\n\tt.Run(tt.name, func(t *testing.T) {\n```"
+  },
+  {
+   "role": "contributor",
+   "path": "internal/azblobclient/azblobclient.go",
+   "created_at": "2026-11-09T12:49:00Z",
+   "body": "Nit: both checks return the same `invalid SAS token`, so someone with a trailing newline in `AZ_SAS_TOKEN` gets no hint. Say why without echoing the token; the loop also fits in one call:\n\n```go\nif strings.ContainsFunc(sasToken, func(r rune) bool { return r < 0x20 || r == 0x7f }) {\n\treturn nil, Credentials{}, errors.New(\"invalid SAS token: contains a control character\")\n}\nif _, err := url.ParseQuery(sasToken); err != nil {\n\treturn nil, Credentials{}, errors.New(\"invalid SAS token: malformed query\")\n}\n```"
+  },
+  {
+   "role": "contributor",
+   "path": "internal/azblobclient/azblobclient.go",
+   "created_at": "2026-11-09T12:50:57Z",
+   "body": "This is optional, because it's a pre-existing bug. I'm ok with fixing it in a follow up PR or just report the issue in backlog.\r\n\r\nA token copied with a leading `?` (`?sv=...&sig=...`) fails on `main` and on this branch alike (AuthorizationFailure on every call against Azurite). With the derived clients, `runtime.JoinPaths` splits the endpoint on `?`, so per-blob requests now go out with no SAS at all instead of a garbled one. Since `New` validates the token now, consider `sasToken = strings.TrimPrefix(sasToken, \"?\")` here, or rejecting it with a hint."
   }
  ],
  "comments": [
@@ -60,6 +84,16 @@
    "role": "collaborator",
    "created_at": "2026-11-08T00:47:15Z",
    "body": "This won't automatically run in continuous integration without approval. A member of the Versity organization must allow it."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-09T07:16:09Z",
+   "body": "Applied the requested service-client derivation and per-call retry overrides, removed ClientOptions and retryOptions, and restored the original policy comment. `copySourceURL` is unchanged: the \"every blob client\" wording went away with ClientOptions, and that client carries no SAS. Added initialization validation for malformed SAS queries with a token-free error and regression tests. The backend/azure and internal/azblobclient suites and go vet pass.\n\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-09T13:06:56Z",
+   "body": "Applied the latest review: the invalid-token subtests are now named cases, the two rejections say why without echoing the token (\"contains a control character\" / \"malformed query\") using `strings.ContainsFunc`, and a leading `?` on the SAS token is trimmed in `New` (with a test). `go test ./internal/azblobclient ./backend/azure` passes.\n\nThis comment was drafted with Claude Code.\n"
   }
  ]
 }

@@ -1,0 +1,26 @@
+{
+ "repo": "Agent-Field/agentfield",
+ "number": 1166,
+ "url": "https://github.com/Agent-Field/agentfield/pull/1166",
+ "title": "fix(go-sdk): accept CRLF delimiters and 'data:' without space in SSE decoder",
+ "merged_at": "2026-11-09T14:08:41Z",
+ "files": [
+  {
+   "filename": "sdk/go/ai/client.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 3,
+   "patch": "@@ -383,14 +383,16 @@ func NewSSEDecoder(r io.Reader) *SSEDecoder {\n func (d *SSEDecoder) Decode() (StreamChunk, error) {\n \tfor {\n \t\t// First check if we already have a complete message in accumulated buffer\n-\t\tdata := string(d.accumulated)\n+\t\t// SSE allows CRLF line endings; normalize so \"\\r\\n\\r\\n\" separates events too.\n+\t\tdata := strings.ReplaceAll(string(d.accumulated), \"\\r\\n\", \"\\n\")\n \t\tif idx := strings.Index(data, \"\\n\\n\"); idx >= 0 {\n \t\t\tmessage := data[:idx]\n \t\t\td.accumulated = []byte(data[idx+2:])\n \n \t\t\t// Parse SSE message\n-\t\t\tif strings.HasPrefix(message, \"data: \") {\n-\t\t\t\tjsonData := strings.TrimPrefix(message, \"data: \")\n+\t\t\t// The SSE field is \"data:\" with an optional single space after the colon.\n+\t\t\tif strings.HasPrefix(message, \"data:\") {\n+\t\t\t\tjsonData := strings.TrimPrefix(message, \"data:\")\n \t\t\t\tjsonData = strings.TrimSpace(jsonData)\n \n \t\t\t\t// Check for stream end"
+  },
+  {
+   "filename": "sdk/go/ai/client_test.go",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -769,3 +769,33 @@ func TestStreamComplete_TimeoutAppliesWhileWaitingForResponse(t *testing.T) {\n \tassert.Error(t, streamErr)\n \tassert.Less(t, time.Since(start), 2*time.Second)\n }\n+\n+func TestSSEDecoder_CRLFAndNoSpaceDataField(t *testing.T) {\n+\ttests := []struct {\n+\t\tname  string\n+\t\tinput string\n+\t}{\n+\t\t{\"CRLF delimiters\", \"data: {\\\"id\\\":\\\"a\\\"}\\r\\n\\r\\ndata: {\\\"id\\\":\\\"b\\\"}\\r\\n\\r\\ndata: [DONE]\\r\\n\\r\\n\"},\n+\t\t{\"no space after data colon\", \"data:{\\\"id\\\":\\\"a\\\"}\\n\\ndata:{\\\"id\\\":\\\"b\\\"}\\n\\ndata:[DONE]\\n\\n\"},\n+\t\t{\"CRLF and no space\", \"data:{\\\"id\\\":\\\"a\\\"}\\r\\n\\r\\ndata:{\\\"id\\\":\\\"b\\\"}\\r\\n\\r\\n\"},\n+\t}\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tdecoder := NewSSEDecoder(strings.NewReader(tt.input))\n+\t\t\tvar ids []string\n+\t\t\tfor {\n+\t\t\t\tchunk, err := decoder.Decode()\n+\t\t\t\tif err == io.EOF {\n+\t\t\t\t\tbreak\n+\t\t\t\t}\n+\t\t\t\tif err != nil {\n+\t\t\t\t\tt.Fatalf(\"unexpected error: %v\", err)\n+\t\t\t\t}\n+\t\t\t\tids = append(ids, chunk.ID)\n+\t\t\t}\n+\t\t\tif len(ids) != 2 || ids[0] != \"a\" || ids[1] != \"b\" {\n+\t\t\t\tt.Fatalf(\"expected chunks [a b], got %v\", ids)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "sdk/go/ai/client_test.go"
+ ]
+}

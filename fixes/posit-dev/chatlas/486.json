@@ -1,0 +1,26 @@
+{
+ "repo": "posit-dev/chatlas",
+ "number": 486,
+ "url": "https://github.com/posit-dev/chatlas/pull/486",
+ "title": "fix(anthropic): say what Anthropic documents in the sampling parameter deprecation warning",
+ "merged_at": "2026-11-09T17:32:29Z",
+ "files": [
+  {
+   "filename": "chatlas/_provider_anthropic.py",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 6,
+   "patch": "@@ -799,15 +799,20 @@ def translate_model_params(self, params: StandardModelParams) -> \"SubmitInputArg\n         res: \"SubmitInputArgs\" = {}\n \n         # anthropic>=1.0 removed these sampling parameters from the request\n-        # schema; current models ignore them. Forward them via `extra_body`\n-        # so older models that still honor them keep working.\n+        # schema; Claude 4.7 and later reject non-default values with a 400.\n+        # Forward them via `extra_body` so older models that still honor them\n+        # keep working.\n         removed = [p for p in (\"temperature\", \"top_p\", \"top_k\") if p in params]\n         if removed:\n             warnings.warn(\n-                f\"The {', '.join(removed)} sampling parameter(s) no longer have \"\n-                \"an effect on current Anthropic models. They are forwarded via \"\n-                \"`extra_body` for older models that still honor them; this \"\n-                \"forwarding is deprecated and will be removed in a future release.\",\n+                f\"The {', '.join(removed)} sampling parameter(s) are deprecated by \"\n+                \"Anthropic: Claude 4.7 and later models return a 400 error when they \"\n+                \"are set to a non-default value, and API version 2026-10-21 removes \"\n+                \"them for every model \"\n+                \"(https://platform.claude.com/docs/en/about-claude/model-deprecations). \"\n+                \"They are forwarded via `extra_body` for older models that still \"\n+                \"honor them; this forwarding is deprecated and will be removed in a \"\n+                \"future release.\",\n                 DeprecationWarning,\n                 stacklevel=2,\n             )"
+  },
+  {
+   "filename": "tests/test_set_model_params.py",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 2,
+   "patch": "@@ -169,7 +169,10 @@ def test_translate_model_params_anthropic():\n         \"stop_sequences\": [\"STOP\"],\n     }\n \n-    with pytest.warns(DeprecationWarning, match=\"no longer have an effect\"):\n+    with pytest.warns(\n+        DeprecationWarning,\n+        match=\"return a 400 error when they are set to a non-default value\",\n+    ):\n         result = provider.translate_model_params(params)\n \n     expected = {\n@@ -517,7 +520,10 @@ def test_anthropic_model_params_integration():\n     )\n \n     # Test that provider.translate_model_params converts them correctly\n-    with pytest.warns(DeprecationWarning, match=\"no longer have an effect\"):\n+    with pytest.warns(\n+        DeprecationWarning,\n+        match=\"return a 400 error when they are set to a non-default value\",\n+    ):\n         provider_args = chat.provider.translate_model_params(\n             chat._standard_model_params\n         )\n@@ -564,3 +570,17 @@ def test_chat_kwargs_with_model_params():\n     assert kwargs.get(\"max_tokens\") == 100\n     assert kwargs.get(\"frequency_penalty\") == 0.1\n     assert kwargs.get(\"presence_penalty\") == 0.3  # Should override chat.chat_kwargs\n+\n+\n+def test_anthropic_sampling_warning_cites_the_deprecation_page():\n+    \"\"\"The warning says what Anthropic documents: a 400 on Claude 4.7+, removal in 2026-10-21.\"\"\"\n+    provider = ChatAnthropic().provider\n+\n+    with pytest.warns(DeprecationWarning) as record:\n+        provider.translate_model_params({\"temperature\": 0.7, \"top_k\": 50})\n+\n+    message = str(record[0].message)\n+    assert message.startswith(\"The temperature, top_k sampling parameter(s)\")\n+    assert \"Claude 4.7 and later\" in message\n+    assert \"2026-10-21\" in message\n+    assert \"no longer have an effect\" not in message"
+  }
+ ],
+ "test_files": [
+  "tests/test_set_model_params.py"
+ ]
+}

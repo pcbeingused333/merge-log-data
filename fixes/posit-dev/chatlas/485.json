@@ -1,0 +1,33 @@
+{
+ "repo": "posit-dev/chatlas",
+ "number": 485,
+ "url": "https://github.com/posit-dev/chatlas/pull/485",
+ "title": "fix(google): count tool-use prompt tokens as input tokens",
+ "merged_at": "2026-11-09T18:43:38Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0\n \n ### Bug fixes\n \n+* `ChatGoogle()` and `ChatVertex()` now count the tokens of content fetched by built-in tools (URL context, search, ...) as input tokens in `Turn.tokens` and the cost estimate. Gemini reports them as `tool_use_prompt_token_count`, separately from `prompt_token_count`, and they were left out.\n * A tool that returns a `ContentToolResult` whose value is a `Content` object other than an image/PDF/document (e.g. `ContentToolResult(value=ContentText(...), model_format=\"as_is\")`, as MCP client adapters produce) no longer poisons the conversation: the next API request failed with a 400 (e.g. Anthropic's \"`tool_result` content must either be a string or a list of content blocks\") because the raw `Content` object was serialized into the request. Turn preparation now unwraps any such value to a plain value -- `ContentText` becomes its text, `ContentJson` its underlying data, and a list of non-file content joins into a single string -- so no provider ever sees a raw `Content` object in a tool-result value. (#494)\n * `.register_tool()` now keeps the description, parameters and `strict` setting of a `Tool` built with explicit `parameters=`, as `.set_tools()` does, instead of rebuilding them from the signature and docstring of `tool.func`. A `name=` override renames the tool without rebuilding it; passing `model=` still rebuilds the schema from that model. (#496)\n * `ChatOllama()` can now be created without a `model`, so `ChatOllama().list_models()` works. Sending a message without a model still raises an error that lists the available models. (#166)"
+  },
+  {
+   "filename": "chatlas/_provider_google.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -565,8 +565,12 @@ def value_tokens(self, completion):\n         if usage is None:\n             return None\n         cached = usage.cached_content_token_count or 0\n+        # Content fetched by built-in tools (URL context, search, ...) is\n+        # counted as input tokens, but reported separately from the prompt.\n         return (\n-            (usage.prompt_token_count or 0) - cached,\n+            (usage.prompt_token_count or 0)\n+            + (usage.tool_use_prompt_token_count or 0)\n+            - cached,\n             (usage.candidates_token_count or 0) + (usage.thoughts_token_count or 0),\n             usage.cached_content_token_count or 0,\n         )"
+  },
+  {
+   "filename": "tests/test_provider_google.py",
+   "status": "modified",
+   "additions": 41,
+   "deletions": 0,
+   "patch": "@@ -127,6 +127,47 @@ def test_google_stream_turn_tool_request_finishes_as_tool_use():\n     assert turn.finish_reason == \"tool_use\"\n \n \n+def test_google_value_tokens_counts_tool_use_prompt_tokens_as_input():\n+    from google.genai.types import (\n+        GenerateContentResponse,\n+        GenerateContentResponseUsageMetadata,\n+    )\n+\n+    provider = GoogleProvider(\n+        model=\"gemini-2.5-flash\", api_key=\"dummy\", name=\"Google/Gemini\", kwargs=None\n+    )\n+    completion = GenerateContentResponse(\n+        usage_metadata=GenerateContentResponseUsageMetadata(\n+            prompt_token_count=27,\n+            tool_use_prompt_token_count=10309,\n+            candidates_token_count=40,\n+            thoughts_token_count=200,\n+        )\n+    )\n+\n+    assert provider.value_tokens(completion) == (10336, 240, 0)\n+\n+\n+def test_google_value_tokens_without_tool_use_prompt_tokens():\n+    from google.genai.types import (\n+        GenerateContentResponse,\n+        GenerateContentResponseUsageMetadata,\n+    )\n+\n+    provider = GoogleProvider(\n+        model=\"gemini-2.5-flash\", api_key=\"dummy\", name=\"Google/Gemini\", kwargs=None\n+    )\n+    completion = GenerateContentResponse(\n+        usage_metadata=GenerateContentResponseUsageMetadata(\n+            prompt_token_count=100,\n+            cached_content_token_count=30,\n+            candidates_token_count=5,\n+        )\n+    )\n+\n+    assert provider.value_tokens(completion) == (70, 5, 30)\n+\n+\n def test_normalize_finish_reason_passes_through_unknown():\n     assert google_normalize_finish_reason(\"OTHER\") == \"OTHER\"\n     assert google_normalize_finish_reason(\"NEW_REASON\") == \"NEW_REASON\""
+  }
+ ],
+ "test_files": [
+  "tests/test_provider_google.py"
+ ]
+}

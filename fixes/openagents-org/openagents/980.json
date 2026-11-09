@@ -1,0 +1,77 @@
+{
+ "repo": "openagents-org/openagents",
+ "number": 980,
+ "url": "https://github.com/openagents-org/openagents/pull/980",
+ "title": "fix(workspace): read Anthropic router replies from the text block, not content[0]",
+ "merged_at": "2026-11-09T07:46:33Z",
+ "files": [
+  {
+   "filename": "workspace/backend/app/mods/workspace_mod.py",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 2,
+   "patch": "@@ -1448,6 +1448,19 @@ def _get_llm_client():\n     return _llm_client, provider\n \n \n+def _anthropic_text(resp) -> str:\n+    \"\"\"Join the text blocks of an Anthropic response.\n+\n+    Models that think by default put a ``thinking`` block first, so\n+    ``content[0]`` is not guaranteed to carry ``.text``.\n+    \"\"\"\n+    return \"\".join(\n+        getattr(b, \"text\", \"\") or \"\"\n+        for b in (resp.content or [])\n+        if getattr(b, \"type\", None) == \"text\"\n+    )\n+\n+\n async def _route_with_llm(\n     channel, new_event: Event, db, workspace, workflow_instruction: Optional[str] = None,\n     allow_human_stop: bool = False, allowed_agents: Optional[List[str]] = None,\n@@ -1646,7 +1659,7 @@ def classify(client, provider, model, max_tokens):\n             **({\"temperature\": 0} if allow_human_stop else {}),\n             messages=[{\"role\": \"user\", \"content\": prompt}],\n         )\n-        return response.content[0].text.strip()\n+        return _anthropic_text(response).strip()\n \n     try:\n         if dedicated_classifier:\n@@ -1880,7 +1893,7 @@ def _classify_task_progress(task, latest_content: str, db, workspace) -> str:\n                 model=model, max_tokens=15,\n                 messages=[{\"role\": \"user\", \"content\": prompt}],\n             )\n-            raw = resp.content[0].text.strip()\n+            raw = _anthropic_text(resp).strip()\n         result = raw.lower()\n         logger.info(\"Task classifier: %s (task=%s)\", raw, task.id)\n         if \"need_input\" in result:"
+  },
+  {
+   "filename": "workspace/backend/app/routers/routines.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 2,
+   "patch": "@@ -206,7 +206,12 @@ def _generate_routine_context_sync(\n     conversation_history: Optional[str] = None,\n ) -> str:\n     \"\"\"Call the LLM to expand a brief task description into comprehensive routine context.\"\"\"\n-    from app.mods.workspace_mod import _get_llm_client, _get_router_api_key, _get_router_model\n+    from app.mods.workspace_mod import (\n+        _anthropic_text,\n+        _get_llm_client,\n+        _get_router_api_key,\n+        _get_router_model,\n+    )\n \n     fallback = _fallback_context(name, message, schedule_desc)\n \n@@ -258,7 +263,7 @@ def _generate_routine_context_sync(\n                 max_tokens=1024,\n                 messages=[{\"role\": \"user\", \"content\": prompt}],\n             )\n-            return resp.content[0].text.strip()\n+            return _anthropic_text(resp).strip()\n     except Exception as exc:\n         logger.warning(\"LLM context generation failed (%s), using fallback\", exc)\n         return fallback"
+  },
+  {
+   "filename": "workspace/backend/app/routers/workspaces.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -922,7 +922,7 @@ def generate_member_description(\n     \"\"\"\n     from app.models import EventRecord\n     from app.mods.workspace_mod import (\n-        _get_llm_client, _get_router_model, _get_router_api_key,\n+        _anthropic_text, _get_llm_client, _get_router_model, _get_router_api_key,\n     )\n \n     workspace = db.execute(\n@@ -1002,7 +1002,7 @@ def generate_member_description(\n                 model=model, max_tokens=60,\n                 messages=[{\"role\": \"user\", \"content\": prompt}],\n             )\n-            text = resp.content[0].text.strip()\n+            text = _anthropic_text(resp).strip()\n     except Exception as e:\n         logger.error(\"generate-description failed for %s: %s\", agent_name, e)\n         return json_response(ResponseCode.INTERNAL_ERROR, \"Failed to generate description\")"
+  },
+  {
+   "filename": "workspace/backend/app/services/approvals.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 2,
+   "patch": "@@ -163,7 +163,12 @@ def _match_custom_rules(rules: list, action: str, details: Optional[str]) -> dic\n     Missing, malformed, unavailable or uncertain results retain the safeguard.\n     The caller validates the full response and computes the verdict itself.\n     \"\"\"\n-    from app.mods.workspace_mod import _get_llm_client, _get_router_api_key, _get_router_model\n+    from app.mods.workspace_mod import (\n+        _anthropic_text,\n+        _get_llm_client,\n+        _get_router_api_key,\n+        _get_router_model,\n+    )\n     if not _get_router_api_key():\n         return {}\n     instruction = (\n@@ -187,7 +192,7 @@ def _match_custom_rules(rules: list, action: str, details: Optional[str]) -> dic\n         else:\n             response = client.messages.create(model=_get_router_model(), max_tokens=1500,\n                 system=instruction, messages=[{\"role\": \"user\", \"content\": data}])\n-            raw = response.content[0].text\n+            raw = _anthropic_text(response)\n         parsed = json.loads(raw)\n         return parsed if isinstance(parsed, dict) else {}\n     except Exception:"
+  },
+  {
+   "filename": "workspace/backend/app/services/completion_routing.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 2,
+   "patch": "@@ -75,7 +75,9 @@ def message_data(event, limit=12000):\n \n \n async def decide(context):\n-    from app.mods.workspace_mod import _get_llm_client, _get_router_model, _get_router_api_key\n+    from app.mods.workspace_mod import (\n+        _anthropic_text, _get_llm_client, _get_router_model, _get_router_api_key,\n+    )\n     dedicated = bool(config.MESSAGE_ROUTER_MODEL)\n     if not config.ROUTER_LLM_ENABLED or not (\n             (dedicated and config.MESSAGE_ROUTER_API_KEY) or _get_router_api_key()):\n@@ -94,7 +96,7 @@ async def call_model(client, provider, model, max_tokens):\n             raw = response.choices[0].message.content\n         else:\n             response = await asyncio.to_thread(client.messages.create, **args, timeout=15)\n-            raw = response.content[0].text\n+            raw = _anthropic_text(response)\n         result = json.loads(raw)\n         if not isinstance(result, dict) or result.get('action') not in ('next', 'ask', 'wait', 'stop'):\n             raise ValueError('invalid decision')"
+  },
+  {
+   "filename": "workspace/backend/app/services/workflow.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 2,
+   "patch": "@@ -232,7 +232,12 @@ def _linked_task(db, workspace_id: str, channel_name: str) -> Optional[KanbanTas\n \n def _judge(prompt: str) -> Optional[str]:\n     \"\"\"Run a one-token judgment on the router model; None if no LLM/available.\"\"\"\n-    from app.mods.workspace_mod import _get_llm_client, _get_router_api_key, _get_router_model\n+    from app.mods.workspace_mod import (\n+        _anthropic_text,\n+        _get_llm_client,\n+        _get_router_api_key,\n+        _get_router_model,\n+    )\n \n     if not _get_router_api_key():\n         return None\n@@ -247,7 +252,7 @@ def _judge(prompt: str) -> Optional[str]:\n         resp = client.messages.create(\n             model=model, max_tokens=10, messages=[{\"role\": \"user\", \"content\": prompt}],\n         )\n-        return resp.content[0].text.strip().lower()\n+        return _anthropic_text(resp).strip().lower()\n     except Exception as exc:\n         logger.warning(\"workflow judge failed: %s\", exc)\n         return None"
+  },
+  {
+   "filename": "workspace/backend/tests/test_approvals.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -524,7 +524,7 @@ def test_policy_classifier_uses_trusted_instructions_and_validates_json(monkeypa\n     client = MagicMock()\n     client.with_options.return_value = client\n     response = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{\"0\":\"no_match\"}'))],\n-                               content=[SimpleNamespace(text='{\"0\":\"no_match\"}')])\n+                               content=[SimpleNamespace(type=\"text\", text='{\"0\":\"no_match\"}')])\n     client.chat.completions.create.return_value = response\n     client.messages.create.return_value = response\n     monkeypatch.setattr(workspace_mod, '_get_router_api_key', lambda: 'test')"
+  },
+  {
+   "filename": "workspace/backend/tests/test_llm_router.py",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 1,
+   "patch": "@@ -7,10 +7,11 @@\n \n import asyncio\n import pytest\n+from types import SimpleNamespace\n from unittest.mock import patch, MagicMock, AsyncMock\n \n from app.models import Channel, ChannelMember, EventRecord, WorkspaceMember, Workspace\n-from app.mods.workspace_mod import _route_with_llm, _handle_message_posted\n+from app.mods.workspace_mod import _anthropic_text, _route_with_llm, _handle_message_posted\n from openagents.core.onm_events import Event\n from openagents.core.onm_mods import PipelineContext\n \n@@ -27,6 +28,7 @@ def _make_event(source: str, target: str, content: str, message_type: str = \"cha\n \n def _mock_anthropic_response(text: str):\n     mock_content = MagicMock()\n+    mock_content.type = \"text\"\n     mock_content.text = text\n     mock_response = MagicMock()\n     mock_response.content = [mock_content]\n@@ -74,9 +76,36 @@ def _run(coro):\n         loop.close()\n \n \n+def _thinking_then_text(text: str):\n+    \"\"\"Claude 5 models think by default, so a thinking block can come first.\"\"\"\n+    return SimpleNamespace(content=[\n+        SimpleNamespace(type=\"thinking\", thinking=\"\", signature=\"\"),\n+        SimpleNamespace(type=\"text\", text=text),\n+    ])\n+\n+\n+def test_anthropic_text_skips_thinking_blocks():\n+    assert _anthropic_text(_thinking_then_text(\"next:agent-worker\")) == \"next:agent-worker\"\n+    assert _anthropic_text(SimpleNamespace(content=[SimpleNamespace(type=\"thinking\", thinking=\"\")])) == \"\"\n+\n+\n class TestRouteWithLLM:\n     \"\"\"Tests for _route_with_llm with Anthropic provider.\"\"\"\n \n+    @patch(\"app.mods.workspace_mod._get_llm_client\")\n+    @patch(\"app.mods.workspace_mod._get_router_api_key\", return_value=\"test-key\")\n+    @patch(\"app.mods.workspace_mod._get_router_model\", return_value=\"claude-sonnet-5-5\")\n+    def test_router_skips_leading_thinking_block(self, _mock_model, _mock_key, mock_get_client, db, multi_agent_workspace):\n+        mock_client = MagicMock()\n+        mock_client.messages.create.return_value = _thinking_then_text(\"next:agent-worker\")\n+        mock_get_client.return_value = (mock_client, \"anthropic\")\n+\n+        ws = multi_agent_workspace[\"workspace\"]\n+        ch = multi_agent_workspace[\"channel\"]\n+        event = _make_event(\"openagents:agent-master\", \"channel/session-test\", \"@agent-worker please do this\")\n+\n+        assert _run(_route_with_llm(ch, event, db, ws)) == [\"agent-worker\"]\n+\n     @patch(\"app.mods.workspace_mod._get_llm_client\")\n     @patch(\"app.mods.workspace_mod._get_router_api_key\", return_value=\"test-key\")\n     @patch(\"app.mods.workspace_mod._get_router_model\", return_value=\"claude-haiku-4-5-20251001\")"
+  },
+  {
+   "filename": "workspace/backend/tests/test_workspaces.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -277,6 +277,7 @@ def _url(self, workspace, name=\"agent-alpha\"):\n     @patch(\"app.mods.workspace_mod._get_router_model\", return_value=\"claude-haiku-4-5-20251001\")\n     def test_generate_returns_suggestion(self, _m, _k, mock_get_client, client, workspace):\n         content = MagicMock()\n+        content.type = \"text\"\n         content.text = '\"Backend engineer that builds APIs and fixes bugs.\"'\n         resp = MagicMock()\n         resp.content = [content]"
+  }
+ ],
+ "test_files": [
+  "workspace/backend/tests/test_approvals.py",
+  "workspace/backend/tests/test_llm_router.py",
+  "workspace/backend/tests/test_workspaces.py"
+ ]
+}

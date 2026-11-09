@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 311,
+ "url": "https://github.com/lofcz/LLMTornado/pull/311",
+ "title": "fix(chat): wrap raw base64 ChatImage in a data URI for OpenAI-compatible providers",
+ "merged_at": "2026-11-09T08:22:09Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/OpenAiCompatibleImageDataUriTests.cs",
+   "status": "added",
+   "additions": 47,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,47 @@\n+using LlmTornado.Images;\n+using LlmTornado.Chat;\n+using LlmTornado.Code;\n+using Newtonsoft.Json.Linq;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class OpenAiCompatibleImageDataUriTests\n+{\n+    [TestCase(LLmProviders.OpenAi, \"gpt-4o\")]\n+    [TestCase(LLmProviders.Mistral, \"pixtral-large-latest\")]\n+    [TestCase(LLmProviders.Groq, \"llama-3.2-11b-vision-preview\")]\n+    public void ImageUrl_WrapsRawBase64InDataUri(LLmProviders providerType, string model)\n+    {\n+        string url = Serialize(providerType, model, new ChatImage(\"QUJD\", \"image/png\"));\n+        Assert.That(url, Is.EqualTo(\"data:image/png;base64,QUJD\"));\n+    }\n+\n+    [Test]\n+    public void ImageUrl_ZaiKeepsRawBase64()\n+    {\n+        string url = Serialize(LLmProviders.Zai, \"glm-4.5v\", new ChatImage(\"QUJD\", \"image/png\"));\n+        Assert.That(url, Is.EqualTo(\"QUJD\"));\n+    }\n+\n+    [TestCase(\"data:image/png;base64,QUJD\", \"image/png\", \"data:image/png;base64,QUJD\")]\n+    [TestCase(\"https://example.com/image.png\", \"image/png\", \"https://example.com/image.png\")]\n+    [TestCase(\"QUJD\", null, \"QUJD\")]\n+    public void ImageUrl_LeavesOtherInputsUntouched(string input, string? mimeType, string expected)\n+    {\n+        string url = Serialize(LLmProviders.OpenAi, \"gpt-4o\", new ChatImage(input) { MimeType = mimeType });\n+        Assert.That(url, Is.EqualTo(expected));\n+    }\n+\n+    private static string Serialize(LLmProviders providerType, string model, ChatImage image)\n+    {\n+        ChatRequest request = new()\n+        {\n+            Model = model,\n+            Messages = [new ChatMessage(ChatMessageRoles.User, [new ChatMessagePart(image)])]\n+        };\n+        IEndpointProvider provider = new TornadoApi(providerType, \"test-key\").GetProvider(providerType);\n+        JObject body = JObject.Parse(request.Serialize(provider).Body.ToString()!);\n+        return body[\"messages\"]![0]![\"content\"]![0]![\"image_url\"]![\"url\"]!.ToString();\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/ChatRequest.cs",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 1,
+   "patch": "@@ -1356,7 +1356,17 @@ public override void WriteJson(JsonWriter writer, IList<ChatMessage>? value, Jso\n \t\t                        writer.WriteStartObject();\n \n \t\t                        writer.WritePropertyName(\"url\");\n-\t\t                        writer.WriteValue(part.Image?.Url);\n+\t\t                        string? imageUrl = part.Image?.Url;\n+\n+\t\t                        if (request?.Model?.Provider is not LLmProviders.Zai && !string.IsNullOrWhiteSpace(part.Image?.MimeType) && !string.IsNullOrEmpty(imageUrl) &&\n+\t\t                            !imageUrl.StartsWith(\"data:\", StringComparison.OrdinalIgnoreCase) &&\n+\t\t                            !imageUrl.StartsWith(\"http://\", StringComparison.OrdinalIgnoreCase) &&\n+\t\t                            !imageUrl.StartsWith(\"https://\", StringComparison.OrdinalIgnoreCase))\n+\t\t                        {\n+\t\t\t                        imageUrl = $\"data:{part.Image.MimeType};base64,{imageUrl}\";\n+\t\t                        }\n+\n+\t\t                        writer.WriteValue(imageUrl);\n \n \t\t                        if (part.Image?.Detail is not null)\n \t\t                        {"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/OpenAiCompatibleImageDataUriTests.cs"
+ ]
+}

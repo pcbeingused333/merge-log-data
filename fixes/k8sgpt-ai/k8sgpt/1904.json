@@ -1,0 +1,26 @@
+{
+ "repo": "k8sgpt-ai/k8sgpt",
+ "number": 1904,
+ "url": "https://github.com/k8sgpt-ai/k8sgpt/pull/1904",
+ "title": "fix: pass configured topp/topk to the Cohere chat request",
+ "merged_at": "2026-11-09T07:21:56Z",
+ "files": [
+  {
+   "filename": "pkg/ai/cohere.go",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 3,
+   "patch": "@@ -31,6 +31,8 @@ type CohereClient struct {\n \tmodel       string\n \ttemperature float32\n \tmaxTokens   int\n+\ttopP        float32\n+\ttopK        int32\n }\n \n func (c *CohereClient) Configure(config IAIConfig) error {\n@@ -54,21 +56,27 @@ func (c *CohereClient) Configure(config IAIConfig) error {\n \tc.model = config.GetModel()\n \tc.temperature = config.GetTemperature()\n \tc.maxTokens = maxTokensOrDefault(config.GetMaxTokens())\n+\tc.topP = config.GetTopP()\n+\tc.topK = config.GetTopK()\n \n \treturn nil\n }\n \n func (c *CohereClient) GetCompletion(ctx context.Context, prompt string) (string, error) {\n \t// Create a completion request\n-\tresponse, err := c.client.Chat(ctx, &api.ChatRequest{\n+\trequest := &api.ChatRequest{\n \t\tMessage:      prompt,\n \t\tModel:        &c.model,\n-\t\tK:            api.Int(0),\n+\t\tK:            api.Int(int(c.topK)),\n \t\tPreamble:     api.String(\"\"),\n \t\tTemperature:  api.Float64(float64(c.temperature)),\n \t\tRawPrompting: api.Bool(false),\n \t\tMaxTokens:    api.Int(c.maxTokens),\n-\t})\n+\t}\n+\tif c.topP > 0 {\n+\t\trequest.P = api.Float64(min(float64(c.topP), 0.99))\n+\t}\n+\tresponse, err := c.client.Chat(ctx, request)\n \tif err != nil {\n \t\treturn \"\", err\n \t}"
+  },
+  {
+   "filename": "pkg/ai/cohere_test.go",
+   "status": "added",
+   "additions": 57,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,57 @@\n+package ai\n+\n+import (\n+\t\"context\"\n+\t\"encoding/json\"\n+\t\"io\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"testing\"\n+\n+\t\"github.com/stretchr/testify/assert\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+func cohereRequestBody(t *testing.T, provider *AIProvider) map[string]any {\n+\tt.Helper()\n+\n+\tvar body map[string]any\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\traw, err := io.ReadAll(r.Body)\n+\t\trequire.NoError(t, err)\n+\t\trequire.NoError(t, json.Unmarshal(raw, &body))\n+\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t_ = json.NewEncoder(w).Encode(map[string]any{\"text\": \"ok\"})\n+\t}))\n+\tt.Cleanup(server.Close)\n+\n+\tprovider.BaseURL = server.URL\n+\tprovider.Model = \"command-r\"\n+\tprovider.Password = \"test-key\"\n+\n+\tclient := &CohereClient{}\n+\trequire.NoError(t, client.Configure(provider))\n+\t_, err := client.GetCompletion(context.Background(), \"why is my pod crashing?\")\n+\trequire.NoError(t, err)\n+\treturn body\n+}\n+\n+func TestCohereSendsConfiguredTopPAndTopK(t *testing.T) {\n+\tbody := cohereRequestBody(t, &AIProvider{TopP: 0.5, TopK: 40})\n+\n+\tassert.EqualValues(t, 0.5, body[\"p\"])\n+\tassert.EqualValues(t, 40, body[\"k\"])\n+}\n+\n+func TestCohereKeepsDefaultsWhenTopPAndTopKUnset(t *testing.T) {\n+\tbody := cohereRequestBody(t, &AIProvider{})\n+\n+\tassert.NotContains(t, body, \"p\")\n+\tassert.EqualValues(t, 0, body[\"k\"])\n+}\n+\n+func TestCohereClampsTopPToAPIUpperLimit(t *testing.T) {\n+\tbody := cohereRequestBody(t, &AIProvider{TopP: 1.0})\n+\n+\tassert.EqualValues(t, 0.99, body[\"p\"])\n+}"
+  }
+ ],
+ "test_files": [
+  "pkg/ai/cohere_test.go"
+ ]
+}

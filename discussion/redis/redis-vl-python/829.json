@@ -3,7 +3,45 @@
  "number": 829,
  "url": "https://github.com/redis/redis-vl-python/pull/829",
  "state": "open",
- "reviews": [],
- "review_comments": [],
- "comments": []
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-09T14:25:08Z",
+   "body": "Thanks for the PR! Main request here is to fix the same issue in a few other places where it pops up (see in-line comments)"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "collaborator",
+   "path": "redisvl/utils/vectorize/text/openai.py",
+   "created_at": "2026-11-09T14:25:07Z",
+   "body": "The same bug exists in six other constructors, all reading the credential as `api_config.get(...) if api_config else os.getenv(...)`. With the env var set and an `api_config` that lacks the credential, each raises instead of using the env:\n- `utils/vectorize/text/cohere.py:153`\n- `utils/vectorize/text/mistral.py:134`\n- `utils/vectorize/voyageai.py:281`\n- `utils/vectorize/vertexai.py:185` and `:188` (`project_id` and `location`; for example, passing only `credentials` ignores `GCP_PROJECT_ID`)\n- `utils/rerank/cohere.py:91`\n- `utils/rerank/voyageai.py:90`\n\nSince the PR describes the pattern rather than one provider, please apply the same per-key fallback (`api_config.get(key) or os.getenv(ENV)`) to each of these, with one parametrised regression test across them. These siblings use `get` and don't forward the rest of `api_config`, so they don't need the copy-and-`pop` that OpenAI and Azure do."
+  },
+  {
+   "role": "collaborator",
+   "path": "redisvl/utils/vectorize/text/openai.py",
+   "created_at": "2026-11-09T14:25:07Z",
+   "body": "With this change an `api_key` of `\"\"` or `None` in `api_config` falls back to `OPENAI_API_KEY`; on main it raised `ValueError`. That matches Azure and suits MCP YAML such as `${OPENAI_API_KEY:-}`, but it's a behaviour change. Please say in the `api_config` docstring of `__init__` (line 83) that each key falls back to its environment variable when missing or empty, and mention it in the Release Notes."
+  },
+  {
+   "role": "collaborator",
+   "path": "tests/unit/test_openai_vectorizer.py",
+   "created_at": "2026-11-09T14:25:07Z",
+   "body": "Nothing here builds `OpenAITextVectorizer()` without an `api_config`, which is the default and most common path. Changing `dict(api_config or {})` to `dict(api_config)` crashes on `None`, yet all four tests still pass. Please add an env-only test like `test_init_from_env_vars_configures_both_clients` in `tests/unit/test_azure_openai_vectorizer.py`. A case with `{\"api_key\": \"\"}` falling back to the env would pin the behaviour change above too."
+  },
+  {
+   "role": "collaborator",
+   "path": "tests/unit/test_openai_vectorizer.py",
+   "created_at": "2026-11-09T14:25:08Z",
+   "body": "`_Item`, `_Response` and `_Embeddings` can be `types.SimpleNamespace` objects, as in `tests/unit/test_cohere_vectorizer.py:18`, which removes about 15 lines of scaffolding."
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-09T15:22:33Z",
+   "body": "Applied in d299a66:\n- Sibling constructors: per-key `(api_config or {}).get(k) or os.getenv(ENV)` at all six listed sites, VertexAI for both `project_id` and `location`, with one parametrised regression test in `tests/unit/test_api_config_env_fallback.py`. `None` is kept in the expression because `api_config` defaults to it on the paths that do not normalise it first.\n- Behaviour change: the `api_config` docstrings now state the fallback for missing or empty keys, and the PR description's Release Notes mention it.\n- OpenAI tests: added an env-only test and `\"\"`/`None` `api_key` cases.\n- Scaffolding: `_Item` and `_Response` are now `SimpleNamespace`; `_Embeddings` stays a class because it has a `create` method.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
 }

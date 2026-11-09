@@ -1,0 +1,33 @@
+{
+ "repo": "mnfst/llm-gateway",
+ "number": 3122,
+ "url": "https://github.com/mnfst/llm-gateway/pull/3122",
+ "title": "fix(backend): map Gemini prompt blocks to content_filter",
+ "merged_at": "2026-11-09T07:59:55Z",
+ "files": [
+  {
+   "filename": ".changeset/gemini-prompt-blocked-content-filter.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'manifest': patch\n+---\n+\n+Gemini prompts rejected up front (`promptFeedback.blockReason`, no candidates) now return a `content_filter` finish reason with usage instead of an empty `choices` array or a bare `stop`."
+  },
+  {
+   "filename": "packages/backend/src/routing/proxy/__tests__/google-adapter.spec.ts",
+   "status": "modified",
+   "additions": 26,
+   "deletions": 0,
+   "patch": "@@ -1795,6 +1795,19 @@ describe('Google Adapter', () => {\n       expect(choices).toHaveLength(0);\n     });\n \n+    it('maps a prompt blocked by promptFeedback to a content_filter choice', () => {\n+      const google = {\n+        promptFeedback: { blockReason: 'PROHIBITED_CONTENT' },\n+        usageMetadata: { promptTokenCount: 7, totalTokenCount: 7 },\n+      };\n+      const result = fromGoogleResponse(google, 'gemini-2.0-flash');\n+      const choices = result.choices as Array<Record<string, unknown>>;\n+      expect(choices).toHaveLength(1);\n+      expect(choices[0].finish_reason).toBe('content_filter');\n+      expect(choices[0].message).toEqual({ role: 'assistant', content: null });\n+      expect((result.usage as Record<string, number>).prompt_tokens).toBe(7);\n+    });\n+\n     it('returns null content when parts have no text', () => {\n       const google = {\n         candidates: [\n@@ -2417,6 +2430,19 @@ describe('Google Adapter', () => {\n         expect(out.filter((e) => e.usage)).toHaveLength(1);\n       });\n \n+      it('closes with content_filter on a promptFeedback block with no candidates', () => {\n+        const blocked = JSON.stringify({\n+          promptFeedback: { blockReason: 'SAFETY' },\n+          usageMetadata: { promptTokenCount: 4, totalTokenCount: 4 },\n+        });\n+        const out = runStream([blocked]);\n+        expect(out.map((e) => e.choices[0]?.finish_reason ?? null)).toEqual([\n+          'content_filter',\n+          null,\n+        ]);\n+        expect(out.filter((e) => e.usage)).toHaveLength(1);\n+      });\n+\n       describe('finishGoogleStream', () => {\n         const midStream = JSON.stringify({\n           candidates: [{ content: { parts: [{ text: 'partial' }] } }],"
+  },
+  {
+   "filename": "packages/backend/src/routing/proxy/google-adapter.ts",
+   "status": "modified",
+   "additions": 26,
+   "deletions": 3,
+   "patch": "@@ -456,12 +456,26 @@ export function fromGoogleResponse(\n   const candidate = candidates[0];\n \n   if (!candidate) {\n+    // A prompt rejected up front comes back with `promptFeedback.blockReason`\n+    // and no candidates. Surface it as a content_filter finish rather than an\n+    // empty `choices` array, and keep the usage Google still reports.\n+    const blocked = hasPromptBlock(googleResp);\n+    const blockedUsage = googleResp.usageMetadata as Record<string, number> | undefined;\n     return {\n       id: `chatcmpl-${randomUUID()}`,\n       object: 'chat.completion',\n       created: Math.floor(Date.now() / 1000),\n       model,\n-      choices: [],\n+      choices: blocked\n+        ? [\n+            {\n+              index: 0,\n+              message: { role: 'assistant', content: null },\n+              finish_reason: 'content_filter',\n+            },\n+          ]\n+        : [],\n+      ...(blockedUsage ? { usage: toChatUsage(blockedUsage) } : {}),\n     };\n   }\n \n@@ -535,6 +549,11 @@ function toChatUsage(usage: Record<string, number>): Record<string, unknown> {\n   };\n }\n \n+function hasPromptBlock(data: Record<string, unknown>): boolean {\n+  const feedback = data.promptFeedback as { blockReason?: unknown } | undefined;\n+  return Boolean(feedback?.blockReason);\n+}\n+\n function mapFinishReason(candidate: Record<string, unknown>, hasToolCalls = false): string {\n   const reason = candidate.finishReason as string | undefined;\n   if (!reason || reason === 'STOP') {\n@@ -662,11 +681,15 @@ export function transformGoogleStreamChunk(\n   // candidate) closes the stream; its usage is the total.\n   const usage = data.usageMetadata as Record<string, number> | undefined;\n   if (usage) state.usage = usage;\n-  const isTerminal = Boolean(candidate?.finishReason) || (Boolean(usage) && !candidate);\n+  const promptBlocked = !candidate && hasPromptBlock(data);\n+  const isTerminal =\n+    Boolean(candidate?.finishReason) || (Boolean(usage) && !candidate) || promptBlocked;\n   if (isTerminal) {\n     if (!state.finished) {\n       state.finished = true;\n-      const finishReason = mapFinishReason(candidate ?? {}, state.toolCallCount > 0);\n+      const finishReason = promptBlocked\n+        ? 'content_filter'\n+        : mapFinishReason(candidate ?? {}, state.toolCallCount > 0);\n       result += `data: ${JSON.stringify({\n         id: state.id,\n         object: 'chat.completion.chunk',"
+  }
+ ],
+ "test_files": [
+  "packages/backend/src/routing/proxy/__tests__/google-adapter.spec.ts"
+ ]
+}

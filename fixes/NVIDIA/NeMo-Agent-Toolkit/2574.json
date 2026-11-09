@@ -1,0 +1,26 @@
+{
+ "repo": "NVIDIA/NeMo-Agent-Toolkit",
+ "number": 2574,
+ "url": "https://github.com/NVIDIA/NeMo-Agent-Toolkit/pull/2574",
+ "title": "fix(langchain): request streaming token usage for Azure OpenAI client",
+ "merged_at": "2026-11-09T14:37:00Z",
+ "files": [
+  {
+   "filename": "packages/nvidia_nat_langchain/src/nat/plugins/langchain/llm.py",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 6,
+   "patch": "@@ -183,15 +183,17 @@ async def azure_openai_langchain(llm_config: AzureOpenAIModelConfig, _builder: B\n \n     async with _create_metadata_injection_client(llm_config) as http_async_client:\n \n+        client_kwargs = llm_config.model_dump(\n+            exclude={\"type\", \"thinking\", \"api_type\", \"api_version\", \"verify_ssl\"},\n+            by_alias=True,\n+            exclude_none=True,\n+            exclude_unset=True,\n+        )\n+        client_kwargs.setdefault(\"stream_usage\", True)\n         client = AzureChatOpenAI(\n             http_async_client=http_async_client,  # type: ignore[call-arg]\n             api_version=llm_config.api_version,  # type: ignore[call-arg]\n-            **llm_config.model_dump(\n-                exclude={\"type\", \"thinking\", \"api_type\", \"api_version\", \"verify_ssl\"},\n-                by_alias=True,\n-                exclude_none=True,\n-                exclude_unset=True,\n-            ),\n+            **client_kwargs,\n         )\n         if \"http_async_client\" in client.model_kwargs:\n             del client.model_kwargs[\"http_async_client\"]"
+  },
+  {
+   "filename": "packages/nvidia_nat_langchain/tests/test_llm_langchain.py",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -209,6 +209,31 @@ async def test_verify_ssl_passed_to_client(self,\n         mock_httpx_async_client.assert_called_once()\n         assert mock_httpx_async_client.call_args.kwargs[\"verify\"] is verify_ssl\n \n+    @patch(\"langchain_openai.AzureChatOpenAI\")\n+    async def test_stream_usage_enabled(self, mock_chat, azure_cfg, mock_builder, mock_httpx_async_client):\n+        \"\"\"Streaming token usage must be requested; AzureChatOpenAI leaves it unset with a custom http client.\"\"\"\n+        mock_httpx_async_client.aclose = AsyncMock()\n+        async with azure_openai_langchain(azure_cfg, mock_builder):\n+            pass\n+        assert mock_chat.call_args.kwargs[\"stream_usage\"] is True\n+\n+    @patch(\"langchain_openai.AzureChatOpenAI\")\n+    async def test_stream_usage_in_config_does_not_duplicate_keyword(self,\n+                                                                     mock_chat,\n+                                                                     azure_cfg,\n+                                                                     mock_builder,\n+                                                                     mock_httpx_async_client):\n+        \"\"\"An explicit ``stream_usage`` in the config is preserved and not passed twice.\"\"\"\n+        mock_httpx_async_client.aclose = AsyncMock()\n+        azure_cfg = AzureOpenAIModelConfig(azure_deployment=\"gpt-4\",\n+                                           api_key=\"test-key\",\n+                                           azure_endpoint=\"https://test.openai.azure.com\",\n+                                           api_version=\"2024-02-01\",\n+                                           stream_usage=False)\n+        async with azure_openai_langchain(azure_cfg, mock_builder):\n+            pass\n+        assert mock_chat.call_args.kwargs[\"stream_usage\"] is False\n+\n \n class TestOCILangChain:\n     \"\"\"Tests for the oci_langchain wrapper.\"\"\""
+  }
+ ],
+ "test_files": [
+  "packages/nvidia_nat_langchain/tests/test_llm_langchain.py"
+ ]
+}

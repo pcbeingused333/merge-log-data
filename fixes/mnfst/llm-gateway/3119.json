@@ -1,0 +1,40 @@
+{
+ "repo": "mnfst/llm-gateway",
+ "number": 3119,
+ "url": "https://github.com/mnfst/llm-gateway/pull/3119",
+ "title": "fix(backend): keep reasoning tokens in ChatGPT backend usage",
+ "merged_at": "2026-11-09T08:00:32Z",
+ "files": [
+  {
+   "filename": ".changeset/chatgpt-reasoning-tokens-usage.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'manifest': patch\n+---\n+\n+Responses from the ChatGPT backend now include `completion_tokens_details.reasoning_tokens` in the usage, so clients see reasoning token counts for streaming and non-streaming requests."
+  },
+  {
+   "filename": "packages/backend/src/routing/proxy/chatgpt-adapter.spec.ts",
+   "status": "modified",
+   "additions": 31,
+   "deletions": 0,
+   "patch": "@@ -523,6 +523,25 @@ describe('chatgpt-adapter', () => {\n       expect(message.reasoning_content).toBe('Summary text.\\n\\nReasoning text.');\n     });\n \n+    it('reports reasoning tokens as completion_tokens_details.reasoning_tokens', () => {\n+      const out = fromResponsesResponse(\n+        {\n+          output: [],\n+          usage: {\n+            input_tokens: 10,\n+            output_tokens: 50,\n+            total_tokens: 60,\n+            output_tokens_details: { reasoning_tokens: 42 },\n+          },\n+        },\n+        'gpt-5',\n+      );\n+      expect(out.usage).toMatchObject({\n+        completion_tokens: 50,\n+        completion_tokens_details: { reasoning_tokens: 42 },\n+      });\n+    });\n+\n     it('defaults missing usage fields to zero', () => {\n       const out = fromResponsesResponse({ output: [] }, 'gpt-5');\n       expect(out.usage).toEqual({\n@@ -683,6 +702,18 @@ describe('chatgpt-adapter', () => {\n       expect(parsed.usage).toMatchObject({ prompt_tokens: 1, completion_tokens: 2 });\n     });\n \n+    it('carries reasoning tokens into the streamed usage', () => {\n+      const chunk =\n+        'event: response.completed\\ndata: {\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":9,\"total_tokens\":10,\"output_tokens_details\":{\"reasoning_tokens\":7}},\"output\":[]}}';\n+      const raw = transformResponsesStreamChunk(chunk, 'gpt-5');\n+      const first = raw!.split('\\n\\n')[0];\n+      const parsed = JSON.parse(first.replace(/^data: /, ''));\n+      expect(parsed.usage).toMatchObject({\n+        completion_tokens: 9,\n+        completion_tokens_details: { reasoning_tokens: 7 },\n+      });\n+    });\n+\n     it('marks finish_reason=tool_calls when the completed response had function_call items', () => {\n       const chunk =\n         'event: response.completed\\ndata: {\"response\":{\"output\":[{\"type\":\"function_call\"}]}}';"
+  },
+  {
+   "filename": "packages/backend/src/routing/proxy/chatgpt-adapter.ts",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 1,
+   "patch": "@@ -369,10 +369,27 @@ export function fromResponsesResponse(\n       cache_read_tokens: inputDetails?.cached_tokens ?? 0,\n       cache_creation_tokens:\n         inputDetails?.cache_write_tokens ?? inputDetails?.cache_creation_input_tokens ?? 0,\n+      ...reasoningTokensDetails(usage),\n     },\n   };\n }\n \n+/**\n+ * Responses API reports reasoning tokens under `output_tokens_details`\n+ * (already included in `output_tokens`). Surface them the way Chat Completions\n+ * does, as `completion_tokens_details.reasoning_tokens`, so clients keep seeing\n+ * them. Omitted when the upstream does not report the figure.\n+ */\n+function reasoningTokensDetails(usage: Record<string, unknown> | undefined): {\n+  completion_tokens_details?: { reasoning_tokens: number };\n+} {\n+  const outputDetails = usage?.output_tokens_details as Record<string, unknown> | undefined;\n+  const reasoning = outputDetails?.reasoning_tokens;\n+  return typeof reasoning === 'number'\n+    ? { completion_tokens_details: { reasoning_tokens: reasoning } }\n+    : {};\n+}\n+\n /* ── Streaming SSE conversion ── */\n \n /**\n@@ -544,7 +561,7 @@ function incompleteFinishReason(response: Record<string, unknown> | undefined):\n \n function extractResponseUsage(\n   response: Record<string, unknown> | undefined,\n-): Record<string, number> | undefined {\n+): Record<string, unknown> | undefined {\n   const responseUsage = response?.usage as Record<string, unknown> | undefined;\n   if (!responseUsage) return undefined;\n   const inputDetails = responseUsage.input_tokens_details as Record<string, number> | undefined;\n@@ -555,6 +572,7 @@ function extractResponseUsage(\n     cache_read_tokens: inputDetails?.cached_tokens ?? 0,\n     cache_creation_tokens:\n       inputDetails?.cache_write_tokens ?? inputDetails?.cache_creation_input_tokens ?? 0,\n+    ...reasoningTokensDetails(responseUsage),\n   };\n }\n "
+  },
+  {
+   "filename": "packages/backend/src/routing/proxy/chatgpt-helpers.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -122,7 +122,7 @@ export function safeParse(str: string): Record<string, unknown> | null {\n export function formatSSE(\n   choice: Record<string, unknown>,\n   model: string,\n-  usage?: Record<string, number>,\n+  usage?: Record<string, unknown>,\n ): string {\n   const payload: Record<string, unknown> = {\n     id: `chatcmpl-${randomUUID().replace(/-/g, '').slice(0, 29)}`,"
+  }
+ ],
+ "test_files": [
+  "packages/backend/src/routing/proxy/chatgpt-adapter.spec.ts"
+ ]
+}

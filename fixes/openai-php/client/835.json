@@ -1,0 +1,41 @@
+{
+ "repo": "openai-php/client",
+ "number": 835,
+ "url": "https://github.com/openai-php/client/pull/835",
+ "title": "feat(chat): expose message.refusal and delta.refusal",
+ "merged_at": "2026-11-09T12:45:21Z",
+ "files": [
+  {
+   "filename": "src/Responses/Chat/CreateResponseMessage.php",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 2,
+   "patch": "@@ -24,10 +24,11 @@ private function __construct(\n         public readonly ?CreateResponseFunctionCall $functionCall,\n         public readonly ?CreateResponseChoiceAudio $audio = null,\n         public readonly ?array $images = null,\n+        public readonly ?string $refusal = null,\n     ) {}\n \n     /**\n-     * @param  array{role: string, content: ?string, reasoning_content?: ?string, reasoning?: ?string, annotations?: array<int, array{type: string, url_citation: array{start_index: int, end_index: int, title: string, url: string}}>, function_call?: array{name: string, arguments: string}, tool_calls?: array<int, array{id: string, type: string, function: array{name: string, arguments: string}}>, audio?: CreateResponseChoiceAudioType, images?: array<int, CreateResponseChoiceImageType>}  $attributes\n+     * @param  array{role: string, content: ?string, reasoning_content?: ?string, reasoning?: ?string, refusal?: ?string, annotations?: array<int, array{type: string, url_citation: array{start_index: int, end_index: int, title: string, url: string}}>, function_call?: array{name: string, arguments: string}, tool_calls?: array<int, array{id: string, type: string, function: array{name: string, arguments: string}}>, audio?: CreateResponseChoiceAudioType, images?: array<int, CreateResponseChoiceImageType>}  $attributes\n      */\n     public static function from(array $attributes): self\n     {\n@@ -52,11 +53,12 @@ public static function from(array $attributes): self\n             functionCall: isset($attributes['function_call']) ? CreateResponseFunctionCall::from($attributes['function_call']) : null,\n             audio: isset($attributes['audio']) ? CreateResponseChoiceAudio::from($attributes['audio']) : null,\n             images: $images,\n+            refusal: $attributes['refusal'] ?? null,\n         );\n     }\n \n     /**\n-     * @return array{role: string, content: string|null, reasoning_content?: string, annotations?: array<int, array{type: string, url_citation: array{start_index: int, end_index: int, title: string, url: string}}>, function_call?: array{name: string, arguments: string}, tool_calls?: array<int, array{id: string, type: string, function: array{name: string, arguments: string}}>, audio?: CreateResponseChoiceAudioType, images?: array<int, CreateResponseChoiceImageType>}\n+     * @return array{role: string, content: string|null, reasoning_content?: string, refusal?: string, annotations?: array<int, array{type: string, url_citation: array{start_index: int, end_index: int, title: string, url: string}}>, function_call?: array{name: string, arguments: string}, tool_calls?: array<int, array{id: string, type: string, function: array{name: string, arguments: string}}>, audio?: CreateResponseChoiceAudioType, images?: array<int, CreateResponseChoiceImageType>}\n      */\n     public function toArray(): array\n     {\n@@ -69,6 +71,10 @@ public function toArray(): array\n             $data['reasoning_content'] = $this->reasoningContent;\n         }\n \n+        if ($this->refusal !== null) {\n+            $data['refusal'] = $this->refusal;\n+        }\n+\n         if ($this->annotations !== []) {\n             $data['annotations'] = array_map(fn (CreateResponseChoiceAnnotations $annotations): array => $annotations->toArray(), $this->annotations);\n         }"
+  },
+  {
+   "filename": "src/Responses/Chat/CreateStreamedResponseDelta.php",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -15,10 +15,11 @@ private function __construct(\n         public readonly ?string $reasoningContent,\n         public readonly array $toolCalls,\n         public readonly ?CreateStreamedResponseFunctionCall $functionCall,\n+        public readonly ?string $refusal = null,\n     ) {}\n \n     /**\n-     * @param  array{role?: string, content?: string, reasoning?: string, reasoning_content?: string, function_call?: array{name?: ?string, arguments?: ?string}, tool_calls?: array<int, array{id?: string, type?: string, function: array{name?: string, arguments: string}}>}  $attributes\n+     * @param  array{role?: string, content?: string, reasoning?: string, reasoning_content?: string, refusal?: ?string, function_call?: array{name?: ?string, arguments?: ?string}, tool_calls?: array<int, array{id?: string, type?: string, function: array{name?: string, arguments: string}}>}  $attributes\n      */\n     public static function from(array $attributes): self\n     {\n@@ -32,18 +33,20 @@ public static function from(array $attributes): self\n             $attributes['reasoning'] ?? $attributes['reasoning_content'] ?? null,\n             $toolCalls,\n             isset($attributes['function_call']) ? CreateStreamedResponseFunctionCall::from($attributes['function_call']) : null,\n+            $attributes['refusal'] ?? null,\n         );\n     }\n \n     /**\n-     * @return array{role?: string, content?: string, reasoning?: string}|array{role?: string, content: null, function_call: array{name?: string, arguments?: string}}\n+     * @return array{role?: string, content?: string, reasoning?: string, refusal?: string}|array{role?: string, content: null, function_call: array{name?: string, arguments?: string}}\n      */\n     public function toArray(): array\n     {\n         $data = array_filter([\n             'role' => $this->role,\n             'content' => $this->content,\n             'reasoning' => $this->reasoningContent,\n+            'refusal' => $this->refusal,\n         ], fn (?string $value): bool => ! is_null($value));\n \n         if ($this->functionCall instanceof CreateStreamedResponseFunctionCall) {"
+  },
+  {
+   "filename": "tests/Responses/Chat/CreateResponseMessage.php",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -127,6 +127,20 @@\n         ->toBe(chatCompletionWithAnnotations()['choices'][0]['message']);\n });\n \n+test('from refusal', function () {\n+    $message = ['role' => 'assistant', 'content' => null, 'refusal' => \"I'm sorry, I can't help with that.\"];\n+    $result = CreateResponseMessage::from($message);\n+\n+    expect($result)\n+        ->content->toBeNull()\n+        ->refusal->toBe(\"I'm sorry, I can't help with that.\")\n+        ->and($result->toArray())->toBe($message);\n+});\n+\n+test('refusal is null when absent', function () {\n+    expect(CreateResponseMessage::from(chatCompletion()['choices'][0]['message'])->refusal)->toBeNull();\n+});\n+\n test('from reasoning aliases', function (array $reasoning, ?string $expected) {\n     $result = CreateResponseMessage::from([\n         'role' => 'assistant',"
+  },
+  {
+   "filename": "tests/Responses/Chat/CreateStreamedResponseDelta.php",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -119,3 +119,18 @@\n \n     expect($result->reasoningContent)->toBe('a');\n });\n+\n+test('from refusal chunk', function () {\n+    $delta = ['refusal' => \"I'm sorry\"];\n+    $result = CreateStreamedResponseDelta::from($delta);\n+\n+    expect($result)\n+        ->content->toBeNull()\n+        ->refusal->toBe(\"I'm sorry\")\n+        ->and($result->toArray())->toBe($delta);\n+});\n+\n+test('refusal is null when absent or null', function () {\n+    expect(CreateStreamedResponseDelta::from(['content' => 'Hi'])->refusal)->toBeNull()\n+        ->and(CreateStreamedResponseDelta::from(['content' => 'Hi', 'refusal' => null])->toArray())->toBe(['content' => 'Hi']);\n+});"
+  }
+ ],
+ "test_files": [
+  "tests/Responses/Chat/CreateResponseMessage.php",
+  "tests/Responses/Chat/CreateStreamedResponseDelta.php"
+ ]
+}

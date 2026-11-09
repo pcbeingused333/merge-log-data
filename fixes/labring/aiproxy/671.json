@@ -1,0 +1,33 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 671,
+ "url": "https://github.com/labring/aiproxy/pull/671",
+ "title": "fix(mcp): close the SSE session when a response cannot be queued",
+ "merged_at": "2026-11-09T12:47:27Z",
+ "files": [
+  {
+   "filename": "core/controller/mcp/embedmcp.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -465,7 +465,7 @@ func handleTestEmbedMCPServer(c *gin.Context, s mcpservers.Server) {\n \tdefer cancel()\n \n \t// Start message processing goroutine\n-\tgo processMCPSSEMpscMessages(ctx, newSession, server)\n+\tgo processMCPSSEMpscMessages(ctx, cancel, newSession, server)\n \n \t// Handle SSE connection\n \tserver.ServeHTTP(c.Writer, c.Request)"
+  },
+  {
+   "filename": "core/controller/mcp/mcp-sse_test.go",
+   "status": "added",
+   "additions": 51,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,51 @@\n+//nolint:testpackage\n+package controller\n+\n+import (\n+\t\"context\"\n+\t\"encoding/json\"\n+\t\"testing\"\n+\t\"time\"\n+\n+\t\"github.com/labring/aiproxy/core/mcpproxy\"\n+\t\"github.com/mark3labs/mcp-go/mcp\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+type echoMCPServer struct{}\n+\n+func (echoMCPServer) HandleMessage(_ context.Context, _ json.RawMessage) mcp.JSONRPCMessage {\n+\treturn mcp.JSONRPCResponse{\n+\t\tJSONRPC: mcp.JSONRPC_VERSION,\n+\t\tID:      mcp.NewRequestId(1),\n+\t\tResult:  struct{}{},\n+\t}\n+}\n+\n+// When the SSE event queue is full the response cannot be delivered, so the\n+// session must be closed instead of silently dropping responses.\n+func TestProcessMCPSSEMpscMessagesClosesSessionWhenEventQueueFull(t *testing.T) {\n+\tconst sessionID = \"test-sse-queue-full\"\n+\n+\tserver := mcpproxy.NewSSEServer(echoMCPServer{})\n+\tctx, cancel := context.WithCancel(context.Background())\n+\n+\tdefer cancel()\n+\n+\tgo processMCPSSEMpscMessages(ctx, cancel, sessionID, server)\n+\n+\t// Nobody drains the SSE event queue (capacity 100), so it overflows.\n+\tgo func() {\n+\t\tfor ctx.Err() == nil {\n+\t\t\t_ = getMCPMpsc().send(ctx, sessionID, []byte(`{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}`))\n+\n+\t\t\ttime.Sleep(time.Millisecond)\n+\t\t}\n+\t}()\n+\n+\tselect {\n+\tcase <-ctx.Done():\n+\tcase <-time.After(10 * time.Second):\n+\t\trequire.Fail(t, \"session was not closed after the SSE event queue overflowed\")\n+\t}\n+}"
+  },
+  {
+   "filename": "core/controller/mcp/mcp.go",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 2,
+   "patch": "@@ -13,6 +13,7 @@ import (\n \tmcpservers \"github.com/labring/aiproxy/mcp-servers\"\n \t\"github.com/labring/aiproxy/openapi-mcp/convert\"\n \t\"github.com/mark3labs/mcp-go/mcp\"\n+\tlog \"github.com/sirupsen/logrus\"\n )\n \n type EndpointProvider interface {\n@@ -46,7 +47,7 @@ func handleSSEMCPServer(\n \tdefer cancel()\n \n \t// Start message processing goroutine\n-\tgo processMCPSSEMpscMessages(ctx, newSession, server)\n+\tgo processMCPSSEMpscMessages(ctx, cancel, newSession, server)\n \n \t// Handle SSE connection\n \tserver.ServeHTTP(c.Writer, c.Request)\n@@ -55,6 +56,7 @@ func handleSSEMCPServer(\n // processMCPSSEMpscMessages handles message processing for OpenAPI\n func processMCPSSEMpscMessages(\n \tctx context.Context,\n+\tcancel context.CancelFunc,\n \tsessionID string,\n \tserver *mcpproxy.SSEServer,\n ) {\n@@ -70,7 +72,13 @@ func processMCPSSEMpscMessages(\n \t\t\t}\n \n \t\t\tif err := server.HandleMessage(ctx, data); err != nil {\n-\t\t\t\tcontinue\n+\t\t\t\t// The response could not be queued on the SSE stream, so the\n+\t\t\t\t// client would wait for it forever. Close the session so the\n+\t\t\t\t// client reconnects instead of silently losing the response.\n+\t\t\t\tlog.Errorf(\"mcp sse session %s: closing session: %v\", sessionID, err)\n+\t\t\t\tcancel()\n+\n+\t\t\t\treturn\n \t\t\t}\n \t\t}\n \t}"
+  }
+ ],
+ "test_files": [
+  "core/controller/mcp/mcp-sse_test.go"
+ ]
+}
