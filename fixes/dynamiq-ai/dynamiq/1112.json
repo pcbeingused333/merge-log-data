@@ -1,0 +1,26 @@
+{
+ "repo": "dynamiq-ai/dynamiq",
+ "number": 1112,
+ "url": "https://github.com/dynamiq-ai/dynamiq/pull/1112",
+ "title": "fix: preserve graph state IDs in manager responses",
+ "merged_at": "2026-11-10T16:36:14Z",
+ "files": [
+  {
+   "filename": "dynamiq/nodes/agents/orchestrators/graph.py",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 3,
+   "patch": "@@ -262,9 +262,12 @@ def get_next_state_by_manager(self, state: GraphState, config: RunnableConfig, *\n             raise OrchestratorError(\"Failed to generate final answer\")\n \n         try:\n-            next_state = json.loads(\n-                manager_result.output.get(\"content\").get(\"result\").replace(\"json\", \"\").replace(\"```\", \"\").strip()\n-            )[\"state\"]\n+            result = manager_result.output.get(\"content\").get(\"result\").strip()\n+            if result.startswith(\"```\") and result.endswith(\"```\"):\n+                opening_fence, separator, fenced_result = result.partition(\"\\n\")\n+                if separator and opening_fence.strip().lower() in {\"```\", \"```json\"}:\n+                    result = fenced_result.rsplit(\"```\", 1)[0].strip()\n+            next_state = json.loads(result)[\"state\"]\n \n             if self.manager.streaming.enabled and self.manager.streaming.mode == StreamingMode.ALL:\n                 self.manager.stream_content("
+  },
+  {
+   "filename": "tests/unit/nodes/agents/test_graph_orchestrator.py",
+   "status": "added",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,34 @@\n+import json\n+\n+import pytest\n+\n+from dynamiq.connections import OpenAI as OpenAIConnection\n+from dynamiq.nodes.agents.orchestrators.graph import START, GraphOrchestrator\n+from dynamiq.nodes.agents.orchestrators.graph_manager import GraphAgentManager\n+from dynamiq.nodes.agents.orchestrators.graph_state import GraphState\n+from dynamiq.nodes.llms import OpenAI\n+from dynamiq.runnables import RunnableConfig, RunnableResult, RunnableStatus\n+\n+\n+@pytest.mark.parametrize(\"state_id\", [\"parse_json\", \"parse_```json\"])\n+@pytest.mark.parametrize(\"fence\", [None, \"\", \"json\", \"JSON\"])\n+def test_manager_selects_state_without_changing_id(mocker, state_id, fence):\n+    target = GraphState(id=state_id)\n+    manager = GraphAgentManager(\n+        llm=OpenAI(\n+            model=\"gpt-4o-mini\",\n+            connection=OpenAIConnection(api_key=\"test-key\"),\n+            is_postponed_component_init=True,\n+        )\n+    )\n+    orchestrator = GraphOrchestrator(manager=manager, states=[target])\n+    response = json.dumps({\"state\": state_id})\n+    if fence is not None:\n+        response = f\"```{fence}\\n{response}\\n```\"\n+    mocker.patch.object(\n+        GraphAgentManager,\n+        \"run\",\n+        return_value=RunnableResult(status=RunnableStatus.SUCCESS, output={\"content\": {\"result\": response}}),\n+    )\n+\n+    assert orchestrator.get_next_state_by_manager(orchestrator._state_by_id[START], RunnableConfig()) is target"
+  }
+ ],
+ "test_files": [
+  "tests/unit/nodes/agents/test_graph_orchestrator.py"
+ ]
+}

@@ -1,0 +1,17 @@
+{
+ "repo": "henrygd/beszel",
+ "number": 2794,
+ "url": "https://github.com/henrygd/beszel/pull/2794",
+ "title": "fix(hub): restore SELinux context of the binary in install-hub.sh",
+ "merged_at": "2026-11-10T19:29:35Z",
+ "files": [
+  {
+   "filename": "supplemental/scripts/install-hub.sh",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -4,6 +4,19 @@ is_freebsd() {\n   [ \"$(uname -s)\" = \"FreeBSD\" ]\n }\n \n+# If SELinux is enabled, reset the binary to the label its path should have.\n+# The binary is extracted in a temp dir and moved, so it keeps the temp label\n+# (user_tmp_t) that systemd is not allowed to execute.\n+restore_selinux_context() {\n+  if command -v getenforce >/dev/null 2>&1 && command -v restorecon >/dev/null 2>&1; then\n+    SELINUX_MODE=$(getenforce) || return 0\n+    if [ \"$SELINUX_MODE\" != \"Disabled\" ]; then\n+      echo \"SELinux is enabled (${SELINUX_MODE} mode). Restoring context of $1...\"\n+      restorecon -v \"$1\" >/dev/null 2>&1 || echo \"Warning: Failed to restore SELinux context for $1.\"\n+    fi\n+  fi\n+}\n+\n # Function to ensure the proxy URL ends with a /\n ensure_trailing_slash() {\n   if [ -n \"$1\" ]; then\n@@ -358,6 +371,7 @@ fi\n chmod +x \"$TEMP_DIR/beszel\"\n mv \"$TEMP_DIR/beszel\" \"$BIN_PATH\"\n chown beszel:beszel \"$BIN_PATH\"\n+restore_selinux_context \"$BIN_PATH\"\n rm -rf \"$TEMP_DIR\"\n \n if is_freebsd; then"
+  }
+ ],
+ "test_files": []
+}

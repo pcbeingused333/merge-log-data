@@ -1,0 +1,33 @@
+{
+ "repo": "microsoft/conductor",
+ "number": 633,
+ "url": "https://github.com/microsoft/conductor/pull/633",
+ "title": "fix(pricing): price Claude 5.5 models and current Sonnet 5 rates",
+ "merged_at": "2026-11-10T17:14:37Z",
+ "files": [
+  {
+   "filename": "changelog.d/+claude-5-5-pricing.fixed.md",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+Fix cost reports pricing Claude Opus 5.5 and Sonnet 5.5 at the older Claude 5 rates, and add pricing for Claude Fable 5.1; Claude Sonnet 5 now uses its current $2/$10 per MTok standard price."
+  },
+  {
+   "filename": "src/conductor/engine/pricing.py",
+   "status": "modified",
+   "additions": 45,
+   "deletions": 4,
+   "patch": "@@ -144,11 +144,52 @@ class ModelPricing:\n         cache_read_per_mtok=0.50,\n         cache_write_per_mtok=6.25,\n     ),\n+    # Claude 5.5 models have their own rates; without exact keys the\n+    # versioned-suffix fallback prices them at the older Claude 5 rate.\n+    \"claude-opus-5-5\": ModelPricing(\n+        input_per_mtok=4.00,\n+        output_per_mtok=20.00,\n+        cache_read_per_mtok=0.20,\n+        cache_write_per_mtok=5.00,\n+    ),\n+    \"claude-sonnet-5-5\": ModelPricing(\n+        input_per_mtok=2.00,\n+        output_per_mtok=10.00,\n+        cache_read_per_mtok=0.10,\n+        cache_write_per_mtok=2.50,\n+    ),\n+    \"claude-fable-5-1\": ModelPricing(\n+        input_per_mtok=10.00,\n+        output_per_mtok=50.00,\n+        cache_read_per_mtok=0.25,\n+        cache_write_per_mtok=12.50,\n+    ),\n+    # The SDK also reports dotted names (claude-*-X.Y) and the ``-`` fallback\n+    # does not cover them, so each 5.5 model needs both spellings.\n+    \"claude-opus-5.5\": ModelPricing(\n+        input_per_mtok=4.00,\n+        output_per_mtok=20.00,\n+        cache_read_per_mtok=0.20,\n+        cache_write_per_mtok=5.00,\n+    ),\n+    \"claude-sonnet-5.5\": ModelPricing(\n+        input_per_mtok=2.00,\n+        output_per_mtok=10.00,\n+        cache_read_per_mtok=0.10,\n+        cache_write_per_mtok=2.50,\n+    ),\n+    \"claude-fable-5.1\": ModelPricing(\n+        input_per_mtok=10.00,\n+        output_per_mtok=50.00,\n+        cache_read_per_mtok=0.25,\n+        cache_write_per_mtok=12.50,\n+    ),\n+    # Sonnet 5's $2/$10 introductory price became the standard price.\n     \"claude-sonnet-5\": ModelPricing(\n-        input_per_mtok=3.00,\n-        output_per_mtok=15.00,\n-        cache_read_per_mtok=0.30,\n-        cache_write_per_mtok=3.75,\n+        input_per_mtok=2.00,\n+        output_per_mtok=10.00,\n+        cache_read_per_mtok=0.20,\n+        cache_write_per_mtok=2.50,\n     ),\n     # Claude 4.5 Series\n     \"claude-opus-4-5\": ModelPricing("
+  },
+  {
+   "filename": "tests/test_engine/test_pricing.py",
+   "status": "modified",
+   "additions": 50,
+   "deletions": 1,
+   "patch": "@@ -176,7 +176,10 @@ def test_default_pricing_table_has_expected_models(self) -> None:\n             # Claude families (#266).\n             (\"claude-opus-4.8\", 5.00, 25.00),\n             (\"claude-opus-4.7\", 5.00, 25.00),\n-            (\"claude-sonnet-5\", 3.00, 15.00),\n+            (\"claude-sonnet-5\", 2.00, 10.00),\n+            (\"claude-opus-5-5\", 4.00, 20.00),\n+            (\"claude-sonnet-5-5\", 2.00, 10.00),\n+            (\"claude-fable-5-1\", 10.00, 50.00),\n             # Gemini (#266).\n             (\"gemini-3.5-flash\", 0.30, 2.50),\n         ],\n@@ -563,6 +566,9 @@ def test_cache_pricing_rates_are_nonnegative(self) -> None:\n             pytest.param((\"claude-opus-4-5\", \"claude-opus-4.5\", \"opus-4.5\"), id=\"opus-4.5\"),\n             pytest.param((\"claude-sonnet-4-5\", \"claude-sonnet-4.5\", \"sonnet-4.5\"), id=\"sonnet-4.5\"),\n             pytest.param((\"claude-haiku-4-5\", \"claude-haiku-4.5\", \"haiku-4.5\"), id=\"haiku-4.5\"),\n+            pytest.param((\"claude-opus-5-5\", \"claude-opus-5.5\"), id=\"opus-5.5\"),\n+            pytest.param((\"claude-sonnet-5-5\", \"claude-sonnet-5.5\"), id=\"sonnet-5.5\"),\n+            pytest.param((\"claude-fable-5-1\", \"claude-fable-5.1\"), id=\"fable-5.1\"),\n         ],\n     )\n     def test_alias_spellings_agree_on_every_rate(self, spellings: tuple[str, ...]) -> None:\n@@ -579,3 +585,46 @@ def test_alias_spellings_agree_on_every_rate(self, spellings: tuple[str, ...]) -\n         assert first is not None\n         for name, pricing in zip(spellings, resolved, strict=True):\n             assert pricing == first, f\"{name} has drifted from {spellings[0]}\"\n+\n+\n+def test_claude_5_5_models_do_not_inherit_claude_5_rates() -> None:\n+    \"\"\"Claude 5.5 names must not fall back to the older ``claude-opus-5`` /\n+    ``claude-sonnet-5`` rates through the versioned-suffix match.\"\"\"\n+    assert get_pricing(\"claude-opus-5-5\") == ModelPricing(\n+        input_per_mtok=4.00,\n+        output_per_mtok=20.00,\n+        cache_read_per_mtok=0.20,\n+        cache_write_per_mtok=5.00,\n+    )\n+    assert get_pricing(\"claude-opus-5\") == ModelPricing(\n+        input_per_mtok=5.00,\n+        output_per_mtok=25.00,\n+        cache_read_per_mtok=0.50,\n+        cache_write_per_mtok=6.25,\n+    )\n+    assert calculate_cost(\"claude-opus-5-5\", 1_000_000, 1_000_000) == 24.0\n+\n+\n+@pytest.mark.parametrize(\"model\", [\"claude-sonnet-5-5\", \"claude-sonnet-5.5\"])\n+def test_sonnet_5_5_cache_read_is_priced_at_published_rate(model: str) -> None:\n+    \"\"\"A fully cached million-token prompt costs $0.10 for Sonnet 5.5.\"\"\"\n+    assert get_pricing(model).cache_read_per_mtok == 0.10\n+    assert calculate_cost(model, 1_000_000, 0, cache_read_tokens=1_000_000) == pytest.approx(0.10)\n+\n+\n+@pytest.mark.parametrize(\n+    (\"model\", \"cache_read\", \"cache_write\"),\n+    [\n+        (\"claude-fable-5-1\", 0.25, 12.50),\n+        (\"claude-fable-5.1\", 0.25, 12.50),\n+        (\"claude-sonnet-5\", 0.20, 2.50),\n+        (\"claude-opus-5-5\", 0.20, 5.00),\n+        (\"claude-opus-5.5\", 0.20, 5.00),\n+    ],\n+)\n+def test_claude_5_cache_rates(model: str, cache_read: float, cache_write: float) -> None:\n+    \"\"\"Cache rates are asserted explicitly, not only input/output.\"\"\"\n+    pricing = get_pricing(model)\n+    assert pricing is not None\n+    assert pricing.cache_read_per_mtok == cache_read\n+    assert pricing.cache_write_per_mtok == cache_write"
+  }
+ ],
+ "test_files": [
+  "tests/test_engine/test_pricing.py"
+ ]
+}

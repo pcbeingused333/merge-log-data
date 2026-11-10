@@ -1,0 +1,26 @@
+{
+ "repo": "fleetdm/fleet",
+ "number": 58078,
+ "url": "https://github.com/fleetdm/fleet/pull/58078",
+ "title": "fix: prioritize VPP token conflicts when adding App Store apps",
+ "merged_at": "2026-11-10T16:38:29Z",
+ "files": [
+  {
+   "filename": "ee/server/service/vpp.go",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 21,
+   "patch": "@@ -1370,6 +1370,27 @@ func (svc *Service) AddAppStoreApp(ctx context.Context, teamID *uint, appID flee\n \t\treturn nil, ctxerr.Wrap(ctx, err, \"getting existing app store app versions\")\n \t}\n \n+\t// Every version of an app on a fleet shares the token of the first one added.\n+\tif existingVersionCount > 0 && appID.Platform.IsApplePlatform() {\n+\t\texisting, err := svc.ds.GetVPPAppMetadataByAdamIDPlatformTeamID(ctx, appID.AdamID, appID.Platform, teamID)\n+\t\tif err != nil {\n+\t\t\treturn nil, ctxerr.Wrap(ctx, err, \"getting first added app store app version\")\n+\t\t}\n+\t\tswitch {\n+\t\tcase existing.VPPTokenID == nil:\n+\t\tcase appID.VPPTokenID == nil:\n+\t\t\tappID.VPPTokenID = existing.VPPTokenID\n+\t\tcase *appID.VPPTokenID != *existing.VPPTokenID:\n+\t\t\texistingTok, err := svc.ds.GetVPPToken(ctx, *existing.VPPTokenID)\n+\t\t\tif err != nil {\n+\t\t\t\treturn nil, ctxerr.Wrap(ctx, err, \"getting vpp token of first added app store app version\")\n+\t\t\t}\n+\t\t\treturn nil, fleet.ConflictError{Message: fmt.Sprintf(\n+\t\t\t\t\"Couldn't add software. %s (%s) is already added to this fleet from the %q VPP token.\",\n+\t\t\t\texisting.Name, appID.Platform.DisplayName(), existingTok.Location)}\n+\t\t}\n+\t}\n+\n \tif versionNameExists {\n \t\t// FE routes the duplicate-name conflict to the Name field by matching\n \t\t// the \"a version named\" substring (routeVersionNameError in\n@@ -1392,27 +1413,6 @@ func (svc *Service) AddAppStoreApp(ctx context.Context, teamID *uint, appID flee\n \t\t}, \"adding app store app version\")\n \t}\n \n-\t// Every version of an app on a fleet shares the token of the first one added.\n-\tif existingVersionCount > 0 && appID.Platform.IsApplePlatform() {\n-\t\texisting, err := svc.ds.GetVPPAppMetadataByAdamIDPlatformTeamID(ctx, appID.AdamID, appID.Platform, teamID)\n-\t\tif err != nil {\n-\t\t\treturn nil, ctxerr.Wrap(ctx, err, \"getting first added app store app version\")\n-\t\t}\n-\t\tswitch {\n-\t\tcase existing.VPPTokenID == nil:\n-\t\tcase appID.VPPTokenID == nil:\n-\t\t\tappID.VPPTokenID = existing.VPPTokenID\n-\t\tcase *appID.VPPTokenID != *existing.VPPTokenID:\n-\t\t\texistingTok, err := svc.ds.GetVPPToken(ctx, *existing.VPPTokenID)\n-\t\t\tif err != nil {\n-\t\t\t\treturn nil, ctxerr.Wrap(ctx, err, \"getting vpp token of first added app store app version\")\n-\t\t\t}\n-\t\t\treturn nil, fleet.ConflictError{Message: fmt.Sprintf(\n-\t\t\t\t\"Couldn't add software. %s (%s) is already added to this fleet from the %q VPP token.\",\n-\t\t\t\texisting.Name, appID.Platform.DisplayName(), existingTok.Location)}\n-\t\t}\n-\t}\n-\n \tisAndroidAppID := androidApplicationID.MatchString(appID.AdamID)\n \n \tvar app *fleet.VPPApp"
+  },
+  {
+   "filename": "ee/server/service/vpp_test.go",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 3,
+   "patch": "@@ -1388,10 +1388,29 @@ func TestAddAppStoreAppToken(t *testing.T) {\n \t\t\trequire.Equal(t, uint(2), *fx.inserted.VPPTokenID)\n \t\t})\n \n-\t\tt.Run(\"another token conflicts\", func(t *testing.T) {\n+\t\tfor _, name := range []string{\"\", \"US copy\"} {\n+\t\t\tt.Run(\"another token conflicts/name=\"+name, func(t *testing.T) {\n+\t\t\t\tfx := withExisting(t, new(uint(2)))\n+\t\t\t\tfx.ds.GetAppStoreAppVersionCountFunc = func(context.Context, *uint, fleet.VPPAppID, string) (uint, bool, error) {\n+\t\t\t\t\treturn 1, name == \"\", nil\n+\t\t\t\t}\n+\t\t\t\tapp := iosApp(new(uint(1)))\n+\t\t\t\tapp.VersionName = name\n+\t\t\t\t_, err := fx.svc.AddAppStoreApp(fx.ctx, nil, app)\n+\t\t\t\trequire.ErrorContains(t, err, `Couldn't add software. Canva (iOS) is already added to this fleet from the \"Acme Japan\" VPP token.`)\n+\t\t\t\trequire.Equal(t, http.StatusConflict, vppErrStatus(err))\n+\t\t\t\trequire.Empty(t, fx.seenAuth)\n+\t\t\t\trequire.False(t, fx.ds.InsertVPPAppWithTeamFuncInvoked)\n+\t\t\t})\n+\t\t}\n+\n+\t\tt.Run(\"same token with an existing name conflicts\", func(t *testing.T) {\n \t\t\tfx := withExisting(t, new(uint(2)))\n-\t\t\t_, err := fx.svc.AddAppStoreApp(fx.ctx, nil, iosApp(new(uint(1))))\n-\t\t\trequire.ErrorContains(t, err, `Couldn't add software. Canva (iOS) is already added to this fleet from the \"Acme Japan\" VPP token.`)\n+\t\t\tfx.ds.GetAppStoreAppVersionCountFunc = func(context.Context, *uint, fleet.VPPAppID, string) (uint, bool, error) {\n+\t\t\t\treturn 1, true, nil\n+\t\t\t}\n+\t\t\t_, err := fx.svc.AddAppStoreApp(fx.ctx, nil, iosApp(new(uint(2))))\n+\t\t\trequire.ErrorContains(t, err, `A version named \"Default version\" already exists`)\n \t\t\trequire.Equal(t, http.StatusConflict, vppErrStatus(err))\n \t\t\trequire.Empty(t, fx.seenAuth)\n \t\t\trequire.False(t, fx.ds.InsertVPPAppWithTeamFuncInvoked)"
+  }
+ ],
+ "test_files": [
+  "ee/server/service/vpp_test.go"
+ ]
+}

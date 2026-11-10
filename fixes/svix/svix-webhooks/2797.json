@@ -1,0 +1,26 @@
+{
+ "repo": "svix/svix-webhooks",
+ "number": 2797,
+ "url": "https://github.com/svix/svix-webhooks/pull/2797",
+ "title": "fix(ruby): compare signatures by bytesize in secure_compare",
+ "merged_at": "2026-11-10T13:24:29Z",
+ "files": [
+  {
+   "filename": "ruby/lib/svix/util.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -33,7 +33,7 @@ def fixed_length_secure_compare(a, b)\n   # the secret length. This should be considered when using secure_compare\n   # to compare weak, short secrets to user input.\n   def secure_compare(a, b)\n-    a.length == b.length && fixed_length_secure_compare(a, b)\n+    a.bytesize == b.bytesize && fixed_length_secure_compare(a, b)\n   end\n \n   module_function :secure_compare"
+  },
+  {
+   "filename": "ruby/spec/webhook_spec.rb",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -300,4 +300,18 @@ def initialize(id: DEFAULT_MSG_ID, timestamp: Time.now.to_i, payload: DEFAULT_PA\n \n     wh.verify(testPayload.payload, testPayload.headers)\n   end\n+\n+  it \"rejects a multibyte signature of the same codepoint count with WebhookVerificationError\" do\n+    testPayload = TestPayload.new\n+\n+    wh = Svix::Webhook.new(testPayload.secret)\n+\n+    headers = testPayload.headers.merge(\"svix-signature\" => \"v1,#{'é' * 44}\")\n+    expect { wh.verify(testPayload.payload, headers) }.to(raise_error(Svix::WebhookVerificationError))\n+  end\n+\n+  it \"secure_compare handles multibyte strings of equal codepoint count\" do\n+    expect(Svix.secure_compare(\"é\" * 44, \"e\" * 44)).to(be(false))\n+    expect(Svix.secure_compare(\"é\" * 44, \"é\" * 44)).to(be(true))\n+  end\n end"
+  }
+ ],
+ "test_files": [
+  "ruby/spec/webhook_spec.rb"
+ ]
+}

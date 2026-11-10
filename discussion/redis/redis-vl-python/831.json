@@ -9,8 +9,105 @@
    "state": "COMMENTED",
    "submitted_at": "2026-11-07T21:34:19Z",
    "body": "From my perspective this can be merged. `TextQuery(\"the a an\")` now raises the same `ValueError` as `AggregateHybridQuery`, and the shared helper is byte for byte the old tokenizer plus that check, so no other query changes.\n\nnon-blocking: the MCP fulltext tool builds a `TextQuery` too, and `map_exception` turns the new `ValueError` into a clean invalid-request error, which beats the Redis syntax error it got before.\n\n```\n$ python rv_repro.py        # construction half of the #821 repro, base 930c14e vs head c18f796\nbase: 'the a an' -> @body:()\nhead: 'the a an' -> ValueError: text string cannot be empty after removing stopwords\n\n$ pytest -q --noconftest tests/unit/test_text_query_weights.py tests/unit/test_query_types.py tests/unit/test_aggregation_types.py   # head, Python 3.12\n83 passed, 1 skipped in 1.21s\n\n$ (same, base query.py, head tests)\nFAILED tests/unit/test_text_query_weights.py::test_text_query_rejects_empty_tokenized_text[the a an-english]\n4 failed, 79 passed, 1 skipped in 0.62s\n# not run: live Redis, the integration suite\n```\n\nI'll send the escaped-token fix as the follow-up once this is in.\n"
+  },
+  {
+   "role": "collaborator",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-10T10:02:24Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-10T10:35:49Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-10T10:35:56Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-10T10:36:03Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-10T10:36:12Z",
+   "body": ""
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-10T14:06:49Z",
+   "body": ""
   }
  ],
- "review_comments": [],
+ "review_comments": [
+  {
+   "role": "collaborator",
+   "path": "redisvl/query/query.py",
+   "created_at": "2026-11-10T10:02:24Z",
+   "body": "This builds a new `FullTextQueryHelper` on every tokenize, and each one re-validates stopwords and weights that `TextQuery` has already parsed. In my measurements that takes `str(TextQuery(...))` from 5.8 µs to 18.4 µs for a 9-word query, and from 46 µs to 99 µs for 200 words.\n\nIt also leaves two copies of the same logic: `_set_stopwords` and `_parse_text_weights` here duplicate the helper's `_get_stopwords` and `_parse_text_weights`. And because validation now runs on every build, mutating the returned containers turns into a build-time error: `q.stopwords.add(1); str(q)` now raises `TypeError`, where before it was ignored.\n\nCould `TextQuery` hold a single `self._ft_helper` built in `__init__`, the way `HybridQuery` (`hybrid.py:143`) and `AggregateHybridQuery` (`aggregate.py:175`) do? `stopwords`, `text_weights` and `set_text_weights` would forward to it (keeping the `_built_query_string = None` reset), `_tokenize_and_escape_query` becomes a thin forwarder, and the duplicate methods and the `get_stopwords` import can go."
+  },
+  {
+   "role": "collaborator",
+   "path": "redisvl/query/query.py",
+   "created_at": "2026-11-10T10:02:24Z",
+   "body": "Running this before `set_filter` means an argument type error now loses to the content check: `TextQuery(\"the\", \"b\", filter_expression=123)` raised the filter `TypeError` before and now raises the stopwords `ValueError`. Could this move after `self.set_filter(...)`?\n\nThe result is also thrown away and recomputed in `_build_query_string`, so every query tokenizes twice. With a held helper (see the comment on line 1426), it's worth keeping the result rather than tokenizing again."
+  },
+  {
+   "role": "collaborator",
+   "path": "redisvl/query/query.py",
+   "created_at": "2026-11-10T10:02:24Z",
+   "body": "`TextQuery(\"\", \"b\", stopwords=None)` raises \"text string cannot be empty after removing stopwords\", although no stopwords are configured. `AggregateHybridQuery` checks `if not text.strip()` separately (`aggregate.py:164`) and gives a plain \"text string cannot be empty\". Could `TextQuery` do the same, so the stopwords message only appears when stopwords actually removed everything?"
+  },
+  {
+   "role": "collaborator",
+   "path": "tests/unit/test_text_query_weights.py",
+   "created_at": "2026-11-10T10:02:24Z",
+   "body": "This file covers field and text weights; the empty-after-stopwords test fits better in `test_query_types.py`, next to the existing `TextQuery` stopword assertions (around line 256). The new coverage in `test_text_query_preserves_escaping_and_updated_weights` is that `set_text_weights` resets the cached query string, so the test name should say that."
+  },
+  {
+   "role": "author",
+   "path": "redisvl/query/query.py",
+   "created_at": "2026-11-10T10:35:49Z",
+   "body": "Fixed in 8237317. TextQuery now owns one FullTextQueryHelper; stopwords, text_weights and set_text_weights delegate to it, with cache invalidation retained. Removed duplicate stopword and weight parsing and the unused import. A regression confirms rebuilds do not revalidate mutated weights.\n\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "path": "redisvl/query/query.py",
+   "created_at": "2026-11-10T10:35:56Z",
+   "body": "Fixed in 8237317. Content validation runs after set_filter, preserving the filter TypeError. Construction retains the built query string; a counted-tokenizer regression confirms construction plus first rendering tokenizes once, and set_text_weights invalidates it.\n\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "path": "redisvl/query/query.py",
+   "created_at": "2026-11-10T10:36:03Z",
+   "body": "Fixed in 8237317. Empty or whitespace-only text now raises the plain empty-text ValueError, including when stopwords=None. Added explicit regression coverage.\n\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "path": "tests/unit/test_text_query_weights.py",
+   "created_at": "2026-11-10T10:36:12Z",
+   "body": "Fixed in 8237317. Moved stopword construction tests next to the TextQuery stopword assertions in test_query_types.py; renamed the weight test to test_set_text_weights_resets_cached_query_string.\n\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "collaborator",
+   "path": "tests/unit/test_query_types.py",
+   "created_at": "2026-11-10T14:06:49Z",
+   "body": "This test pins that writing into the dict returned by `query.text_weights` is silently accepted. That's a side effect of the property returning the helper's own dict, not behaviour we want to promise. Could it go?"
+  },
+  {
+   "role": "collaborator",
+   "path": "tests/unit/test_query_types.py",
+   "created_at": "2026-11-10T14:06:49Z",
+   "body": "This test counts calls to the private `_tokenize_and_escape_query` through monkeypatching, so it breaks whenever the tokenizer is restructured (#833 already changes it). The behaviour that matters, that `set_text_weights` resets the cached query string, is already covered by `test_set_text_weights_resets_cached_query_string` (`test_text_query_weights.py:125`). Could this one go too?"
+  }
+ ],
  "comments": []
 }

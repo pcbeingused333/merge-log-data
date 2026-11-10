@@ -1,0 +1,33 @@
+{
+ "repo": "TriliumNext/Trilium",
+ "number": 12558,
+ "url": "https://github.com/TriliumNext/Trilium/pull/12558",
+ "title": "fix(pdfjs-viewer): bundle CMaps and standard fonts",
+ "merged_at": "2026-11-10T15:52:41Z",
+ "files": [
+  {
+   "filename": ".changelog/20261110153627_pdfjs-cjk-cmaps.md",
+   "status": "added",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,7 @@\n+---\n+type: fix\n+area: PDF\n+closes: [12556]\n+---\n+\n+PDFs that used CJK CMaps showed their Chinese, Japanese or Korean text blank, and CMYK images rendered with less accurate colors."
+  },
+  {
+   "filename": "packages/pdfjs-viewer/scripts/build.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -49,7 +49,11 @@ async function main() {\n     // The legacy build ships core-js polyfills for the newest JS APIs; the modern\n     // build requires browsers only a few months old (Chrome 145+/Safari 26.2+).\n     // Keep in sync with the legacy viewer vendored by scripts/update-viewer.ts.\n-    const pdfjsBuildDir = join(dirname(require.resolve(\"pdfjs-dist/package.json\")), \"legacy\", \"build\");\n+    const pdfjsDir = dirname(require.resolve(\"pdfjs-dist/package.json\"));\n+    for (const directory of [ \"cmaps\", \"iccs\", \"standard_fonts\" ]) {\n+        build.copy(\"/\" + relative(build.rootDir, join(pdfjsDir, directory)), join(\"web\", directory));\n+    }\n+    const pdfjsBuildDir = join(pdfjsDir, \"legacy\", \"build\");\n     const pdfjsBuildDirFromRoot = \"/\" + relative(build.rootDir, pdfjsBuildDir);\n     for (const file of [ \"pdf.mjs\", \"pdf.worker.mjs\", \"pdf.sandbox.mjs\" ]) {\n         build.copy(join(pdfjsBuildDirFromRoot, file), join(\"build\", file));"
+  },
+  {
+   "filename": "scripts/pdfjs-build.spec.ts",
+   "status": "added",
+   "additions": 31,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,31 @@\n+import { execFileSync } from \"node:child_process\";\n+import { readdirSync, readFileSync } from \"node:fs\";\n+import { createRequire } from \"node:module\";\n+import { dirname, join } from \"node:path\";\n+import { fileURLToPath } from \"node:url\";\n+import { beforeAll, describe, expect, it } from \"vitest\";\n+\n+const rootDir = fileURLToPath(new URL(\"../\", import.meta.url));\n+const viewerDir = join(rootDir, \"packages/pdfjs-viewer\");\n+const require = createRequire(join(viewerDir, \"package.json\"));\n+const pdfjsDir = dirname(require.resolve(\"pdfjs-dist/package.json\"));\n+\n+beforeAll(() => {\n+    execFileSync(process.execPath, [ \"--import\", \"tsx\", join(viewerDir, \"scripts/build.ts\") ], {\n+        cwd: rootDir,\n+        stdio: \"pipe\"\n+    });\n+}, 30000);\n+\n+describe(\"PDF.js build assets\", () => {\n+    it.each([\n+        [ \"cmaps\", \"Adobe-GB1-UCS2.bcmap\" ],\n+        [ \"iccs\", \"CGATS001Compat-v2-micro.icc\" ],\n+        [ \"standard_fonts\", \"LiberationSans-Regular.ttf\" ]\n+    ])(\"packages %s at the viewer's configured resource path\", (directory, resource) => {\n+        const source = join(pdfjsDir, directory);\n+        const output = join(viewerDir, \"dist/web\", directory);\n+        expect(readdirSync(output).sort()).toEqual(readdirSync(source).sort());\n+        expect(readFileSync(join(output, resource))).toEqual(readFileSync(join(source, resource)));\n+    });\n+});"
+  }
+ ],
+ "test_files": [
+  "scripts/pdfjs-build.spec.ts"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "MacPaw/OpenAI",
+ "number": 483,
+ "url": "https://github.com/MacPaw/OpenAI/pull/483",
+ "title": "fix(chat): tolerate missing fields in prompt_tokens_details",
+ "merged_at": "2026-11-10T10:34:14Z",
+ "files": [
+  {
+   "filename": "Sources/OpenAI/Public/Models/ChatResult.swift",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -268,6 +268,19 @@ public struct ChatResult: Codable, Equatable, Sendable {\n                 case audioTokens = \"audio_tokens\"\n                 case cachedTokens = \"cached_tokens\"\n             }\n+\n+            public init(audioTokens: Int, cachedTokens: Int) {\n+                self.audioTokens = audioTokens\n+                self.cachedTokens = cachedTokens\n+            }\n+\n+            public init(from decoder: any Decoder) throws {\n+                let container = try decoder.container(keyedBy: CodingKeys.self)\n+                let parsingOptions = decoder.userInfo[.parsingOptions] as? ParsingOptions ?? []\n+                // OpenAI-compatible providers (e.g. DeepSeek, Gemini) often send only one of these fields.\n+                self.audioTokens = try container.decodeInt(forKey: .audioTokens, parsingOptions: parsingOptions)\n+                self.cachedTokens = try container.decodeInt(forKey: .cachedTokens, parsingOptions: parsingOptions)\n+            }\n         }\n \n         public struct CompletionTokensDetails: Codable, Equatable, Sendable {"
+  },
+  {
+   "filename": "Tests/OpenAITests/ChatResultTests.swift",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -216,6 +216,42 @@ final class ChatResultTests: XCTestCase {\n         XCTAssertEqual(usage.completionTokensDetails?.audioTokens, 35)\n     }\n     \n+    func testPromptTokensDetailsMemberwiseInit() {\n+        let details = ChatResult.CompletionUsage.PromptTokensDetails(audioTokens: 3, cachedTokens: 7)\n+        let usage = ChatResult.CompletionUsage(\n+            completionTokens: 1, promptTokens: 2, totalTokens: 3, promptTokensDetails: details\n+        )\n+        XCTAssertEqual(usage.promptTokensDetails?.audioTokens, 3)\n+        XCTAssertEqual(usage.promptTokensDetails?.cachedTokens, 7)\n+    }\n+\n+    func testUsageDecodesWhenPromptTokensDetailsOmitsAudioTokens() throws {\n+        // Some OpenAI-compatible providers (e.g. DeepSeek, Gemini) only send `cached_tokens`.\n+        let jsonString = \"\"\"\n+            {\n+                \"id\": \"chatcmpl-1\",\n+                \"object\": \"chat.completion\",\n+                \"created\": 1677652288,\n+                \"model\": \"deepseek-chat\",\n+                \"choices\": [],\n+                \"usage\": {\n+                    \"prompt_tokens\": 60,\n+                    \"completion_tokens\": 40,\n+                    \"total_tokens\": 100,\n+                    \"prompt_tokens_details\": {\n+                        \"cached_tokens\": 12\n+                    }\n+                }\n+            }\n+            \"\"\"\n+        \n+        decoder.userInfo = [.parsingOptions: ParsingOptions.relaxed]\n+        let usage = try XCTUnwrap(decode(jsonString).usage)\n+        XCTAssertEqual(usage.totalTokens, 100)\n+        XCTAssertEqual(usage.promptTokensDetails?.cachedTokens, 12)\n+        XCTAssertEqual(usage.promptTokensDetails?.audioTokens, 0)\n+    }\n+    \n     private func decode(_ jsonString: String) throws -> ChatResult {\n         let jsonData = jsonString.data(using: .utf8)!\n         return try decoder.decode(ChatResult.self, from: jsonData)"
+  }
+ ],
+ "test_files": [
+  "Tests/OpenAITests/ChatResultTests.swift"
+ ]
+}

@@ -1,0 +1,69 @@
+{
+ "repo": "microsoft/conductor",
+ "number": 632,
+ "url": "https://github.com/microsoft/conductor/pull/632",
+ "title": "fix(openai): default to gpt-5.6-terra instead of retired gpt-5-mini",
+ "merged_at": "2026-11-10T17:16:11Z",
+ "files": [
+  {
+   "filename": "README.md",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -401,7 +401,7 @@ Copilot is the default provider — `runtime.provider` can be omitted entirely.\n workflow:\n   runtime:\n     provider: openai\n-    default_model: gpt-5-mini\n+    default_model: gpt-5.6-terra\n ```\n \n Set your API key: `export OPENAI_API_KEY=sk-...`\n@@ -450,7 +450,7 @@ workflow:\n       name: aca\n       pool_endpoint: \"https://my-agent-pool.example.westus2.azurecontainerapps.io\"\n       inner_provider: copilot\n-    default_model: gpt-5-mini\n+    default_model: gpt-5.6-terra\n ```\n \n The `aca` provider delegates an agent's entire agentic loop, tools, and MCP calls to a remote **Azure Container Apps dynamic-sessions sandbox** instead of running it on the host — useful for untrusted or isolation-sensitive agents (e.g. running arbitrary generated code). Unlike the other providers, `aca` requires the structured `provider:` form with a `pool_endpoint` pointing at an operator-provisioned ACA session pool (`scripts/aca/provision-pool.sh`) and `azure-identity` for authentication. Resolves its inner Copilot credential automatically via `COPILOT_PROVIDER_BASE_URL` → `COPILOT_GITHUB_TOKEN`/`GH_TOKEN`/`GITHUB_TOKEN` → `gh auth token`, so a `gh`-authenticated operator needs no ACA-specific setup. See [`examples/aca-coding-agent.yaml`](examples/aca-coding-agent.yaml) for a full end-to-end example."
+  },
+  {
+   "filename": "changelog.d/+openai-default-model.fixed.md",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+Default OpenAI model is now `gpt-5.6-terra` instead of `gpt-5-mini`, which OpenAI retires on 2026-12-11 (agents without a model would fail after that date).\n+\n+If you rely on the implicit model default, review your budget or select a model explicitly. See the [GPT-5.6 Terra pricing](https://developers.openai.com/api/docs/models/gpt-5.6-terra)."
+  },
+  {
+   "filename": "docs/providers/comparison.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -88,7 +88,7 @@ workflow:\n   name: openai-workflow\n   runtime:\n     provider: openai\n-    default_model: gpt-5-mini\n+    default_model: gpt-5.6-terra\n     temperature: 0.7\n \n agents:"
+  },
+  {
+   "filename": "docs/providers/openai.md",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 4,
+   "patch": "@@ -30,11 +30,11 @@ workflow:\n   name: my-openai-workflow\n   runtime:\n     provider: openai\n-    default_model: gpt-5-mini\n+    default_model: gpt-5.6-terra\n \n agents:\n   - name: assistant\n-    model: gpt-5-mini\n+    model: gpt-5.6-terra\n     prompt: |\n       Answer the following question: {{ workflow.input.question }}\n     output:\n@@ -193,7 +193,7 @@ Unlike the Claude and Copilot providers which cap temperature at `1.0`, the Open\n workflow:\n   runtime:\n     provider: openai\n-    default_model: gpt-5-mini\n+    default_model: gpt-5.6-terra\n     temperature: 1.5  # Valid for OpenAI (0.0 to 2.0 range)\n ```\n \n@@ -231,7 +231,7 @@ The OpenAI provider supports stdio MCP servers via Conductor's `MCPManager`.\n workflow:\n   runtime:\n     provider: openai\n-    default_model: gpt-5-mini\n+    default_model: gpt-5.6-terra\n     mcp_servers:\n       fetch:\n         command: uvx"
+  },
+  {
+   "filename": "src/conductor/providers/_pydantic_ai/agent_builder.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -60,7 +60,7 @@\n )\n \n # Default OpenAI model used when the agent and runtime fail to declare one.\n-DEFAULT_OPENAI_MODEL: str = \"gpt-5-mini\"\n+DEFAULT_OPENAI_MODEL: str = \"gpt-5.6-terra\"\n \n # Default cap for total output tokens when Anthropic extended thinking is\n # enabled. This matches CLAUDE_EXTENDED_THINKING_OUTPUT_CAP in reasoning.py\n@@ -399,7 +399,7 @@ def _build_openai_model_settings(\n                 f\"Model {model_name!r} does not support reasoning.effort, but \"\n                 f\"reasoning.effort={effort!r} was requested for agent {agent.name!r}.\",\n                 suggestion=(\n-                    \"Use a reasoning-capable model (e.g. o-series, gpt-5-mini) or \"\n+                    \"Use a reasoning-capable model (e.g. o-series, gpt-5.6-terra) or \"\n                     \"remove the reasoning config.\"\n                 ),\n             )"
+  },
+  {
+   "filename": "src/conductor/providers/openai.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -209,7 +209,7 @@ def __init__(\n             base_url: Optional custom API endpoint. Resolves from ``OPENAI_BASE_URL``\n                 when not passed explicitly. When set, ``api_key`` must also be provided\n                 explicitly.\n-            model: Default model to use. Defaults to ``gpt-5-mini``.\n+            model: Default model to use. Defaults to ``gpt-5.6-terra``.\n             temperature: Default temperature (0.0-2.0).\n             max_tokens: Maximum output tokens. Omitted from the request when\n                 unset, so the server applies the model's own default; the\n@@ -244,7 +244,7 @@ def __init__(\n         self._resolve_environment = resolve_environment\n         self._base_url = base_url\n         self._model_user_configured = model is not None\n-        self._default_model = model or \"gpt-5-mini\"\n+        self._default_model = model or \"gpt-5.6-terra\"\n \n         if temperature is not None:\n             self._validate_temperature(temperature)\n@@ -843,7 +843,7 @@ async def execute_dialog_turn(\n                     f\"Model {resolved_model!r} does not support reasoning.effort, but \"\n                     f\"default_reasoning_effort={self._default_reasoning_effort!r} was requested.\",\n                     suggestion=(\n-                        \"Use a reasoning-capable model (e.g. o-series, gpt-5-mini) or \"\n+                        \"Use a reasoning-capable model (e.g. o-series, gpt-5.6-terra) or \"\n                         \"remove the reasoning config.\"\n                     ),\n                 )"
+  },
+  {
+   "filename": "tests/test_integration/test_openai_real_api.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -34,7 +34,7 @@\n # A custom endpoint requires an explicit api_key (the provider refuses to\n # forward an ambient OPENAI_API_KEY to a non-OpenAI endpoint), so read both.\n _TEST_BASE_URL = os.getenv(\"CONDUCTOR_TEST_OPENAI_BASE_URL\")\n-_TEST_MODEL = os.getenv(\"CONDUCTOR_TEST_OPENAI_MODEL\", \"gpt-5-mini\")\n+_TEST_MODEL = os.getenv(\"CONDUCTOR_TEST_OPENAI_MODEL\")\n \n \n @pytest.mark.real_api"
+  },
+  {
+   "filename": "tests/test_providers/test_openai.py",
+   "status": "modified",
+   "additions": 94,
+   "deletions": 2,
+   "patch": "@@ -74,10 +74,10 @@ def _build_text_agent(text: str) -> Agent[Any, str]:\n class TestProviderConstruction:\n     \"\"\"Tests for OpenAIProvider construction and validation.\"\"\"\n \n-    def test_default_model_is_gpt_5_mini(self) -> None:\n+    def test_default_model_is_gpt_5_6_terra(self) -> None:\n         \"\"\"Requirement: omitted model uses the default; an unset cap stays off the wire.\"\"\"\n         p = OpenAIProvider(api_key=\"test-key\")\n-        assert p._default_model == \"gpt-5-mini\"\n+        assert p._default_model == \"gpt-5.6-terra\"\n         assert p._default_max_tokens is None\n         assert p._max_tokens_user_configured is False\n \n@@ -527,6 +527,98 @@ async def test_dialog_turn_rejects_unsupported_reasoning_effort(self) -> None:\n             await provider.execute_dialog_turn(\"system prompt\", \"user message\")\n \n \n+def _chat_completion_response(content: str) -> dict[str, Any]:\n+    \"\"\"Minimal OpenAI chat completion payload.\"\"\"\n+    return {\n+        \"id\": \"chatcmpl-test\",\n+        \"object\": \"chat.completion\",\n+        \"created\": 0,\n+        \"model\": \"gpt-5.6-terra\",\n+        \"choices\": [\n+            {\n+                \"index\": 0,\n+                \"message\": {\"role\": \"assistant\", \"content\": content},\n+                \"finish_reason\": \"stop\",\n+            }\n+        ],\n+        \"usage\": {\"prompt_tokens\": 1, \"completion_tokens\": 1, \"total_tokens\": 2},\n+    }\n+\n+\n+class TestDefaultModelOnTheWire:\n+    \"\"\"The default model reaches the HTTP request through the real provider and builder.\"\"\"\n+\n+    @staticmethod\n+    def _patch_transport(requests: list[dict[str, Any]]) -> Any:\n+        import json\n+\n+        from conductor.providers._pydantic_ai import agent_builder\n+\n+        def handler(request: httpx.Request) -> httpx.Response:\n+            body = json.loads(request.content)\n+            requests.append(body)\n+            if body.get(\"stream\"):\n+                chunk = {\n+                    \"id\": \"chatcmpl-test\",\n+                    \"object\": \"chat.completion.chunk\",\n+                    \"created\": 0,\n+                    \"model\": \"gpt-5.6-terra\",\n+                    \"choices\": [\n+                        {\n+                            \"index\": 0,\n+                            \"delta\": {\"role\": \"assistant\", \"content\": \"hello\"},\n+                            \"finish_reason\": \"stop\",\n+                        }\n+                    ],\n+                }\n+                sse = f\"data: {json.dumps(chunk)}\\n\\ndata: [DONE]\\n\\n\"\n+                return httpx.Response(\n+                    200, content=sse.encode(), headers={\"content-type\": \"text/event-stream\"}\n+                )\n+            return httpx.Response(200, json=_chat_completion_response(\"hello\"))\n+\n+        real_client = agent_builder.AsyncOpenAI\n+\n+        def make_client(**kwargs: Any) -> Any:\n+            kwargs[\"http_client\"] = httpx.AsyncClient(transport=httpx.MockTransport(handler))\n+            return real_client(**kwargs)\n+\n+        return patch.object(agent_builder, \"AsyncOpenAI\", side_effect=make_client)\n+\n+    async def test_execute_sends_default_model_without_output_cap(self) -> None:\n+        \"\"\"Requirement: with no model override, execute() requests gpt-5.6-terra and omits\n+        an unset output cap.\n+        \"\"\"\n+        provider = OpenAIProvider(api_key=\"test-key\")\n+        agent = AgentDef(name=\"test_agent\", prompt=\"hi\")\n+        requests: list[dict[str, Any]] = []\n+\n+        with (\n+            patch.object(provider, \"_get_mcp_manager_for_cwd\", return_value=None),\n+            self._patch_transport(requests),\n+        ):\n+            await provider.execute(agent, {}, \"say hi\")\n+\n+        assert len(requests) == 1\n+        assert requests[0][\"model\"] == \"gpt-5.6-terra\"\n+        assert \"max_tokens\" not in requests[0]\n+        assert \"max_completion_tokens\" not in requests[0]\n+\n+    async def test_dialog_turn_sends_default_model_with_output_cap(self) -> None:\n+        \"\"\"Requirement: dialog requests use the default model and still cap output at 4096.\"\"\"\n+        provider = OpenAIProvider(api_key=\"test-key\")\n+        requests: list[dict[str, Any]] = []\n+\n+        with self._patch_transport(requests):\n+            reply = await provider.execute_dialog_turn(\"system prompt\", \"user message\")\n+\n+        assert reply == \"hello\"\n+        assert len(requests) == 1\n+        assert requests[0][\"model\"] == \"gpt-5.6-terra\"\n+        cap = requests[0].get(\"max_completion_tokens\", requests[0].get(\"max_tokens\"))\n+        assert cap == 4096\n+\n+\n class TestConnectionHelpers:\n     \"\"\"Tests for validate_connection/list_models/get_model_capabilities.\"\"\"\n "
+  }
+ ],
+ "test_files": [
+  "tests/test_integration/test_openai_real_api.py",
+  "tests/test_providers/test_openai.py"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "aws/aws-network-policy-agent",
+ "number": 778,
+ "url": "https://github.com/aws/aws-network-policy-agent/pull/778",
+ "title": "fix(fwruleprocessor): skip self-overlap when several CNP rules share a CIDR",
+ "merged_at": "2026-11-10T19:04:36Z",
+ "files": [
+  {
+   "filename": "pkg/fwruleprocessor/fw_rule_processor.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -321,7 +321,9 @@ func (f *FirewallRuleProcessor) ComputeClusterPolicyMapEntriesFromEndpointRules(\n \t\toverlappingCIDR := f.findMostSpecificOverlap(cidr, processedCIDRs)\n \n \t\t// Copy L4 rules from overlapping CIDR if found\n-\t\tif overlappingCIDR != \"\" {\n+\t\t// A CIDR that was already processed (same CIDR in several rules) already holds its own rules;\n+\t\t// copying them onto itself would double the list on every repeat.\n+\t\tif overlappingCIDR != \"\" && overlappingCIDR != cidr {\n \t\t\tcidrL4Rules[cidr] = append(cidrL4Rules[cidr], cidrL4Rules[overlappingCIDR]...)\n \t\t}\n "
+  },
+  {
+   "filename": "pkg/fwruleprocessor/fw_rule_processor_test.go",
+   "status": "modified",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -3,6 +3,7 @@ package fwruleprocessor\n import (\n \t\"encoding/binary\"\n \t\"net\"\n+\t\"runtime\"\n \t\"sort\"\n \t\"testing\"\n \n@@ -1017,3 +1018,35 @@ func TestFWRuleProcessor_IPv4MappedCIDRSkippedInIPv6Mode(t *testing.T) {\n \t\tt.Fatalf(\"2001:db8::/32 ports = %v, want [80]\", ports32)\n \t}\n }\n+\n+// TestClusterPolicy_RepeatedCIDRNotExponential verifies that N rules sharing the\n+// same CIDR are processed in linear time and memory. Previously each repeat copied\n+// the CIDR's own accumulated L4 rules onto itself, doubling the list per rule (O(2^N)).\n+func TestClusterPolicy_RepeatedCIDRNotExponential(t *testing.T) {\n+\tprotocolTCP := corev1.ProtocolTCP\n+\tconst n = 20\n+\n+\trules := make([]EbpfFirewallRules, 0, n)\n+\tfor i := 0; i < n; i++ {\n+\t\tport := int32(1000 + i)\n+\t\trules = append(rules, EbpfFirewallRules{\n+\t\t\tIPCidr:   \"10.0.0.0/8\",\n+\t\t\tL4Info:   []v1alpha1.Port{{Protocol: &protocolTCP, Port: &port}},\n+\t\t\tAction:   v1alpha1.ClusterNetworkPolicyRuleActionAccept,\n+\t\t\tPriority: 100,\n+\t\t})\n+\t}\n+\n+\t_, cidrNet, _ := net.ParseCIDR(\"10.0.0.0/8\")\n+\tkey := string(utils.ComputeTrieKey(*cidrNet, false))\n+\n+\tvar before, after runtime.MemStats\n+\truntime.ReadMemStats(&before)\n+\tgot, err := NewFirewallRuleProcessor(\"192.168.0.1\", \"/32\", false).ComputeClusterPolicyMapEntriesFromEndpointRules(rules)\n+\truntime.ReadMemStats(&after)\n+\n+\tassert.NoError(t, err)\n+\tassert.Len(t, decodeCPETrieValuePorts(got[key]), n)\n+\t// Linear processing allocates a few KB; the exponential version allocates hundreds of MB at n=20.\n+\tassert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(10<<20), \"allocations grew exponentially with repeated CIDR\")\n+}"
+  }
+ ],
+ "test_files": [
+  "pkg/fwruleprocessor/fw_rule_processor_test.go"
+ ]
+}

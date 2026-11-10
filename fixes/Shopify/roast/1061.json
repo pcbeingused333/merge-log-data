@@ -1,0 +1,42 @@
+{
+ "repo": "Shopify/roast",
+ "number": 1061,
+ "url": "https://github.com/Shopify/roast/pull/1061",
+ "title": "fix(pi): do not pass --no-session so chained prompts can --fork the session",
+ "merged_at": "2026-11-10T18:41:39Z",
+ "files": [
+  {
+   "filename": "lib/roast/cogs/agent/providers/pi/pi_invocation.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 5,
+   "patch": "@@ -339,11 +339,7 @@ def command_line\n               command.push(\"--model\", @model) if @model\n               command.push(\"--system-prompt\", @replace_system_prompt) if @replace_system_prompt\n               command.push(\"--append-system-prompt\", @append_system_prompt) if @append_system_prompt\n-              if @session.present?\n-                command.push(\"--fork\", @session)\n-              else\n-                command.push(\"--no-session\")\n-              end\n+              command.push(\"--fork\", @session) if @session.present?\n               command\n             end\n           end"
+  },
+  {
+   "filename": "test/examples/functional/roast_examples_test.rb",
+   "status": "modified",
+   "additions": 0,
+   "deletions": 1,
+   "patch": "@@ -665,7 +665,6 @@ class RoastExamplesTest < FunctionalTest\n             \"anthropic/claude-haiku-4-5-20251001\",\n             \"--append-system-prompt\",\n             \"Always respond in haiku form\",\n-            \"--no-session\",\n           ],\n           expected_stdin_content: \"What is the world's largest lake?\",\n         })"
+  },
+  {
+   "filename": "test/roast/cogs/agent/providers/pi/pi_invocation_test.rb",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -168,7 +168,7 @@ def failure_status\n           assert_includes command, \"--mode\"\n           assert_includes command, \"json\"\n           assert_includes command, \"-p\"\n-          assert_includes command, \"--no-session\"\n+          refute_includes command, \"--no-session\"\n         end\n \n         test \"command_line uses custom command when configured as string\" do\n@@ -229,11 +229,11 @@ def failure_status\n           refute_includes command, \"--no-session\"\n         end\n \n-        test \"command_line includes --no-session when no session is set\" do\n+        test \"command_line does not pass --no-session or --fork when no session is set\" do\n           invocation = Pi::PiInvocation.new(@config, \"Test prompt\", nil)\n \n           command = invocation.send(:command_line)\n-          assert_includes command, \"--no-session\"\n+          refute_includes command, \"--no-session\"\n           refute_includes command, \"--fork\"\n         end\n "
+  },
+  {
+   "filename": "test/roast/cogs/agent/providers/pi_test.rb",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -139,18 +139,23 @@ def mock_status(success:)\n           input.prompts = [\"Main task\", \"Finalizer\"]\n \n           fork_flags = []\n+          no_session_flags = []\n           CommandRunner.stubs(:execute).with do |args, **kwargs|\n             fork_flags << args.include?(\"--fork\")\n+            no_session_flags << args.include?(\"--no-session\")\n             session_json = { type: \"session\", id: \"session_1\" }.to_json\n             kwargs[:stdout_handler]&.call(session_json)\n             true\n           end.returns([\"\", \"\", mock_status(success: true)])\n \n           @provider.invoke(input)\n \n-          # First invocation has no session, so --no-session (no --fork).\n+          # First invocation has no session to fork from. It must not pass\n+          # --no-session, otherwise Pi keeps the session in memory only and the\n+          # second invocation cannot --fork from it.\n           # Second invocation forks from the first session.\n           assert_equal [false, true], fork_flags\n+          assert_equal [false, false], no_session_flags\n         end\n \n         test \"invoke uses --fork for first invocation when input has session\" do"
+  }
+ ],
+ "test_files": [
+  "test/examples/functional/roast_examples_test.rb",
+  "test/roast/cogs/agent/providers/pi/pi_invocation_test.rb",
+  "test/roast/cogs/agent/providers/pi_test.rb"
+ ]
+}

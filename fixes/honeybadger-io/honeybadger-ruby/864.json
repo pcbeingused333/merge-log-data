@@ -1,0 +1,34 @@
+{
+ "repo": "honeybadger-io/honeybadger-ruby",
+ "number": 864,
+ "url": "https://github.com/honeybadger-io/honeybadger-ruby/pull/864",
+ "title": "fix(cli): use connection.ui_host in test notice link",
+ "merged_at": "2026-11-10T15:03:34Z",
+ "files": [
+  {
+   "filename": "lib/honeybadger/cli/test.rb",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -246,7 +246,8 @@ def verify_test\n \n       def generate_success_message(response)\n         notice_id = JSON.parse(response.body)[\"id\"]\n-        notice_url = \"https://app.honeybadger.io/notice/#{notice_id}\"\n+        ui_host = Honeybadger.config.get(:\"connection.ui_host\")\n+        notice_url = \"https://#{ui_host}/notice/#{notice_id}\"\n \n         unless options[:install]\n           return \"⚡ Success: #{notice_url}\""
+  },
+  {
+   "filename": "spec/unit/honeybadger/cli/test_spec.rb",
+   "status": "added",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,36 @@\n+require \"thor\"\n+require \"honeybadger/cli/test\"\n+\n+describe Honeybadger::CLI::Test do\n+  let(:response) { double(\"response\", body: {id: \"abc-123\"}.to_json) }\n+  let(:config) { Honeybadger::Config.new(api_key: \"asdf\", logger: NULL_LOGGER, backend: :null) }\n+  let(:options) { {} }\n+\n+  subject(:cli) { described_class.new(options) }\n+\n+  before { allow(Honeybadger).to receive(:config).and_return(config) }\n+\n+  describe \"#generate_success_message\" do\n+    it \"links to the default UI host\" do\n+      expect(cli.send(:generate_success_message, response)).to eq(\"⚡ Success: https://app.honeybadger.io/notice/abc-123\")\n+    end\n+\n+    context \"when connection.ui_host is configured\" do\n+      let(:config) { Honeybadger::Config.new(api_key: \"asdf\", logger: NULL_LOGGER, backend: :null, \"connection.ui_host\": \"eu-app.honeybadger.io\") }\n+\n+      it \"links to the configured UI host\" do\n+        expect(cli.send(:generate_success_message, response)).to eq(\"⚡ Success: https://eu-app.honeybadger.io/notice/abc-123\")\n+      end\n+\n+      context \"during install\" do\n+        let(:options) { {install: true} }\n+\n+        it \"uses the configured UI host in the install message\" do\n+          message = cli.send(:generate_success_message, response)\n+          expect(message).to include(\"https://eu-app.honeybadger.io/notice/abc-123\")\n+          expect(message).not_to include(\"https://app.honeybadger.io\")\n+        end\n+      end\n+    end\n+  end\n+end"
+  },
+  {
+   "filename": "spec/unit/honeybadger/plugins/thor_spec.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 2,
+   "patch": "@@ -23,9 +23,8 @@ def self.no_commands\n     end\n \n     before do\n-      Object.const_set(:Thor, shim)\n+      stub_const(\"Thor\", shim)\n     end\n-    after { Object.send(:remove_const, :Thor) }\n \n     it \"includes integration module into Thor\" do\n       expect(shim).to receive(:send).with(:include, Honeybadger::Plugins::Thor)"
+  }
+ ],
+ "test_files": [
+  "spec/unit/honeybadger/cli/test_spec.rb",
+  "spec/unit/honeybadger/plugins/thor_spec.rb"
+ ]
+}

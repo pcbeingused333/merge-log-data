@@ -1,0 +1,47 @@
+{
+ "repo": "PostHog/posthog-dotnet",
+ "number": 370,
+ "url": "https://github.com/PostHog/posthog-dotnet/pull/370",
+ "title": "fix(ai): capture OpenAI reasoning tokens as $ai_reasoning_tokens",
+ "merged_at": "2026-11-10T12:47:04Z",
+ "files": [
+  {
+   "filename": ".changeset/openai-reasoning-tokens.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+\"PostHog.AI\": patch\n+---\n+\n+Capture OpenAI reasoning token usage as `$ai_reasoning_tokens` for Chat Completions and Responses API calls."
+  },
+  {
+   "filename": "src/PostHog.AI/PostHogAIFieldNames.cs",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -112,6 +112,11 @@ public static class PostHogAIFieldNames\n     /// </summary>\n     public const string TotalTokens = \"$ai_total_tokens\";\n \n+    /// <summary>\n+    /// Number of reasoning tokens used by the model (when available).\n+    /// </summary>\n+    public const string ReasoningTokens = \"$ai_reasoning_tokens\";\n+\n     /// <summary>\n     /// Number of tokens read from cache (when available).\n     /// </summary>"
+  },
+  {
+   "filename": "src/PostHog.AI/PostHogOpenAIHandler.cs",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -396,6 +396,19 @@ is JsonValue outputTokens\n                         eventProperties[PostHogAIFieldNames.CacheReadInputTokens] = cachedInt;\n                     }\n \n+                    // Reasoning models report their hidden reasoning tokens under\n+                    // *_tokens_details.reasoning_tokens (Chat Completions / Responses API).\n+                    if (\n+                        (\n+                            (usage[\"completion_tokens_details\"] as JsonObject)?[\"reasoning_tokens\"]\n+                            ?? (usage[\"output_tokens_details\"] as JsonObject)?[\"reasoning_tokens\"]\n+                        ) is JsonValue reasoningTokens\n+                        && reasoningTokens.TryGetValue<int>(out var reasoningInt)\n+                    )\n+                    {\n+                        eventProperties[PostHogAIFieldNames.ReasoningTokens] = reasoningInt;\n+                    }\n+\n                     if (usage[\"cache_creation_input_tokens\"] is JsonValue cacheCreationTokens)\n                     {\n                         eventProperties[PostHogAIFieldNames.CacheCreationInputTokens] ="
+  },
+  {
+   "filename": "src/PostHog.AI/PublicAPI.Unshipped.txt",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -1,2 +1,3 @@\n #nullable enable\n const PostHog.AI.PostHogAIFieldNames.LibVersion = \"$ai_lib_version\" -> string!\n+const PostHog.AI.PostHogAIFieldNames.ReasoningTokens = \"$ai_reasoning_tokens\" -> string!"
+  },
+  {
+   "filename": "tests/PostHog.AI.Tests/PostHogOpenAIHandlerTests.cs",
+   "status": "modified",
+   "additions": 40,
+   "deletions": 0,
+   "patch": "@@ -403,6 +403,46 @@ string responseJson\n             );\n     }\n \n+    [Theory]\n+    [InlineData(\n+        \"/v1/chat/completions\",\n+        \"{\\\"model\\\":\\\"o3\\\",\\\"choices\\\":[],\\\"usage\\\":{\\\"prompt_tokens\\\":50,\\\"completion_tokens\\\":300,\\\"total_tokens\\\":350,\\\"completion_tokens_details\\\":{\\\"reasoning_tokens\\\":256}}}\"\n+    )]\n+    [InlineData(\n+        \"/v1/responses\",\n+        \"{\\\"model\\\":\\\"o3\\\",\\\"output\\\":[],\\\"usage\\\":{\\\"input_tokens\\\":50,\\\"output_tokens\\\":300,\\\"total_tokens\\\":350,\\\"output_tokens_details\\\":{\\\"reasoning_tokens\\\":256}}}\"\n+    )]\n+    public async Task SendAsyncCapturesOpenAIReasoningTokens(string path, string responseJson)\n+    {\n+        using var responseContent = new StringContent(responseJson, Encoding.UTF8, \"application/json\");\n+        _innerHandler.Response = new HttpResponseMessage(HttpStatusCode.OK)\n+        {\n+            Content = responseContent,\n+        };\n+        using var requestContent = new StringContent(\n+            \"{\\\"model\\\":\\\"o3\\\"}\",\n+            Encoding.UTF8,\n+            \"application/json\"\n+        );\n+\n+        using var response = await _client.PostAsync(new Uri(path, UriKind.Relative), requestContent);\n+\n+        Assert.True(response.IsSuccessStatusCode);\n+        _postHogClient\n+            .Received(1)\n+            .Capture(\n+                Arg.Any<string>(),\n+                PostHogAIFieldNames.Generation,\n+                Arg.Is<Dictionary<string, object>>(props =>\n+                    (int)props[PostHogAIFieldNames.OutputTokens] == 300\n+                    && (int)props[PostHogAIFieldNames.ReasoningTokens] == 256\n+                ),\n+                null,\n+                false,\n+                Arg.Any<DateTimeOffset?>()\n+            );\n+    }\n+\n     private static bool VerifyProps(Dictionary<string, object> props)\n     {\n         if ("
+  }
+ ],
+ "test_files": [
+  "tests/PostHog.AI.Tests/PostHogOpenAIHandlerTests.cs"
+ ]
+}

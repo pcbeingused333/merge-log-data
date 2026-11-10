@@ -1,0 +1,33 @@
+{
+ "repo": "langgenius/dify-official-plugins",
+ "number": 4216,
+ "url": "https://github.com/langgenius/dify-official-plugins/pull/4216",
+ "title": "fix(openai_api_compatible): keep versioned base URLs such as /v3",
+ "merged_at": "2026-11-10T16:00:19Z",
+ "files": [
+  {
+   "filename": "models/openai_api_compatible/manifest.yaml",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -1,4 +1,4 @@\n-version: 0.0.79\n+version: 0.0.80\n type: plugin\n author: \"langgenius\"\n name: \"openai_api_compatible\""
+  },
+  {
+   "filename": "models/openai_api_compatible/models/llm/llm.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -1069,7 +1069,8 @@ def _create_openai_client(self, credentials: dict) -> OpenAI:\n         base_url = None\n         if endpoint_url:\n             base_url = endpoint_url.rstrip(\"/\")\n-            if not base_url.endswith(\"/v1\"):\n+            # Keep an already versioned base URL (/v1, /v3, ...) as given.\n+            if not re.search(r\"/v\\d+$\", base_url):\n                 base_url += \"/v1\"\n         extra_headers = credentials.get(\"extra_headers\") or None\n         return OpenAI(api_key=api_key, base_url=base_url, default_headers=extra_headers)"
+  },
+  {
+   "filename": "models/openai_api_compatible/tests/test_responses_api.py",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -1,3 +1,4 @@\n+import pytest\n from unittest.mock import MagicMock, patch\n \n from dify_plugin.entities.model.message import (\n@@ -182,3 +183,22 @@ def test_invoke_responses_api_with_json_schema():\n     assert text_format[\"name\"] == \"llm_response\"\n     assert text_format[\"schema\"][\"additionalProperties\"] is False\n     assert text_format[\"schema\"][\"required\"] == [\"summary\"]\n+\n+\n+@pytest.mark.parametrize(\n+    (\"endpoint_url\", \"expected\"),\n+    [\n+        (\"https://api.openai.com/v1\", \"https://api.openai.com/v1\"),\n+        (\"https://api.openai.com/v1/\", \"https://api.openai.com/v1\"),\n+        (\"https://gateway.example.com\", \"https://gateway.example.com/v1\"),\n+        (\"https://gateway.example.com/openai\", \"https://gateway.example.com/openai/v1\"),\n+        # Versioned bases other than /v1 must be kept as given (e.g. Volcengine Ark).\n+        (\"https://ark.cn-beijing.volces.com/api/v3\", \"https://ark.cn-beijing.volces.com/api/v3\"),\n+        (\"https://ark.cn-beijing.volces.com/api/v3/\", \"https://ark.cn-beijing.volces.com/api/v3\"),\n+        (\"https://gateway.example.com/v2\", \"https://gateway.example.com/v2\"),\n+    ],\n+)\n+def test_create_openai_client_base_url(endpoint_url, expected):\n+    model = OpenAILargeLanguageModel(model_schemas=[])\n+    client = model._create_openai_client({\"api_key\": \"k\", \"endpoint_url\": endpoint_url})\n+    assert str(client.base_url).rstrip(\"/\") == expected"
+  }
+ ],
+ "test_files": [
+  "models/openai_api_compatible/tests/test_responses_api.py"
+ ]
+}

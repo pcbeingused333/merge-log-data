@@ -1,0 +1,33 @@
+{
+ "repo": "PostHog/posthog-js",
+ "number": 5622,
+ "url": "https://github.com/PostHog/posthog-js/pull/5622",
+ "title": "fix(ai): capture custom tool calls in OpenAI Responses output",
+ "merged_at": "2026-11-10T13:12:01Z",
+ "files": [
+  {
+   "filename": ".changeset/tidy-custom-responses.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@posthog/ai': patch\n+---\n+\n+Capture custom tool calls in OpenAI Responses API output."
+  },
+  {
+   "filename": "packages/ai/src/utils.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -272,13 +272,13 @@ export const formatResponseOpenAI = (response: any): FormattedMessage[] => {\n         } else if (item.content) {\n           content.push({ type: 'text', text: String(item.content) })\n         }\n-      } else if (item.type === 'function_call') {\n+      } else if (item.type === 'function_call' || item.type === 'custom_tool_call') {\n         content.push({\n           type: 'function',\n           id: item.call_id || item.id || '',\n           function: {\n             name: item.name,\n-            arguments: item.arguments || {},\n+            arguments: item.type === 'custom_tool_call' ? item.input : item.arguments || {},\n           },\n         })\n       } else if (item.type === 'image_generation_call' && item.result) {"
+  },
+  {
+   "filename": "packages/ai/tests/utils.test.ts",
+   "status": "modified",
+   "additions": 37,
+   "deletions": 1,
+   "patch": "@@ -1,4 +1,4 @@\n-import { toContentString, getTokensSource, getModelParams } from '../src/utils'\n+import { toContentString, getTokensSource, getModelParams, formatResponseOpenAI } from '../src/utils'\n \n describe('getTokensSource', () => {\n   it.each([\n@@ -232,3 +232,39 @@ describe('getModelParams', () => {\n     expect(result).not.toHaveProperty('service_tier')\n   })\n })\n+\n+describe('formatResponseOpenAI Responses custom tools', () => {\n+  it.each(['print(\"hello\")\\n', ''])('preserves free-form input %j', (input) => {\n+    expect(\n+      formatResponseOpenAI({\n+        output: [{ type: 'custom_tool_call', id: 'ctc_1', call_id: 'call_1', name: 'code_exec', input }],\n+      })\n+    ).toEqual([\n+      {\n+        role: 'assistant',\n+        content: [{ type: 'function', id: 'call_1', function: { name: 'code_exec', arguments: input } }],\n+      },\n+    ])\n+  })\n+\n+  it('keeps custom tools in order with function calls and text', () => {\n+    expect(\n+      formatResponseOpenAI({\n+        output: [\n+          { type: 'function_call', call_id: 'call_1', name: 'lookup', arguments: '{\"key\":1}' },\n+          { type: 'custom_tool_call', id: 'ctc_2', name: 'code_exec', input: '1 + 1' },\n+          { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Done' }] },\n+        ],\n+      })\n+    ).toEqual([\n+      {\n+        role: 'assistant',\n+        content: [\n+          { type: 'function', id: 'call_1', function: { name: 'lookup', arguments: '{\"key\":1}' } },\n+          { type: 'function', id: 'ctc_2', function: { name: 'code_exec', arguments: '1 + 1' } },\n+          { type: 'text', text: 'Done' },\n+        ],\n+      },\n+    ])\n+  })\n+})"
+  }
+ ],
+ "test_files": [
+  "packages/ai/tests/utils.test.ts"
+ ]
+}

@@ -1,0 +1,49 @@
+{
+ "repo": "DataDog/dd-trace-js",
+ "number": 11012,
+ "url": "https://github.com/DataDog/dd-trace-js/pull/11012",
+ "title": "fix(llmobs): count thinking, tool-use and cached tokens for @google/genai",
+ "merged_at": "2026-11-10T16:29:27Z",
+ "files": [
+  {
+   "filename": "packages/dd-trace/src/llmobs/plugins/genai/util.js",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 6,
+   "patch": "@@ -101,20 +101,33 @@ function extractMetrics (response) {\n \n   if (!tokenUsage) return metrics\n \n-  if (tokenUsage.promptTokenCount) {\n-    metrics.inputTokens = tokenUsage.promptTokenCount\n+  // Gemini reports thinking tokens (`thoughtsTokenCount`) and tool-use prompt tokens\n+  // (`toolUsePromptTokenCount`) outside of `candidatesTokenCount` / `promptTokenCount`.\n+  const { thoughtsTokenCount, toolUsePromptTokenCount, cachedContentTokenCount } = tokenUsage\n+  const inputTokens = (tokenUsage.promptTokenCount || 0) + (toolUsePromptTokenCount || 0)\n+  const outputTokens = (tokenUsage.candidatesTokenCount || 0) + (thoughtsTokenCount || 0)\n+\n+  if (inputTokens) {\n+    metrics.inputTokens = inputTokens\n   }\n \n-  if (tokenUsage.candidatesTokenCount) {\n-    metrics.outputTokens = tokenUsage.candidatesTokenCount\n+  if (outputTokens) {\n+    metrics.outputTokens = outputTokens\n   }\n \n-  const totalTokens = tokenUsage.totalTokenCount ||\n-                    (tokenUsage.promptTokenCount || 0) + (tokenUsage.candidatesTokenCount || 0)\n+  const totalTokens = tokenUsage.totalTokenCount || inputTokens + outputTokens\n   if (totalTokens) {\n     metrics.totalTokens = totalTokens\n   }\n \n+  if (cachedContentTokenCount) {\n+    metrics.cacheReadTokens = cachedContentTokenCount\n+  }\n+\n+  if (thoughtsTokenCount) {\n+    metrics.reasoningOutputTokens = thoughtsTokenCount\n+  }\n+\n   return metrics\n }\n "
+  },
+  {
+   "filename": "packages/dd-trace/src/llmobs/plugins/vertexai.js",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 2,
+   "patch": "@@ -187,9 +187,17 @@ function extractMetrics (result) {\n   const tokenCounts = response.usageMetadata\n   const metrics = {}\n   if (tokenCounts) {\n-    metrics.inputTokens = tokenCounts.promptTokenCount\n-    metrics.outputTokens = tokenCounts.candidatesTokenCount\n+    const { thoughtsTokenCount, toolUsePromptTokenCount, cachedContentTokenCount } = tokenCounts\n+    // Gemini reports thinking and tool-use prompt tokens outside the prompt/candidates counts.\n+    metrics.inputTokens = toolUsePromptTokenCount\n+      ? (tokenCounts.promptTokenCount || 0) + toolUsePromptTokenCount\n+      : tokenCounts.promptTokenCount\n+    metrics.outputTokens = thoughtsTokenCount\n+      ? (tokenCounts.candidatesTokenCount || 0) + thoughtsTokenCount\n+      : tokenCounts.candidatesTokenCount\n     metrics.totalTokens = tokenCounts.totalTokenCount\n+    if (cachedContentTokenCount) metrics.cacheReadTokens = cachedContentTokenCount\n+    if (thoughtsTokenCount) metrics.reasoningOutputTokens = thoughtsTokenCount\n   }\n \n   return metrics"
+  },
+  {
+   "filename": "packages/dd-trace/test/llmobs/plugins/google-cloud-vertexai/gen-ai-apm-tags.spec.js",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -53,6 +53,31 @@ describe('vertexai gen_ai APM attributes with LLM Observability disabled', () =>\n     assert.equal(apmTags['gen_ai.usage.total_tokens'], 18)\n   })\n \n+  it('counts thinking, tool-use and cached tokens like the other Gemini integrations', () => {\n+    const { metrics } = plugin.getGenAiApmEndTags({\n+      result: {\n+        response: {\n+          usageMetadata: {\n+            promptTokenCount: 5,\n+            toolUsePromptTokenCount: 4,\n+            cachedContentTokenCount: 3,\n+            candidatesTokenCount: 7,\n+            thoughtsTokenCount: 30,\n+            totalTokenCount: 46,\n+          },\n+        },\n+      },\n+    })\n+\n+    assert.deepEqual(metrics, {\n+      inputTokens: 9,\n+      outputTokens: 37,\n+      totalTokens: 46,\n+      cacheReadTokens: 3,\n+      reasoningOutputTokens: 30,\n+    })\n+  })\n+\n   it('omits usage when the response reports none', () => {\n     publish({ instance: { model: 'publishers/google/models/gemini-1.5-flash' }, result: { response: {} } })\n "
+  },
+  {
+   "filename": "packages/dd-trace/test/llmobs/plugins/google-genai/index.spec.js",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -139,6 +139,7 @@ describe('Plugin', () => {\n             input_tokens: MOCK_NUMBER,\n             output_tokens: MOCK_NUMBER,\n             total_tokens: MOCK_NUMBER,\n+            reasoning_output_tokens: MOCK_NUMBER,\n           },\n           tags: { ml_app: 'test', integration: 'google_genai' },\n         })"
+  },
+  {
+   "filename": "packages/dd-trace/test/llmobs/plugins/google-genai/util.spec.js",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -19,6 +19,35 @@ describe('google-genai llmobs util', () => {\n       assert.deepStrictEqual(metrics, { inputTokens: 5, outputTokens: 7, totalTokens: 20 })\n     })\n \n+    it('counts thinking tokens in outputTokens and reports them as reasoningOutputTokens', () => {\n+      const metrics = extractMetrics({\n+        usageMetadata: {\n+          promptTokenCount: 5,\n+          candidatesTokenCount: 7,\n+          thoughtsTokenCount: 30,\n+          totalTokenCount: 42,\n+        },\n+      })\n+      assert.deepStrictEqual(metrics, {\n+        inputTokens: 5,\n+        outputTokens: 37,\n+        totalTokens: 42,\n+        reasoningOutputTokens: 30,\n+      })\n+    })\n+\n+    it('counts tool-use prompt tokens in inputTokens and reports cached tokens as cacheReadTokens', () => {\n+      const metrics = extractMetrics({\n+        usageMetadata: {\n+          promptTokenCount: 5,\n+          toolUsePromptTokenCount: 4,\n+          cachedContentTokenCount: 3,\n+          candidatesTokenCount: 7,\n+        },\n+      })\n+      assert.deepStrictEqual(metrics, { inputTokens: 9, outputTokens: 7, totalTokens: 16, cacheReadTokens: 3 })\n+    })\n+\n     it('omits totalTokens when no token counts are present', () => {\n       assert.deepStrictEqual(extractMetrics({ usageMetadata: {} }), {})\n     })"
+  }
+ ],
+ "test_files": [
+  "packages/dd-trace/test/llmobs/plugins/google-cloud-vertexai/gen-ai-apm-tags.spec.js",
+  "packages/dd-trace/test/llmobs/plugins/google-genai/index.spec.js",
+  "packages/dd-trace/test/llmobs/plugins/google-genai/util.spec.js"
+ ]
+}

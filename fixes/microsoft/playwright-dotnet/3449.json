@@ -1,0 +1,33 @@
+{
+ "repo": "microsoft/playwright-dotnet",
+ "number": 3449,
+ "url": "https://github.com/microsoft/playwright-dotnet/pull/3449",
+ "title": "fix(cli): preserve quoted arguments and spaced driver paths",
+ "merged_at": "2026-11-10T15:01:58Z",
+ "files": [
+  {
+   "filename": "src/Playwright.Tests/CLITests.cs",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -23,6 +23,7 @@\n  */\n \n using System.Diagnostics;\n+using System.Reflection;\n \n namespace Microsoft.Playwright.Tests;\n \n@@ -52,6 +53,43 @@ public void ShouldReturnExitCode1ForCommandNotFound()\n         StringAssert.Contains(\"unknown command\", stderr);\n     }\n \n+    // See https://github.com/microsoft/playwright-dotnet/issues/3430\n+    [PlaywrightTest]\n+    [TestCase(\"\", \"\\\"\\\"\")]\n+    [TestCase(\"say \\\"hi\\\"\", \"\\\"say \\\\\\\"hi\\\\\\\"\\\"\")]\n+    [TestCase(@\"C:\\My Dir\\\", \"\\\"C:\\\\My Dir\\\\\\\\\\\"\")]\n+    [TestCase(\"plain\", \"\\\"plain\\\"\")]\n+    [NonParallelizable]\n+    public void ShouldPreserveCLIArguments(string argument, string expected)\n+    {\n+        var previousNode = Environment.GetEnvironmentVariable(\"PLAYWRIGHT_NODEJS_PATH\");\n+        var previousSearch = Environment.GetEnvironmentVariable(\"PLAYWRIGHT_DRIVER_SEARCH_PATH\");\n+        try\n+        {\n+            Environment.SetEnvironmentVariable(\"PLAYWRIGHT_NODEJS_PATH\", Environment.ProcessPath);\n+            Environment.SetEnvironmentVariable(\"PLAYWRIGHT_DRIVER_SEARCH_PATH\", Path.GetTempPath());\n+            var method = typeof(Program).GetMethod(\"CreateDriverProcess\", BindingFlags.NonPublic | BindingFlags.Static);\n+            using var process = (Process)method.Invoke(null, new object[] { new[] { argument }, true });\n+            var entrypoint = Path.Combine(Path.GetTempPath(), \".playwright\", \"package\", \"cli.js\");\n+            Assert.That(process.StartInfo.Arguments, Is.EqualTo($\"\\\"{entrypoint}\\\" {expected}\"));\n+        }\n+        finally\n+        {\n+            Environment.SetEnvironmentVariable(\"PLAYWRIGHT_NODEJS_PATH\", previousNode);\n+            Environment.SetEnvironmentVariable(\"PLAYWRIGHT_DRIVER_SEARCH_PATH\", previousSearch);\n+        }\n+    }\n+\n+    // See https://github.com/microsoft/playwright-dotnet/issues/3430\n+    [PlaywrightTest]\n+    public void ShouldQuoteEntrypointWithoutArguments()\n+    {\n+        var method = typeof(Microsoft.Playwright.Helpers.Driver).GetMethod(\"GetPath\", BindingFlags.NonPublic | BindingFlags.Static);\n+        var path = Path.Combine(Path.GetTempPath(), \"John Smith\");\n+        var result = ((string ExecutablePath, Func<string, string> GetArgs))method.Invoke(null, new object[] { path });\n+        Assert.That(result.GetArgs(null), Is.EqualTo($\"\\\"{Path.Combine(path, \".playwright\", \"package\", \"cli.js\")}\\\"\"));\n+    }\n+\n     // Out of process execution of playwright.ps1\n     private (string stdout, string stderr, int exitCode) ExecutePlaywrightPs1(string[] arguments)\n     {"
+  },
+  {
+   "filename": "src/Playwright/Helpers/Driver.cs",
+   "status": "modified",
+   "additions": 26,
+   "deletions": 1,
+   "patch": "@@ -28,6 +28,7 @@\n using System.IO;\n using System.Reflection;\n using System.Runtime.InteropServices;\n+using System.Text;\n \n namespace Microsoft.Playwright.Helpers;\n \n@@ -96,6 +97,30 @@ internal static (string ExecutablePath, Func<string?, string> GetArgs) GetExecut\n         throw new PlaywrightException($\"Driver not found: {executableFile}\");\n     }\n \n+    internal static string QuoteArgument(string argument)\n+    {\n+        var result = new StringBuilder(\"\\\"\");\n+        var backslashes = 0;\n+        foreach (var character in argument)\n+        {\n+            if (character == '\\\\')\n+            {\n+                backslashes++;\n+                continue;\n+            }\n+\n+            // Backslashes before a quote must be doubled, then the quote escaped.\n+            result.Append('\\\\', character == '\"' ? (backslashes * 2) + 1 : backslashes);\n+            result.Append(character);\n+            backslashes = 0;\n+        }\n+\n+        // Escape trailing backslashes so they cannot consume the closing quote.\n+        result.Append('\\\\', backslashes * 2);\n+        result.Append('\"');\n+        return result.ToString();\n+    }\n+\n     private static bool TryGetCodeBase(Assembly assembly, out Uri? codeBase)\n     {\n         try\n@@ -139,7 +164,7 @@ private static (string ExecutablePath, Func<string?, string> GetArgs) GetPath(st\n         var cliEntrypoint = Path.Combine(driversPath, \".playwright\", \"package\", \"cli.js\");\n         string getArgs(string? args)\n         {\n-            return !string.IsNullOrEmpty(args) ? $\"\\\"{cliEntrypoint}\\\" {args}\" : cliEntrypoint;\n+            return !string.IsNullOrEmpty(args) ? $\"{QuoteArgument(cliEntrypoint)} {args}\" : QuoteArgument(cliEntrypoint);\n         }\n         return (\n             Environment.GetEnvironmentVariable(\"PLAYWRIGHT_NODEJS_PATH\") ?? Path.GetFullPath(Path.Combine(driversPath, \".playwright\", \"node\", platformId, nodeExecutable)),"
+  },
+  {
+   "filename": "src/Playwright/Program.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -95,7 +95,7 @@ public RunResult RunWithResult(string[] args)\n     private static Process CreateDriverProcess(string[] args, bool captureOutput)\n     {\n         var (executablePath, getArgs) = Driver.GetExecutablePath();\n-        var startInfo = new ProcessStartInfo(executablePath, getArgs(args.Length > 0 ? \"\\\"\" + string.Join(\"\\\" \\\"\", args) + \"\\\"\" : null))\n+        var startInfo = new ProcessStartInfo(executablePath, getArgs(string.Join(\" \", Array.ConvertAll(args, Driver.QuoteArgument))))\n         {\n             UseShellExecute = false,\n             // This works after net8.0-preview-4"
+  }
+ ],
+ "test_files": [
+  "src/Playwright.Tests/CLITests.cs"
+ ]
+}
