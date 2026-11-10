@@ -15,6 +15,12 @@
    "state": "CHANGES_REQUESTED",
    "submitted_at": "2026-11-09T12:51:13Z",
    "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-10T06:36:19Z",
+   "body": "Everything looks good, just a small nit, before I approve it."
   }
  ],
  "review_comments": [
@@ -77,6 +83,12 @@
    "path": "internal/azblobclient/azblobclient.go",
    "created_at": "2026-11-09T12:50:57Z",
    "body": "This is optional, because it's a pre-existing bug. I'm ok with fixing it in a follow up PR or just report the issue in backlog.\r\n\r\nA token copied with a leading `?` (`?sv=...&sig=...`) fails on `main` and on this branch alike (AuthorizationFailure on every call against Azurite). With the derived clients, `runtime.JoinPaths` splits the endpoint on `?`, so per-blob requests now go out with no SAS at all instead of a garbled one. Since `New` validates the token now, consider `sasToken = strings.TrimPrefix(sasToken, \"?\")` here, or rejecting it with a hint."
+  },
+  {
+   "role": "contributor",
+   "path": "internal/azblobclient/azblobclient.go",
+   "created_at": "2026-11-10T06:35:43Z",
+   "body": "Nit: trimming inside the `sasToken != \"\"` branch lets a token of just `?` through as empty. `New` then returns an anonymous client and `Credentials` with none of SASToken/SharedKey/Default set, contradicting the doc on `Credentials`. Trim before the check:\n\n```go\n// A token copied with its leading \"?\" would otherwise be sent twice.\nsasToken = strings.TrimPrefix(sasToken, \"?\")\nif sasToken != \"\" {\n```"
   }
  ],
  "comments": [
@@ -94,6 +106,11 @@
    "role": "author",
    "created_at": "2026-11-09T13:06:56Z",
    "body": "Applied the latest review: the invalid-token subtests are now named cases, the two rejections say why without echoing the token (\"contains a control character\" / \"malformed query\") using `strings.ContainsFunc`, and a leading `?` on the SAS token is trimmed in `New` (with a test). `go test ./internal/azblobclient ./backend/azure` passes.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-10T07:14:25Z",
+   "body": "Moved the leading-question-mark trim before the empty-token check as requested, and added a regression case confirming that `?` falls back to account credentials. The internal/azblobclient and backend/azure suites pass.\n\nThis response was drafted with Codex.\n\n"
   }
  ]
 }

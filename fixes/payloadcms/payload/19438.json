@@ -1,0 +1,33 @@
+{
+ "repo": "payloadcms/payload",
+ "number": 19438,
+ "url": "https://github.com/payloadcms/payload/pull/19438",
+ "title": "fix: await a remote JSON schema before validating",
+ "merged_at": "2026-11-09T23:06:34Z",
+ "files": [
+  {
+   "filename": "packages/payload/src/fields/config/types.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -1147,7 +1147,8 @@ export type JSONField = {\n \n   jsonSchema?: {\n     fileMatch: string[]\n-    schema: JSONSchema4\n+    /** Inline schema. When omitted, the schema is fetched from `uri`. */\n+    schema?: JSONSchema4\n     uri: string\n   }\n   type: 'json'"
+  },
+  {
+   "filename": "packages/payload/src/fields/validateJSONSchema.spec.ts",
+   "status": "added",
+   "additions": 95,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,95 @@\n+import type { JSONSchema4 } from 'json-schema'\n+\n+import { validateJSONSchema } from './validateJSONSchema.js'\n+import { afterEach, describe, expect, it, vitest } from 'vitest'\n+\n+const customerSchema: JSONSchema4 = {\n+  type: 'object',\n+  properties: {\n+    a: {\n+      type: 'number',\n+    },\n+  },\n+  required: ['a'],\n+}\n+\n+const jsonResponse = (body: unknown, status = 200) =>\n+  new Response(JSON.stringify(body), {\n+    headers: { 'content-type': 'application/json' },\n+    status,\n+  })\n+\n+describe('validateJSONSchema', () => {\n+  afterEach(() => {\n+    vitest.unstubAllGlobals()\n+  })\n+\n+  it('rejects a value that violates an inline schema without fetching', async () => {\n+    const fetchMock = vitest.fn()\n+    vitest.stubGlobal('fetch', fetchMock)\n+\n+    const result = await validateJSONSchema({\n+      jsonSchema: {\n+        fileMatch: ['a://b/foo.json'],\n+        schema: customerSchema,\n+        uri: 'a://b/foo.json',\n+      },\n+      value: { a: 'x' },\n+    })\n+\n+    expect(result).not.toBe(true)\n+    expect(typeof result).toBe('string')\n+    expect(fetchMock).not.toHaveBeenCalled()\n+  })\n+\n+  it('fetches a remote schema from uri and rejects a value that violates it', async () => {\n+    const fetchMock = vitest.fn(async () => jsonResponse(customerSchema))\n+    vitest.stubGlobal('fetch', fetchMock)\n+\n+    const jsonSchema: {\n+      fileMatch: string[]\n+      schema?: JSONSchema4\n+      uri: string\n+    } = {\n+      fileMatch: ['https://example.com/customer.schema.json'],\n+      uri: 'https://example.com/customer.schema.json',\n+    }\n+\n+    const invalid = await validateJSONSchema({\n+      jsonSchema,\n+      value: { a: 'x' },\n+    })\n+\n+    expect(fetchMock).toHaveBeenCalledTimes(1)\n+    expect(invalid).not.toBe(true)\n+    expect(typeof invalid).toBe('string')\n+    expect(invalid).toContain('a')\n+    expect(jsonSchema.schema).not.toBeInstanceOf(Promise)\n+\n+    const valid = await validateJSONSchema({\n+      jsonSchema,\n+      value: { a: 1 },\n+    })\n+\n+    expect(valid).toBe(true)\n+    expect(fetchMock).toHaveBeenCalledTimes(1)\n+  })\n+\n+  it('reports a failed fetch instead of accepting every value when uri is missing', async () => {\n+    const fetchMock = vitest.fn(async () => {\n+      throw new TypeError('Failed to parse URL from undefined')\n+    })\n+    vitest.stubGlobal('fetch', fetchMock)\n+\n+    const result = await validateJSONSchema({\n+      jsonSchema: {\n+        fileMatch: ['a://b/foo.json'],\n+        schema: customerSchema,\n+      } as any,\n+      value: { a: 'x' },\n+    })\n+\n+    expect(result).not.toBe(true)\n+    expect(typeof result).toBe('string')\n+  })\n+})"
+  },
+  {
+   "filename": "packages/payload/src/fields/validateJSONSchema.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -16,7 +16,7 @@ type Args = {\n  * admin never validates JSON Schemas in the browser, and doesn't need to compile or download zod.\n  */\n export const validateJSONSchema = async ({ jsonSchema, value }: Args): Promise<string | true> => {\n-  const fetchSchema = ({ schema, uri }: { schema: JSONSchema4; uri: string }) => {\n+  const fetchSchema = ({ schema, uri }: { schema?: JSONSchema4; uri: string }) => {\n     if (uri && schema) {\n       return schema\n     }\n@@ -42,7 +42,7 @@ export const validateJSONSchema = async ({ jsonSchema, value }: Args): Promise<s\n   }\n \n   try {\n-    jsonSchema.schema = fetchSchema(jsonSchema)\n+    jsonSchema.schema = await fetchSchema(jsonSchema)\n     const { schema } = jsonSchema\n     const { fromJSONSchema } = await import('zod')\n     // `JSONSchema4` allows any string for `$schema`, while zod narrows it to the three drafts it"
+  }
+ ],
+ "test_files": [
+  "packages/payload/src/fields/validateJSONSchema.spec.ts"
+ ]
+}

@@ -1,0 +1,56 @@
+{
+ "repo": "Twigpine/openclaude",
+ "number": 2494,
+ "url": "https://github.com/Twigpine/openclaude/pull/2494",
+ "title": "fix(openai-shim): report Gemini cachedContentTokenCount as cache_read_input_tokens",
+ "merged_at": "2026-11-10T01:24:46Z",
+ "files": [
+  {
+   "filename": "src/services/api/geminiVertexClient.test.ts",
+   "status": "modified",
+   "additions": 75,
+   "deletions": 0,
+   "patch": "@@ -685,3 +685,78 @@ test('direct native client rejects a host-changing location before resolving a b\n   })).toThrow('GEMINI_VERTEX_LOCATION')\n   expect(credentials).toBe(0)\n })\n+\n+test('Gemini Vertex client reports cachedContentTokenCount as cache_read_input_tokens', async () => {\n+  const client = createGeminiVertexClient({\n+    project: 'project-123',\n+    location: 'us-central1',\n+    model: 'gemini-3.5-flash',\n+    getAccessToken: async () => 'access-token-123',\n+    fetch: (async (_input, _init) =>\n+      new Response(\n+        JSON.stringify({\n+          candidates: [{ content: { parts: [{ text: 'hi' }] } }],\n+          usageMetadata: {\n+            promptTokenCount: 100,\n+            cachedContentTokenCount: 80,\n+            candidatesTokenCount: 2,\n+          },\n+        }),\n+        { headers: { 'Content-Type': 'application/json' } },\n+      )) as typeof fetch,\n+  })\n+\n+  const response = await client.messages.create({\n+    model: 'gemini-3.5-flash',\n+    max_tokens: 100,\n+    messages: [{ role: 'user', content: 'hi' }],\n+  })\n+\n+  expect(response.usage).toMatchObject({\n+    input_tokens: 20,\n+    output_tokens: 2,\n+    cache_read_input_tokens: 80,\n+  })\n+})\n+\n+test('Gemini Vertex streaming publishes cache-aware usage on the terminal message_delta', async () => {\n+  const client = createGeminiVertexClient({\n+    project: 'project-123',\n+    location: 'us-central1',\n+    model: 'gemini-3.5-flash',\n+    getAccessToken: async () => 'access-token-123',\n+    fetch: (async () =>\n+      new Response(\n+        JSON.stringify({\n+          candidates: [{ content: { parts: [{ text: 'hi' }] } }],\n+          usageMetadata: {\n+            promptTokenCount: 100,\n+            cachedContentTokenCount: 80,\n+            candidatesTokenCount: 2,\n+          },\n+        }),\n+        { headers: { 'Content-Type': 'application/json' } },\n+      )) as unknown as typeof fetch,\n+  })\n+\n+  const result = await client.beta.messages.create({\n+    model: 'gemini-3.5-flash',\n+    max_tokens: 100,\n+    messages: [{ role: 'user', content: 'hi' }],\n+    stream: true,\n+  }).withResponse()\n+\n+  const events: GeminiVertexStreamEvent[] = []\n+  for await (const event of result.data) {\n+    events.push(event)\n+  }\n+\n+  const start = events.find(e => e.type === 'message_start')\n+  const delta = events.find(e => e.type === 'message_delta')\n+  expect(start).toMatchObject({\n+    message: { usage: { input_tokens: 20, cache_read_input_tokens: 80, output_tokens: 2 } },\n+  })\n+  expect(delta).toMatchObject({\n+    usage: { input_tokens: 20, cache_read_input_tokens: 80, output_tokens: 2 },\n+  })\n+})"
+  },
+  {
+   "filename": "src/services/api/geminiVertexClient.ts",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 4,
+   "patch": "@@ -84,6 +84,7 @@ type GeminiVertexResponse = {\n     candidatesTokenCount?: number\n     totalTokenCount?: number\n     thoughtsTokenCount?: number\n+    cachedContentTokenCount?: number\n   }\n }\n \n@@ -179,7 +180,11 @@ type GeminiVertexMessage = {\n   model: string\n   stop_reason: GeminiVertexStopReason\n   stop_sequence: null\n-  usage: { input_tokens: number; output_tokens: number }\n+  usage: {\n+    input_tokens: number\n+    output_tokens: number\n+    cache_read_input_tokens: number\n+  }\n   content: GeminiVertexContentBlock[]\n }\n \n@@ -202,7 +207,7 @@ export type GeminiVertexStreamEvent =\n   | {\n       type: 'message_delta'\n       delta: { stop_reason: GeminiVertexStopReason; stop_sequence: null }\n-      usage: { output_tokens: number }\n+      usage: GeminiVertexMessage['usage']\n     }\n   | { type: 'message_stop' }\n \n@@ -630,7 +635,7 @@ async function* toAnthropicStream(\n   yield {\n     type: 'message_delta',\n     delta: { stop_reason: message.stop_reason, stop_sequence: null },\n-    usage: { output_tokens: message.usage.output_tokens },\n+    usage: { ...message.usage },\n   }\n   yield { type: 'message_stop' }\n }\n@@ -737,6 +742,7 @@ export function createGeminiVertexClient(options: GeminiVertexClientOptions) {\n       const candidate = json.candidates?.[0]\n       const finishReason = candidate?.finishReason\n       const thoughtsTokenCount = json.usageMetadata?.thoughtsTokenCount ?? 0\n+      const cachedTokens = json.usageMetadata?.cachedContentTokenCount ?? 0\n       const hasToolCall = contentBlocks.some(b => b.type === 'tool_use')\n \n       // Surface every silent-empty-response path explicitly. We treat the\n@@ -825,7 +831,13 @@ export function createGeminiVertexClient(options: GeminiVertexClientOptions) {\n         stop_reason: hasToolCall ? 'tool_use' : candidate?.finishReason === 'MAX_TOKENS' ? 'max_tokens' : 'end_turn',\n         stop_sequence: null,\n         usage: {\n-          input_tokens: json.usageMetadata?.promptTokenCount ?? 0,\n+          // promptTokenCount includes cached tokens; report them as cache\n+          // reads and keep input_tokens to the uncached remainder.\n+          input_tokens: Math.max(\n+            0,\n+            (json.usageMetadata?.promptTokenCount ?? 0) - cachedTokens,\n+          ),\n+          cache_read_input_tokens: cachedTokens,\n           output_tokens: (json.usageMetadata?.candidatesTokenCount ?? 0) +\n             (json.usageMetadata?.thoughtsTokenCount ?? 0),\n         },"
+  },
+  {
+   "filename": "src/services/api/openaiShim/geminiStreamConversion.test.ts",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 0,
+   "patch": "@@ -144,3 +144,26 @@ test('rejects an already-aborted Gemini stream without yielding events', async (\n   await expect(stream.next()).rejects.toMatchObject({ name: 'AbortError' })\n   expect(cancelReasons).toHaveLength(1)\n })\n+\n+test('reports Gemini cachedContentTokenCount as cache_read_input_tokens', async () => {\n+  const events = await collectEvents(responseFor({\n+    candidates: [{\n+      content: { parts: [{ text: 'hi' }] },\n+      finishReason: 'STOP',\n+    }],\n+    usageMetadata: {\n+      promptTokenCount: 100,\n+      cachedContentTokenCount: 80,\n+      candidatesTokenCount: 2,\n+    },\n+  }))\n+\n+  expect(events.at(-2)).toMatchObject({\n+    type: 'message_delta',\n+    usage: {\n+      input_tokens: 20,\n+      output_tokens: 2,\n+      cache_read_input_tokens: 80,\n+    },\n+  })\n+})"
+  },
+  {
+   "filename": "src/services/api/openaiShim/geminiStreamConversion.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -184,6 +184,7 @@ export async function* geminiSseToAnthropic(\n             output_tokens:\n               (metadata.candidatesTokenCount ?? 0) +\n               (metadata.thoughtsTokenCount ?? 0),\n+            cached_content_token_count: metadata.cachedContentTokenCount ?? 0,\n           })\n         }\n "
+  },
+  {
+   "filename": "src/services/api/openaiShim/responseAdapters.test.ts",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -193,3 +193,23 @@ test('openaiStreamToAnthropic wrapper emits text, usage, and terminal stop', asy\n   })\n   expect(events.at(-1)).toEqual({ type: 'message_stop' })\n })\n+\n+test('maps Gemini cachedContentTokenCount to cache_read_input_tokens', () => {\n+  const message = convertGeminiToAnthropicResponse({\n+    candidates: [{\n+      content: { parts: [{ text: 'hi' }] },\n+      finishReason: 'STOP',\n+    }],\n+    usageMetadata: {\n+      promptTokenCount: 100,\n+      cachedContentTokenCount: 80,\n+      candidatesTokenCount: 2,\n+    },\n+  }, 'gemini-test')\n+\n+  expect(message.usage).toMatchObject({\n+    input_tokens: 20,\n+    output_tokens: 2,\n+    cache_read_input_tokens: 80,\n+  })\n+})"
+  },
+  {
+   "filename": "src/services/api/openaiShim/responseAdapters.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -209,6 +209,7 @@ export function convertGeminiToAnthropicResponse(\n       output_tokens:\n         (usageMetadata?.candidatesTokenCount ?? 0) +\n         (usageMetadata?.thoughtsTokenCount ?? 0),\n+      cached_content_token_count: usageMetadata?.cachedContentTokenCount ?? 0,\n     } as unknown as Record<string, unknown>),\n   }\n }"
+  }
+ ],
+ "test_files": [
+  "src/services/api/geminiVertexClient.test.ts",
+  "src/services/api/openaiShim/geminiStreamConversion.test.ts",
+  "src/services/api/openaiShim/responseAdapters.test.ts"
+ ]
+}

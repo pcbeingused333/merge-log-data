@@ -1,0 +1,26 @@
+{
+ "repo": "bucketeer-io/bucketeer",
+ "number": 2987,
+ "url": "https://github.com/bucketeer-io/bucketeer/pull/2987",
+ "title": "fix(api): hash all flags in GetEvaluations user evaluations id when tag is empty",
+ "merged_at": "2026-11-10T01:47:28Z",
+ "files": [
+  {
+   "filename": "pkg/api/api/api_grpc.go",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 1,
+   "patch": "@@ -544,7 +544,14 @@ func (s *grpcGatewayService) GetEvaluations(\n \t\treturn nil, err\n \t}\n \tfeatures := f.([]*featureproto.Feature)\n-\tfilteredByTag := s.filterByTag(features, req.Tag)\n+\t// An empty tag means all flags, as the evaluator and GetFeatureFlags treat it.\n+\t// UserEvaluationsID sorts in place, so hash a copy to leave the cached slice alone.\n+\tvar filteredByTag []*featureproto.Feature\n+\tif req.Tag == \"\" {\n+\t\tfilteredByTag = append([]*featureproto.Feature(nil), features...)\n+\t} else {\n+\t\tfilteredByTag = s.filterByTag(features, req.Tag)\n+\t}\n \n \tif len(features) == 0 {\n \t\tevaluationsCounter.WithLabelValues("
+  },
+  {
+   "filename": "pkg/api/api/api_grpc_test.go",
+   "status": "modified",
+   "additions": 63,
+   "deletions": 0,
+   "patch": "@@ -2583,6 +2583,8 @@ func TestGrpcGetEvaluationsUserEvaluationsID(t *testing.T) {\n \tuserMetadata := map[string]string{\"b\": \"value-b\", \"c\": \"value-c\", \"a\": \"value-a\", \"d\": \"value-d\"}\n \tueidFromAndroidFeatures := evaluation.UserEvaluationsID(userID, nil, androidFeatures)\n \tueidWithDataFromAndroidFeatures := evaluation.UserEvaluationsID(userID, userMetadata, androidFeatures)\n+\tueidFromAllFeatures := evaluation.UserEvaluationsID(userID, nil, append([]*featureproto.Feature(nil), multiFeatures...))\n+\tueidFromNoFeatures := evaluation.UserEvaluationsID(userID, nil, nil)\n \n \tpatterns := []struct {\n \t\tdesc                      string\n@@ -2747,6 +2749,67 @@ func TestGrpcGetEvaluationsUserEvaluationsID(t *testing.T) {\n \t\t\texpectedErr:               nil,\n \t\t\texpectedEvaluationsAssert: assert.NotNil,\n \t\t},\n+\t\t{\n+\t\t\tdesc: \"empty tag hashes all features and detects a change\",\n+\t\t\tsetup: func(gs *grpcGatewayService) {\n+\t\t\t\tgs.environmentAPIKeyCache.(*cachev3mock.MockEnvironmentAPIKeyCache).EXPECT().Get(gomock.Any()).Return(\n+\t\t\t\t\t&accountproto.EnvironmentAPIKey{\n+\t\t\t\t\t\tEnvironment: &environmentproto.EnvironmentV2{Id: \"ns0\"},\n+\t\t\t\t\t\tApiKey: &accountproto.APIKey{\n+\t\t\t\t\t\t\tId:       \"id-0\",\n+\t\t\t\t\t\t\tRole:     accountproto.APIKey_SDK_CLIENT,\n+\t\t\t\t\t\t\tDisabled: false,\n+\t\t\t\t\t\t},\n+\t\t\t\t\t}, nil)\n+\t\t\t\tgs.featuresCache.(*cachev3mock.MockFeaturesCache).EXPECT().Get(gomock.Any()).Return(\n+\t\t\t\t\t&featureproto.Features{\n+\t\t\t\t\t\tFeatures: multiFeatures,\n+\t\t\t\t\t}, nil)\n+\t\t\t},\n+\t\t\tinput: &gwproto.GetEvaluationsRequest{\n+\t\t\t\tUser:              &userproto.User{Id: userID},\n+\t\t\t\tUserEvaluationsId: ueidFromNoFeatures,\n+\t\t\t\t// The tag is optional on the UserEvaluationCondition path.\n+\t\t\t\tUserEvaluationCondition: &gwproto.GetEvaluationsRequest_UserEvaluationCondition{},\n+\t\t\t},\n+\t\t\texpected: &gwproto.GetEvaluationsResponse{\n+\t\t\t\tState:             featureproto.UserEvaluations_FULL,\n+\t\t\t\tUserEvaluationsId: ueidFromAllFeatures,\n+\t\t\t},\n+\t\t\texpectedErr:               nil,\n+\t\t\texpectedEvaluationsAssert: assert.NotNil,\n+\t\t},\n+\t\t{\n+\t\t\tdesc: \"empty tag and the id is the same\",\n+\t\t\tsetup: func(gs *grpcGatewayService) {\n+\t\t\t\tgs.environmentAPIKeyCache.(*cachev3mock.MockEnvironmentAPIKeyCache).EXPECT().Get(gomock.Any()).Return(\n+\t\t\t\t\t&accountproto.EnvironmentAPIKey{\n+\t\t\t\t\t\tEnvironment: &environmentproto.EnvironmentV2{Id: \"ns0\"},\n+\t\t\t\t\t\tApiKey: &accountproto.APIKey{\n+\t\t\t\t\t\t\tId:       \"id-0\",\n+\t\t\t\t\t\t\tRole:     accountproto.APIKey_SDK_CLIENT,\n+\t\t\t\t\t\t\tDisabled: false,\n+\t\t\t\t\t\t},\n+\t\t\t\t\t}, nil)\n+\t\t\t\tgs.featuresCache.(*cachev3mock.MockFeaturesCache).EXPECT().Get(gomock.Any()).Return(\n+\t\t\t\t\t&featureproto.Features{\n+\t\t\t\t\t\tFeatures: multiFeatures,\n+\t\t\t\t\t}, nil)\n+\t\t\t},\n+\t\t\tinput: &gwproto.GetEvaluationsRequest{\n+\t\t\t\tUser:              &userproto.User{Id: userID},\n+\t\t\t\tUserEvaluationsId: ueidFromAllFeatures,\n+\t\t\t\t// The tag is optional on the UserEvaluationCondition path.\n+\t\t\t\tUserEvaluationCondition: &gwproto.GetEvaluationsRequest_UserEvaluationCondition{},\n+\t\t\t},\n+\t\t\texpected: &gwproto.GetEvaluationsResponse{\n+\t\t\t\tState:             featureproto.UserEvaluations_FULL,\n+\t\t\t\tUserEvaluationsId: ueidFromAllFeatures,\n+\t\t\t\tEvaluations:       &featureproto.UserEvaluations{},\n+\t\t\t},\n+\t\t\texpectedErr:               nil,\n+\t\t\texpectedEvaluationsAssert: assert.NotNil,\n+\t\t},\n \t}\n \tfor _, p := range patterns {\n \t\tt.Run(p.desc, func(t *testing.T) {"
+  }
+ ],
+ "test_files": [
+  "pkg/api/api/api_grpc_test.go"
+ ]
+}

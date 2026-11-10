@@ -1,0 +1,33 @@
+{
+ "repo": "kestra-io/plugin-ai",
+ "number": 557,
+ "url": "https://github.com/kestra-io/plugin-ai/pull/557",
+ "title": "fix(bedrock): reject thinkingBudgetTokens >= maxToken before calling Converse",
+ "merged_at": "2026-11-10T06:41:54Z",
+ "files": [
+  {
+   "filename": "src/main/java/io/kestra/plugin/ai/domain/ChatConfiguration.java",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -87,7 +87,7 @@ public class ChatConfiguration {\n \n     @Schema(\n         title = \"Thinking Token Budget\",\n-        description = \"Maximum number of tokens the model may spend on internal reasoning before producing its final answer. Not set by default. For Google Gemini, when neither this property nor `thinkingEnabled` is set, Gemini 2.x models get a budget of `0` (thinking disabled), while Gemini 3 and later are sent no budget and apply their own; set this property to cap it on those models.\",\n+        description = \"Maximum number of tokens the model may spend on internal reasoning before producing its final answer. Not set by default. For Google Gemini, when neither this property nor `thinkingEnabled` is set, Gemini 2.x models get a budget of `0` (thinking disabled), while Gemini 3 and later are sent no budget and apply their own; set this property to cap it on those models. On Anthropic and Amazon Bedrock, `maxToken` must be greater than this value, otherwise the task fails.\",\n         example = \"1024\"\n     )\n     @PluginProperty(group = \"advanced\")"
+  },
+  {
+   "filename": "src/main/java/io/kestra/plugin/ai/provider/AmazonBedrock.java",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 1,
+   "patch": "@@ -126,6 +126,14 @@ public ChatModel chatModel(RunContext runContext, ChatConfiguration configuratio\n         var awsAccessKeyId = runContext.render(this.accessKeyId).as(String.class).orElseThrow(() -> new IllegalVariableEvaluationException(\"AWS Access Key ID cannot be null\"));\n         var awsSecretAccessKey = runContext.render(this.secretAccessKey).as(String.class).orElseThrow(() -> new IllegalVariableEvaluationException(\"AWS Secret Access Key cannot be null\"));\n         var thinkingBudgetTokens = runContext.render(configuration.getThinkingBudgetTokens()).as(Integer.class).orElse(null);\n+        var maxToken = runContext.render(configuration.getMaxToken()).as(Integer.class).orElse(null);\n+        if (thinkingBudgetTokens != null && maxToken != null && thinkingBudgetTokens >= maxToken) {\n+            throw new IllegalArgumentException(\n+                \"`maxToken` must be greater than `thinkingBudgetTokens` when extended thinking is enabled on Amazon Bedrock. \"\n+                    + \"Thinking budget is \" + thinkingBudgetTokens + \" but max tokens is \" + maxToken\n+                    + \". Set `configuration.maxToken` above `configuration.thinkingBudgetTokens`.\"\n+            );\n+        }\n \n         var credentials = AwsBasicCredentials.create(awsAccessKeyId, awsSecretAccessKey);\n         var credentialsProvider = StaticCredentialsProvider.create(credentials);\n@@ -144,7 +152,7 @@ public ChatModel chatModel(RunContext runContext, ChatConfiguration configuratio\n                     .temperature(runContext.render(configuration.getTemperature()).as(Double.class).orElse(null))\n                     .responseFormat(configuration.computeResponseFormat(runContext))\n                     .enableReasoning(thinkingBudgetTokens)\n-                    .maxOutputTokens(runContext.render(configuration.getMaxToken()).as(Integer.class).orElse(null))\n+                    .maxOutputTokens(maxToken)\n                     .build()\n             )\n             .logRequests(runContext.render(configuration.getLogRequests()).as(Boolean.class).orElse(false))"
+  },
+  {
+   "filename": "src/test/java/io/kestra/plugin/ai/provider/AmazonBedrockTest.java",
+   "status": "added",
+   "additions": 65,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,65 @@\n+package io.kestra.plugin.ai.provider;\n+\n+import java.util.Map;\n+\n+import org.junit.jupiter.api.Test;\n+import org.junit.jupiter.api.parallel.ResourceLock;\n+\n+import io.kestra.core.context.TestRunContextFactory;\n+import io.kestra.core.junit.annotations.KestraTest;\n+import io.kestra.core.models.property.Property;\n+import io.kestra.plugin.ai.domain.ChatConfiguration;\n+\n+import jakarta.inject.Inject;\n+\n+import static org.assertj.core.api.Assertions.assertThat;\n+import static org.assertj.core.api.Assertions.assertThatThrownBy;\n+\n+@ResourceLock(\"kestra-h2-flyway\")\n+@KestraTest\n+class AmazonBedrockTest {\n+    @Inject\n+    private TestRunContextFactory runContextFactory;\n+\n+    private AmazonBedrock provider() {\n+        return AmazonBedrock.builder()\n+            .type(AmazonBedrock.class.getName())\n+            .accessKeyId(Property.ofValue(\"test-key\"))\n+            .secretAccessKey(Property.ofValue(\"test-secret\"))\n+            .modelName(Property.ofValue(\"us.anthropic.claude-3-7-sonnet-20250219-v1:0\"))\n+            .build();\n+    }\n+\n+    @Test\n+    void chatModel_shouldRejectThinkingBudgetEqualToMaxToken() {\n+        var configuration = ChatConfiguration.builder()\n+            .thinkingBudgetTokens(Property.ofValue(2048))\n+            .maxToken(Property.ofValue(2048))\n+            .build();\n+\n+        assertThatThrownBy(() -> provider().chatModel(runContextFactory.of(Map.of()), configuration))\n+            .isInstanceOf(IllegalArgumentException.class)\n+            .hasMessageContaining(\"`maxToken` must be greater than `thinkingBudgetTokens`\");\n+    }\n+\n+    @Test\n+    void chatModel_shouldAcceptThinkingBudgetBelowMaxToken() throws Exception {\n+        var configuration = ChatConfiguration.builder()\n+            .thinkingBudgetTokens(Property.ofValue(1024))\n+            .maxToken(Property.ofValue(2048))\n+            .build();\n+\n+        // the AWS client resolves a region at build time; no network call is made\n+        var previousRegion = System.getProperty(\"aws.region\");\n+        System.setProperty(\"aws.region\", \"us-east-1\");\n+        try {\n+            assertThat(provider().chatModel(runContextFactory.of(Map.of()), configuration)).isNotNull();\n+        } finally {\n+            if (previousRegion == null) {\n+                System.clearProperty(\"aws.region\");\n+            } else {\n+                System.setProperty(\"aws.region\", previousRegion);\n+            }\n+        }\n+    }\n+}"
+  }
+ ],
+ "test_files": [
+  "src/test/java/io/kestra/plugin/ai/provider/AmazonBedrockTest.java"
+ ]
+}

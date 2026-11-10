@@ -1,0 +1,33 @@
+{
+ "repo": "posit-dev/chatlas",
+ "number": 483,
+ "url": "https://github.com/posit-dev/chatlas/pull/483",
+ "title": "fix(streaming): keep the text of a chunk that has an empty reasoning field",
+ "merged_at": "2026-11-10T00:38:28Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0\n * `ChatGoogle()` and `ChatVertex()` now count the tokens of content fetched by built-in tools (URL context, search, ...) as input tokens in `Turn.tokens` and the cost estimate. Gemini reports them as `tool_use_prompt_token_count`, separately from `prompt_token_count`, and they were left out.\n * A tool that returns a `ContentToolResult` whose value is a `Content` object other than an image/PDF/document (e.g. `ContentToolResult(value=ContentText(...), model_format=\"as_is\")`, as MCP client adapters produce) no longer poisons the conversation: the next API request failed with a 400 (e.g. Anthropic's \"`tool_result` content must either be a string or a list of content blocks\") because the raw `Content` object was serialized into the request. Turn preparation now unwraps any such value to a plain value -- `ContentText` becomes its text, `ContentJson` its underlying data, and a list of non-file content joins into a single string -- so no provider ever sees a raw `Content` object in a tool-result value. (#494)\n * `.register_tool()` now keeps the description, parameters and `strict` setting of a `Tool` built with explicit `parameters=`, as `.set_tools()` does, instead of rebuilding them from the signature and docstring of `tool.func`. A `name=` override renames the tool without rebuilding it; passing `model=` still rebuilds the schema from that model. (#496)\n+* Streaming from `ChatOpenAICompletions()` (and the providers built on it, such as `ChatOpenRouter()` and `ChatGroq()`) no longer drops a chunk's text when the same chunk carries an empty `reasoning` or `reasoning_content` field, as some OpenAI-compatible servers send.\n * `ChatOllama()` can now be created without a `model`, so `ChatOllama().list_models()` works. Sending a message without a model still raises an error that lists the available models. (#166)\n * `ChatGoogle()` now reports `finish_reason == \"content_filter\"` for Gemini's `IMAGE_SAFETY`, `IMAGE_PROHIBITED_CONTENT`, `IMAGE_RECITATION` and `LANGUAGE` finish reasons, instead of passing the raw Gemini string through, and reports `\"tool_use\"` (rather than `\"success\"`) when a turn ends with a tool request, as `ChatOpenAI()` does. (#473)\n * The error raised for a tool request with invalid JSON arguments from `ChatOpenAI()` and `ChatOpenAICompletions()` (and the providers built on them) now shows the offending arguments, instead of the literal text `{args}`."
+  },
+  {
+   "filename": "chatlas/_provider_openai_completions.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -320,7 +320,7 @@ def stream_content(self, chunk, completion, turns=()) -> list[Content]:\n         reasoning = getattr(delta, \"reasoning\", None) or getattr(\n             delta, \"reasoning_content\", None\n         )\n-        if reasoning is not None:\n+        if reasoning:\n             return [ContentThinkingDelta(thinking=reasoning)]\n \n         text = delta.content"
+  },
+  {
+   "filename": "tests/test_provider_openai_completions.py",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -206,6 +206,33 @@ def __init__(self, choices):\n     assert result == [ContentText(text=\"hello\")]\n \n \n+def test_stream_content_empty_reasoning_keeps_text():\n+    \"\"\"Some backends send `reasoning_content: \"\"` alongside the text of a chunk.\"\"\"\n+    from openai.types.chat import ChatCompletionChunk\n+\n+    provider = OpenAICompletionsProvider(model=\"test\")\n+\n+    def chunk(**delta):\n+        return ChatCompletionChunk.model_validate(\n+            {\n+                \"id\": \"1\",\n+                \"object\": \"chat.completion.chunk\",\n+                \"created\": 0,\n+                \"model\": \"test\",\n+                \"choices\": [{\"index\": 0, \"delta\": delta, \"finish_reason\": None}],\n+            }\n+        )\n+\n+    result = provider.stream_content(chunk(content=\"Hello\", reasoning_content=\"\"), None)\n+    assert result == [ContentText(text=\"Hello\")]\n+\n+    result = provider.stream_content(chunk(content=\"Hello\", reasoning=\"\"), None)\n+    assert result == [ContentText(text=\"Hello\")]\n+\n+    # A chunk with neither reasoning nor text adds nothing.\n+    assert provider.stream_content(chunk(reasoning_content=\"\"), None) == []\n+\n+\n def test_response_as_turn_extracts_reasoning_content():\n     from unittest.mock import Mock\n "
+  }
+ ],
+ "test_files": [
+  "tests/test_provider_openai_completions.py"
+ ]
+}

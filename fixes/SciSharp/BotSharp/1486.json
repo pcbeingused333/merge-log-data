@@ -1,0 +1,48 @@
+{
+ "repo": "SciSharp/BotSharp",
+ "number": 1486,
+ "url": "https://github.com/SciSharp/BotSharp/pull/1486",
+ "title": "fix(google-ai): count Gemini thinking tokens as output tokens",
+ "merged_at": "2026-11-10T01:16:41Z",
+ "files": [
+  {
+   "filename": "src/Plugins/BotSharp.Plugin.GoogleAI/Providers/Chat/ChatCompletionProvider.cs",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -127,7 +127,7 @@ public async Task<RoleDialogModel> GetChatCompletions(Agent agent, List<RoleDial\n                 Provider = Provider,\n                 Model = _model,\n                 TextInputTokens = response?.UsageMetadata?.PromptTokenCount ?? 0,\n-                TextOutputTokens = response?.UsageMetadata?.CandidatesTokenCount ?? 0\n+                TextOutputTokens = ProviderHelper.GetOutputTokens(response?.UsageMetadata)\n             });\n         }\n \n@@ -184,7 +184,7 @@ public async Task<bool> GetChatCompletionsAsync(Agent agent, List<RoleDialogMode\n                 Provider = Provider,\n                 Model = _model,\n                 TextInputTokens = response?.UsageMetadata?.PromptTokenCount ?? 0,\n-                TextOutputTokens = response?.UsageMetadata?.CandidatesTokenCount ?? 0\n+                TextOutputTokens = ProviderHelper.GetOutputTokens(response?.UsageMetadata)\n             });\n         }\n \n@@ -447,7 +447,7 @@ public async Task<RoleDialogModel> GetChatCompletionsStreamingAsync(Agent agent,\n                 Provider = Provider,\n                 Model = _model,\n                 TextInputTokens = tokenUsage?.PromptTokenCount ?? 0,\n-                TextOutputTokens = tokenUsage?.CandidatesTokenCount ?? 0\n+                TextOutputTokens = ProviderHelper.GetOutputTokens(tokenUsage)\n             });\n         }\n "
+  },
+  {
+   "filename": "src/Plugins/BotSharp.Plugin.GoogleAI/Providers/ProviderHelper.cs",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -17,4 +17,13 @@ public static GenerativeAI.GoogleAi GetGeminiClient(string provider, string mode\n             return new GenerativeAI.GoogleAi(aiSettings.Gemini.ApiKey);\n         }\n     }\n+\n+    /// <summary>\n+    /// Gemini bills thinking tokens as output but reports them separately from\n+    /// the candidates, so both have to be counted.\n+    /// </summary>\n+    public static long GetOutputTokens(GenerativeAI.Types.UsageMetadata? usage)\n+    {\n+        return (usage?.CandidatesTokenCount ?? 0) + (usage?.ThoughtsTokenCount ?? 0);\n+    }\n }"
+  },
+  {
+   "filename": "src/Plugins/BotSharp.Plugin.GoogleAI/Providers/Text/TextCompletionProvider.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -63,7 +63,7 @@ public async Task<string> GetCompletion(string text, string agentId, string mess\n                 Provider = Provider,\n                 Model = _model,\n                 TextInputTokens = response?.UsageMetadata?.PromptTokenCount ?? 0,\n-                TextOutputTokens = response?.UsageMetadata?.CandidatesTokenCount ?? 0\n+                TextOutputTokens = ProviderHelper.GetOutputTokens(response?.UsageMetadata)\n             });\n         }\n "
+  },
+  {
+   "filename": "tests/BotSharp.Core.UnitTests/BotSharp.Core.UnitTests.csproj",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -47,6 +47,8 @@\n     <ProjectReference Include=\"..\\..\\src\\Plugins\\BotSharp.Plugin.OpenAI\\BotSharp.Plugin.OpenAI.csproj\" />\n     <!-- For ReadPdfFnDefaultModelTests: the PDF reading fallback model lives here. -->\n     <ProjectReference Include=\"..\\..\\src\\Plugins\\BotSharp.Plugin.FileHandler\\BotSharp.Plugin.FileHandler.csproj\" />\n+    <!-- For GoogleAiUsageTests: Gemini thinking tokens must be counted as output tokens. -->\n+    <ProjectReference Include=\"..\\..\\src\\Plugins\\BotSharp.Plugin.GoogleAI\\BotSharp.Plugin.GoogleAI.csproj\" />\n   </ItemGroup>\n \n </Project>"
+  },
+  {
+   "filename": "tests/BotSharp.Core.UnitTests/Plugins/GoogleAiUsageTests.cs",
+   "status": "added",
+   "additions": 23,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,23 @@\n+using BotSharp.Plugin.GoogleAi.Providers;\n+using GenerativeAI.Types;\n+using Xunit;\n+\n+namespace BotSharp.Core.UnitTests.Plugins;\n+\n+public class GoogleAiUsageTests\n+{\n+    [Fact]\n+    public void Output_tokens_include_thinking_tokens()\n+    {\n+        var usage = new UsageMetadata { CandidatesTokenCount = 20, ThoughtsTokenCount = 100 };\n+\n+        Assert.Equal(120, ProviderHelper.GetOutputTokens(usage));\n+    }\n+\n+    [Fact]\n+    public void Output_tokens_without_thinking_are_the_candidates_count()\n+    {\n+        Assert.Equal(20, ProviderHelper.GetOutputTokens(new UsageMetadata { CandidatesTokenCount = 20 }));\n+        Assert.Equal(0, ProviderHelper.GetOutputTokens(null));\n+    }\n+}"
+  }
+ ],
+ "test_files": [
+  "tests/BotSharp.Core.UnitTests/BotSharp.Core.UnitTests.csproj",
+  "tests/BotSharp.Core.UnitTests/Plugins/GoogleAiUsageTests.cs"
+ ]
+}

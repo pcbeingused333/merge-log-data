@@ -1,0 +1,41 @@
+{
+ "repo": "SciSharp/BotSharp",
+ "number": 1488,
+ "url": "https://github.com/SciSharp/BotSharp/pull/1488",
+ "title": "fix(anthropic): show the max-output notice when a streamed reply hits max_tokens",
+ "merged_at": "2026-11-10T01:15:46Z",
+ "files": [
+  {
+   "filename": "src/Plugins/BotSharp.Plugin.AnthropicAI/Providers/ChatCompletionProvider.cs",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 13,
+   "patch": "@@ -74,7 +74,7 @@ public async Task<RoleDialogModel> GetChatCompletions(Agent agent, List<RoleDial\n         {\n             _logger.LogWarning($\"Action: {nameof(GetChatCompletions)}, Reason: {response.StopReason}, Agent: {agent.Name}, MaxOutputTokens: {parameters.MaxTokens}, Content:{text}\");\n \n-            responseMessage = new RoleDialogModel(AgentRole.Assistant, $\"AI response exceeded max output length\")\n+            responseMessage = new RoleDialogModel(AgentRole.Assistant, ProviderHelper.MaxTokensMessage)\n             {\n                 CurrentAgentId = agent.Id,\n                 MessageId = conversations.LastOrDefault()?.MessageId ?? string.Empty,\n@@ -157,7 +157,7 @@ public async Task<bool> GetChatCompletionsAsync(Agent agent, List<RoleDialogMode\n         {            \n             _logger.LogWarning($\"Action: {nameof(GetChatCompletionsAsync)}, Reason: {response.StopReason}, Agent: {agent.Name}, MaxOutputTokens: {parameters.MaxTokens}, Content:{text}\");\n \n-            responseMessage = new RoleDialogModel(AgentRole.Assistant, $\"AI response exceeded max output length\")\n+            responseMessage = new RoleDialogModel(AgentRole.Assistant, ProviderHelper.MaxTokensMessage)\n             {\n                 CurrentAgentId = agent.Id,\n                 MessageId = conversations.LastOrDefault()?.MessageId ?? string.Empty,\n@@ -274,9 +274,9 @@ public async Task<RoleDialogModel> GetChatCompletionsStreamingAsync(Agent agent,\n                         }\n #endif\n                     }\n-                    else if (delta.StopReason == StopReason.EndTurn)\n+                    else if (!string.IsNullOrEmpty(delta.StopReason))\n                     {\n-                        var allText = textStream.GetText();\n+                        var allText = ProviderHelper.ResolveStreamedContent(delta.StopReason, textStream.GetText());\n                         responseMessage = new RoleDialogModel(AgentRole.Assistant, allText)\n                         {\n                             CurrentAgentId = agent.Id,\n@@ -288,15 +288,6 @@ public async Task<RoleDialogModel> GetChatCompletionsStreamingAsync(Agent agent,\n                         _logger.LogDebug($\"Stream text Content: {allText}\");\n #endif\n                     }\n-                    else if (!string.IsNullOrEmpty(delta.StopReason))\n-                    {\n-                        responseMessage = new RoleDialogModel(AgentRole.Assistant, delta.StopReason)\n-                        {\n-                            CurrentAgentId = agent.Id,\n-                            MessageId = messageId,\n-                            IsStreaming = true\n-                        };\n-                    }\n                     else\n                     {\n                         var deltaText = delta.Text ?? string.Empty;"
+  },
+  {
+   "filename": "src/Plugins/BotSharp.Plugin.AnthropicAI/Providers/ProviderHelper.cs",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -13,4 +13,20 @@ public static AnthropicClient GetAnthropicClient(string provider, string model,\n         }\n         return client;\n     }\n+\n+    public const string MaxTokensMessage = \"AI response exceeded max output length\";\n+\n+    /// <summary>\n+    /// Content of the final streamed message. end_turn keeps the collected text; max_tokens uses the same\n+    /// notice as the non-streaming path instead of the raw stop reason; other stop reasons are unchanged.\n+    /// </summary>\n+    public static string ResolveStreamedContent(string? stopReason, string collectedText)\n+    {\n+        return stopReason switch\n+        {\n+            StopReason.EndTurn => collectedText,\n+            StopReason.MaxTokens => MaxTokensMessage,\n+            _ => stopReason ?? string.Empty\n+        };\n+    }\n }"
+  },
+  {
+   "filename": "tests/BotSharp.Core.UnitTests/BotSharp.Core.UnitTests.csproj",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -45,6 +45,8 @@\n     <ProjectReference Include=\"..\\..\\src\\Infrastructure\\BotSharp.OpenAPI\\BotSharp.OpenAPI.csproj\" />\n     <!-- For StreamingToolCallReconstructionTests: the streamed tool-call reconstruction lives here. -->\n     <ProjectReference Include=\"..\\..\\src\\Plugins\\BotSharp.Plugin.OpenAI\\BotSharp.Plugin.OpenAI.csproj\" />\n+    <!-- For AnthropicStreamedContentTests: the streamed final-message content lives here. -->\n+    <ProjectReference Include=\"..\\..\\src\\Plugins\\BotSharp.Plugin.AnthropicAI\\BotSharp.Plugin.AnthropicAI.csproj\" />\n     <!-- For ReadPdfFnDefaultModelTests: the PDF reading fallback model lives here. -->\n     <ProjectReference Include=\"..\\..\\src\\Plugins\\BotSharp.Plugin.FileHandler\\BotSharp.Plugin.FileHandler.csproj\" />\n   </ItemGroup>"
+  },
+  {
+   "filename": "tests/BotSharp.Core.UnitTests/Plugins/AnthropicStreamedContentTests.cs",
+   "status": "added",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,30 @@\n+using BotSharp.Plugin.AnthropicAI.Providers;\n+using Xunit;\n+\n+namespace BotSharp.Core.UnitTests.Plugins;\n+\n+public class AnthropicStreamedContentTests\n+{\n+    [Theory]\n+    [InlineData(\"partial answer\")]\n+    [InlineData(\"\")]\n+    public void ResolveStreamedContent_EndTurn_ReturnsCollectedText(string text)\n+    {\n+        Assert.Equal(text, ProviderHelper.ResolveStreamedContent(\"end_turn\", text));\n+    }\n+\n+    // Streaming used to surface the raw \"max_tokens\" string; the non-streaming path shows a notice.\n+    [Theory]\n+    [InlineData(\"partial answer\")]\n+    [InlineData(\"\")]\n+    public void ResolveStreamedContent_MaxTokens_ReturnsSameNoticeAsNonStreaming(string text)\n+    {\n+        Assert.Equal(\"AI response exceeded max output length\", ProviderHelper.ResolveStreamedContent(\"max_tokens\", text));\n+    }\n+\n+    [Fact]\n+    public void ResolveStreamedContent_OtherStopReason_IsUnchanged()\n+    {\n+        Assert.Equal(\"refusal\", ProviderHelper.ResolveStreamedContent(\"refusal\", \"x\"));\n+    }\n+}"
+  }
+ ],
+ "test_files": [
+  "tests/BotSharp.Core.UnitTests/BotSharp.Core.UnitTests.csproj",
+  "tests/BotSharp.Core.UnitTests/Plugins/AnthropicStreamedContentTests.cs"
+ ]
+}

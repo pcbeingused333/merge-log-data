@@ -9,6 +9,12 @@
    "state": "CHANGES_REQUESTED",
    "submitted_at": "2026-11-09T07:06:06Z",
    "body": "Reproduced #2627 on main with a backend stress test on Linux: 23/1510 GETs had an ETag that wasn't MD5(body), and every If-Match hit in that window returned the wrong body. With this PR the xattr GET case drops to 0. Thanks! Before merge:\n1. CI: `TestGetObjectRemovedBeforeOpen` fails (inline).\n2. HeadObject has the same split (stat, then ETag by path): 309/4500 HEADs returned a ContentLength from a different version than the ETag. HEAD followed by ranged GETs with If-Match is a common client pattern. Please fix it here or open a follow-up.\n3. Sidecar is unchanged (~13% of GETs mismatched under the same load). `Fixes #2627` will close the issue, so please open a follow-up for sidecar/HEAD, or note in the issue that this fix is xattr-only."
+  },
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-10T06:41:25Z",
+   "body": ""
   }
  ],
  "review_comments": [
@@ -89,6 +95,24 @@
    "path": "backend/posix/get_object_etag_test.go",
    "created_at": "2026-11-09T07:05:27Z",
    "body": "Please also add an integration test. The unit test above only checks that the ETag is read through `f`; a race test checks the S3 behavior end to end and catches any later change that moves a read back to the path. `HeadObject_GetObject_race_with_delete` in `tests/integration/posix.go` is a good model.\n\nSuggested shape: 4 writers PUT unique bodies to one key while 4 readers GET it (every other GET with `If-Match` of the previous ETag). Record ETag → MD5(body) from the PUT responses. After the run, check that each GET's body is the one put with its ETag, and that each If-Match 200 returned that ETag's body. Don't assume ETag == MD5, so it also works with `--data-integrity-etag`.\n\nI ran a draft of this against a real gateway: it failed 10/10 runs on main and passed 8/8 on this branch. A correct gateway can't fail it, so it isn't flaky.\n\nCatch: `runtests.sh --sidecar` runs the `posix` group against a sidecar gateway without a sidecar flag, and sidecar still fails this test (~30% of reads). Either add a `--sidecar` flag to the `posix` test subcommand and skip the test with it, or fix sidecar here too. If you fix the VersionId read (comment above), a versioned variant that also checks `VersionId` would cover that."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-10T06:39:03Z",
+   "body": "Small gap in the new reopen path: it doesn't re-check for a delete marker. If `versionId` names the live delete marker and a PUT moves it to the versioning dir between the version-id lookup and the `isObjDeleteMarker` check, that check sees the new object and this reopens the marker's file. The GET then returns 200 with the body and ETag of the version the marker hides (markers are made in place and keep its data), instead of 405 MethodNotAllowed with `x-amz-delete-marker: true`. Reproduced deterministically with `beforeReadMeta` on `deleteMarkerKey`. main is also wrong here (it returns the new object's body), so not a regression, but a perfect spot to fix it. Read `deleteMarkerKey` from the reopened `f` and return the same delete-marker response as the check above."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/get_object_etag_test.go",
+   "created_at": "2026-11-10T06:40:36Z",
+   "body": "Nit: the 304 path now also reads Cache-Control/Expires/metadata and the lock settings from `f`, but nothing covers it: switching that `loadObjectMetaProperties` call back to `nil` keeps every test green. A stale path value for one of those attributes, checked in this subtest, would cover it."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/get_object_attributes_test.go",
+   "created_at": "2026-11-10T06:41:06Z",
+   "body": "Nit: this doc comment still describes the old trigger (the live version-id lookup), and the new `directory object removed` case is never opened. Worth a refresh."
   }
  ],
  "comments": [
@@ -101,6 +125,11 @@
    "role": "author",
    "created_at": "2026-11-09T15:32:38Z",
    "body": "Thanks for the detailed review. The new commits on top address it:\n\n- **CI / `TestGetObjectRemovedBeforeOpen`**: tags are looked up with the requested version id again, so a versioned GET with no `versionId` that races a delete answers `NoSuchKey`. `go test ./backend/posix` passes at this HEAD.\n- **`x-amz-version-id`**: `liveObjVersionId` now takes `f`, for the 200 and the 304. `TestGetObjectLiveVersionIdFromOpenedFile` replaces the object after the open; reading the id by path turns it red.\n- **`?versionId=` naming the live version**: the id on the opened inode is checked, and the version is reopened from the versioning dir if a PUT moved it.\n- **Removed object test**: `TestGetObjectRemovedBeforeOpen` reaches the open branch again. It also covers a removed directory object.\n- **ETag read errors**: only a missing attribute falls back to the default ETag; anything else fails the GET.\n- **304**: the parts count now comes from `f`. The fake store diverges for `mpMetaKey` too, with a `partNumber` GET and a 304 case.\n- **Nits**: the `f.Stat()` mappings are gone, the open uses the requested version id, `closeFile` became a `bodyOwned` flag, the comment is two lines, and the subtest names have no `'`. That flag also fixes the fd leaks on main's error returns after the open.\n- **Integration test**: `GetObject_etag_race_with_put` follows your shape: 4 writers and 4 readers on one key, with ETag -> body recorded from the PUT responses and no ETag == MD5 assumption. With main's `posix.go` it failed 2/2. On this branch the `posix` suite passed 3/3 plain, 3/3 with `-vs` and 2/2 with `--data-integrity-etag`.\n- **Sidecar**: added `--sidecar-test-mode` to the `posix` test subcommand, and `runtests.sh` passes it on the four `posix` runs, so the test is skipped there (2/2 on a `--sidecar` gateway). `runtests.ps1` already gets it through `--windows-test-mode`.\n- **Scope**: this fixes the xattr GET only. HEAD and sidecar are not changed here, and #2627 now has a note saying so, with the numbers you measured. I can take HEAD next if you want it.\n\nThe versioned variant of the race test that also checks `VersionId` is not included; the unit test above covers that read.\n\n(Reply drafted with the help of an AI coding assistant.)\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-10T07:16:52Z",
+   "body": "\nThe reopened version now checks deleteMarkerKey through f and returns the existing delete-marker response. TestGetObjectDeleteMarkerMovedAfterLookup reproduces the reported interleaving and fails before the fix. The 304 subtest now checks Cache-Control with a stale path value; changing its loadObjectMetaProperties call back to nil fails that assertion. The removal-test comment now describes the delete-marker read trigger and the directory-object case. The full posix unit suite passes.\n\nThis comment was drafted with Claude Code.\n\n"
   }
  ]
 }

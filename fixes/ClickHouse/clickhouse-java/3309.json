@@ -1,0 +1,33 @@
+{
+ "repo": "ClickHouse/clickhouse-java",
+ "number": 3309,
+ "url": "https://github.com/ClickHouse/clickhouse-java/pull/3309",
+ "title": "fix(client-v2): record connection times only when metrics are enabled",
+ "merged_at": "2026-11-10T06:30:15Z",
+ "files": [
+  {
+   "filename": "client-v2/src/main/java/com/clickhouse/client/api/internal/HttpAPIClientHelper.java",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -297,6 +297,7 @@ private HttpClientConnectionManager poolConnectionManager(LayeredConnectionSocke\n         PoolingHttpClientConnectionManager phccm = connMgrBuilder.build();\r\n         poolControl = phccm;\r\n         if (metricsRegistry != null) {\r\n+            connectionFactory.enableMetrics();\r\n             try {\r\n                 String mGroupName = ClientConfigProperties.METRICS_GROUP_NAME.getOrDefault(configuration);\r\n                 Class<?> micrometerLoader = getClass().getClassLoader().loadClass(\"com.clickhouse.client.api.metrics.MicrometerLoader\");\r\n@@ -307,6 +308,8 @@ private HttpClientConnectionManager poolConnectionManager(LayeredConnectionSocke\n                 applyMethod.invoke(micrometerLoader, metricsRegistry, mGroupName, connectionFactory);\r\n             } catch (Exception e) {\r\n                 LOG.error(\"Failed to register metrics\", e);\r\n+                // No gauge will drain the recorded times, so stop recording them.\r\n+                connectionFactory.disableMetrics();\r\n             }\r\n         }\r\n         return phccm;\r\n@@ -1380,9 +1383,24 @@ public MeteredManagedHttpClientConnectionFactory(Http1Config http1Config, CharCo\n \r\n         ConcurrentLinkedQueue<Long> times = new ConcurrentLinkedQueue<>();\r\n \r\n+        // Connection times are drained only by the metrics gauge (see getTime()), so they are recorded\r\n+        // only when a metrics registry is attached. Otherwise the queue would grow with every new connection.\r\n+        private volatile boolean metricsEnabled = false;\r\n+\r\n+        public void enableMetrics() {\r\n+            this.metricsEnabled = true;\r\n+        }\r\n+\r\n+        public void disableMetrics() {\r\n+            this.metricsEnabled = false;\r\n+            this.times.clear();\r\n+        }\r\n \r\n         @Override\r\n         public ManagedHttpClientConnection createConnection(Socket socket) throws IOException {\r\n+            if (!metricsEnabled) {\r\n+                return super.createConnection(socket);\r\n+            }\r\n             long startT = System.currentTimeMillis();\r\n             try {\r\n                 return super.createConnection(socket);\r"
+  },
+  {
+   "filename": "client-v2/src/test/java/com/clickhouse/client/api/internal/MeteredConnectionFactoryTest.java",
+   "status": "added",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,49 @@\n+package com.clickhouse.client.api.internal;\n+\n+import org.apache.hc.core5.http.config.CharCodingConfig;\n+import org.apache.hc.core5.http.config.Http1Config;\n+import org.apache.hc.core5.http.impl.io.DefaultHttpResponseParserFactory;\n+import org.testng.Assert;\n+import org.testng.annotations.Test;\n+\n+import java.net.Socket;\n+\n+public class MeteredConnectionFactoryTest {\n+\n+    private static HttpAPIClientHelper.MeteredManagedHttpClientConnectionFactory newFactory() {\n+        return new HttpAPIClientHelper.MeteredManagedHttpClientConnectionFactory(\n+                Http1Config.DEFAULT, CharCodingConfig.DEFAULT, DefaultHttpResponseParserFactory.INSTANCE);\n+    }\n+\n+    @Test(groups = {\"unit\"})\n+    public void testConnectionTimesNotRecordedWithoutMetrics() throws Exception {\n+        HttpAPIClientHelper.MeteredManagedHttpClientConnectionFactory factory = newFactory();\n+        for (int i = 0; i < 10; i++) {\n+            factory.createConnection(new Socket());\n+        }\n+        Assert.assertEquals(factory.times.size(), 0, \"Connection times must not accumulate when metrics are disabled\");\n+    }\n+\n+    @Test(groups = {\"unit\"})\n+    public void testConnectionTimesRecordedAndDrainedWithMetrics() throws Exception {\n+        HttpAPIClientHelper.MeteredManagedHttpClientConnectionFactory factory = newFactory();\n+        factory.enableMetrics();\n+        for (int i = 0; i < 10; i++) {\n+            factory.createConnection(new Socket());\n+        }\n+        Assert.assertEquals(factory.times.size(), 10);\n+        factory.getTime();\n+        Assert.assertEquals(factory.times.size(), 0);\n+    }\n+\n+    @Test(groups = {\"unit\"})\n+    public void testConnectionTimesNotRecordedAfterMetricsDisabled() throws Exception {\n+        HttpAPIClientHelper.MeteredManagedHttpClientConnectionFactory factory = newFactory();\n+        factory.enableMetrics();\n+        factory.createConnection(new Socket());\n+        factory.disableMetrics();\n+        Assert.assertEquals(factory.times.size(), 0);\n+        factory.createConnection(new Socket());\n+        Assert.assertEquals(factory.times.size(), 0, \"Connection times must not accumulate once metrics are disabled\");\n+    }\n+}"
+  },
+  {
+   "filename": "history/latest/3253.md",
+   "status": "added",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,4 @@\n+- **[client-v2]** Fixed a memory leak where every new pooled HTTP connection added one entry to an internal queue of\n+  connection times that was only drained by the metrics gauge. Without a metrics registry the queue was never emptied\n+  and grew for the lifetime of the client. Connection times are now recorded only when metrics are enabled. `jdbc-v2`\n+  is affected as well because it uses `client-v2`. (https://github.com/ClickHouse/clickhouse-java/issues/3253)"
+  }
+ ],
+ "test_files": [
+  "client-v2/src/test/java/com/clickhouse/client/api/internal/MeteredConnectionFactoryTest.java"
+ ]
+}
