@@ -1,0 +1,26 @@
+{
+ "repo": "NVIDIA/cudf",
+ "number": 25097,
+ "url": "https://github.com/NVIDIA/cudf/pull/25097",
+ "title": "fix(cudf-polars): skip NaN in max_horizontal and min_horizontal",
+ "merged_at": "2026-11-10T23:51:10Z",
+ "files": [
+  {
+   "filename": "python/cudf_polars/cudf_polars/dsl/expressions/unary.py",
+   "status": "modified",
+   "additions": 40,
+   "deletions": 0,
+   "patch": "@@ -1887,11 +1887,51 @@ def do_evaluate(\n         elif self.name in UnaryFunction._horizontal_fold_ops:\n             op = UnaryFunction._horizontal_fold_ops[self.name]\n             columns = self._horizontal_broadcast_columns(df, context=context)\n+            originals = columns\n+            is_float = plc.traits.is_floating_point(self.dtype.plc_type)\n+            bool8 = plc.DataType(plc.TypeId.BOOL8)\n+            if is_float:\n+                # Polars skips NaN like a null in max/min_horizontal, while the\n+                # binary NULL_MAX/NULL_MIN follow IEEE ordering.\n+                null_scalar = plc.Scalar.from_py(\n+                    None, self.dtype.plc_type, stream=df.stream\n+                )\n+                false = plc.Scalar.from_py(False, bool8, stream=df.stream)  # noqa: FBT003\n+                columns = [\n+                    plc.copying.copy_if_else(\n+                        null_scalar,\n+                        col,\n+                        plc.replace.replace_nulls(\n+                            plc.unary.is_nan(col, stream=df.stream),\n+                            false,\n+                            stream=df.stream,\n+                        ),\n+                        stream=df.stream,\n+                    )\n+                    for col in columns\n+                ]\n             result = columns[0]\n             for other in columns[1:]:\n                 result = plc.binaryop.binary_operation(\n                     result, other, op, self.dtype.plc_type, stream=df.stream\n                 )\n+            if is_float:\n+                # A row with no non-NaN value but at least one NaN is NaN.\n+                for col in originals:\n+                    use_nan = plc.binaryop.binary_operation(\n+                        plc.replace.replace_nulls(\n+                            plc.unary.is_nan(col, stream=df.stream),\n+                            false,\n+                            stream=df.stream,\n+                        ),\n+                        plc.unary.is_null(result, stream=df.stream),\n+                        plc.binaryop.BinaryOperator.LOGICAL_AND,\n+                        bool8,\n+                        stream=df.stream,\n+                    )\n+                    result = plc.copying.copy_if_else(\n+                        col, result, use_nan, stream=df.stream\n+                    )\n             return Column(result, dtype=self.dtype)\n         elif self.name == \"mean_horizontal\":\n             (ignore_nulls,) = self.options"
+  },
+  {
+   "filename": "python/cudf_polars/tests/expressions/test_horizontal.py",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -47,6 +47,20 @@ def test_max_horizontal_all_null_row(engine: pl.GPUEngine) -> None:\n     assert_gpu_result_equal(q, engine=engine)\n \n \n+@pytest.mark.parametrize(\"fn\", [pl.max_horizontal, pl.min_horizontal])\n+def test_minmax_horizontal_skips_nan(fn, engine: pl.GPUEngine) -> None:\n+    nan = float(\"nan\")\n+    df = pl.LazyFrame(\n+        {\n+            \"a\": [1.0, nan, nan, None, None, 1.0, 3.0],\n+            \"b\": [nan, 2.0, nan, nan, None, None, 0.5],\n+            \"c\": [0.0, 5.0, nan, None, None, nan, nan],\n+        }\n+    )\n+    q = df.select(fn(\"a\", \"b\", \"c\"))\n+    assert_gpu_result_equal(q, engine=engine)\n+\n+\n def test_max_horizontal_string(engine: pl.GPUEngine) -> None:\n     df = pl.LazyFrame(\n         {"
+  }
+ ],
+ "test_files": [
+  "python/cudf_polars/tests/expressions/test_horizontal.py"
+ ]
+}

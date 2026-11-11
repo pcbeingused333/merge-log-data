@@ -1,0 +1,33 @@
+{
+ "repo": "FlowFuse/node-red-dashboard",
+ "number": 2365,
+ "url": "https://github.com/FlowFuse/node-red-dashboard/pull/2365",
+ "title": "fix: handle IPv6 hosts when saving dashboard layouts",
+ "merged_at": "2026-11-10T21:29:40Z",
+ "files": [
+  {
+   "filename": "nodes/config/ui_base.js",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -7,7 +7,7 @@ const v = require('../../package.json').version\n const { createClientStore } = require('../store/clients.js')\n const datastore = require('../store/data.js')\n const statestore = require('../store/state.js')\n-const { appendTopic, addConnectionCredentials, matchesClient, normalizeClientId, getThirdPartyWidgets } = require('../utils/index.js')\n+const { appendTopic, addConnectionCredentials, matchesClient, normalizeClientId, getThirdPartyWidgets, getFlowsUrl } = require('../utils/index.js')\n \n // from: https://stackoverflow.com/a/28592528/3016654\n function join (...paths) {\n@@ -1252,7 +1252,7 @@ module.exports = function (RED) {\n                 return res.status(500).json({ error: 'Error processing https settings' })\n             }\n         }\n-        const url = scheme + (`${host}:${port}/${httpAdminRoot}flows`).replace('//', '/')\n+        const url = getFlowsUrl(host, port, httpAdminRoot, scheme)\n         console.log('url', url)\n         // get request body\n         const dashboardId = req.params.dashboardId"
+  },
+  {
+   "filename": "nodes/utils/index.js",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -1,4 +1,5 @@\n const fs = require('fs')\n+const { isIPv6 } = require('net')\n const path = require('path')\n \n function asyncEvaluateNodeProperty (RED, value, type, node, msg) {\n@@ -147,7 +148,13 @@ function getThirdPartyWidgets (directory) {\n     return contribs\n }\n \n+function getFlowsUrl (host, port, httpAdminRoot, scheme) {\n+    const hostname = isIPv6(host) ? `[${host}]` : host\n+    return scheme + (`${hostname}:${port}/${httpAdminRoot}flows`).replace('//', '/')\n+}\n+\n module.exports = {\n+    getFlowsUrl,\n     asyncEvaluateNodeProperty,\n     appendTopic,\n     getTopic,"
+  },
+  {
+   "filename": "test/nodes/utils.spec.js",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -3,6 +3,24 @@ const should = require('should') // eslint-disable-line no-unused-vars\n const utils = require('../../nodes/utils/index.js')\n \n describe('utils', function () {\n+    describe('getFlowsUrl', function () {\n+        const cases = [\n+            ['::', 'http://', '/admin/', 'http://[::]:1880/admin/flows'],\n+            ['::1', 'http://', '/admin/', 'http://[::1]:1880/admin/flows'],\n+            ['2001:db8::1', 'http://', '/admin/', 'http://[2001:db8::1]:1880/admin/flows'],\n+            ['0.0.0.0', 'http://', '/', 'http://0.0.0.0:1880/flows'],\n+            ['127.0.0.1', 'http://', '/', 'http://127.0.0.1:1880/flows'],\n+            ['localhost', 'http://', '/admin/', 'http://localhost:1880/admin/flows'],\n+            ['::', 'https://', '/admin/', 'https://[::]:1880/admin/flows'],\n+            ['localhost', 'http://', 'admin/', 'http://localhost:1880/admin/flows']\n+        ]\n+        cases.forEach(([host, scheme, root, expected]) => {\n+            it(`builds ${expected} for host ${host} and root ${root}`, function () {\n+                utils.getFlowsUrl(host, 1880, root, scheme).should.equal(expected)\n+            })\n+        })\n+    })\n+\n     describe('getThirdPartyWidgets', function () {\n         it('should load single node package', function () {\n             // this covers loading from a nodesDir source"
+  }
+ ],
+ "test_files": [
+  "test/nodes/utils.spec.js"
+ ]
+}

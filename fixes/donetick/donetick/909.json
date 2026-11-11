@@ -1,0 +1,26 @@
+{
+ "repo": "donetick/donetick",
+ "number": 909,
+ "url": "https://github.com/donetick/donetick/pull/909",
+ "title": "fix(storage): delete S3 objects at the key they were saved under",
+ "merged_at": "2026-11-11T05:02:40Z",
+ "files": [
+  {
+   "filename": "internal/storage/storage_s3.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -75,7 +75,7 @@ func (s *S3Storage) Save(ctx context.Context, path string, file io.Reader) error\n func (s *S3Storage) Delete(ctx context.Context, paths []string) error {\n \tvar err error\n \tfor _, path := range paths {\n-\t\tkey := s.BasePath + path\n+\t\tkey := fmt.Sprintf(\"%s/%s\", s.BasePath, path)\n \t\t_, e := s.Client.DeleteObjectWithContext(ctx, &s3.DeleteObjectInput{\n \t\t\tBucket: aws.String(s.Bucket),\n \t\t\tKey:    aws.String(key),"
+  },
+  {
+   "filename": "internal/storage/storage_s3_test.go",
+   "status": "added",
+   "additions": 69,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,69 @@\n+package storage\n+\n+import (\n+\t\"context\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"strings\"\n+\t\"sync\"\n+\t\"testing\"\n+\n+\t\"github.com/aws/aws-sdk-go/aws\"\n+\t\"github.com/aws/aws-sdk-go/aws/credentials\"\n+\t\"github.com/aws/aws-sdk-go/aws/session\"\n+\t\"github.com/aws/aws-sdk-go/service/s3\"\n+)\n+\n+// newRecordingS3 returns an S3Storage backed by a fake path-style S3 endpoint\n+// that records the object path of every request, keyed by HTTP method.\n+func newRecordingS3(t *testing.T, basePath string) (*S3Storage, map[string][]string) {\n+\tt.Helper()\n+\tvar mu sync.Mutex\n+\tseen := map[string][]string{}\n+\tsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tmu.Lock()\n+\t\tseen[r.Method] = append(seen[r.Method], strings.TrimPrefix(r.URL.Path, \"/bucket/\"))\n+\t\tmu.Unlock()\n+\t\tif r.Method == http.MethodDelete {\n+\t\t\tw.WriteHeader(http.StatusNoContent)\n+\t\t}\n+\t}))\n+\tt.Cleanup(srv.Close)\n+\n+\tsess, err := session.NewSession(&aws.Config{\n+\t\tRegion:           aws.String(\"us-east-1\"),\n+\t\tEndpoint:         aws.String(srv.URL),\n+\t\tCredentials:      credentials.NewStaticCredentials(\"key\", \"secret\", \"\"),\n+\t\tS3ForcePathStyle: aws.Bool(true),\n+\t})\n+\tif err != nil {\n+\t\tt.Fatalf(\"failed to create session: %v\", err)\n+\t}\n+\treturn &S3Storage{Bucket: \"bucket\", BasePath: basePath, Client: s3.New(sess)}, seen\n+}\n+\n+// Delete must remove the same object key that Save wrote, otherwise the\n+// object is orphaned in the bucket while its storage_files row is deleted.\n+func TestS3DeleteRemovesTheKeySaveWrote(t *testing.T) {\n+\tfor _, basePath := range []string{\"assets\", \"\"} {\n+\t\tt.Run(\"base_path=\"+basePath, func(t *testing.T) {\n+\t\t\ts, seen := newRecordingS3(t, basePath)\n+\t\t\tctx := context.Background()\n+\t\t\tpath := \"users/1/file.pdf\"\n+\n+\t\t\tif err := s.Save(ctx, path, strings.NewReader(\"data\")); err != nil {\n+\t\t\t\tt.Fatalf(\"Save: %v\", err)\n+\t\t\t}\n+\t\t\tif err := s.Delete(ctx, []string{path}); err != nil {\n+\t\t\t\tt.Fatalf(\"Delete: %v\", err)\n+\t\t\t}\n+\n+\t\t\tif len(seen[http.MethodPut]) != 1 || len(seen[http.MethodDelete]) != 1 {\n+\t\t\t\tt.Fatalf(\"expected one PUT and one DELETE, got %v\", seen)\n+\t\t\t}\n+\t\t\tif put, del := seen[http.MethodPut][0], seen[http.MethodDelete][0]; put != del {\n+\t\t\t\tt.Fatalf(\"Delete removed %q, but Save wrote %q\", del, put)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/storage/storage_s3_test.go"
+ ]
+}

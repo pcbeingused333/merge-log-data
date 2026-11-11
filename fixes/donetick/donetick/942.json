@@ -1,0 +1,33 @@
+{
+ "repo": "donetick/donetick",
+ "number": 942,
+ "url": "https://github.com/donetick/donetick/pull/942",
+ "title": "fix(chore): do not panic completing a chore with a window but no due date",
+ "merged_at": "2026-11-11T05:31:55Z",
+ "files": [
+  {
+   "filename": "internal/chore/api.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 8,
+   "patch": "@@ -338,14 +338,12 @@ func (h *API) CompleteChore(c *gin.Context) {\n \t}\n \n \t// confirm that the chore in completion window:\n-\tif chore.CompletionWindow != nil {\n-\t\tif completedDate.Before(chore.NextDueDate.Add(time.Hour * time.Duration(-*chore.CompletionWindow))) {\n-\t\t\tlog.Debugw(\"chore.api.CompleteChore chore is in completion window\", \"choreID\", choreID, \"completionWindow\", chore.CompletionWindow)\n-\t\t\tc.JSON(400, gin.H{\n-\t\t\t\t\"error\": \"Chore is out of completion window\",\n-\t\t\t})\n-\t\t\treturn\n-\t\t}\n+\tif isBeforeCompletionWindow(chore, completedDate) {\n+\t\tlog.Debugw(\"chore.api.CompleteChore chore is in completion window\", \"choreID\", choreID, \"completionWindow\", chore.CompletionWindow)\n+\t\tc.JSON(400, gin.H{\n+\t\t\t\"error\": \"Chore is out of completion window\",\n+\t\t})\n+\t\treturn\n \t}\n \n \tvar nextDueDate *time.Time"
+  },
+  {
+   "filename": "internal/chore/handler.go",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 7,
+   "patch": "@@ -1137,6 +1137,15 @@ func dueDatesDiffer(oldDueDate, newDueDate *time.Time) bool {\n \treturn !oldDueDate.Equal(*newDueDate)\n }\n \n+// isBeforeCompletionWindow reports whether completedDate is earlier than the chore's\n+// completion window allows. A chore without a due date has no window to be early for.\n+func isBeforeCompletionWindow(chore *chModel.Chore, completedDate time.Time) bool {\n+\tif chore.CompletionWindow == nil || chore.NextDueDate == nil {\n+\t\treturn false\n+\t}\n+\treturn completedDate.UTC().Before(chore.NextDueDate.UTC().Add(-time.Hour * time.Duration(*chore.CompletionWindow)))\n+}\n+\n func (h *Handler) deleteChoreFiles(ctx *gin.Context, choreID int) {\n \tfiles, err := h.storageRepo.GetAllFilesByOwnerType(ctx, storageModel.EntityTypeChoreDescription, choreID)\n \tif err != nil || len(files) == 0 {\n@@ -2419,13 +2428,11 @@ func (h *Handler) CompleteChore(c *gin.Context) {\n \t}\n \n \t// confirm that the chore in completion window:\n-\tif chore.CompletionWindow != nil {\n-\t\tif completedDate.UTC().Before(chore.NextDueDate.UTC().Add(-time.Hour * time.Duration(*chore.CompletionWindow))) {\n-\t\t\tc.JSON(400, gin.H{\n-\t\t\t\t\"error\": \"Chore is out of completion window\",\n-\t\t\t})\n-\t\t\treturn\n-\t\t}\n+\tif isBeforeCompletionWindow(chore, completedDate) {\n+\t\tc.JSON(400, gin.H{\n+\t\t\t\"error\": \"Chore is out of completion window\",\n+\t\t})\n+\t\treturn\n \t}\n \n \tif req.CompletedBy != nil {"
+  },
+  {
+   "filename": "internal/chore/handler_test.go",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -252,3 +252,28 @@ func TestEditChoreWithoutLabelsV2KeepsLabels(t *testing.T) {\n \trequire.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())\n \trequire.Zero(t, labelCount(), \"an empty labelsV2 still removes the labels\")\n }\n+\n+func TestIsBeforeCompletionWindow(t *testing.T) {\n+\tdueDate := time.Date(2026, time.July, 28, 12, 0, 0, 0, time.UTC)\n+\twindow := 2\n+\n+\ttests := []struct {\n+\t\tname          string\n+\t\tchore         chModel.Chore\n+\t\tcompletedDate time.Time\n+\t\twant          bool\n+\t}{\n+\t\t{\"no completion window\", chModel.Chore{NextDueDate: &dueDate}, dueDate.Add(-48 * time.Hour), false},\n+\t\t{\"window but no due date\", chModel.Chore{CompletionWindow: &window}, dueDate, false},\n+\t\t{\"completed before the window opens\", chModel.Chore{CompletionWindow: &window, NextDueDate: &dueDate}, dueDate.Add(-3 * time.Hour), true},\n+\t\t{\"completed inside the window\", chModel.Chore{CompletionWindow: &window, NextDueDate: &dueDate}, dueDate.Add(-time.Hour), false},\n+\t\t{\"completed after the due date\", chModel.Chore{CompletionWindow: &window, NextDueDate: &dueDate}, dueDate.Add(time.Hour), false},\n+\t}\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tif got := isBeforeCompletionWindow(&tt.chore, tt.completedDate); got != tt.want {\n+\t\t\t\tt.Errorf(\"isBeforeCompletionWindow() = %v, want %v\", got, tt.want)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/chore/handler_test.go"
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "livekit/track-processors-js",
+ "number": 155,
+ "url": "https://github.com/livekit/track-processors-js/pull/155",
+ "title": "fix: drop pending first frame after background processor destruction",
+ "merged_at": "2026-11-10T21:26:32Z",
+ "files": [
+  {
+   "filename": ".changeset/destroy-pending-background-frame.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@livekit/track-processors': patch\n+---\n+\n+Skip segmentation of a pending first frame when the background processor is destroyed."
+  },
+  {
+   "filename": "src/transformers/BackgroundTransformer.ts",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -112,7 +112,9 @@ export default class BackgroundProcessor extends VideoTransformer<BackgroundOpti\n     // The segmenter renders into the canvas's WebGL context, which super.destroy() releases,\n     // so it is closed first. Disabling first passes frames that arrive during the close through.\n     this.isDisabled = true;\n-    await this.imageSegmenter?.close();\n+    const segmenter = this.imageSegmenter;\n+    this.imageSegmenter = undefined;\n+    await segmenter?.close();\n     await super.destroy();\n     this.backgroundImageAndPath = null;\n \n@@ -189,6 +191,9 @@ export default class BackgroundProcessor extends VideoTransformer<BackgroundOpti\n           });\n         }\n       }\n+      if (this.isDisabled || !this.imageSegmenter) {\n+        return;\n+      }\n       this.isFirstFrame = false;\n \n       const filterStartTimeMs = performance.now();"
+  },
+  {
+   "filename": "test/background-transformer.test.ts",
+   "status": "added",
+   "additions": 47,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,47 @@\n+import { describe, expect, it, vi } from 'vitest';\n+import BackgroundTransformer from '../src/transformers/BackgroundTransformer';\n+\n+describe('BackgroundTransformer lifecycle', () => {\n+  it('drops the first frame when destroyed while waiting for it to render', async () => {\n+    const processor = new BackgroundTransformer({ blurRadius: 10 });\n+    const canvas = new OffscreenCanvas(2, 2);\n+    canvas.getContext('2d')!.fillRect(0, 0, 2, 2);\n+    const frame = new VideoFrame(canvas, { timestamp: 0 });\n+    const video = document.createElement('video');\n+    let renderFrame!: VideoFrameRequestCallback;\n+    vi.spyOn(video, 'requestVideoFrameCallback').mockImplementation((callback) => {\n+      renderFrame = callback;\n+      return 1;\n+    });\n+    const segmentForVideo = vi.fn(() => {\n+      throw new Error('segmenter is closed');\n+    });\n+    const close = vi.fn();\n+    processor.imageSegmenter = { close, segmentForVideo } as unknown as NonNullable<\n+      typeof processor.imageSegmenter\n+    >;\n+    processor.canvas = canvas;\n+    processor.inputVideo = video;\n+    const enqueued: VideoFrame[] = [];\n+    const controller = {\n+      enqueue: (output: VideoFrame) => enqueued.push(output),\n+    } as TransformStreamDefaultController<VideoFrame>;\n+\n+    try {\n+      const transforming = processor.transform(frame, controller);\n+      expect(enqueued).toHaveLength(1);\n+      await processor.destroy();\n+      renderFrame(0, { expectedDisplayTime: 0, presentationTime: 0 } as VideoFrameCallbackMetadata);\n+      await transforming;\n+\n+      expect(close).toHaveBeenCalledTimes(1);\n+      expect(segmentForVideo).not.toHaveBeenCalled();\n+      expect(processor.imageSegmenter).toBeUndefined();\n+      expect(frame.codedWidth).toBe(0);\n+      expect(enqueued).toHaveLength(1);\n+    } finally {\n+      frame.close();\n+      enqueued.forEach((output) => output.close());\n+    }\n+  });\n+});"
+  }
+ ],
+ "test_files": [
+  "test/background-transformer.test.ts"
+ ]
+}
