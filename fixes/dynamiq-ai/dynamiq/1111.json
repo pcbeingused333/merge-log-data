@@ -1,0 +1,26 @@
+{
+ "repo": "dynamiq-ai/dynamiq",
+ "number": 1111,
+ "url": "https://github.com/dynamiq-ai/dynamiq/pull/1111",
+ "title": "fix(rankers): honor top_k in LLMDocumentRanker",
+ "merged_at": "2026-11-11T11:43:58Z",
+ "files": [
+  {
+   "filename": "dynamiq/nodes/rankers/llm.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -220,7 +220,7 @@ def perform_llm_ranking(\n         logger.debug(\n             f\"Node {self.name} - {self.id}: LLM selected {len(selected_documents)} documents for context\"\n         )\n-        return selected_documents\n+        return selected_documents[: self.top_k]\n \n     def call_llm(self, input_data, prompt, config, **run_kwargs):\n         \"\"\""
+  },
+  {
+   "filename": "tests/unit/nodes/rankers/test_llm_ranker.py",
+   "status": "added",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,36 @@\n+from unittest.mock import patch\n+\n+from dynamiq import connections\n+from dynamiq.nodes.llms import OpenAI\n+from dynamiq.nodes.rankers import LLMDocumentRanker\n+from dynamiq.runnables import RunnableConfig\n+from dynamiq.types import Document\n+\n+\n+def _ranker(top_k: int) -> LLMDocumentRanker:\n+    llm = OpenAI(model=\"gpt-4o-mini\", connection=connections.OpenAI(api_key=\"test-key\"))\n+    return LLMDocumentRanker(llm=llm, top_k=top_k)\n+\n+\n+def test_llm_ranker_respects_top_k():\n+    documents = [Document(content=f\"doc {i}\") for i in range(6)]\n+    ranker = _ranker(top_k=2)\n+\n+    with patch.object(LLMDocumentRanker, \"call_llm\", return_value=\"Yes\"):\n+        result = ranker.perform_llm_ranking(\"query\", documents, RunnableConfig())\n+\n+    assert [d.content for d in result] == [\"doc 0\", \"doc 1\"]\n+\n+\n+def test_llm_ranker_returns_fewer_than_top_k_when_few_selected():\n+    documents = [Document(content=f\"doc {i}\") for i in range(4)]\n+    ranker = _ranker(top_k=3)\n+\n+    # call_llm runs in a thread pool, so answer by passage rather than by call order.\n+    def answer(input_data, *args, **kwargs):\n+        return \"Yes\" if input_data[\"passage\"] == \"doc 1\" else \"No\"\n+\n+    with patch.object(LLMDocumentRanker, \"call_llm\", side_effect=answer):\n+        result = ranker.perform_llm_ranking(\"query\", documents, RunnableConfig())\n+\n+    assert [d.content for d in result] == [\"doc 1\"]"
+  }
+ ],
+ "test_files": [
+  "tests/unit/nodes/rankers/test_llm_ranker.py"
+ ]
+}

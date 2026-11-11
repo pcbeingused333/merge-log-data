@@ -1,0 +1,26 @@
+{
+ "repo": "looplj/axonhub",
+ "number": 2910,
+ "url": "https://github.com/looplj/axonhub/pull/2910",
+ "title": "fix(orchestrator): retry upstream HTTP/2 stream resets and GOAWAY",
+ "merged_at": "2026-11-11T06:59:07Z",
+ "files": [
+  {
+   "filename": "internal/server/orchestrator/retry_transport_test.go",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -45,6 +45,11 @@ func TestRetryTransportClassification(t *testing.T) {\n \t\t{\"LLM incomplete stream\", llm.ErrStreamIncomplete, true},\n \t\t{\"orchestrator incomplete stream\", ErrStreamIncomplete, true},\n \t\t{\"network timeout\", &net.DNSError{IsTimeout: true}, true},\n+\t\t{\"h2 stream error INTERNAL_ERROR\", errors.New(\"failed to stream request: stream error: stream ID 19; INTERNAL_ERROR; received from peer\"), true},\n+\t\t{\"h2 stream error REFUSED_STREAM\", fmt.Errorf(\"read: %w\", errors.New(\"stream error: stream ID 3; REFUSED_STREAM; received from peer\")), true},\n+\t\t{\"h2 GOAWAY\", errors.New(\"http2: server sent GOAWAY and closed the connection; LastStreamID=5, ErrCode=NO_ERROR, debug=\\\"\\\"\"), true},\n+\t\t{\"h2 stream error with cancellation\", errors.Join(context.Canceled, errors.New(\"stream error: stream ID 19; INTERNAL_ERROR; received from peer\")), false},\n+\t\t{\"h2 stream error with HTTP 400\", fmt.Errorf(\"upstream: %w\", &httpclient.Error{StatusCode: http.StatusBadRequest, Body: []byte(\"stream error: stream ID 1; INTERNAL_ERROR\")}), false},\n \t\t{\"temporary network error\", &net.DNSError{IsTemporary: true}, true},\n \t\t{\"wrapped cancellation\", fmt.Errorf(\"read: %w\", context.Canceled), false},\n \t\t{\"wrapped deadline\", &url.Error{Op: \"Post\", Err: context.DeadlineExceeded}, false},\n@@ -116,6 +121,8 @@ func TestRetryTransportPipeline(t *testing.T) {\n \t\t{\"same channel pipe before content\", syscall.EPIPE, 1, 0, false, false, []string{\"first\", \"first\"}},\n \t\t{\"cross channel reset after same channel exhaustion\", syscall.ECONNRESET, 2, 1, false, false, []string{\"first\", \"first\", \"second\"}},\n \t\t{\"cross channel pipe after same channel exhaustion\", syscall.EPIPE, 2, 1, false, false, []string{\"first\", \"first\", \"second\"}},\n+\t\t{\"h2 stream error before content\", errors.New(\"stream error: stream ID 19; INTERNAL_ERROR; received from peer\"), 1, 0, false, false, []string{\"first\", \"first\"}},\n+\t\t{\"h2 stream error after content\", errors.New(\"stream error: stream ID 19; INTERNAL_ERROR; received from peer\"), 1, 1, true, true, []string{\"first\"}},\n \t\t{\"reset after content\", syscall.ECONNRESET, 1, 1, true, true, []string{\"first\"}},\n \t\t{\"pipe after content\", syscall.EPIPE, 1, 1, true, true, []string{\"first\"}},\n \t\t{\"local cancellation\", context.Canceled, 1, 0, false, true, []string{\"first\"}},"
+  },
+  {
+   "filename": "internal/server/orchestrator/upstream_transport_error.go",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -6,6 +6,7 @@ import (\n \t\"io\"\n \t\"net\"\n \t\"net/http\"\n+\t\"strings\"\n \t\"syscall\"\n \n \t\"github.com/looplj/axonhub/internal/ent/requestexecution\"\n@@ -53,11 +54,29 @@ func IsUpstreamTransportError(err error) bool {\n \t\treturn true\n \t}\n \n+\tif isHTTP2ConnectionError(err) {\n+\t\treturn true\n+\t}\n+\n \tvar netErr net.Error\n \n \treturn errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary())\n }\n \n+// isHTTP2ConnectionError reports whether err is an HTTP/2 stream reset or GOAWAY from\n+// the peer. net/http keeps these error types unexported (they live in its bundled h2\n+// copy), so the only way to recognize them is by message.\n+func isHTTP2ConnectionError(err error) bool {\n+\tmsg := err.Error()\n+\n+\tif strings.Contains(msg, \"stream error: stream ID \") &&\n+\t\t(strings.Contains(msg, \"INTERNAL_ERROR\") || strings.Contains(msg, \"REFUSED_STREAM\")) {\n+\t\treturn true\n+\t}\n+\n+\treturn strings.Contains(msg, \"http2: server sent GOAWAY\")\n+}\n+\n // ClassifyUpstreamTransportError converts a transport-level upstream failure into a\n // *llm.ResponseError with 502 semantics, a stable code and the original cause, so\n // clients and the request log see a classifiable error instead of a bare"
+  }
+ ],
+ "test_files": [
+  "internal/server/orchestrator/retry_transport_test.go"
+ ]
+}

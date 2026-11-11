@@ -1,0 +1,33 @@
+{
+ "repo": "iota-uz/iota-sdk",
+ "number": 1248,
+ "url": "https://github.com/iota-uz/iota-sdk/pull/1248",
+ "title": "fix(money): preserve decimal minor units from floats",
+ "merged_at": "2026-11-11T14:24:49Z",
+ "files": [
+  {
+   "filename": ".changes/money-float-minor-units.json",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+{\"bump\":\"patch\",\"summary\":\"Preserve decimal minor units when creating money from floats while truncating excess fractional digits toward zero.\"}"
+  },
+  {
+   "filename": "pkg/money/money.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 9,
+   "patch": "@@ -10,6 +10,7 @@ import (\n \t\"math/big\"\n \n \t\"github.com/iota-uz/iota-sdk/pkg/serrors\"\n+\t\"github.com/shopspring/decimal\"\n )\n \n // Injection points for backward compatibility.\n@@ -121,18 +122,14 @@ func New(amount int64, code string) *Money {\n }\n \n // NewFromFloat creates and returns new instance of Money from a float64.\n-// Always rounding trailing decimals down.\n+// Trailing decimals are truncated toward zero.\n func NewFromFloat(amount float64, code string) *Money {\n-\tcurrencyDecimals := math.Pow10(newCurrency(code).get().Fraction)\n-\tscaled := amount * currencyDecimals\n-\n-\t// Safe conversion: use big.Float -> big.Int to avoid int64 overflow\n-\tbf := new(big.Float).SetFloat64(scaled)\n-\tbi, _ := bf.Int(nil)\n+\tcurrency := newCurrency(code).get()\n+\tscaled := decimal.NewFromFloat(amount).Shift(int32(currency.Fraction))\n \n \treturn &Money{\n-\t\tamount:   bi,\n-\t\tcurrency: newCurrency(code).get(),\n+\t\tamount:   scaled.BigInt(),\n+\t\tcurrency: currency,\n \t}\n }\n "
+  },
+  {
+   "filename": "pkg/money/money_test.go",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -1390,3 +1390,28 @@ func TestMoney_JSON_RoundTrip(t *testing.T) {\n \t\tassert.Equal(t, int64(123), m.Amount())\n \t})\n }\n+\n+func TestNewFromFloat_DecimalMinorUnits(t *testing.T) {\n+\tcases := []struct {\n+\t\tname     string\n+\t\tamount   float64\n+\t\tcurrency string\n+\t\twant     int64\n+\t}{\n+\t\t{\"expense\", 19.99, USD, 1999},\n+\t\t{\"twenty-nine cents\", 0.29, USD, 29},\n+\t\t{\"fifty-seven cents\", 0.57, USD, 57},\n+\t\t{\"one dollar thirteen\", 1.13, USD, 113},\n+\t\t{\"negative cents\", -0.29, USD, -29},\n+\t\t{\"truncate positive\", 0.125, USD, 12},\n+\t\t{\"truncate negative\", -0.125, USD, -12},\n+\t\t{\"no rounding up\", 19.999, USD, 1999},\n+\t\t{\"zero fraction\", 19.99, JPY, 19},\n+\t\t{\"three fractions\", 1.001, KWD, 1001},\n+\t}\n+\tfor _, tc := range cases {\n+\t\tt.Run(tc.name, func(t *testing.T) {\n+\t\t\trequire.Equal(t, tc.want, NewFromFloat(tc.amount, tc.currency).Amount())\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "pkg/money/money_test.go"
+ ]
+}

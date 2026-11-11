@@ -1,0 +1,40 @@
+{
+ "repo": "svix/svix-webhooks",
+ "number": 2792,
+ "url": "https://github.com/svix/svix-webhooks/pull/2792",
+ "title": "fix(javascript): retry HTTP 423 Locked responses",
+ "merged_at": "2026-11-11T15:41:14Z",
+ "files": [
+  {
+   "filename": "codegen/templates/javascript/summary.ts.jinja",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -38,8 +38,8 @@ export type SvixOptions = {\n     retryScheduleInMs?: number[];\n   },\n   {\n-    /** The number of times the client will retry if a server-side error\n-     *  or timeout is received.\n+    /** The number of times the client will retry if a server-side error,\n+     *  HTTP 423 (Locked), or a timeout is received.\n      *  Default: 2\n      */\n     numRetries?: number;"
+  },
+  {
+   "filename": "javascript/src/index.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -51,8 +51,8 @@ export type SvixOptions = {\n     retryScheduleInMs?: number[];\n   },\n   {\n-    /** The number of times the client will retry if a server-side error\n-     *  or timeout is received.\n+    /** The number of times the client will retry if a server-side error,\n+     *  HTTP 423 (Locked), or a timeout is received.\n      *  Default: 2\n      */\n     numRetries?: number;"
+  },
+  {
+   "filename": "javascript/src/request.test.ts",
+   "status": "modified",
+   "additions": 52,
+   "deletions": 0,
+   "patch": "@@ -187,3 +187,55 @@ for (const status of [400, 503]) {\n     assert.equal(calls, 1);\n   });\n }\n+\n+test(\"HTTP 423 Locked is retried and a later success is returned\", async () => {\n+  let calls = 0;\n+  const retryCounts: Array<string | null> = [];\n+  const svx = new Svix(\"token\", {\n+    serverUrl: \"https://api.example.com\",\n+    retryScheduleInMs: [0],\n+    fetch: async (_input, init) => {\n+      calls += 1;\n+      retryCounts.push(new Headers(init?.headers).get(\"svix-retry-count\"));\n+      if (calls === 1) {\n+        return new Response(\n+          JSON.stringify({\n+            code: \"LOCKED\",\n+            detail: \"Another request is currently in your castle\",\n+          }),\n+          { status: 423 }\n+        );\n+      }\n+      return new Response('{\"data\":[],\"iterator\":null,\"done\":true}');\n+    },\n+  });\n+\n+  const result = await svx.application.list();\n+  assert.deepEqual(result.data, []);\n+  assert.equal(calls, 2);\n+  assert.deepEqual(retryCounts, [null, \"1\"]);\n+});\n+\n+test(\"HTTP 409 Conflict is not retried\", async () => {\n+  let calls = 0;\n+  const errorBody = JSON.stringify({\n+    code: \"CONFLICT\",\n+    detail: \"Sorry, someone else already ate this cake\",\n+  });\n+  const svx = new Svix(\"token\", {\n+    serverUrl: \"https://api.example.com\",\n+    retryScheduleInMs: [0],\n+    fetch: async () => {\n+      calls += 1;\n+      return new Response(errorBody, { status: 409 });\n+    },\n+  });\n+\n+  await assert.rejects(svx.application.list(), (error: unknown) => {\n+    assert.ok(error instanceof ApiException);\n+    assert.equal(error.code, 409);\n+    assert.deepEqual(error.body, JSON.parse(errorBody));\n+    return true;\n+  });\n+  assert.equal(calls, 1);\n+});"
+  },
+  {
+   "filename": "javascript/src/request.ts",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 4,
+   "patch": "@@ -50,8 +50,8 @@ export type SvixRequestContext = {\n     retryScheduleInMs?: number[];\n   },\n   {\n-    /** The number of times the client will retry if a server-side error\n-     *  or timeout is received.\n+    /** The number of times the client will retry if a server-side error,\n+     *  HTTP 423 (Locked), or a timeout is received.\n      *  Default: 2\n      */\n     numRetries?: number;\n@@ -186,7 +186,8 @@ export class SvixRequest {\n    * If the server returns a 422 error, an `ApiException<HTTPValidationError>` is thrown.\n    * If the server returns another 4xx error, an `ApiException<HttpErrorOut>` is thrown.\n    *\n-   * If the server returns a 5xx error, the request is retried up to two times with exponential backoff.\n+   * If the server returns a 5xx error or HTTP 423 (Locked), the request is retried up to\n+   * two times with exponential backoff.\n    * If retries are exhausted, an `ApiException<HttpErrorOut>` is thrown.\n    */\n   public async send<R>(\n@@ -314,7 +315,8 @@ async function sendWithRetry(\n       ...init,\n       signal: AbortSignal.timeout(timeout),\n     });\n-    if (triesLeft <= 0 || response.status < 500) {\n+    const retryable = response.status >= 500 || response.status === 423;\n+    if (triesLeft <= 0 || !retryable) {\n       return response;\n     }\n     // A retried response is never returned or read. Release its body before"
+  }
+ ],
+ "test_files": [
+  "javascript/src/request.test.ts"
+ ]
+}

@@ -5,5 +5,16 @@
  "state": "open",
  "reviews": [],
  "review_comments": [],
- "comments": []
+ "comments": [
+  {
+   "role": "member",
+   "created_at": "2026-11-11T12:50:27Z",
+   "body": "I have tried to reproduce this issue myself but I am not able. Can you provide a PoC to trigger this issue? I'm not aware of a method to trigger a response where largeBlob is missing yet the status is non-zero."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-11T17:25:17Z",
+   "body": "Thanks for trying. I ran an appid-only assertion on a real Windows machine with a security key (WebAuthn API v9, assertion struct `dwVersion` 6): it returned `dwCredLargeBlobStatus = 0` and no error, so I can't reproduce the `KeyError` on hardware either, which matches what you saw.\n\nWhat I can show is that the code path is reachable if the native layer ever reports a nonzero `dwCredLargeBlobStatus` without `largeBlob` in the request (as the reporter in #260 hit, via a customer): `tests/test_windows.py::test_get_assertion_large_blob[extensions0-2-expected0]` drives the real `WindowsClient` with stubbed DLL calls, an `appid`-only request and `dwCredLargeBlobStatus=1`. On current main it fails with `KeyError: 'largeBlob'` at `windows.py:492`; with this PR it passes. The guard only reads the result when `largeBlob` was in the request, so it's cheap and harmless even if the status is never nonzero in practice.\n\nIf you'd rather not carry a defensive change without a real repro, I'm fine with closing this; the reporter in #260 may be able to log the raw status on their customer's machine.\n"
+  }
+ ]
 }

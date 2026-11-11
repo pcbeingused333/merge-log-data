@@ -1,0 +1,26 @@
+{
+ "repo": "NPC-Worldwide/npcpy",
+ "number": 352,
+ "url": "https://github.com/NPC-Worldwide/npcpy/pull/352",
+ "title": "fix(streaming): forward temperature=0.0 instead of dropping it",
+ "merged_at": "2026-11-11T16:39:05Z",
+ "files": [
+  {
+   "filename": "npcpy/streaming.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -422,7 +422,7 @@ def create_chat_stream(config: StreamConfig,\n     kwargs = {}\n     if config.params:\n         kwargs.update(config.params)\n-    if config.temperature and 'temperature' not in kwargs:\n+    if config.temperature is not None and 'temperature' not in kwargs:\n         kwargs['temperature'] = config.temperature\n \n     thinking_kwargs = {}\n@@ -522,7 +522,7 @@ def create_tool_agent_stream(config: StreamConfig,\n     kwargs = {}\n     if config.params:\n         kwargs.update(config.params)\n-    if config.temperature and 'temperature' not in kwargs:\n+    if config.temperature is not None and 'temperature' not in kwargs:\n         kwargs['temperature'] = config.temperature\n \n     thinking_kwargs = {}"
+  },
+  {
+   "filename": "tests/test_stream_temperature_zero.py",
+   "status": "added",
+   "additions": 28,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,28 @@\n+import pytest\n+\n+from npcpy import streaming\n+from npcpy.streaming import StreamConfig\n+\n+\n+@pytest.mark.parametrize(\"kind\", [\"chat\", \"tool\"])\n+@pytest.mark.parametrize(\"temperature\", [0.0, 0.3])\n+def test_stream_forwards_temperature(monkeypatch, kind, temperature):\n+    seen = []\n+\n+    def fake_get_llm_response(*args, **kwargs):\n+        seen.append(kwargs)\n+        return iter([{\"content\": \"hello\"}])\n+\n+    monkeypatch.setattr(streaming, \"get_llm_response\", fake_get_llm_response)\n+    cfg = StreamConfig(\n+        model=\"local-model\",\n+        provider=\"ollama\",\n+        temperature=temperature,\n+        max_tool_iterations=1,\n+    )\n+    if kind == \"chat\":\n+        list(streaming.create_chat_stream(cfg))\n+    else:\n+        list(streaming.create_tool_agent_stream(cfg, [], {}))\n+\n+    assert seen[0].get(\"temperature\") == temperature"
+  }
+ ],
+ "test_files": [
+  "tests/test_stream_temperature_zero.py"
+ ]
+}

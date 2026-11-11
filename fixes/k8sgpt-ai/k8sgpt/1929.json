@@ -1,0 +1,26 @@
+{
+ "repo": "k8sgpt-ai/k8sgpt",
+ "number": 1929,
+ "url": "https://github.com/k8sgpt-ai/k8sgpt/pull/1929",
+ "title": "fix: skip Gemini citations without a URI",
+ "merged_at": "2026-11-11T07:10:39Z",
+ "files": [
+  {
+   "filename": "pkg/ai/googlegenai.go",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 2,
+   "patch": "@@ -96,10 +96,16 @@ func (c *GoogleGenAIClient) GetCompletion(ctx context.Context, prompt string) (s\n \t}\n \n \tif got.CitationMetadata != nil && len(got.CitationMetadata.CitationSources) > 0 {\n-\t\toutput += \"Citations:\\n\"\n+\t\tvar citations string\n \t\tfor _, source := range got.CitationMetadata.CitationSources {\n+\t\t\tif source.URI == nil {\n+\t\t\t\tcontinue\n+\t\t\t}\n \t\t\t// TODO(bwplotka): Give details around what exactly words could be attributed to the citation.\n-\t\t\toutput += fmt.Sprintf(\"* %s, %s\\n\", *source.URI, source.License)\n+\t\t\tcitations += fmt.Sprintf(\"* %s, %s\\n\", *source.URI, source.License)\n+\t\t}\n+\t\tif citations != \"\" {\n+\t\t\toutput += \"Citations:\\n\" + citations\n \t\t}\n \t}\n \treturn output, nil"
+  },
+  {
+   "filename": "pkg/ai/googlegenai_test.go",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -14,8 +14,15 @@ limitations under the License.\n package ai\n \n import (\n+\t\"context\"\n+\t\"fmt\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n \t\"testing\"\n \n+\t\"github.com/google/generative-ai-go/genai\"\n+\t\"google.golang.org/api/option\"\n+\n \t\"github.com/stretchr/testify/require\"\n )\n \n@@ -41,3 +48,30 @@ func TestGoogleGenAIClientConfigureInvalidCredentialsJSON(t *testing.T) {\n \n \trequire.Error(t, client.Configure(&AIProvider{Name: googleAIClientName, Password: \"{\"}))\n }\n+\n+func TestGoogleGenAIClientCitationWithoutURI(t *testing.T) {\n+\tfor _, tt := range []struct {\n+\t\tname    string\n+\t\tsources string\n+\t\twant    string\n+\t}{\n+\t\t{\"mixed citations\", `[{\"license\":\"MIT\"},{\"uri\":\"https://example.com/source\",\"license\":\"Apache-2.0\"}]`, \"answer\\nCitations:\\n* https://example.com/source, Apache-2.0\\n\"},\n+\t\t{\"only citation without URI\", `[{}]`, \"answer\\n\"},\n+\t} {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\t\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t\t\t_, _ = fmt.Fprint(w, `{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"answer\"}],\"role\":\"model\"},\"finishReason\":\"STOP\",\"citationMetadata\":{\"citationSources\":`+tt.sources+`}}]}`)\n+\t\t\t}))\n+\t\t\tdefer server.Close()\n+\t\t\tctx := context.Background()\n+\t\t\tsdk, err := genai.NewClient(ctx, option.WithAPIKey(\"test-key\"), option.WithEndpoint(server.URL), option.WithHTTPClient(server.Client()))\n+\t\t\trequire.NoError(t, err)\n+\t\t\tclient := &GoogleGenAIClient{client: sdk, model: \"gemini-pro\", maxTokens: 100}\n+\t\t\tdefer client.Close()\n+\t\t\toutput, err := client.GetCompletion(ctx, \"test\")\n+\t\t\trequire.NoError(t, err)\n+\t\t\trequire.Equal(t, tt.want, output)\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "pkg/ai/googlegenai_test.go"
+ ]
+}

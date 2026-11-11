@@ -9,9 +9,46 @@
    "state": "COMMENTED",
    "submitted_at": "2026-11-07T13:24:13Z",
    "body": "read b403a7a against #25622 and ran `instrumentWorkersAiStream` from a copy with stubbed sentry imports, head vs develop, 8 delta shapes. no index and `index: null` parallel calls: 2 calls, develop gave 1. normal indexed stream unchanged. repo suite not run.\n\none gap at `streaming.ts:71`, it does not fully match #25622. `index: 0` on every call with new ids still merges into 1 call. `{index: 0, id, name}` then an args fragment with no index or id now gives 2 calls, nameless one holds the args, develop gave 1. no index then indexed comes out reversed.\n\nworth fixing before merge.\n"
+  },
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-11T11:32:50Z",
+   "body": "Thank you for working on this! A few comments to look at. \r\n\r\nalso, which model sends tool calls without index? cloudflare's own workers-ai-provider keys them by index ?? 0 and its docs show index on every chunk that carries a name or arguments, so I'd like to see a captured stream before we handle more no-index shapes. \r\nif there isn't one, this is a guard for openai-compatible routes rather than a workers ai fix and the PR description should say so. the description also still mentions getUnindexedToolCall and \"three new cases\", both out of date."
   }
  ],
- "review_comments": [],
+ "review_comments": [
+  {
+   "role": "collaborator",
+   "path": "packages/server-utils/src/ai/workers-ai/streaming.ts",
+   "created_at": "2026-11-11T10:23:52Z",
+   "body": "m: the reverse order still splits: `{id:'c1',...}` then `{index:0,id:'c1',function:{arguments:'1}'}}` records two `c1` entries, develop merged them. checking `findById` before opening a new `index-N` key fixes the id case. #25622 has the same gap so worth fixing in both if you extract the helper."
+  },
+  {
+   "role": "collaborator",
+   "path": "packages/server-utils/src/ai/workers-ai/streaming.ts",
+   "created_at": "2026-11-11T10:23:54Z",
+   "body": "m: `index: toolCall.index ?? calls.size` still writes an index the provider never sent. with mixed streams it collides, e.g. unindexed `cb` then indexed `ca` both record `index: 0`. I'd keep whatever the provider sent, like #25622 does. the first new test will need updating since it expects `index: 0` and `index: 1`."
+  },
+  {
+   "role": "collaborator",
+   "path": "packages/server-utils/test/ai/lib/tracing/workers-ai-streaming.test.ts",
+   "created_at": "2026-11-11T10:23:55Z",
+   "body": "m: the new tests still only check `gen_ai.response.tool_calls`. can one of them assert `gen_ai.output.messages` too, since that's what the product reads? also missing `index: null` and an id that continues a call without an index. #25622's tests port over almost as is."
+  },
+  {
+   "role": "collaborator",
+   "path": "packages/server-utils/src/ai/workers-ai/streaming.ts",
+   "created_at": "2026-11-11T10:23:56Z",
+   "body": "h: this is now `getToolCallKey` from `openai/streaming.ts` almost verbatim. can it move to `ai/core` and be shared? it only needs the calls map, `keyByIndex` and the last key, which openai's state already has, so each caller just passes in the normalized name."
+  },
+  {
+   "role": "collaborator",
+   "path": "packages/server-utils/src/ai/workers-ai/streaming.ts",
+   "created_at": "2026-11-11T10:23:57Z",
+   "body": "m: one more limit worth naming in the description: with no index and no id, `{name:'a',arguments:'{\"x\":'}` then `{name:'a',arguments:'1}'}` records two calls with half the args each. same for a nameless opener whose id arrives later. develop gave one call for both, by accident since it merged everything into index 0, so these shapes do get worse. #25622 behaves the same and I wouldn't add a heuristic unless a model actually streams like this."
+  }
+ ],
  "comments": [
   {
    "role": "author",
@@ -22,6 +59,11 @@
    "role": "author",
    "created_at": "2026-11-07T14:07:48Z",
    "body": "Thanks @JosephDoUrden, good catch. Pushed a follow-up that ports the accumulator logic from the OpenAI integration (#25622) to the Workers AI streaming path:\n\n- `{index: 0}` with a new `id` now starts a new tool call instead of merging into the previous one.\n- An argument fragment with no `index`/`id` is appended to the call currently being built, so the name and arguments stay together.\n- Calls keep the order in which they arrived.\n\nI added tests for these three cases; the suite passes locally.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-11T14:00:43Z",
+   "body": "The key selection now lives in ai/core and is shared by Workers AI and OpenAI. A known id is resolved before a numeric index opens a new call, and Workers AI preserves the original index instead of synthesizing one. Tests cover the unindexed-to-indexed transition, null indices, a returning id after another call opens, and gen_ai.output.messages. The description also names the ambiguous shapes without adding heuristics.\n\nThis comment was drafted with Claude Code.\n"
   }
  ]
 }

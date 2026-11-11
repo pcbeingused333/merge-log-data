@@ -1,0 +1,17 @@
+{
+ "repo": "jeremychone/rust-genai",
+ "number": 381,
+ "url": "https://github.com/jeremychone/rust-genai/pull/381",
+ "title": "fix(embed): preserve client raw body capture with request options",
+ "merged_at": "2026-11-11T18:13:03Z",
+ "files": [
+  {
+   "filename": "src/embed/embed_options.rs",
+   "status": "modified",
+   "additions": 39,
+   "deletions": 2,
+   "patch": "@@ -184,8 +184,8 @@ impl<'client, 'request> EmbedOptionsSet<'client, 'request> {\n \t/// Get the effective capture_raw_body setting.\n \tpub fn capture_raw_body(&self) -> bool {\n \t\tself.request_options\n-\t\t\t.map(|o| o.capture_raw_body())\n-\t\t\t.or_else(|| self.client_options.map(|o| o.capture_raw_body()))\n+\t\t\t.and_then(|o| o.capture_raw_body)\n+\t\t\t.or_else(|| self.client_options.and_then(|o| o.capture_raw_body))\n \t\t\t.unwrap_or(false)\n \t}\n \n@@ -234,3 +234,40 @@ impl<'client, 'request> EmbedOptionsSet<'client, 'request> {\n }\n \n // endregion: --- EmbedOptionsSet\n+\n+#[cfg(test)]\n+mod tests {\n+\tuse super::*;\n+\n+\t#[test]\n+\tfn test_capture_raw_body_inherits_client_with_request_dimensions() {\n+\t\tlet client = EmbedOptions::new().with_capture_raw_body(true);\n+\t\tlet request = EmbedOptions::new().with_dimensions(256);\n+\t\tlet options = EmbedOptionsSet::new()\n+\t\t\t.with_client_options(Some(&client))\n+\t\t\t.with_request_options(Some(&request));\n+\n+\t\tassert!(options.capture_raw_body());\n+\t\tassert_eq!(options.dimensions(), Some(256));\n+\t}\n+\n+\t#[test]\n+\tfn test_capture_raw_body_explicit_request_override() {\n+\t\tfor capture in [false, true] {\n+\t\t\tlet client = EmbedOptions::new().with_capture_raw_body(!capture);\n+\t\t\tlet request = EmbedOptions::new().with_capture_raw_body(capture);\n+\t\t\tlet options = EmbedOptionsSet::new()\n+\t\t\t\t.with_client_options(Some(&client))\n+\t\t\t\t.with_request_options(Some(&request));\n+\n+\t\t\tassert_eq!(options.capture_raw_body(), capture);\n+\t\t}\n+\t}\n+\n+\t#[test]\n+\tfn test_capture_raw_body_defaults_to_false() {\n+\t\tassert!(!EmbedOptionsSet::new().capture_raw_body());\n+\t\tlet request = EmbedOptions::new().with_dimensions(256);\n+\t\tassert!(!EmbedOptionsSet::new().with_request_options(Some(&request)).capture_raw_body());\n+\t}\n+}"
+  }
+ ],
+ "test_files": []
+}

@@ -1,0 +1,49 @@
+{
+ "repo": "Abilityai/trinity",
+ "number": 4383,
+ "url": "https://github.com/Abilityai/trinity/pull/4383",
+ "title": "fix(telemetry): report release version in operator-intake and export manifest",
+ "merged_at": "2026-11-11T06:39:40Z",
+ "files": [
+  {
+   "filename": "src/backend/routers/agent_data.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -58,6 +58,7 @@\n from services.docker_service import get_agent_container\n from services.docker_utils import container_get_archive\n from services.platform_audit_service import AuditEventType, platform_audit_service\n+from utils.app_version import resolve_release_version\n \n from utils.log_masking import masked_text\n \n@@ -299,7 +300,7 @@ async def export_agent_data(\n                 \"exported_at\": datetime.now(timezone.utc).isoformat(),\n                 \"data_root\": \"data/\",\n                 \"data_paths\": declared_paths,\n-                \"trinity_version\": os.getenv(\"GIT_COMMIT_SHORT\", \"unknown\"),\n+                \"trinity_version\": resolve_release_version(),\n             }\n             await loop.run_in_executor(None, _append_manifest, tmp_path, manifest)\n         except _ExportTooLarge:"
+  },
+  {
+   "filename": "src/backend/services/operator_intake_service.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -38,7 +38,6 @@\n     never write it to a log line.\n \"\"\"\n import logging\n-import os\n import re\n import uuid\n from typing import Dict, Optional\n@@ -47,6 +46,7 @@\n \n from config import OPERATOR_INTAKE_ENABLED, OPERATOR_INTAKE_URL\n from database import db\n+from utils.app_version import resolve_release_version\n from utils.helpers import utc_now_iso\n \n logger = logging.getLogger(__name__)\n@@ -216,7 +216,7 @@ async def submit_operator_intake(\n             \"role\": role or None,\n             \"use_case\": use_case or None,\n             \"consent\": \"security_and_product_updates\",\n-            \"trinity_version\": os.getenv(\"GIT_COMMIT_SHORT\", \"unknown\"),\n+            \"trinity_version\": resolve_release_version(),\n             \"submitted_at\": submitted_at,\n         }\n "
+  },
+  {
+   "filename": "tests/unit/test_agent_data_endpoints.py",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -12,6 +12,7 @@\n \"\"\"\n import base64\n import io\n+import json\n import tarfile\n import types\n from unittest.mock import AsyncMock, patch\n@@ -111,6 +112,23 @@ def test_export_base64_returns_tar_with_manifest(client):\n         assert \"manifest.json\" in names  # self-describing\n \n \n+def test_export_manifest_trinity_version_is_release_version(client, monkeypatch):\n+    # #4381: was read from an unset GIT_COMMIT_SHORT, so always \"unknown\".\n+    monkeypatch.setenv(\"VERSION\", \"0.9.5-rc2+g1a2b3c4\")\n+    tar = _data_tar({\"data/app.db\": b\"SQLITEDATA\"})\n+    archive = AsyncMock(return_value=(iter([tar]), {}))\n+    with patch.object(ad, \"get_agent_container\", return_value=_running()), patch.object(\n+        ad, \"container_get_archive\", archive\n+    ):\n+        resp = client.post(f\"/api/agents/{_AGENT}/data/export?format=base64\")\n+\n+    assert resp.status_code == 200\n+    raw = base64.b64decode(resp.json()[\"tar_base64\"])\n+    with tarfile.open(fileobj=io.BytesIO(raw), mode=\"r\") as tf:\n+        manifest = json.loads(tf.extractfile(\"manifest.json\").read())\n+    assert manifest[\"trinity_version\"] == \"0.9.5-rc2\"\n+\n+\n def test_export_stream_returns_tar(client):\n     tar = _data_tar({\"data/x.csv\": b\"1,2,3\"})\n     archive = AsyncMock(return_value=(iter([tar]), {}))"
+  },
+  {
+   "filename": "tests/unit/test_ent437_telemetry_consent.py",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -632,3 +632,21 @@ def test_release_version_resolver_is_import_safe_and_prefers_env(monkeypatch):\n     monkeypatch.setenv(\"VERSION\", \"unknown\")\n     v = app_version.resolve_release_version()\n     assert isinstance(v, str) and v            # file fallback or \"unknown\", never a raise\n+\n+\n+def test_release_version_unknown_only_without_env_and_file(monkeypatch):\n+    \"\"\"#4381: \"unknown\" is reported only when neither env nor file is available.\"\"\"\n+    from utils import app_version\n+    monkeypatch.delenv(\"VERSION\", raising=False)\n+    monkeypatch.setattr(app_version, \"_candidate_paths\", lambda: [])\n+    assert app_version.resolve_release_version() == \"unknown\"\n+\n+\n+def test_release_version_read_from_file_when_env_unset(monkeypatch, tmp_path):\n+    \"\"\"#4381: the VERSION file is used when the env var is unset.\"\"\"\n+    from utils import app_version\n+    f = tmp_path / \"VERSION\"\n+    f.write_text(\"1.2.3\\n\")\n+    monkeypatch.delenv(\"VERSION\", raising=False)\n+    monkeypatch.setattr(app_version, \"_candidate_paths\", lambda: [f])\n+    assert app_version.resolve_release_version() == \"1.2.3\""
+  },
+  {
+   "filename": "tests/unit/test_operator_intake.py",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -150,6 +150,18 @@ def test_submits_on_consent_with_expected_payload(fake_db, monkeypatch, caplog):\n     assert \"me@acme.com\" not in caplog.text\n \n \n+def test_payload_trinity_version_is_release_version(fake_db, monkeypatch):\n+    # #4381: was read from an unset GIT_COMMIT_SHORT, so always \"unknown\".\n+    _enable(monkeypatch)\n+    monkeypatch.setenv(\"VERSION\", \"0.9.5-rc2+g1a2b3c4\")\n+    monkeypatch.setattr(ois.httpx, \"AsyncClient\", RecordingClient)\n+\n+    asyncio.run(ois.submit_operator_intake(email=\"me@acme.com\", company=\"Acme\"))\n+\n+    _, payload = RecordingClient.posted[0]\n+    assert payload[\"trinity_version\"] == \"0.9.5-rc2\"\n+\n+\n def test_disabled_never_submits(fake_db, monkeypatch):\n     _enable(monkeypatch, on=False)\n     monkeypatch.setattr(ois.httpx, \"AsyncClient\", RecordingClient)"
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_agent_data_endpoints.py",
+  "tests/unit/test_ent437_telemetry_consent.py",
+  "tests/unit/test_operator_intake.py"
+ ]
+}

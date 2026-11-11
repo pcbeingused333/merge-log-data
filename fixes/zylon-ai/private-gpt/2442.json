@@ -1,0 +1,33 @@
+{
+ "repo": "zylon-ai/private-gpt",
+ "number": 2442,
+ "url": "https://github.com/zylon-ai/private-gpt/pull/2442",
+ "title": "fix(llm): honor temperature 0 for openailike models",
+ "merged_at": "2026-11-11T07:36:47Z",
+ "files": [
+  {
+   "filename": "private_gpt/components/llm/factories/completions/openailike.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -49,7 +49,7 @@ def _create_llm(\n             model=model_config.name,\n             is_chat_model=True,\n             api_version=\"\",\n-            temperature=model_config.sampling_params.temperature or 0.1,\n+            temperature=model_config.sampling_params.temperature,\n             context_window=model_config.context_window or 3900,\n             max_tokens=model_config.sampling_params.max_new_tokens or 1024,\n             messages_to_prompt=prompt_style.messages_to_prompt"
+  },
+  {
+   "filename": "private_gpt/components/llm/factories/responses/openailike.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -42,7 +42,7 @@ def _create_llm(\n                 model=model_config.name,\n                 api_key=self.openai_settings.api_key or \"default\",\n                 api_base=self.openai_settings.api_base,\n-                temperature=model_config.sampling_params.temperature or 0.1,\n+                temperature=model_config.sampling_params.temperature,\n                 max_output_tokens=model_config.sampling_params.max_new_tokens or None,\n                 context_window=model_config.context_window or None,\n                 is_function_calling_model=bool(model_config.support_tools),"
+  },
+  {
+   "filename": "tests/components/llm/test_openailike_temperature.py",
+   "status": "added",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,38 @@\n+from types import SimpleNamespace\n+from typing import Any\n+\n+import pytest\n+\n+from private_gpt.components.llm.factories.completions.openailike import (\n+    OpenAILikeCompletionsFactory,\n+)\n+from private_gpt.components.llm.factories.responses.openailike import (\n+    OpenAILikeResponsesFactory,\n+)\n+from private_gpt.settings.settings import LLMModelConfig, SamplingParams\n+\n+FACTORIES: list[Any] = [OpenAILikeCompletionsFactory, OpenAILikeResponsesFactory]\n+\n+\n+def _settings() -> Any:\n+    return SimpleNamespace(\n+        openai=SimpleNamespace(\n+            api_base=\"http://localhost:1/v1\", api_key=\"test\", request_timeout=None\n+        )\n+    )\n+\n+\n+def _temperature(factory_cls: Any, params: SamplingParams) -> float:\n+    config = LLMModelConfig(name=\"mock\", mode=\"openailike\", sampling_params=params)\n+    llm, _ = factory_cls(_settings())._create_llm(config)\n+    return float(llm.temperature)\n+\n+\n+@pytest.mark.parametrize(\"factory_cls\", FACTORIES)\n+def test_zero_temperature_is_kept(factory_cls: Any) -> None:\n+    assert _temperature(factory_cls, SamplingParams(temperature=0.0)) == 0.0\n+\n+\n+@pytest.mark.parametrize(\"factory_cls\", FACTORIES)\n+def test_default_temperature_is_unchanged(factory_cls: Any) -> None:\n+    assert _temperature(factory_cls, SamplingParams()) == 0.1"
+  }
+ ],
+ "test_files": [
+  "tests/components/llm/test_openailike_temperature.py"
+ ]
+}

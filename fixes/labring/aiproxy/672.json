@@ -1,0 +1,26 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 672,
+ "url": "https://github.com/labring/aiproxy/pull/672",
+ "title": "fix(gemini): assign distinct indexes to streamed tool calls",
+ "merged_at": "2026-11-11T09:51:33Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/gemini/openai.go",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -1520,6 +1520,7 @@ func StreamHandler(\n \twebSearchQueries := map[string]struct{}{}\n \twebSearchGrounded := false\n \twebSearchGemini3 := isGemini3Meta(meta)\n+\ttoolCallIndexes := make(map[int]int)\n \n \tfor scanner.Scan() {\n \t\tdata := scanner.Bytes()\n@@ -1541,6 +1542,13 @@ func StreamHandler(\n \t\t}\n \n \t\tresponse := streamResponseChat2OpenAI(meta, &geminiResponse)\n+\t\tfor _, choice := range response.Choices {\n+\t\t\tfor i := range choice.Delta.ToolCalls {\n+\t\t\t\tchoice.Delta.ToolCalls[i].Index = toolCallIndexes[choice.Index]\n+\t\t\t\ttoolCallIndexes[choice.Index]++\n+\t\t\t}\n+\t\t}\n+\n \t\tif response.Usage != nil {\n \t\t\tusage = geminiResponse.UsageMetadata.ToModelUsage()\n \t\t}"
+  },
+  {
+   "filename": "core/relay/adaptor/gemini/stream_tool_calls_test.go",
+   "status": "added",
+   "additions": 74,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,74 @@\n+package gemini_test\n+\n+import (\n+\t\"bytes\"\n+\t\"encoding/json\"\n+\t\"io\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"strings\"\n+\t\"testing\"\n+\n+\t\"github.com/gin-gonic/gin\"\n+\t\"github.com/labring/aiproxy/core/relay/adaptor/gemini\"\n+\t\"github.com/labring/aiproxy/core/relay/meta\"\n+\trelaymodel \"github.com/labring/aiproxy/core/relay/model\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+func TestStreamHandlerToolCallIndexes(t *testing.T) {\n+\tstream := `data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Calling tools\"},{\"functionCall\":{\"name\":\"weather\",\"args\":{\"city\":\"Paris\"}},\"thoughtSignature\":\"signature\"},{\"functionCall\":{\"name\":\"weather\",\"args\":{\"city\":\"London\"}}}]}},{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"clock\",\"args\":{}}}]}}]}\n+\n+data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"More tools\"}]}}]}\n+\n+data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"clock\",\"args\":{}}}]}},{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"weather\",\"args\":{\"city\":\"Rome\"}}}]}}]}\n+\n+data: [DONE]\n+\n+`\n+\trecorder := httptest.NewRecorder()\n+\tc, _ := gin.CreateTestContext(recorder)\n+\tc.Request = httptest.NewRequestWithContext(\n+\t\tt.Context(),\n+\t\thttp.MethodPost,\n+\t\t\"/v1/chat/completions\",\n+\t\tnil,\n+\t)\n+\t_, err := gemini.StreamHandler(\n+\t\t&meta.Meta{OriginModel: \"gemini-2.5-pro\"},\n+\t\tc,\n+\t\t&http.Response{\n+\t\t\tStatusCode: http.StatusOK,\n+\t\t\tBody:       io.NopCloser(strings.NewReader(stream)),\n+\t\t},\n+\t)\n+\trequire.Nil(t, err)\n+\n+\tcalls := make(map[int][]relaymodel.ToolCall)\n+\tfor line := range bytes.SplitSeq(recorder.Body.Bytes(), []byte(\"\\n\")) {\n+\t\tif !bytes.HasPrefix(line, []byte(\"data: {\")) {\n+\t\t\tcontinue\n+\t\t}\n+\n+\t\tvar chunk relaymodel.ChatCompletionsStreamResponse\n+\n+\t\trequire.NoError(t, json.Unmarshal(bytes.TrimPrefix(line, []byte(\"data: \")), &chunk))\n+\n+\t\tfor _, choice := range chunk.Choices {\n+\t\t\tcalls[choice.Index] = append(calls[choice.Index], choice.Delta.ToolCalls...)\n+\t\t}\n+\t}\n+\n+\trequire.Len(t, calls[0], 3)\n+\trequire.Len(t, calls[1], 2)\n+\n+\tfor choiceIndex, toolCalls := range calls {\n+\t\tfor index, call := range toolCalls {\n+\t\t\trequire.Equal(t, index, call.Index, \"choice %d, call %d\", choiceIndex, index)\n+\t\t\trequire.NotEmpty(t, call.ID)\n+\t\t}\n+\t}\n+\n+\trequire.Equal(t, `{\"city\":\"Paris\"}`, calls[0][0].Function.Arguments)\n+\trequire.Equal(t, \"signature\", calls[0][0].ExtraContent.Google.ThoughtSignature)\n+}"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/gemini/stream_tool_calls_test.go"
+ ]
+}

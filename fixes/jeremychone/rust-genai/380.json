@@ -1,0 +1,17 @@
+{
+ "repo": "jeremychone/rust-genai",
+ "number": 380,
+ "url": "https://github.com/jeremychone/rust-genai/pull/380",
+ "title": "fix(model_name): deserialize what Serialize produces",
+ "merged_at": "2026-11-11T17:53:53Z",
+ "files": [
+  {
+   "filename": "src/common/model_name.rs",
+   "status": "modified",
+   "additions": 52,
+   "deletions": 1,
+   "patch": "@@ -15,11 +15,26 @@ enum Inner {\n }\n \n impl<'de> Deserialize<'de> for ModelName {\n+\t/// Accepts what `Serialize` produces (`{\"Shared\": \"name\"}` / `{\"Static\": \"name\"}`),\n+\t/// and also a plain string (`\"name\"`), so a serialized `ModelName` round-trips.\n \tfn deserialize<D>(deserializer: D) -> Result<Self, D::Error>\n \twhere\n \t\tD: Deserializer<'de>,\n \t{\n-\t\tlet s: &str = <&str>::deserialize(deserializer)?;\n+\t\t#[derive(Deserialize)]\n+\t\tenum Tagged {\n+\t\t\tStatic(String),\n+\t\t\tShared(String),\n+\t\t}\n+\n+\t\t#[derive(Deserialize)]\n+\t\t#[serde(untagged)]\n+\t\tenum Repr {\n+\t\t\tPlain(String),\n+\t\t\tTagged(Tagged),\n+\t\t}\n+\n+\t\tlet (Repr::Plain(s) | Repr::Tagged(Tagged::Static(s) | Tagged::Shared(s))) = Repr::deserialize(deserializer)?;\n \t\tOk(ModelName(Inner::Shared(Arc::<str>::from(s))))\n \t}\n }\n@@ -158,3 +173,39 @@ impl PartialEq<ModelName> for String {\n }\n \n // endregion: --- EQ\n+\n+// region:    --- Tests\n+\n+#[cfg(test)]\n+mod tests {\n+\ttype Result<T> = core::result::Result<T, Box<dyn std::error::Error>>;\n+\n+\tuse super::*;\n+\n+\t#[test]\n+\tfn test_model_name_serde_round_trip_shared() -> Result<()> {\n+\t\tlet name = ModelName::new(\"xiaomi/mimo-v2.6-flash\");\n+\t\tlet json = serde_json::to_string(&name)?;\n+\t\tlet back: ModelName = serde_json::from_str(&json)?;\n+\t\tassert_eq!(back, name);\n+\t\tOk(())\n+\t}\n+\n+\t#[test]\n+\tfn test_model_name_serde_round_trip_static() -> Result<()> {\n+\t\tlet name = ModelName::from_static(\"gpt-5.6-sol\");\n+\t\tlet json = serde_json::to_string(&name)?;\n+\t\tlet back: ModelName = serde_json::from_str(&json)?;\n+\t\tassert_eq!(back.as_str(), name.as_str());\n+\t\tOk(())\n+\t}\n+\n+\t#[test]\n+\tfn test_model_name_deserialize_plain_string() -> Result<()> {\n+\t\tlet back: ModelName = serde_json::from_str(\"\\\"gemini::gemini-3-flash-preview\\\"\")?;\n+\t\tassert_eq!(back.as_str(), \"gemini::gemini-3-flash-preview\");\n+\t\tOk(())\n+\t}\n+}\n+\n+// endregion: --- Tests"
+  }
+ ],
+ "test_files": []
+}

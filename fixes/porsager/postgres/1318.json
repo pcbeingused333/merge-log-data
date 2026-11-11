@@ -1,0 +1,34 @@
+{
+ "repo": "porsager/postgres",
+ "number": 1318,
+ "url": "https://github.com/porsager/postgres/pull/1318",
+ "title": "fix: clear the cancel_timeout timer once a canceled sql.batch settles",
+ "merged_at": "2026-11-11T08:10:52Z",
+ "files": [
+  {
+   "filename": "src/connection.js",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -1131,6 +1131,12 @@ export function Connection(ready, options, events) {\n \n   function settle(x) {\n     answered(x)\n+    settling(x)\n+    // a batch query settles inside settling(), after the first answered()\n+    x.batch && answered(x)\n+  }\n+\n+  function settling(x) {\n     if (x.kind === 'internal')\n       return\n "
+  },
+  {
+   "filename": "tests/unit/cancel.js",
+   "status": "added",
+   "additions": 23,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,23 @@\n+import { t } from '../test.js'\n+import postgres from '../../src/index.js'\n+import { Clock, Random } from '../sim/net.js'\n+import { Server } from '../sim/server.js'\n+\n+t('A canceled sql.batch leaves no cancel_timeout timer behind', async() => {\n+  const clock = Clock()\n+      , server = Server({ clock, random: Random(1), delay: 0, split: 0 })\n+      , sql = postgres({\n+        host: 'sim', port: 5432, user: 'sim', database: 'sim', max: 1, fetch_types: false,\n+        max_lifetime: 0, idle_timeout: 0, cancel_timeout: 5, timers: clock.timers,\n+        socket: () => server.socket()\n+      })\n+\n+  const q = sql.batch([sql`select 1 as id, 0 as scope sleep(1000)`])\n+  let code\n+  q.then(() => code = 'resolved', e => code = e.code)\n+  await clock.run(100)\n+  q.cancel()\n+  await clock.run(200)\n+  await clock.run(300)\n+  return ['57014,0', code + ',' + clock.pending]\n+})"
+  },
+  {
+   "filename": "tests/unit/index.js",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -1,6 +1,6 @@\n import { t } from '../test.js'\n \n-t.ready = Promise.all(['protocol', 'socket', 'types', 'build', 'errors', 'pool', 'options'].map(area =>\n+t.ready = Promise.all(['protocol', 'socket', 'types', 'build', 'errors', 'pool', 'options', 'cancel'].map(area =>\n   import('./' + area + '.js').catch(error =>\n     t(area + ' loads', async() => { throw error })\n   )"
+  }
+ ],
+ "test_files": [
+  "tests/unit/cancel.js",
+  "tests/unit/index.js"
+ ]
+}
