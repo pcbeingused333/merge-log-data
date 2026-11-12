@@ -1,0 +1,26 @@
+{
+ "repo": "kagent-dev/kagent",
+ "number": 3568,
+ "url": "https://github.com/kagent-dev/kagent/pull/3568",
+ "title": "fix(go/adk): emit Anthropic streaming tool calls in block order",
+ "merged_at": "2026-11-12T00:29:15Z",
+ "files": [
+  {
+   "filename": "go/adk/pkg/models/anthropic_adk.go",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -401,7 +401,13 @@ func runAnthropicStreaming(ctx context.Context, m *AnthropicModel, params anthro\n \tif aggregatedTextValue != \"\" {\n \t\tfinalParts = append(finalParts, &genai.Part{Text: aggregatedTextValue})\n \t}\n-\tfor _, block := range toolUseBlocks {\n+\tindices := make([]int, 0, len(toolUseBlocks))\n+\tfor k := range toolUseBlocks {\n+\t\tindices = append(indices, k)\n+\t}\n+\tslices.Sort(indices)\n+\tfor _, idx := range indices {\n+\t\tblock := toolUseBlocks[idx]\n \t\tvar args map[string]any\n \t\tif block.inputJSON != \"\" {\n \t\t\t_ = json.Unmarshal([]byte(block.inputJSON), &args)"
+  },
+  {
+   "filename": "go/adk/pkg/models/anthropic_adk_test.go",
+   "status": "modified",
+   "additions": 41,
+   "deletions": 0,
+   "patch": "@@ -319,3 +319,44 @@ func TestAnthropicModelGenerateContentSendsStructuredOutputWithTools(t *testing.\n \t\tt.Fatalf(\"tools = %#v, want one tool\", body[\"tools\"])\n \t}\n }\n+\n+func TestAnthropicStreamingToolCallsKeepBlockOrder(t *testing.T) {\n+\tconst n = 8\n+\tevents := []string{\n+\t\t`{\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-6\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":4,\"output_tokens\":1}}}`,\n+\t}\n+\tvar wantIDs []string\n+\tfor i := range n {\n+\t\tid := \"call-\" + string(rune('a'+i))\n+\t\twantIDs = append(wantIDs, id)\n+\t\tevents = append(events,\n+\t\t\t`{\"type\":\"content_block_start\",\"index\":`+string(rune('0'+i))+`,\"content_block\":{\"type\":\"tool_use\",\"id\":\"`+id+`\",\"name\":\"tool_`+string(rune('a'+i))+`\",\"input\":{}}}`,\n+\t\t\t`{\"type\":\"content_block_delta\",\"index\":`+string(rune('0'+i))+`,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{}\"}}`,\n+\t\t\t`{\"type\":\"content_block_stop\",\"index\":`+string(rune('0'+i))+`}`,\n+\t\t)\n+\t}\n+\tevents = append(events,\n+\t\t`{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":5}}`,\n+\t\t`{\"type\":\"message_stop\"}`,\n+\t)\n+\tm, _ := anthropicTestServer(t, func(w http.ResponseWriter) {\n+\t\tw.Header().Set(\"Content-Type\", \"text/event-stream\")\n+\t\tfor _, event := range events {\n+\t\t\tvar envelope struct {\n+\t\t\t\tType string `json:\"type\"`\n+\t\t\t}\n+\t\t\trequire.NoError(t, json.Unmarshal([]byte(event), &envelope))\n+\t\t\t_, _ = io.WriteString(w, \"event: \"+envelope.Type+\"\\ndata: \"+event+\"\\n\\n\")\n+\t\t}\n+\t})\n+\n+\tfinal := finalResponse(t, m, true)\n+\n+\tvar gotIDs []string\n+\tfor _, p := range final.Content.Parts {\n+\t\tif p.FunctionCall != nil {\n+\t\t\tgotIDs = append(gotIDs, p.FunctionCall.ID)\n+\t\t}\n+\t}\n+\tassert.Equal(t, wantIDs, gotIDs)\n+}"
+  }
+ ],
+ "test_files": [
+  "go/adk/pkg/models/anthropic_adk_test.go"
+ ]
+}

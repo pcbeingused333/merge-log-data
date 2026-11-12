@@ -1,0 +1,26 @@
+{
+ "repo": "redis/rueidis",
+ "number": 1057,
+ "url": "https://github.com/redis/rueidis/pull/1057",
+ "title": "fix(url): treat ParseURL addr without port as host with default port",
+ "merged_at": "2026-11-12T04:38:42Z",
+ "files": [
+  {
+   "filename": "url.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -24,7 +24,11 @@ func ParseURL(str string) (opt ClientOption, err error) {\n \t\treturn opt, err\n \t}\n \tparseAddr := func(hostport string) (host string, addr string) {\n-\t\thost, port, _ := net.SplitHostPort(hostport)\n+\t\thost, port, err := net.SplitHostPort(hostport)\n+\t\tif err != nil && hostport != \"\" {\n+\t\t\t// no port in the address, e.g. \"replica.example\" or \"[::1]\": the whole string is the host\n+\t\t\thost, port = strings.TrimSuffix(strings.TrimPrefix(hostport, \"[\"), \"]\"), \"\"\n+\t\t}\n \t\tif host == \"\" {\n \t\t\thost = u.Hostname()\n \t\t}"
+  },
+  {
+   "filename": "url_test.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -41,6 +41,9 @@ func TestParseURL(t *testing.T) {\n \tif opt, err := ParseURL(\"redis://[::1]:6379?addr=:6380\"); err != nil || opt.InitAddress[0] != \"[::1]:6379\" || opt.InitAddress[1] != \"[::1]:6380\" {\n \t\tt.Fatalf(\"unexpected %v %v\", opt, err)\n \t}\n+\tif opt, err := ParseURL(\"redis://primary:6379?addr=replica.example&addr=[2001:db8::2]&addr=replica2:6380\"); err != nil || len(opt.InitAddress) != 4 || opt.InitAddress[0] != \"primary:6379\" || opt.InitAddress[1] != \"replica.example:6379\" || opt.InitAddress[2] != \"[2001:db8::2]:6379\" || opt.InitAddress[3] != \"replica2:6380\" {\n+\t\tt.Fatalf(\"unexpected %v %v\", opt, err)\n+\t}\n \tif opt, err := ParseURL(\"redis://myhost:1234\"); err != nil || opt.InitAddress[0] != \"myhost:1234\" {\n \t\tt.Fatalf(\"unexpected %v %v\", opt, err)\n \t}"
+  }
+ ],
+ "test_files": [
+  "url_test.go"
+ ]
+}

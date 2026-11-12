@@ -1,0 +1,34 @@
+{
+ "repo": "Kong/unirest-java",
+ "number": 596,
+ "url": "https://github.com/Kong/unirest-java/pull/596",
+ "title": "fix: append query parameters before URI fragments",
+ "merged_at": "2026-11-12T01:06:12Z",
+ "files": [
+  {
+   "filename": "unirest-bdd-tests/src/test/java/BehaviorTests/QueryStringTest.java",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -34,6 +34,22 @@\n \n class QueryStringTest extends BddTest {\n \n+    @Test\n+    void sendsQueryParametersBeforeFragment() {\n+        Unirest.get(MockServer.GET + \"#results?sort=new\")\n+                .queryString(\"page\", 2)\n+                .asObject(RequestCapture.class)\n+                .getBody()\n+                .assertParam(\"page\", \"2\");\n+\n+        Unirest.get(MockServer.GET + \"?name=mark#results\")\n+                .queryString(\"page\", 2)\n+                .asObject(RequestCapture.class)\n+                .getBody()\n+                .assertParam(\"name\", \"mark\")\n+                .assertParam(\"page\", \"2\");\n+    }\n+\n     @Test\n     void testGetQueryStrings() {\n        Unirest.get(MockServer.GET)"
+  },
+  {
+   "filename": "unirest/src/main/java/kong/unirest/core/Path.java",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -110,8 +110,11 @@ public void queryString(String name, Collection<?> value){\n      * @param value the value\n      */\n     public void queryString(String name, Object value) {\n+        int fragmentIndex = url.indexOf('#');\n+        String base = fragmentIndex < 0 ? url : url.substring(0, fragmentIndex);\n+        String fragment = fragmentIndex < 0 ? \"\" : url.substring(fragmentIndex);\n         StringBuilder queryString = new StringBuilder();\n-        if (url.contains(\"?\")) {\n+        if (base.contains(\"?\")) {\n             queryString.append(\"&\");\n         } else {\n             queryString.append(\"?\");\n@@ -124,7 +127,7 @@ public void queryString(String name, Object value) {\n         } catch (UnsupportedEncodingException e) {\n             throw new UnirestException(e);\n         }\n-        url += queryString.toString();\n+        url = base + queryString + fragment;\n     }\n \n     /**"
+  },
+  {
+   "filename": "unirest/src/test/java/kong/unirest/core/PathTest.java",
+   "status": "modified",
+   "additions": 37,
+   "deletions": 0,
+   "patch": "@@ -32,6 +32,43 @@\n import static org.junit.jupiter.api.Assertions.*;\n \n class PathTest {\n+    @Test\n+    void addsQueryBeforeFragment() {\n+        Path path = new Path(\"https://example.com/search#results\");\n+\n+        path.queryString(\"page\", 2);\n+\n+        assertEquals(\"https://example.com/search?page=2#results\", path.toString());\n+    }\n+\n+    @Test\n+    void appendsToExistingQueryBeforeFragment() {\n+        Path path = new Path(\"https://example.com/search?old=1#results\");\n+\n+        path.queryString(\"page\", 2);\n+        path.queryString(\"filter\", \"a b\");\n+\n+        assertEquals(\"https://example.com/search?old=1&page=2&filter=a+b#results\", path.toString());\n+    }\n+\n+    @Test\n+    void questionMarkInFragmentDoesNotStartQuery() {\n+        Path path = new Path(\"https://example.com/search#results?sort=new\");\n+\n+        path.queryString(\"page\", 2);\n+\n+        assertEquals(\"https://example.com/search?page=2#results?sort=new\", path.toString());\n+    }\n+\n+    @Test\n+    void preservesEmptyFragmentAndEncodedHash() {\n+        Path path = new Path(\"https://example.com/search%23part#\");\n+\n+        path.queryString(\"flag\", (Object) null);\n+\n+        assertEquals(\"https://example.com/search%23part?flag#\", path.toString());\n+    }\n+\n     @Test\n     void sameOriginIgnoresPathQueryAndCase() {\n         Path p = new Path(\"https://Example.com/a?b=c\", null);"
+  }
+ ],
+ "test_files": [
+  "unirest-bdd-tests/src/test/java/BehaviorTests/QueryStringTest.java",
+  "unirest/src/test/java/kong/unirest/core/PathTest.java"
+ ]
+}

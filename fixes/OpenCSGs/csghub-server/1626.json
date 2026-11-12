@@ -1,0 +1,26 @@
+{
+ "repo": "OpenCSGs/csghub-server",
+ "number": 1626,
+ "url": "https://github.com/OpenCSGs/csghub-server/pull/1626",
+ "title": "fix(aigateway): accept delta.reasoning in Messages stream adapter",
+ "merged_at": "2026-11-12T02:31:04Z",
+ "files": [
+  {
+   "filename": "aigateway/handler/anthropic/to_chat_adapter.go",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 4,
+   "patch": "@@ -523,7 +523,7 @@ func (w *toChatResponseWriter) handleChatStreamChunk(data []byte) {\n \t}\n \n \t// Handle reasoning content — emit as thinking blocks.\n-\tif reasoning, ok := delta[\"reasoning_content\"].(string); ok && reasoning != \"\" {\n+\tif reasoning := chatStreamDeltaReasoning(delta); reasoning != \"\" {\n \t\tif !w.thinkingStarted {\n \t\t\tw.thinkingStarted = true\n \t\t\tw.thinkingBlockIdx = w.nextBlockIdx\n@@ -639,9 +639,7 @@ func buildChunkFromChatStreamData(id string, choices []struct {\n \t\tif content, ok := ch.Delta[\"content\"].(string); ok {\n \t\t\tdelta.Content = content\n \t\t}\n-\t\tif reasoning, ok := ch.Delta[\"reasoning_content\"].(string); ok {\n-\t\t\tdelta.ReasoningContent = reasoning\n-\t\t}\n+\t\tdelta.ReasoningContent = chatStreamDeltaReasoning(ch.Delta)\n \t\tif toolCalls, ok := ch.Delta[\"tool_calls\"].([]any); ok {\n \t\t\tfor _, tc := range toolCalls {\n \t\t\t\ttcMap, ok := tc.(map[string]any)\n@@ -716,3 +714,14 @@ func extraBodyReasoningEffort(req *types.AnthropicMessagesRequest) string {\n \t}\n \treturn extraBody.ReasoningEffort\n }\n+\n+// chatStreamDeltaReasoning returns the reasoning text of a Chat stream delta.\n+// Upstreams spell it reasoning_content (DeepSeek) or reasoning (vLLM,\n+// OpenRouter); reasoning_content wins when both are present.\n+func chatStreamDeltaReasoning(delta map[string]any) string {\n+\tif s, ok := delta[\"reasoning_content\"].(string); ok && s != \"\" {\n+\t\treturn s\n+\t}\n+\ts, _ := delta[\"reasoning\"].(string)\n+\treturn s\n+}"
+  },
+  {
+   "filename": "aigateway/handler/anthropic/to_chat_reasoning_stream_test.go",
+   "status": "added",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,49 @@\n+package anthropic\n+\n+import (\n+\t\"fmt\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"testing\"\n+\n+\t\"github.com/stretchr/testify/assert\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+func TestStreamReasoningFieldBecomesThinkingBlock(t *testing.T) {\n+\tfor _, field := range []string{\"reasoning_content\", \"reasoning\"} {\n+\t\tt.Run(field, func(t *testing.T) {\n+\t\t\tchunks := []string{\n+\t\t\t\tchatChunk(fmt.Sprintf(`{%q:\"think \"}`, field), \"null\"),\n+\t\t\t\tchatChunk(fmt.Sprintf(`{%q:\"hard\"}`, field), \"null\"),\n+\t\t\t\tchatChunk(`{\"content\":\"answer\"}`, `\"stop\"`),\n+\t\t\t}\n+\t\t\tupstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\t\t\tw.Header().Set(\"Content-Type\", \"text/event-stream\")\n+\t\t\t\tw.WriteHeader(200)\n+\t\t\t\tfor _, c := range chunks {\n+\t\t\t\t\tfmt.Fprintf(w, \"%s\\n\\n\", c)\n+\t\t\t\t}\n+\t\t\t\tfmt.Fprint(w, \"data: [DONE]\\n\\n\")\n+\t\t\t}))\n+\t\t\tdefer upstream.Close()\n+\n+\t\t\tplanner := &fakePlanner{target: makeMessagesTarget(upstream.URL+\"/v1/chat/completions\", \"\")}\n+\t\t\thandler := makeTestHandlerWithPlanner(planner)\n+\t\t\tw := dispatchWithTarget(t, handler, fmt.Sprintf(toolCallsRequestBody, true), planner)\n+\t\t\trequire.Equal(t, 200, w.Code)\n+\n+\t\t\tthinking := \"\"\n+\t\t\tfor _, ev := range parseSSEEvents(t, w.Body.String()) {\n+\t\t\t\tif ev.Event != \"content_block_delta\" {\n+\t\t\t\t\tcontinue\n+\t\t\t\t}\n+\t\t\t\td, _ := ev.Data[\"delta\"].(map[string]any)\n+\t\t\t\tif d[\"type\"] == \"thinking_delta\" {\n+\t\t\t\t\tthinking += d[\"thinking\"].(string)\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tassert.Equal(t, \"think hard\", thinking)\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "aigateway/handler/anthropic/to_chat_reasoning_stream_test.go"
+ ]
+}

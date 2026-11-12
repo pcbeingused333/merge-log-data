@@ -1,0 +1,26 @@
+{
+ "repo": "Nixtla/neuralforecast",
+ "number": 1744,
+ "url": "https://github.com/Nixtla/neuralforecast/pull/1744",
+ "title": "fix(losses): sCRPS no longer crashes without a mask",
+ "merged_at": "2026-11-11T19:40:24Z",
+ "files": [
+  {
+   "filename": "neuralforecast/losses/pytorch.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -3421,8 +3421,11 @@ def __call__(\n         Returns:\n             float: sCRPS.\n         \"\"\"\n+        if mask is None:\n+            mask = torch.ones_like(y)\n+\n         mql = self.mql(y=y, y_hat=y_hat, mask=mask, y_insample=y_insample)\n-        norm = torch.sum(torch.abs(y))\n+        norm = torch.sum(torch.abs(y) * mask)\n         unmean = torch.sum(mask)\n         scrps = 2 * mql * unmean / (norm + 1e-5)\n         return scrps"
+  },
+  {
+   "filename": "tests/test_losses/test_pytorch.py",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -18,6 +18,7 @@\n     HuberIQLoss,\n     IQLoss,\n     QuantileLoss,\n+    sCRPS,\n     _divide_no_nan,\n     _weighted_mean,\n     weighted_average,\n@@ -377,3 +378,36 @@ def test_mape_gradient_is_finite_with_zero_targets():\n \n     assert torch.isfinite(y_hat.grad).all()\n     assert y_hat.grad.flatten()[0] == 0.0, \"the zero-target point gets no gradient\"\n+\n+\n+@pytest.mark.parametrize(\"shape\", [(2, 4, 1), (3, 6, 3)])\n+def test_scrps_without_mask_matches_all_ones_mask(shape):\n+    torch.manual_seed(0)\n+    y = torch.rand(*shape)\n+    y_hat = torch.rand(*shape, 5)\n+    loss = sCRPS(level=[80, 90])\n+\n+    no_mask = loss(y=y, y_hat=y_hat, y_insample=None)\n+    ones_mask = loss(y=y, y_hat=y_hat, y_insample=None, mask=torch.ones_like(y))\n+\n+    assert torch.isfinite(no_mask)\n+    assert torch.equal(no_mask, ones_mask)\n+\n+\n+def test_scrps_norm_ignores_masked_points():\n+    torch.manual_seed(0)\n+    y = torch.rand(1, 4, 1)\n+    y_hat = torch.rand(1, 4, 1, 5)\n+    mask = torch.tensor([[[1.0], [1.0], [0.0], [0.0]]])\n+    loss = sCRPS(level=[80, 90])\n+\n+    base = loss(y=y, y_hat=y_hat, y_insample=None, mask=mask)\n+    y_big = y.clone()\n+    y_big[:, 2:] = 1e6  # masked points must not inflate the normalisation\n+    changed = loss(y=y_big, y_hat=y_hat, y_insample=None, mask=mask)\n+\n+    assert torch.isclose(base, changed)\n+\n+    # sCRPS on only the unmasked steps pins both the mask and the denominator\n+    unmasked = loss(y=y[:, :2], y_hat=y_hat[:, :2], y_insample=None)\n+    torch.testing.assert_close(base, unmasked)"
+  }
+ ],
+ "test_files": [
+  "tests/test_losses/test_pytorch.py"
+ ]
+}

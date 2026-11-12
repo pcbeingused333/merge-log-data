@@ -1,0 +1,33 @@
+{
+ "repo": "loro-dev/loro",
+ "number": 1265,
+ "url": "https://github.com/loro-dev/loro/pull/1265",
+ "title": "fix: prevent undo merging when the clock moves backwards",
+ "merged_at": "2026-11-11T22:04:58Z",
+ "files": [
+  {
+   "filename": ".changeset/undo-backwards-clock.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+\"loro-crdt\": patch\n+---\n+\n+Prevent automatic undo merging when the wall clock moves backwards, including when `mergeInterval` is zero. Explicit undo groups continue to merge normally."
+  },
+  {
+   "filename": "crates/loro-internal/src/undo.rs",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 2,
+   "patch": "@@ -647,8 +647,9 @@ impl UndoManagerInner {\n \n         let mut this = this.borrow_mut();\n         let this: &mut Self = &mut this;\n-        // Wether the change is within the accepted merge interval\n-        let in_merge_interval = now - this.last_undo_time < this.merge_interval_in_ms;\n+        // A backwards wall clock must not merge otherwise separate undo items.\n+        let elapsed = now - this.last_undo_time;\n+        let in_merge_interval = (0..this.merge_interval_in_ms).contains(&elapsed);\n \n         // If group is active, but there is nothing in the group, don't merge\n         // If the group is active and it's not the first push in the group, merge"
+  },
+  {
+   "filename": "crates/loro-wasm/tests/undo.test.ts",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 1,
+   "patch": "@@ -1,5 +1,5 @@\n import { Cursor, LoroDoc, LoroMap, UndoManager } from \"../bundler/index\";\n-import { describe, expect, test } from \"vitest\";\n+import { describe, expect, test, vi } from \"vitest\";\n import { expectDefined } from \"./helpers\";\n \n describe(\"undo\", () => {\n@@ -113,6 +113,41 @@ describe(\"undo\", () => {\n     });\n   });\n \n+  test.each([\n+    [0, -500, false, false],\n+    [0, 0, false, false],\n+    [0, 500, false, false],\n+    [1000, -500, false, false],\n+    [1000, 0, false, true],\n+    [1000, 500, false, true],\n+    [1000, 1000, false, false],\n+    [0, -500, true, true],\n+  ])(\n+    \"merge interval %s with clock delta %s and manual group %s\",\n+    (mergeInterval, delta, grouped, merges) => {\n+      const clock = vi.spyOn(Date, \"now\").mockReturnValue(100000);\n+      try {\n+        const doc = new LoroDoc();\n+        const text = doc.getText(\"text\");\n+        const undo = new UndoManager(doc, { mergeInterval });\n+        if (grouped) undo.groupStart();\n+        text.insert(0, \"a\");\n+        doc.commit();\n+        clock.mockReturnValue(100000 + delta);\n+        text.insert(1, \"b\");\n+        doc.commit();\n+        if (grouped) undo.groupEnd();\n+\n+        expect(undo.undo()).toBe(true);\n+        expect(text.toString()).toBe(merges ? \"\" : \"a\");\n+        expect(undo.redo()).toBe(true);\n+        expect(text.toString()).toBe(\"ab\");\n+      } finally {\n+        clock.mockRestore();\n+      }\n+    },\n+  );\n+\n   test(\"merge\", async () => {\n     const doc = new LoroDoc();\n     const undo = new UndoManager(doc, { maxUndoSteps: 100, mergeInterval: 50 });"
+  }
+ ],
+ "test_files": [
+  "crates/loro-wasm/tests/undo.test.ts"
+ ]
+}

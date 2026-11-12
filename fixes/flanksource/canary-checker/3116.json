@@ -1,0 +1,26 @@
+{
+ "repo": "flanksource/canary-checker",
+ "number": 3116,
+ "url": "https://github.com/flanksource/canary-checker/pull/3116",
+ "title": "fix(tcp): accept bracketed IPv6 endpoints",
+ "merged_at": "2026-11-12T02:19:57Z",
+ "files": [
+  {
+   "filename": "checks/tcp.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 4,
+   "patch": "@@ -4,7 +4,6 @@ import (\n \t\"errors\"\n \t\"fmt\"\n \t\"net\"\n-\t\"strings\"\n \t\"time\"\n \n \t\"github.com/flanksource/canary-checker/api/context\"\n@@ -55,11 +54,11 @@ func (t *TCPChecker) Check(ctx *context.Context, extConfig external.Check) pkg.R\n }\n \n func extractAddrAndPort(e string) (string, string, error) {\n-\ts := strings.Split(e, \":\")\n-\tif len(s) != 2 {\n+\thost, port, err := net.SplitHostPort(e)\n+\tif err != nil {\n \t\treturn \"\", \"\", errors.New(formatErrorMsg(e))\n \t}\n-\treturn s[0], s[1], nil\n+\treturn host, port, nil\n }\n \n func formatErrorMsg(f string) string {"
+  },
+  {
+   "filename": "checks/tcp_test.go",
+   "status": "added",
+   "additions": 31,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,31 @@\n+package checks\n+\n+import \"testing\"\n+\n+func TestExtractAddrAndPort(t *testing.T) {\n+\ttests := []struct {\n+\t\tendpoint string\n+\t\taddr     string\n+\t\tport     string\n+\t\twantErr  bool\n+\t}{\n+\t\t{\"example.com:443\", \"example.com\", \"443\", false},\n+\t\t{\"127.0.0.1:80\", \"127.0.0.1\", \"80\", false},\n+\t\t{\"[::1]:443\", \"::1\", \"443\", false},\n+\t\t{\"[2001:db8::1]:8080\", \"2001:db8::1\", \"8080\", false},\n+\t\t{\"example.com\", \"\", \"\", true},\n+\t\t{\"::1:443\", \"\", \"\", true},\n+\t\t{\"\", \"\", \"\", true},\n+\t}\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.endpoint, func(t *testing.T) {\n+\t\t\taddr, port, err := extractAddrAndPort(tt.endpoint)\n+\t\t\tif (err != nil) != tt.wantErr {\n+\t\t\t\tt.Fatalf(\"unexpected error state: %v\", err)\n+\t\t\t}\n+\t\t\tif addr != tt.addr || port != tt.port {\n+\t\t\t\tt.Errorf(\"got (%q, %q), want (%q, %q)\", addr, port, tt.addr, tt.port)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "checks/tcp_test.go"
+ ]
+}

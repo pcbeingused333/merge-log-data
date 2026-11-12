@@ -1,0 +1,26 @@
+{
+ "repo": "OpenCSGs/csghub-server",
+ "number": 1627,
+ "url": "https://github.com/OpenCSGs/csghub-server/pull/1627",
+ "title": "fix(aigateway): finish tool-call items when stream ends with finish_reason stop",
+ "merged_at": "2026-11-12T02:31:35Z",
+ "files": [
+  {
+   "filename": "aigateway/handler/responses_adapter_stream_writer.go",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -209,6 +209,13 @@ func (w *responsesAdapterStreamWriter) Write(data []byte) (int, error) {\n \t\t\t\t\tw.finishReasoningItem()\n \t\t\t\t\tw.finishTextItem()\n \t\t\t\t\tw.finishRefusalItem()\n+\t\t\t\t\t// Some upstreams end a tool-calling turn with \"stop\";\n+\t\t\t\t\t// finishToolCallItems is a no-op for calls already done.\n+\t\t\t\t\t// Truncated turns (length/content_filter) stay unfinished\n+\t\t\t\t\t// so their arguments are not reported as complete.\n+\t\t\t\t\tif responsesIncompleteReason(choice.FinishReason) == \"\" {\n+\t\t\t\t\t\tw.finishToolCallItems()\n+\t\t\t\t\t}\n \t\t\t\t}\n \t\t\t}\n \t\t}"
+  },
+  {
+   "filename": "aigateway/handler/responses_adapter_test.go",
+   "status": "modified",
+   "additions": 46,
+   "deletions": 0,
+   "patch": "@@ -1500,6 +1500,52 @@ func TestResponsesAdapterStreamWriterEmitsToolCallItemBeforeArguments(t *testing\n \trequire.Contains(t, body, `\"item_id\":\"call_1\"`)\n }\n \n+func TestResponsesAdapterStreamWriterToolCallsFinishedByStopReason(t *testing.T) {\n+\tgin.SetMode(gin.TestMode)\n+\tw := httptest.NewRecorder()\n+\tctx, _ := gin.CreateTestContext(w)\n+\twriter := newResponsesAdapterStreamWriter(ctx.Writer, \"public-model\", nil, nil, \"\")\n+\twriter.WriteHeader(200)\n+\n+\t// Some upstreams (e.g. Gemini's OpenAI-compatible endpoint) end a tool-calling\n+\t// turn with finish_reason \"stop\" instead of \"tool_calls\".\n+\t_, err := writer.Write([]byte(`data: {\"id\":\"chatcmpl_1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Tokyo\\\"}\"}}]}}]}` + \"\\n\\n\"))\n+\trequire.NoError(t, err)\n+\t_, err = writer.Write([]byte(`data: {\"id\":\"chatcmpl_1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}` + \"\\n\\n\"))\n+\trequire.NoError(t, err)\n+\t_, err = writer.Write([]byte(\"data: [DONE]\\n\\n\"))\n+\trequire.NoError(t, err)\n+\n+\tbody := w.Body.String()\n+\trequire.Contains(t, body, \"event: response.function_call_arguments.done\")\n+\trequire.Contains(t, body, \"event: response.output_item.done\")\n+\trequire.Equal(t, 1, strings.Count(body, \"event: response.function_call_arguments.done\"))\n+\trequire.Contains(t, body, \"event: response.completed\")\n+}\n+\n+func TestResponsesAdapterStreamWriterTruncatedToolCallsNotFinished(t *testing.T) {\n+\tfor _, reason := range []string{\"length\", \"content_filter\"} {\n+\t\tt.Run(reason, func(t *testing.T) {\n+\t\t\tgin.SetMode(gin.TestMode)\n+\t\t\tw := httptest.NewRecorder()\n+\t\t\tctx, _ := gin.CreateTestContext(w)\n+\t\t\twriter := newResponsesAdapterStreamWriter(ctx.Writer, \"public-model\", nil, nil, \"\")\n+\t\t\twriter.WriteHeader(200)\n+\n+\t\t\t_, err := writer.Write([]byte(`data: {\"id\":\"chatcmpl_1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"To\"}}]}}]}` + \"\\n\\n\"))\n+\t\t\trequire.NoError(t, err)\n+\t\t\t_, err = writer.Write([]byte(`data: {\"id\":\"chatcmpl_1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"` + reason + `\"}]}` + \"\\n\\n\"))\n+\t\t\trequire.NoError(t, err)\n+\t\t\t_, err = writer.Write([]byte(\"data: [DONE]\\n\\n\"))\n+\t\t\trequire.NoError(t, err)\n+\n+\t\t\tbody := w.Body.String()\n+\t\t\trequire.NotContains(t, body, \"event: response.function_call_arguments.done\")\n+\t\t\trequire.Contains(t, body, \"event: response.incomplete\")\n+\t\t})\n+\t}\n+}\n+\n func TestResponsesAdapterStreamWriterToolOnlyStreamDoesNotEmitTextItem(t *testing.T) {\n \tgin.SetMode(gin.TestMode)\n \tw := httptest.NewRecorder()"
+  }
+ ],
+ "test_files": [
+  "aigateway/handler/responses_adapter_test.go"
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "goreleaser/goreleaser",
+ "number": 7285,
+ "url": "https://github.com/goreleaser/goreleaser/pull/7285",
+ "title": "fix(telegram): use an HTML-escaped default message with parse_mode HTML",
+ "merged_at": "2026-11-11T20:05:10Z",
+ "files": [
+  {
+   "filename": "internal/pipe/telegram/telegram.go",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 3,
+   "patch": "@@ -18,6 +18,7 @@ import (\n \n const (\n \tdefaultMessageTemplate = `{{ print .ProjectName \" \" .Tag \" is out! Check it out at \" .ReleaseURL | mdv2escape }}`\n+\tdefaultHTMLTemplate    = `{{ print .ProjectName \" \" .Tag \" is out! Check it out at \" .ReleaseURL | html }}`\n \tparseModeHTML          = \"HTML\"\n \tparseModeMarkdown      = \"MarkdownV2\"\n )\n@@ -41,14 +42,18 @@ type SendMessageResponse struct {\n }\n \n func (Pipe) Default(ctx *context.Context) error {\n-\tif ctx.Config.Announce.Telegram.MessageTemplate == \"\" {\n-\t\tctx.Config.Announce.Telegram.MessageTemplate = defaultMessageTemplate\n-\t}\n \tswitch ctx.Config.Announce.Telegram.ParseMode {\n \tcase parseModeHTML, parseModeMarkdown:\n \tdefault:\n \t\tctx.Config.Announce.Telegram.ParseMode = parseModeMarkdown\n \t}\n+\tif ctx.Config.Announce.Telegram.MessageTemplate == \"\" {\n+\t\tif ctx.Config.Announce.Telegram.ParseMode == parseModeHTML {\n+\t\t\tctx.Config.Announce.Telegram.MessageTemplate = defaultHTMLTemplate\n+\t\t} else {\n+\t\t\tctx.Config.Announce.Telegram.MessageTemplate = defaultMessageTemplate\n+\t\t}\n+\t}\n \treturn nil\n }\n "
+  },
+  {
+   "filename": "internal/pipe/telegram/telegram_test.go",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -131,4 +131,38 @@ func TestGetMessageDetails(t *testing.T) {\n \t\trequire.Equal(t, \"1230212\", args[\"chat_id\"])\n \t\trequire.Equal(t, \"foo v1\\\\.0\\\\.0 is out\\\\! Check it out at \", args[\"text\"])\n \t})\n+\n+\tt.Run(\"default message template html\", func(t *testing.T) {\n+\t\tctx := testctx.WrapWithCfg(t.Context(),\n+\t\t\tconfig.Project{\n+\t\t\t\tProjectName: \"my_app<b>&\",\n+\t\t\t\tAnnounce: config.Announce{\n+\t\t\t\t\tTelegram: config.Telegram{\n+\t\t\t\t\t\tChatID:    \"1230212\",\n+\t\t\t\t\t\tParseMode: parseModeHTML,\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t},\n+\t\t\ttestctx.WithCurrentTag(\"v1.0.0\"))\n+\n+\t\trequire.NoError(t, Pipe{}.Default(ctx))\n+\t\trequire.Equal(t, defaultHTMLTemplate, ctx.Config.Announce.Telegram.MessageTemplate)\n+\t\targs, err := getMessageDetails(ctx)\n+\t\trequire.NoError(t, err)\n+\t\trequire.Equal(t, \"my_app&lt;b&gt;&amp; v1.0.0 is out! Check it out at \", args[\"text\"])\n+\t})\n+\n+\tt.Run(\"custom message template html is kept\", func(t *testing.T) {\n+\t\tctx := testctx.WrapWithCfg(t.Context(),\n+\t\t\tconfig.Project{\n+\t\t\t\tAnnounce: config.Announce{\n+\t\t\t\t\tTelegram: config.Telegram{\n+\t\t\t\t\t\tParseMode:       parseModeHTML,\n+\t\t\t\t\t\tMessageTemplate: \"<b>hi</b>\",\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t})\n+\t\trequire.NoError(t, Pipe{}.Default(ctx))\n+\t\trequire.Equal(t, \"<b>hi</b>\", ctx.Config.Announce.Telegram.MessageTemplate)\n+\t})\n }"
+  },
+  {
+   "filename": "www/content/customization/announce/telegram.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -38,6 +38,7 @@ announce:\n     # Message template to use while publishing.\n     #\n     # Default: '{{ print .ProjectName \" \" .Tag \" is out! Check it out at \" .ReleaseURL | mdv2escape }}'.\n+    # When `parse_mode` is `HTML`, the default uses `| html` instead of `| mdv2escape`.\n     # Templates: allowed.\n     message_template: '<a href=\"{{.ReleaseURL}}\">{{ .ProjectName }} {{.Tag}}</a> is out!'\n "
+  }
+ ],
+ "test_files": [
+  "internal/pipe/telegram/telegram_test.go"
+ ]
+}
