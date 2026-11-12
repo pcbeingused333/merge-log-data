@@ -1,0 +1,68 @@
+{
+ "repo": "flox/flox",
+ "number": 4870,
+ "url": "https://github.com/flox/flox/pull/4870",
+ "title": "fix(nef): percent-encode path flakerefs so paths with spaces work",
+ "merged_at": "2026-11-12T14:23:04Z",
+ "files": [
+  {
+   "filename": ".github/CONTRIBUTORS.csv",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -33,3 +33,4 @@ yes,jsoref,Josh Soref,<jsoref@gmail.com>\n yes,esteve,Esteve Fernández,<github@nara.ac>\n yes,fzakaria,Farid Zakaria,<farid.m.zakaria@gmail.com>\n yes,nixfred,Fred Nix,<frednix@gmail.com>\n+yes,pcbeingused333,Alex Castillo,<alex.castillog33@gmail.com>"
+  },
+  {
+   "filename": "Cargo.lock",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -3167,6 +3167,7 @@ dependencies = [\n  \"httpmock\",\n  \"indent\",\n  \"indoc\",\n+ \"percent-encoding\",\n  \"rnix\",\n  \"rowan\",\n  \"serde\","
+  },
+  {
+   "filename": "Cargo.toml",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -86,6 +86,7 @@ nix = { version = \"0.31\", features = [\"signal\", \"process\", \"user\", \"fs\"] }\n # uses, because native-tls takes precedence.\n oauth2 = { version = \"5.0\", default-features = false, features = [\"reqwest\"] }\n path-dedot = \"3.1.1\"\n+percent-encoding = \"2.3\"\n pollster = \"0.4.0\"\n progenitor-client = \"0.11.2\"\n proptest = \"1.9.0\""
+  },
+  {
+   "filename": "cli/nef-lock-catalog/Cargo.toml",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -11,6 +11,7 @@ anyhow.workspace = true\n clap.workspace = true\n indent.workspace = true\n indoc.workspace = true\n+percent-encoding.workspace = true\n url.workspace = true\n serde_json.workspace = true\n serde.workspace = true"
+  },
+  {
+   "filename": "cli/nef-lock-catalog/src/lock/flakeref.rs",
+   "status": "modified",
+   "additions": 54,
+   "deletions": 3,
+   "patch": "@@ -2,6 +2,7 @@ use std::path::Path;\n use std::str::FromStr;\n \n use anyhow::{Context, Result};\n+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};\n use serde::{Deserialize, Serialize};\n use serde_json::{Value, json};\n use url::Url;\n@@ -72,11 +73,24 @@ impl TryFrom<Value> for NixFlakeref {\n     }\n }\n \n+/// Format a filesystem path as a `path:` flakeref string.\n+/// Keep path separators and URI-unreserved characters; Nix decodes the rest.\n+fn path_flakeref_string(path: &Path) -> String {\n+    const PATH_FLAKEREF_SET: &AsciiSet = &NON_ALPHANUMERIC\n+        .remove(b'/')\n+        .remove(b'-')\n+        .remove(b'.')\n+        .remove(b'_')\n+        .remove(b'~');\n+    format!(\n+        \"path:{}\",\n+        utf8_percent_encode(&path.to_string_lossy(), PATH_FLAKEREF_SET)\n+    )\n+}\n+\n impl NixFlakeref {\n     pub fn from_path(path: impl AsRef<Path>) -> Result<Self> {\n-        format!(\"path:{}\", path.as_ref().to_string_lossy())\n-            .as_str()\n-            .try_into()\n+        path_flakeref_string(path.as_ref()).as_str().try_into()\n     }\n \n     pub fn from_git_with_dir(url: &Url, dir: Option<&Path>) -> Result<Self> {\n@@ -154,3 +168,40 @@ impl From<&crate::lock::build_lock::GitSource> for RawNixFlakerefAttrs {\n         }))\n     }\n }\n+\n+#[cfg(test)]\n+mod tests {\n+    use super::*;\n+\n+    #[test]\n+    fn path_flakeref_plain_path_is_unchanged() {\n+        assert_eq!(\n+            path_flakeref_string(Path::new(\"/tmp/demo/.flox\")),\n+            \"path:/tmp/demo/.flox\"\n+        );\n+    }\n+\n+    #[test]\n+    fn path_flakeref_encodes_spaces_and_url_delimiters() {\n+        assert_eq!(\n+            path_flakeref_string(Path::new(\"/tmp/space demo/a%b?c#d\")),\n+            \"path:/tmp/space%20demo/a%25b%3Fc%23d\"\n+        );\n+    }\n+\n+    #[test]\n+    fn path_flakeref_encodes_punctuation() {\n+        assert_eq!(\n+            path_flakeref_string(Path::new(\"/tmp/a^b'c’d\")),\n+            \"path:/tmp/a%5Eb%27c%E2%80%99d\"\n+        );\n+    }\n+\n+    #[test]\n+    fn path_flakeref_encodes_non_ascii_characters() {\n+        assert_eq!(\n+            path_flakeref_string(Path::new(\"/tmp/café dir\")),\n+            \"path:/tmp/caf%C3%A9%20dir\"\n+        );\n+    }\n+}"
+  },
+  {
+   "filename": "cli/tests/develop.bats",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -512,3 +512,20 @@ logged_catalog_lock_path() {\n   link_count=\"$(find \"$PROJECT_DIR/.flox/run\" -maxdepth 1 -name \"$NIX_SYSTEM.greet.develop*\" | wc -l)\"\n   assert_equal \"$link_count\" 1\n }\n+\n+@test \"develop: builds a Nix expression from a project directory containing a space\" {\n+  project_setup_common\n+  PROJECT_DIR=\"${BATS_TEST_TMPDIR?}/project with space\"\n+  rm -rf \"${PROJECT_DIR?}\"\n+  mkdir -p \"$PROJECT_DIR\"\n+  popd >/dev/null || true\n+  pushd \"$PROJECT_DIR\" >/dev/null || return\n+  \"$FLOX_BIN\" init -d \"$PROJECT_DIR\"\n+  git_init_project\n+  nef_package_setup greet\n+  export _FLOX_USE_CATALOG_MOCK=\"$UNIT_TEST_GENERATED/get_base_catalog_nixpkgs_url.yaml\"\n+\n+  run \"$FLOX_BIN\" build -d \"$PROJECT_DIR\" greet\n+  assert_success\n+  assert [ -e \"$PROJECT_DIR/result-greet/hi\" ]\n+}"
+  },
+  {
+   "filename": "package-builder/flox-build.mk",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -322,8 +322,10 @@ define COMMON_BUILD_VARS_template =\n \t@# Having confirmed the links, create the $(_pvarname)_resultLinks_json\n \t@# variable used to construct build-meta.json in the form of a json string\n \t@# like '{ \"result-link1\":\"store-path1\",\"result-link2\":\"store-path2\",... }'.\n+\t@# Entries are space-separated, but $(PWD) may itself contain spaces, so\n+\t@# only replace the space between the closing and opening quotes.\n \t$$(eval $(_pvarname)_resultLinks_json = \\\n-\t  { $$(subst $$(space),$$(comma),$$($(_pvarname)_resultLinks)) })\n+\t  { $$(subst \"$$(space)\",\"$$(comma)\",$$($(_pvarname)_resultLinks)) })\n \n endef\n "
+  },
+  {
+   "filename": "pkgs/crate2nix/Cargo.nix",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -10693,6 +10693,10 @@ rec {\n             name = \"indoc\";\n             packageId = \"indoc\";\n           }\n+          {\n+            name = \"percent-encoding\";\n+            packageId = \"percent-encoding\";\n+          }\n           {\n             name = \"rnix\";\n             packageId = \"rnix\";"
+  }
+ ],
+ "test_files": [
+  "cli/tests/develop.bats"
+ ]
+}

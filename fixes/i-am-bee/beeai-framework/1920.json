@@ -1,0 +1,26 @@
+{
+ "repo": "i-am-bee/beeai-framework",
+ "number": 1920,
+ "url": "https://github.com/i-am-bee/beeai-framework/pull/1920",
+ "title": "fix(langchain): report finish_reason from OpenAI and Anthropic response metadata",
+ "merged_at": "2026-11-12T09:16:08Z",
+ "files": [
+  {
+   "filename": "python/beeai_framework/adapters/langchain/backend/chat.py",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -99,10 +99,15 @@ def _transform_output(self, response: LCModelResponse) -> ChatModelOutput:\n         message = response[\"output\"]\n         usage_metadata: dict[str, Any] = getattr(message, \"usage_metadata\", None) or {}\n         input_token_details: dict[str, int] = usage_metadata.get(\"input_token_details\") or {}\n+        response_metadata: dict[str, Any] = message.response_metadata or {}\n         return ChatModelOutput(\n             output=to_beeai_messages([message]),\n             output_structured=response[\"output_structured\"],\n-            finish_reason=message.response_metadata.get(\"done_reason\"),\n+            # Ollama reports \"done_reason\", OpenAI \"finish_reason\", Anthropic \"stop_reason\", Bedrock \"stopReason\".\n+            finish_reason=response_metadata.get(\"done_reason\")\n+            or response_metadata.get(\"finish_reason\")\n+            or response_metadata.get(\"stop_reason\")\n+            or response_metadata.get(\"stopReason\"),\n             usage=ChatModelUsage(\n                 prompt_tokens=usage_metadata.get(\"input_tokens\") or 0,\n                 completion_tokens=usage_metadata.get(\"output_tokens\") or 0,"
+  },
+  {
+   "filename": "python/tests/adapters/langchain/test_chat.py",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -130,3 +130,23 @@ def test_transform_output_without_token_details_has_no_cached_tokens() -> None:\n     assert output.usage is not None\n     assert output.usage.cached_prompt_tokens == 0\n     assert output.usage.cached_creation_tokens == 0\n+\n+\n+@pytest.mark.unit\n+@pytest.mark.parametrize(\n+    (\"response_metadata\", \"expected\"),\n+    [\n+        ({\"done_reason\": \"stop\"}, \"stop\"),\n+        ({\"finish_reason\": \"tool_calls\"}, \"tool_calls\"),\n+        ({\"stop_reason\": \"max_tokens\"}, \"max_tokens\"),\n+        ({\"stopReason\": \"end_turn\"}, \"end_turn\"),\n+        ({}, None),\n+    ],\n+)\n+def test_transform_output_reports_the_finish_reason(response_metadata: dict[str, str], expected: str | None) -> None:\n+    model = LangChainChatModel(GenericFakeChatModel(messages=iter([])))\n+    message = AIMessage(content=\"hi\", response_metadata=response_metadata)\n+\n+    output = model._transform_output({\"output\": message, \"output_structured\": None})  # type: ignore[typeddict-item]\n+\n+    assert output.finish_reason == expected"
+  }
+ ],
+ "test_files": [
+  "python/tests/adapters/langchain/test_chat.py"
+ ]
+}

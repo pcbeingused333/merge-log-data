@@ -1,0 +1,40 @@
+{
+ "repo": "dbcli/mycli",
+ "number": 2424,
+ "url": "https://github.com/dbcli/mycli/pull/2424",
+ "title": "fix: decode DSN database names",
+ "merged_at": "2026-11-12T10:15:13Z",
+ "files": [
+  {
+   "filename": "changelog.md",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -1,6 +1,10 @@\n Upcoming (TBD)\n ==============\n \n+Bug Fixes\n+--------\n+* Decode percent-encoded database names in DSN URIs, including aliases with environment variable expansion enabled.\n+\n Internal\n --------\n * Improve test coverage for `packages/special_commands/main.py`."
+  },
+  {
+   "filename": "mycli/AUTHORS.txt",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -122,6 +122,7 @@ Contributors:\n   * Chris Burr\n   * Wei-Lun Li\n   * Shaurya Kesarwani\n+  * Alex Castillo\n \n \n Created by:"
+  },
+  {
+   "filename": "mycli/cli_runner.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -117,7 +117,7 @@ def expand_dsn_alias_env_vars(\n         expand_dsn_alias_env_var(unquote(password) if password is not None else None, alias_name),\n         expand_dsn_alias_env_var(host, alias_name),\n         port_number,\n-        expand_dsn_alias_env_var(uri.path[1:], alias_name) or '',\n+        expand_dsn_alias_env_var(unquote(uri.path[1:]), alias_name) or '',\n         params,\n     )\n \n@@ -310,7 +310,7 @@ def run_from_cli_args(cli_args: 'CliArgs', client_factory: ClientFactory | None\n             dsn_password = unquote(uri.password) if uri.password is not None else None\n             dsn_host = uri.hostname\n             dsn_port = uri.port\n-            dsn_database = uri.path[1:]\n+            dsn_database = unquote(uri.path[1:])\n             dsn_params = parse_qs(uri.query, keep_blank_values=True) if uri.query else {}\n \n         if not database:"
+  },
+  {
+   "filename": "mycli_test/pytests/test_cli_runner.py",
+   "status": "modified",
+   "additions": 40,
+   "deletions": 0,
+   "patch": "@@ -93,6 +93,46 @@ def test_expand_dsn_alias_env_var_returns_none() -> None:\n     assert cli_runner.expand_dsn_alias_env_var(None, 'prod') is None\n \n \n+@pytest.mark.parametrize('expand_env', (False, True))\n+@pytest.mark.parametrize(\n+    ('path', 'expected'),\n+    (\n+        ('sales%20data', 'sales data'),\n+        ('caf%C3%A9', 'café'),\n+        ('rate%25', 'rate%'),\n+        ('rate%2520', 'rate%20'),\n+        ('sales+data', 'sales+data'),\n+    ),\n+)\n+def test_run_from_cli_args_decodes_dsn_database(monkeypatch: pytest.MonkeyPatch, expand_env: bool, path: str, expected: str) -> None:\n+    cli_args = make_cli_args()\n+    uri = f'mysql://user@host/{path}'\n+    config = default_config()\n+    cli_args.dsn = 'prod' if expand_env else uri\n+    config['main']['expand_dsn_alias_env_vars'] = str(expand_env)\n+    config['alias_dsn'] = {'prod': uri}\n+    client = DummyMyCli(config=config)\n+\n+    run_with_client(monkeypatch, cli_args, client)\n+\n+    assert client.connect_calls[-1]['database'] == expected\n+\n+\n+@pytest.mark.parametrize('path', ('${MYCLI_TEST_DSN_DATABASE}', '%24%7BMYCLI_TEST_DSN_DATABASE%7D'))\n+def test_run_from_cli_args_preserves_literal_database_env_value(monkeypatch: pytest.MonkeyPatch, path: str) -> None:\n+    monkeypatch.setenv('MYCLI_TEST_DSN_DATABASE', 'sales%20data')\n+    cli_args = make_cli_args()\n+    cli_args.dsn = 'prod'\n+    config = default_config()\n+    config['main']['expand_dsn_alias_env_vars'] = 'true'\n+    config['alias_dsn'] = {'prod': f'mysql://user@host/{path}'}\n+    client = DummyMyCli(config=config)\n+\n+    run_with_client(monkeypatch, cli_args, client)\n+\n+    assert client.connect_calls[-1]['database'] == 'sales%20data'\n+\n+\n def test_split_dsn_netloc_handles_user_without_password() -> None:\n     assert cli_runner.split_dsn_netloc('user@host:3306') == ('user', None, 'host', '3306')\n "
+  }
+ ],
+ "test_files": [
+  "mycli_test/pytests/test_cli_runner.py"
+ ]
+}

@@ -9,6 +9,12 @@
    "state": "CHANGES_REQUESTED",
    "submitted_at": "2026-11-12T00:51:59Z",
    "body": "@pcbeingused333 , thanks for your fix, but Gemini rejects these penalties with a 400 in most cases (API key: all models; Vertex: 3.6+). Details in my comment. Can you handle that error before merging?"
+  },
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-12T16:11:54Z",
+   "body": "@pcbeingused333 - thanks for contributing. few more comments, in addition to @azanux "
   }
  ],
  "review_comments": [
@@ -17,6 +23,18 @@
    "path": "embabel-agent-autoconfigure/models/embabel-agent-google-genai-autoconfigure/src/main/kotlin/com/embabel/agent/config/models/googlegenai/GoogleGenAiModelsConfig.kt",
    "created_at": "2026-11-12T00:50:24Z",
    "body": "Thanks for this. One concern: Gemini rejects these two parameters with `400 Penalty is not enabled` in most cases:\n\n- with the Gemini API (API key), on all models, including 2.5 Flash;\n- on Vertex AI, from Gemini 3.6 Flash on (see the [Vertex AI docs](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/multimodal/content-generation-parameters)).\n\nThey only work on Vertex AI with Gemini 3.5 or older. So this change would make calls fail that work today, where the penalties are just ignored. `UnsupportedRequestParameterRetry` does not catch this error, because it only reads OpenAI-style error messages.\n\nSuggestion: teach `UnsupportedRequestParameterRetry` to recognise this Gemini error, so it removes both penalties and retries. With that, penalties are applied where Gemini supports them, and where it does not, the call is retried without them instead of failing.\n"
+  },
+  {
+   "role": "contributor",
+   "path": "embabel-agent-api/src/main/kotlin/com/embabel/agent/spi/support/springai/InstrumentedChatModel.kt",
+   "created_at": "2026-11-12T16:06:46Z",
+   "body": "throws exception once the first parameter matches?\n\nPlease consider a more functional, loop-less style, perhaps filter by \"any\""
+  },
+  {
+   "role": "contributor",
+   "path": "embabel-agent-api/src/main/kotlin/com/embabel/agent/spi/support/springai/UnsupportedRequestParameterRetry.kt",
+   "created_at": "2026-11-12T16:09:15Z",
+   "body": "are attributes (\"presencePenalty\", \"frequencyPenalty\") generic or Google-specific?"
   }
  ],
  "comments": [
@@ -24,6 +42,21 @@
    "role": "author",
    "created_at": "2026-11-12T03:18:00Z",
    "body": "Thanks, good catch. I added the handling you suggested: `UnsupportedRequestParameterRetry` now recognises Gemini's `400 Penalty is not enabled` (it does not name the field) and maps it to both `presencePenalty` and `frequencyPenalty`, so `InstrumentedChatModel` strips both and retries once. Tests cover the mapping and the single retry that keeps the other options (temperature). Penalties are still applied where Gemini accepts them.\n\nThis comment was drafted with the help of an AI assistant (Claude Code) and reviewed before posting.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-12T16:25:33Z",
+   "body": "The exception is thrown only if stripParameter returns null, which means the name is unknown; a recognized parameter returns an options copy even when its value is already null. Replaced the loop with fold so each step strips from the previous options copy. Using any would short-circuit and could leave the second penalty in the retry request.\n\npresencePenalty and frequencyPenalty are generic Spring AI ChatOptions property names. stripParameter normalizes them and clears the corresponding portable properties through options.mutate(); they are not Google-specific wire names. Added this clarification to the extraction documentation.\n\nThis change was prepared with the assistance of an AI coding tool; the submitter is responsible for the contents.\n"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-11-12T18:01:54Z",
+   "body": "@pcbeingused333 -  is for-loop necessary?  thanks"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-12T18:36:17Z",
+   "body": "No. The current head (`179e979`) has no `for` loop: the retry now does `parameters.fold(options) { ... }`, so each stripped copy feeds the next step and both penalties are removed before the single retry. (`any` would stop after the first match and leave the other penalty in the request.)\n\nThe only loop left in the diff is the `while` in `extractUnsupportedParameters`, which walks the exception `cause` chain. That loop is unchanged from `main` (it was in `extractUnsupportedParameter`). If you prefer it loop-less too, it can become `generateSequence(throwable) { it.cause }.mapNotNull { it.message }.firstNotNullOfOrNull { ... } ?: emptyList()` with the same behaviour. Happy to push that here, or leave it as is to keep the diff small.\n\nThis response was prepared with the assistance of an AI coding tool; the submitter is responsible for the contents.\n\n"
   }
  ]
 }

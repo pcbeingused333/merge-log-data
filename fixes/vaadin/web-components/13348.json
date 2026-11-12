@@ -1,0 +1,26 @@
+{
+ "repo": "vaadin/web-components",
+ "number": 13348,
+ "url": "https://github.com/vaadin/web-components/pull/13348",
+ "title": "fix: wait for pending data before committing on combo-box focusout",
+ "merged_at": "2026-11-12T11:15:02Z",
+ "files": [
+  {
+   "filename": "packages/combo-box/src/vaadin-combo-box-base-mixin.js",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 10,
+   "patch": "@@ -805,19 +805,14 @@ export const ComboBoxBaseMixin = (superClass) =>\n      * @protected\n      */\n     _handleFocusOut() {\n-      if (isKeyboardActive()) {\n-        // Close on Tab key causing blur. With mouse, close on outside click instead.\n-        this._closeOrCommit();\n+      // With mouse, the outside click closes the visible overlay without committing\n+      if (!isKeyboardActive() && this.opened && this._overlayOpened) {\n         return;\n       }\n \n-      if (!this.opened) {\n-        this._commitValue();\n-      } else if (!this._overlayOpened) {\n-        // Combo-box is opened, but overlay is not visible -> custom value was entered.\n-        // Make sure we close here as there won't be an \"outside click\" in this case.\n-        this.close();\n-      }\n+      // When tabbing out or the overlay is already closed, commit the\n+      // value instead, also while data provider might still be loading\n+      this._closeOrCommit();\n     }\n \n     /**"
+  },
+  {
+   "filename": "packages/combo-box/test/data-provider.test.js",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 1,
+   "patch": "@@ -1,6 +1,14 @@\n import { expect } from '@vaadin/chai-plugins';\n import { sendKeys } from '@vaadin/test-runner-commands';\n-import { arrowDownKeyDown, aTimeout, enterKeyDown, fixtureSync, nextFrame, nextRender } from '@vaadin/testing-helpers';\n+import {\n+  arrowDownKeyDown,\n+  aTimeout,\n+  enterKeyDown,\n+  fixtureSync,\n+  nextFrame,\n+  nextRender,\n+  outsideClick,\n+} from '@vaadin/testing-helpers';\n import sinon from 'sinon';\n import '../src/vaadin-combo-box.js';\n import { ComboBoxPlaceholder } from '../src/vaadin-combo-box-placeholder.js';\n@@ -1136,6 +1144,24 @@ describe('data provider', () => {\n           expect(comboBox.value).to.equal('other value');\n           expect(comboBox.inputElement.value).to.equal('other value');\n         });\n+\n+        if (autoOpenDisabled) {\n+          it('should keep input value while loading when clicking outside', () => {\n+            setInputValue(comboBox, 'item 12');\n+            expect(comboBox.loading).to.be.true;\n+            outsideClick();\n+            expect(comboBox.loading).to.be.true;\n+            expect(comboBox.inputElement.value).to.equal('item 12');\n+            expect(comboBox.value).to.equal('');\n+          });\n+\n+          it('should set value matching input when data is returned after clicking outside', () => {\n+            setInputValue(comboBox, 'item 12');\n+            outsideClick();\n+            returnData(['item 12']);\n+            expect(comboBox.value).to.equal('item 12');\n+          });\n+        }\n       });\n     });\n   });"
+  }
+ ],
+ "test_files": [
+  "packages/combo-box/test/data-provider.test.js"
+ ]
+}

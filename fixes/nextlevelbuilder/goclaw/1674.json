@@ -1,0 +1,33 @@
+{
+ "repo": "nextlevelbuilder/goclaw",
+ "number": 1674,
+ "url": "https://github.com/nextlevelbuilder/goclaw/pull/1674",
+ "title": "fix(agent): don't treat identical successful exec results as a runaway loop",
+ "merged_at": "2026-11-12T16:11:25Z",
+ "files": [
+  {
+   "filename": "internal/agent/loop_tools.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -179,7 +179,7 @@ func (l *Loop) processToolResult(\n \n \t// Check for same tool returning identical results with different args.\n \tif rh := hashResult(result.ForLLM); rh != \"\" {\n-\t\tif level, msg := rs.loopDetector.detectSameResult(registryName, rh); level != \"\" {\n+\t\tif level, msg := rs.loopDetector.detectSameResult(registryName, rh, result.IsError); level != \"\" {\n \t\t\tif level == \"critical\" {\n \t\t\t\tslog.Warn(\"tool loop critical: same result\",\n \t\t\t\t\t\"tool\", registryName, \"agent\", l.id, \"run\", req.RunID)"
+  },
+  {
+   "filename": "internal/agent/toolloop.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 2,
+   "patch": "@@ -244,8 +244,12 @@ func (s *toolLoopState) detectReadOnlyStreak() (level, message string) {\n // detectSameResult checks if the same tool returned identical results multiple\n // times with different arguments. This catches loops where the agent varies\n // args slightly but gets no new information.\n-func (s *toolLoopState) detectSameResult(toolName, resultHash string) (level, message string) {\n-\tif resultHash == \"\" {\n+//\n+// A successful exec is exempt: commands such as API calls routinely return the\n+// same static success body for different inputs, which is not a stuck loop.\n+// Failing exec calls (isError) are still detected.\n+func (s *toolLoopState) detectSameResult(toolName, resultHash string, isError bool) (level, message string) {\n+\tif resultHash == \"\" || (toolName == \"exec\" && !isError) {\n \t\treturn \"\", \"\"\n \t}\n \tvar count int"
+  },
+  {
+   "filename": "internal/agent/toolloop_test.go",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 3,
+   "patch": "@@ -631,7 +631,7 @@ func TestSameResult_Warning(t *testing.T) {\n \t\ts.recordResult(h, sameResult)\n \t}\n \trh := hashResult(sameResult)\n-\tlevel, _ := s.detectSameResult(\"list_files\", rh)\n+\tlevel, _ := s.detectSameResult(\"list_files\", rh, false)\n \tif level != \"warning\" {\n \t\tt.Fatalf(\"expected warning after %d same-result calls, got %q\", sameResultWarning, level)\n \t}\n@@ -646,7 +646,7 @@ func TestSameResult_Critical(t *testing.T) {\n \t\ts.recordResult(h, sameResult)\n \t}\n \trh := hashResult(sameResult)\n-\tlevel, _ := s.detectSameResult(\"list_files\", rh)\n+\tlevel, _ := s.detectSameResult(\"list_files\", rh, false)\n \tif level != \"critical\" {\n \t\tt.Fatalf(\"expected critical after %d same-result calls, got %q\", sameResultCritical, level)\n \t}\n@@ -661,12 +661,38 @@ func TestSameResult_DifferentResults(t *testing.T) {\n \t\ts.recordResult(h, \"result \"+string(rune('a'+i)))\n \t}\n \trh := hashResult(\"result a\") // check against the first result\n-\tlevel, _ := s.detectSameResult(\"list_files\", rh)\n+\tlevel, _ := s.detectSameResult(\"list_files\", rh, false)\n \tif level != \"\" {\n \t\tt.Fatalf(\"expected no detection for different results, got %q\", level)\n \t}\n }\n \n+func TestSameResult_ExecSuccessExempt(t *testing.T) {\n+\t// Successful exec calls (e.g. API mutations returning a static success\n+\t// body) with different args must not be flagged as a runaway loop.\n+\tvar s toolLoopState\n+\tsame := `{\"data\":{\"ok\":true}}`\n+\tfor i := range sameResultCritical + 2 {\n+\t\th := s.record(\"exec\", map[string]any{\"command\": \"curl -d id=\" + string(rune('a'+i))})\n+\t\ts.recordResult(h, same)\n+\t}\n+\tif level, _ := s.detectSameResult(\"exec\", hashResult(same), false); level != \"\" {\n+\t\tt.Fatalf(\"expected no detection for successful exec, got %q\", level)\n+\t}\n+}\n+\n+func TestSameResult_ExecErrorStillDetected(t *testing.T) {\n+\tvar s toolLoopState\n+\tsame := \"command failed\"\n+\tfor i := range sameResultCritical {\n+\t\th := s.record(\"exec\", map[string]any{\"command\": \"false \" + string(rune('a'+i))})\n+\t\ts.recordResult(h, same)\n+\t}\n+\tif level, _ := s.detectSameResult(\"exec\", hashResult(same), true); level != \"critical\" {\n+\t\tt.Fatalf(\"expected critical for repeated failing exec, got %q\", level)\n+\t}\n+}\n+\n func TestHashToolCall(t *testing.T) {\n \t// Same input → same hash\n \th1 := hashToolCall(\"list_files\", map[string]any{\"path\": \".\"})"
+  }
+ ],
+ "test_files": [
+  "internal/agent/toolloop_test.go"
+ ]
+}

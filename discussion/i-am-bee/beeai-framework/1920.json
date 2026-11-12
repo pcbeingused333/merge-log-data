@@ -2,13 +2,19 @@
  "repo": "i-am-bee/beeai-framework",
  "number": 1920,
  "url": "https://github.com/i-am-bee/beeai-framework/pull/1920",
- "state": "open",
+ "state": "merged",
  "reviews": [
   {
    "role": "contributor",
    "state": "COMMENTED",
    "submitted_at": "2026-11-11T05:20:19Z",
    "body": "Thanks for tracking down the `done_reason`-only lookup and for writing the test as a parametrized table, which made checking one more provider a one-row change.\n\nBedrock through `langchain-aws` has the same gap: `ChatBedrockConverse` passes the Converse API's own `stopReason` key into `response_metadata`, so `finish_reason` is still `None` on this branch. If you'd like to cover it here, one more `or` in the chain picks it up; the two inline suggestions add that line and a test row.\n\n| case | main | this PR | PR + `stopReason` |\n|---|---|---|---|\n| live `ChatBedrockConverse` (Haiku 4.5, us-east-1), plain prompt, `stream=False` / `True` | `None` / `None` | `None` / `None` | `'end_turn'` / `'end_turn'` |\n| live, `max_tokens=8`, `stream=False` / `True` | `None` / `None` | `None` / `None` | `'max_tokens'` / `'max_tokens'` |\n| live, one tool bound | `None` | `None` | `'tool_use'` |\n| your four parametrized rows | ❌ 2 of 4 fail | ✅ 4 of 4 | ✅ 4 of 4 |\n| new `stopReason` row | | ❌ `assert None == 'end_turn'` | ✅ |\n\n```\nChatBedrockConverse.invoke() response_metadata keys: ['ResponseMetadata', 'metrics', 'model_name', 'model_provider', 'stopReason']\nresponse_metadata['stopReason'] = 'end_turn'\n```\n\n<details>\n<summary>How I checked</summary>\n\n- main@817114d and this branch at 67ba820, Python 3.13, langchain-core 1.7.7, langchain-aws 1.9.3, model `us.anthropic.claude-haiku-4-5-20251001-v1:0`.\n- The live rows go through `LangChainChatModel.run()`. I loaded three copies of `chat.py` (main, this branch, this branch plus the suggestion) and sent the same five requests through each, so only the adapter code differed between columns.\n- Streaming: `stopReason` arrives on the `messageStop` chunk, and `ChatModelOutput.merge` keeps a non-empty `finish_reason` (`types.py` L197-198), so it reaches the final output (the two `stream=True` rows).\n- `test_chat.py`: your test on main's source is 2 failed (`assert None == 'tool_calls'`, `assert None == 'max_tokens'`), 7 passed, and 9 passed on this branch. With the extra row it is 1 failed, 9 passed on this branch and 10 passed with the suggestion.\n- `ruff check` and `ruff format --check` (0.9.10, matching the repo's `^0.9.6` pin) are clean on both files with the suggestion applied.\n\n</details>\n"
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-12T09:16:05Z",
+   "body": "Thanks, including the Bedrock `stopReason` row. Passing the provider's own value through matches what the LiteLLM adapter does. LGTM."
   }
  ],
  "review_comments": [

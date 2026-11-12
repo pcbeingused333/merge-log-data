@@ -1,0 +1,33 @@
+{
+ "repo": "warpstreamlabs/bento",
+ "number": 1147,
+ "url": "https://github.com/warpstreamlabs/bento/pull/1147",
+ "title": "fix(sftp): drop dead client in output after connection loss",
+ "merged_at": "2026-11-12T15:28:32Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -17,6 +17,7 @@ All notable changes to this project will be documented in this file.\n \n ### Fixed\n \n+ - `sftp` output now drops its client after a lost connection, so the next `Connect` re-establishes it instead of reusing the dead client and never delivering messages again\n  - `elasticsearch_v2` output no longer acks a batch whose whole `_bulk` request failed (unreachable cluster, non-2xx response): `github.com/elastic/go-elasticsearch/v9` is bumped to v9.3.6, which reports such failures per document, so they reach `fallback`/nacks like any other write error\n  - `http` processor now sends its requests with the processing context, so a forced stop of the stream ends their rate limit waits instead of leaving them to retry forever @weird-oecophylla\n "
+  },
+  {
+   "filename": "internal/impl/sftp/output.go",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 2,
+   "patch": "@@ -119,6 +119,21 @@ func (s *sftpWriter) Connect(ctx context.Context) (err error) {\n \treturn\n }\n \n+// dropClient closes and discards the client (and any open handle) after the\n+// connection was lost so that the next Connect establishes a fresh one. The\n+// caller must hold handleMut.\n+func (s *sftpWriter) dropClient() {\n+\tif s.handle != nil {\n+\t\t_ = s.handle.Close()\n+\t\ts.handle = nil\n+\t\ts.handlePath = \"\"\n+\t}\n+\tif s.client != nil {\n+\t\t_ = s.client.Close()\n+\t\ts.client = nil\n+\t}\n+}\n+\n func (s *sftpWriter) writeTo(wtr io.Writer, p *service.Message) error {\n \tmBytes, err := p.AsBytes()\n \tif err != nil {\n@@ -152,8 +167,14 @@ func (s *sftpWriter) Write(ctx context.Context, msg *service.Message) error {\n \t}\n \n \tif s.handle != nil && path == s.handlePath {\n-\t\t// TODO: Detect underlying connection failure here and drop client.\n-\t\treturn s.writeTo(s.handle, msg)\n+\t\tif err := s.writeTo(s.handle, msg); err != nil {\n+\t\t\tif errors.Is(err, sftp.ErrSshFxConnectionLost) {\n+\t\t\t\ts.dropClient()\n+\t\t\t\treturn service.ErrNotConnected\n+\t\t\t}\n+\t\t\treturn err\n+\t\t}\n+\t\treturn nil\n \t}\n \tif s.handle != nil {\n \t\tif err := s.handle.Close(); err != nil {\n@@ -172,6 +193,7 @@ func (s *sftpWriter) Write(ctx context.Context, msg *service.Message) error {\n \n \tif err := s.client.MkdirAll(filepath.Dir(path)); err != nil {\n \t\tif errors.Is(err, sftp.ErrSshFxConnectionLost) {\n+\t\t\ts.dropClient()\n \t\t\treturn service.ErrNotConnected\n \t\t}\n \t\treturn err\n@@ -180,13 +202,18 @@ func (s *sftpWriter) Write(ctx context.Context, msg *service.Message) error {\n \thandle, err := s.client.OpenFile(path, flag)\n \tif err != nil {\n \t\tif errors.Is(err, sftp.ErrSshFxConnectionLost) {\n+\t\t\ts.dropClient()\n \t\t\treturn service.ErrNotConnected\n \t\t}\n \t\treturn err\n \t}\n \n \tif err := s.writeTo(handle, msg); err != nil {\n \t\t_ = handle.Close()\n+\t\tif errors.Is(err, sftp.ErrSshFxConnectionLost) {\n+\t\t\ts.dropClient()\n+\t\t\treturn service.ErrNotConnected\n+\t\t}\n \t\treturn err\n \t}\n "
+  },
+  {
+   "filename": "internal/impl/sftp/output_reconnect_test.go",
+   "status": "added",
+   "additions": 37,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,37 @@\n+package sftp\n+\n+import (\n+\t\"bytes\"\n+\t\"context\"\n+\t\"errors\"\n+\t\"testing\"\n+\n+\tpkgsftp \"github.com/pkg/sftp\"\n+\t\"github.com/warpstreamlabs/bento/public/service\"\n+)\n+\n+type discardSink struct{}\n+\n+func (*discardSink) Close() error                { return nil }\n+func (*discardSink) Write(p []byte) (int, error) { return len(p), nil }\n+\n+func TestOutputDropsClientOnConnectionLost(t *testing.T) {\n+\tc, err := pkgsftp.NewClientPipe(bytes.NewReader([]byte{0, 0, 0, 5, 2, 0, 0, 0, 3}), &discardSink{})\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tdefer c.Close()\n+\t_ = c.Wait()\n+\tpath, err := service.NewInterpolatedString(\"folder/file.txt\")\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tw := &sftpWriter{client: c, path: path}\n+\terr = w.Write(context.Background(), service.NewMessage([]byte(\"message\")))\n+\tif !errors.Is(err, service.ErrNotConnected) {\n+\t\tt.Fatalf(\"expected ErrNotConnected, got %v\", err)\n+\t}\n+\tif w.client != nil {\n+\t\tt.Fatal(\"dead client retained: subsequent Connect returns nil without establishing a connection\")\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/impl/sftp/output_reconnect_test.go"
+ ]
+}

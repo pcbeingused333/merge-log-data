@@ -1,0 +1,26 @@
+{
+ "repo": "open-multi-agent/open-multi-agent",
+ "number": 666,
+ "url": "https://github.com/open-multi-agent/open-multi-agent/pull/666",
+ "title": "fix(gemini): map safety/recitation/blocklist finish reasons to content_filter",
+ "merged_at": "2026-11-12T10:25:53Z",
+ "files": [
+  {
+   "filename": "packages/core/src/llm/gemini.ts",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -378,6 +378,19 @@ function fromGeminiPart(part: Part): ContentBlock | null {\n   return null\n }\n \n+/**\n+ * Gemini finish reasons that mean the response was withheld by a safety or\n+ * content policy. Mapped to `content_filter`, matching the OpenAI-family adapters.\n+ */\n+const GEMINI_CONTENT_FILTER_REASONS = new Set([\n+  'SAFETY',\n+  'RECITATION',\n+  'BLOCKLIST',\n+  'PROHIBITED_CONTENT',\n+  'SPII',\n+  'IMAGE_SAFETY',\n+])\n+\n /**\n  * Convert a Gemini {@link GenerateContentResponse} into a framework\n  * {@link LLMResponse}.\n@@ -400,6 +413,8 @@ function fromGeminiResponse(\n   let stop_reason: LLMResponse['stop_reason'] = 'end_turn'\n   if (finishReason === 'MAX_TOKENS') {\n     stop_reason = 'max_tokens'\n+  } else if (finishReason !== undefined && GEMINI_CONTENT_FILTER_REASONS.has(finishReason)) {\n+    stop_reason = 'content_filter'\n   } else if (content.some((b) => b.type === 'tool_use')) {\n     // Gemini may report STOP even when it returned function calls.\n     stop_reason = 'tool_use'\n@@ -552,6 +567,8 @@ export class GeminiAdapter implements LLMAdapter {\n       let stop_reason: LLMResponse['stop_reason'] = 'end_turn'\n       if (lastFinishReason === 'MAX_TOKENS') {\n         stop_reason = 'max_tokens'\n+      } else if (lastFinishReason !== undefined && GEMINI_CONTENT_FILTER_REASONS.has(lastFinishReason)) {\n+        stop_reason = 'content_filter'\n       } else if (hasToolUse) {\n         stop_reason = 'tool_use'\n       }"
+  },
+  {
+   "filename": "packages/core/tests/gemini-adapter-contract.test.ts",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -315,6 +315,17 @@ describe('GeminiAdapter (contract)', () => {\n       expect(result.stop_reason).toBe('max_tokens')\n     })\n \n+    it.each(['SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII'])(\n+      'maps %s finishReason to content_filter',\n+      async (finishReason) => {\n+        mockGenerateContent.mockResolvedValue(makeGeminiResponse([], { finishReason }))\n+\n+        const result = await adapter.chat([textMsg('user', 'Hi')], chatOpts())\n+\n+        expect(result.stop_reason).toBe('content_filter')\n+      },\n+    )\n+\n     it('maps to tool_use when response contains functionCall (even with STOP)', async () => {\n       mockGenerateContent.mockResolvedValue(makeGeminiResponse(\n         [{ functionCall: { id: 'c1', name: 'search', args: {} } }],\n@@ -443,6 +454,17 @@ describe('GeminiAdapter (contract)', () => {\n       expect((done!.data as LLMResponse).stop_reason).toBe('max_tokens')\n     })\n \n+    it('yields done event with content_filter when the stream is blocked', async () => {\n+      mockGenerateContentStream.mockResolvedValue(\n+        asyncGen([makeGeminiResponse([], { finishReason: 'SAFETY' })]),\n+      )\n+\n+      const events = await collectEvents(adapter.stream([textMsg('user', 'Hi')], chatOpts()))\n+\n+      const done = events.find(e => e.type === 'done')\n+      expect((done!.data as LLMResponse).stop_reason).toBe('content_filter')\n+    })\n+\n     it('yields error event when stream throws', async () => {\n       mockGenerateContentStream.mockResolvedValue(\n         (async function* () { throw new Error('Gemini error') })(),"
+  }
+ ],
+ "test_files": [
+  "packages/core/tests/gemini-adapter-contract.test.ts"
+ ]
+}

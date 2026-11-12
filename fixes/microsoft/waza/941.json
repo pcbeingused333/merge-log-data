@@ -1,0 +1,54 @@
+{
+ "repo": "microsoft/waza",
+ "number": 941,
+ "url": "https://github.com/microsoft/waza/pull/941",
+ "title": "fix: write reporters after grading failures",
+ "merged_at": "2026-11-12T15:37:54Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -42,6 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0\n \n ### Fixed\n \n+- Write configured reports after completed grading failures while retaining the\n+  grading error and any report write error (#892).\n+\n - **Cancellation force-stop join** - When a canceled send or disconnect finishes\n   during forced cleanup, join the force-stop callback within the remaining\n   post-force grace instead of prematurely retiring its client. A callback that"
+  },
+  {
+   "filename": "README.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -757,6 +757,7 @@ fi\n waza run eval.yaml --format github-comment > comment.md\n gh pr comment $PR_NUMBER --body-file comment.md\n \n+# Completed grading failures also write JUnit XML and retain a nonzero exit status.\n # Generate JUnit XML for CI test reporting\n waza run eval.yaml --reporter junit:results.xml\n "
+  },
+  {
+   "filename": "cmd/waza/cmd_run.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 6,
+   "patch": "@@ -738,21 +738,17 @@ func runCommandForSpec(cmd *cobra.Command, sp skillSpecPath, defaultSkills []str\n \t\t}\n \t}\n \n-\tif lastErr != nil {\n-\t\treturn allResults, lastErr\n-\t}\n-\n \t// Write reporter outputs for the last model result\n \tif len(allResults) > 0 {\n \t\tlast := allResults[len(allResults)-1]\n \t\tif last.outcome != nil {\n \t\t\tif err := writeReporters(last.outcome); err != nil {\n-\t\t\t\treturn allResults, err\n+\t\t\t\treturn allResults, errors.Join(lastErr, err)\n \t\t\t}\n \t\t}\n \t}\n \n-\treturn allResults, nil\n+\treturn allResults, lastErr\n }\n \n func shutdownSharedClientAfterRun(parent context.Context) error {"
+  },
+  {
+   "filename": "cmd/waza/cmd_run_test.go",
+   "status": "modified",
+   "additions": 53,
+   "deletions": 0,
+   "patch": "@@ -436,6 +436,59 @@ func TestRunCommand_ReporterJUnit(t *testing.T) {\n \tassert.Contains(t, content, \"test-eval\")\n }\n \n+func TestRunCommand_ReporterJUnitGradingFailure(t *testing.T) {\n+\tfor _, writeFailure := range []bool{false, true} {\n+\t\tt.Run(fmt.Sprintf(\"writeFailure=%t\", writeFailure), func(t *testing.T) {\n+\t\t\tresetRunGlobals()\n+\t\t\tt.Cleanup(resetRunGlobals)\n+\t\t\tspecPath := createTestSpec(t, \"mock\")\n+\t\t\tspec, err := os.ReadFile(specPath)\n+\t\t\trequire.NoError(t, err)\n+\t\t\tspec = append(spec, []byte(`\n+graders:\n+  - type: text\n+    name: must-contain-never-match\n+    config:\n+      regex_match:\n+        - \"NEVER_MATCH_VALUE_12345\"\n+`)...)\n+\t\t\trequire.NoError(t, os.WriteFile(specPath, spec, 0o644))\n+\t\t\tdir := t.TempDir()\n+\t\t\tjunitFile := filepath.Join(dir, \"results.xml\")\n+\t\t\tif writeFailure {\n+\t\t\t\trequire.NoError(t, os.Mkdir(junitFile, 0o755))\n+\t\t\t}\n+\t\t\toutputFile := filepath.Join(dir, \"results.json\")\n+\t\t\tcmd := newRunCommand()\n+\t\t\tcmd.SetArgs([]string{specPath, \"--output\", outputFile, \"--reporter\", \"junit:\" + junitFile})\n+\t\t\tcmd.SetOut(io.Discard)\n+\t\t\tcmd.SetErr(io.Discard)\n+\t\t\terr = cmd.Execute()\n+\t\t\trequire.Error(t, err)\n+\t\t\tvar failure *TestFailureError\n+\t\t\trequire.ErrorAs(t, err, &failure)\n+\t\t\tassert.Contains(t, err.Error(), \"benchmark completed:\")\n+\t\t\tdata, readErr := os.ReadFile(outputFile)\n+\t\t\trequire.NoError(t, readErr)\n+\t\t\tvar outcome models.EvaluationOutcome\n+\t\t\trequire.NoError(t, json.Unmarshal(data, &outcome))\n+\t\t\trequire.Len(t, outcome.TestOutcomes, 1)\n+\t\t\tassert.Equal(t, 1, outcome.Digest.Failed)\n+\t\t\tassert.Zero(t, outcome.Digest.Errors)\n+\t\t\tif writeFailure {\n+\t\t\t\tassert.Contains(t, err.Error(), \"failed to write JUnit XML\")\n+\t\t\t\tvar pathErr *os.PathError\n+\t\t\t\tassert.ErrorAs(t, err, &pathErr)\n+\t\t\t} else {\n+\t\t\t\tdata, readErr := os.ReadFile(junitFile)\n+\t\t\t\trequire.NoError(t, readErr)\n+\t\t\t\tassert.Contains(t, string(data), \"<failure\")\n+\t\t\t\tassert.Contains(t, string(data), `name=\"Test Task\"`)\n+\t\t\t}\n+\t\t})\n+\t}\n+}\n+\n func TestRunCommand_ReporterFlagParsed(t *testing.T) {\n \tcmd := newRunCommand()\n \trequire.NoError(t, cmd.ParseFlags([]string{"
+  },
+  {
+   "filename": "docs/GUIDE.md",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -692,6 +692,13 @@ waza run evals/code-explainer/eval.yaml -o results.json\n \n ---\n \n+### Reports for failed evaluations\n+\n+Use `waza run eval.yaml --output results.json --reporter junit:results.xml`\n+to save JSON and JUnit XML, including when a completed evaluation fails grading.\n+The command retains its nonzero exit status; if writing the report also fails,\n+the returned error includes both the grading failure and the write error.\n+\n ### `waza dev <skill-name | skill-path>`\n \n Iteratively score and improve a skill's frontmatter. A single target can be a"
+  },
+  {
+   "filename": "site/src/content/docs/reference/cli.mdx",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -182,6 +182,7 @@ waza run eval.yaml --parallel --workers 8\n # With caching\n waza run eval.yaml --cache --cache-dir .waza-cache\n \n+# Completed grading failures also write JUnit XML and retain a nonzero exit status.\n # Generate JUnit XML for CI test reporting\n waza run eval.yaml --reporter junit:results.xml\n "
+  }
+ ],
+ "test_files": [
+  "cmd/waza/cmd_run_test.go"
+ ]
+}

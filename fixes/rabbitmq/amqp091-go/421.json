@@ -1,0 +1,26 @@
+{
+ "repo": "rabbitmq/amqp091-go",
+ "number": 421,
+ "url": "https://github.com/rabbitmq/amqp091-go/pull/421",
+ "title": "fix: build TLS config before dialing so config errors leave no open socket",
+ "merged_at": "2026-11-12T08:22:38Z",
+ "files": [
+  {
+   "filename": "connection.go",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 5,
+   "patch": "@@ -374,11 +374,7 @@ func DialConfig(url string, config Config) (*Connection, error) {\n \t\tdialer = DefaultDial(uri.connectionTimeout())\n \t}\n \n-\tconn, err = dialer(\"tcp\", addr)\n-\tif err != nil {\n-\t\treturn nil, err\n-\t}\n-\n+\t// Build the TLS config before dialing so a failure leaves no socket open.\n \tif uri.Scheme == \"amqps\" {\n \t\tif config.TLSClientConfig == nil {\n \t\t\ttlsConfig, err := tlsConfigFromURI(uri)\n@@ -393,7 +389,14 @@ func DialConfig(url string, config Config) (*Connection, error) {\n \t\tif config.TLSClientConfig.ServerName == \"\" {\n \t\t\tconfig.TLSClientConfig.ServerName = uri.Host\n \t\t}\n+\t}\n \n+\tconn, err = dialer(\"tcp\", addr)\n+\tif err != nil {\n+\t\treturn nil, err\n+\t}\n+\n+\tif uri.Scheme == \"amqps\" {\n \t\tclient := tls.Client(conn, config.TLSClientConfig)\n \t\tif err := client.Handshake(); err != nil {\n \t\t\tconn.Close()"
+  },
+  {
+   "filename": "connection_unit_test.go",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -12,6 +12,7 @@ import (\n \t\"errors\"\n \t\"io\"\n \t\"net\"\n+\t\"net/url\"\n \t\"os\"\n \t\"path/filepath\"\n \t\"reflect\"\n@@ -1728,3 +1729,31 @@ func TestConnectionCallPrefersShutdownReasonOverClosedRPC(t *testing.T) {\n \t\t}\n \t}\n }\n+\n+// TestDialTLSConfigFailureDoesNotDial verifies that an error building the TLS\n+// config from the URI is returned before any TCP connection is opened.\n+func TestDialTLSConfigFailureDoesNotDial(t *testing.T) {\n+\tmissing := filepath.Join(t.TempDir(), \"missing.pem\")\n+\n+\tfor name, query := range map[string]string{\n+\t\t\"cacertfile\":     \"cacertfile=\" + url.QueryEscape(missing),\n+\t\t\"client-keypair\": \"certfile=\" + url.QueryEscape(missing) + \"&keyfile=\" + url.QueryEscape(missing),\n+\t} {\n+\t\tt.Run(name, func(t *testing.T) {\n+\t\t\tdialed := false\n+\t\t\t_, err := DialConfig(\"amqps://127.0.0.1:5671/?\"+query, Config{\n+\t\t\t\tDial: func(network, addr string) (net.Conn, error) {\n+\t\t\t\t\tdialed = true\n+\t\t\t\t\treturn nil, errors.New(\"unexpected dial\")\n+\t\t\t\t},\n+\t\t\t})\n+\t\t\tvar pathErr *os.PathError\n+\t\t\tif !errors.As(err, &pathErr) || pathErr.Path != missing {\n+\t\t\t\tt.Fatalf(\"expected error for %s, got %v\", missing, err)\n+\t\t\t}\n+\t\t\tif dialed {\n+\t\t\t\tt.Fatal(\"dialer was called although TLS configuration failed\")\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "connection_unit_test.go"
+ ]
+}

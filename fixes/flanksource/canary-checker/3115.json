@@ -1,0 +1,26 @@
+{
+ "repo": "flanksource/canary-checker",
+ "number": 3115,
+ "url": "https://github.com/flanksource/canary-checker/pull/3115",
+ "title": "fix: calculate scheduled JUnit pod expiry from last runtime",
+ "merged_at": "2026-11-12T07:16:43Z",
+ "files": [
+  {
+   "filename": "checks/common.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -43,7 +43,7 @@ func getNextRuntime(canary v1.Canary, lastRuntime time.Time) (*time.Time, error)\n \t\tif err != nil {\n \t\t\treturn nil, err\n \t\t}\n-\t\tt := schedule.Next(time.Now())\n+\t\tt := schedule.Next(lastRuntime)\n \t\treturn &t, nil\n \t}\n \tt := lastRuntime.Add(time.Duration(canary.Spec.Interval) * time.Second)"
+  },
+  {
+   "filename": "checks/common_test.go",
+   "status": "added",
+   "additions": 44,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,44 @@\n+package checks\n+\n+import (\n+\t\"testing\"\n+\t\"time\"\n+\n+\tv1 \"github.com/flanksource/canary-checker/api/v1\"\n+)\n+\n+func TestGetNextRuntime(t *testing.T) {\n+\tlastRuntime := time.Date(2020, time.January, 2, 12, 0, 0, 0, time.UTC)\n+\tfor _, tt := range []struct {\n+\t\tname     string\n+\t\tschedule string\n+\t\tinterval uint64\n+\t}{\n+\t\t{name: \"cron\", schedule: \"*/15 * * * *\"},\n+\t\t{name: \"every\", schedule: \"@every 15m\"},\n+\t\t{name: \"interval\", interval: 900},\n+\t} {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tcanary := v1.Canary{}\n+\t\t\tcanary.Spec.Schedule = tt.schedule\n+\t\t\tcanary.Spec.Interval = tt.interval\n+\t\t\tgot, err := getNextRuntime(canary, lastRuntime)\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\t\t\twant := lastRuntime.Add(15 * time.Minute)\n+\t\t\tif got == nil || !got.Equal(want) {\n+\t\t\t\tt.Fatalf(\"getNextRuntime() = %v, want %v\", got, want)\n+\t\t\t}\n+\t\t})\n+\t}\n+}\n+\n+func TestGetNextRuntimeInvalidSchedule(t *testing.T) {\n+\tcanary := v1.Canary{}\n+\tcanary.Spec.Schedule = \"invalid\"\n+\tgot, err := getNextRuntime(canary, time.Now())\n+\tif err == nil || got != nil {\n+\t\tt.Fatalf(\"getNextRuntime() = %v, %v; want nil and an error\", got, err)\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "checks/common_test.go"
+ ]
+}

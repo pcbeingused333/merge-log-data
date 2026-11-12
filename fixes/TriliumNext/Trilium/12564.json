@@ -1,0 +1,33 @@
+{
+ "repo": "TriliumNext/Trilium",
+ "number": 12564,
+ "url": "https://github.com/TriliumNext/Trilium/pull/12564",
+ "title": "fix(llm): honor disableVersioning in MCP write tools",
+ "merged_at": "2026-11-12T13:24:42Z",
+ "files": [
+  {
+   "filename": ".changelog/20261112115347_mcp-disable-versioning.md",
+   "status": "added",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,7 @@\n+---\n+type: fix\n+area: LLM\n+closes: [12563]\n+---\n+\n+Editing a note through the LLM chat or the MCP server saved a revision even when the note had `#disableVersioning`, set on it or inherited from a parent."
+  },
+  {
+   "filename": "packages/trilium-core/src/services/llm/tools/note_tools.spec.ts",
+   "status": "modified",
+   "additions": 37,
+   "deletions": 0,
+   "patch": "@@ -1,4 +1,5 @@\n import becca from \"../../../becca/becca.js\";\n+import BAttribute from \"../../../becca/entities/battribute.js\";\n import { saveLinks } from \"../../../services/notes.js\";\n import * as becca_easy_mocking from \"../../../test/becca_easy_mocking.js\";\n import { beforeEach, describe, expect, it, vi } from \"vitest\";\n@@ -313,6 +314,42 @@ describe(\"note_tools — write tools return post-write content\", () => {\n         });\n     });\n \n+    describe(\"disableVersioning label\", () => {\n+        const calls: Array<[string, Record<string, unknown>]> = [\n+            [\"set_note_content\", { content: \"new\" }],\n+            [\"append_to_note\", { content: \"more\" }],\n+            [\"edit_note_content\", { edits: [{ oldText: \"a\", newText: \"z\" }] }]\n+        ];\n+\n+        for (const [tool, args] of calls) {\n+            it(`${tool} snapshots only a note with no own or inherited #disableVersioning`, () => {\n+                const codeNote = { type: \"code\" as const, mime: \"text/plain\", content: \"a\\nb\" };\n+                const owner = buildNote({ id: \"ver-owner\", ...codeNote, \"#disableVersioning\": \"\" });\n+                buildNote({ id: \"ver-parent\", children: [ { id: \"ver-heir\", ...codeNote } ] });\n+                new BAttribute({\n+                    attributeId: \"ver-parent-label\",\n+                    noteId: \"ver-parent\",\n+                    type: \"label\",\n+                    name: \"disableVersioning\",\n+                    value: \"\",\n+                    isInheritable: true\n+                });\n+                const heir = becca.getNoteOrThrow(\"ver-heir\");\n+                const plain = buildNote({ id: \"ver-plain\", ...codeNote });\n+\n+                for (const note of [ owner, heir, plain ]) {\n+                    withMutableContent(note, \"a\\nb\");\n+                    expect(getTool(tool).execute({ noteId: note.noteId, ...args })).toMatchObject({ success: true });\n+                    expect(note.setContent).toHaveBeenCalled();\n+                }\n+\n+                expect(owner.saveRevision).not.toHaveBeenCalled();\n+                expect(heir.saveRevision).not.toHaveBeenCalled();\n+                expect(plain.saveRevision).toHaveBeenCalledWith({ source: \"llm\" });\n+            });\n+        }\n+    });\n+\n     describe(\"create_note\", () => {\n         it(\"returns the created note's content\", async () => {\n             buildNote({ id: \"parent1\", title: \"Parent\" });"
+  },
+  {
+   "filename": "packages/trilium-core/src/services/llm/tools/note_tools.ts",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 3,
+   "patch": "@@ -143,7 +143,7 @@ export const noteTools = defineTools({\n             }\n             const mimeChanged = newMime !== note.mime;\n \n-            note.saveRevision({ source: \"llm\" });\n+            saveLlmRevision(note);\n             if (typeChanged || mimeChanged) {\n                 note.type = newType;\n                 note.mime = newMime;\n@@ -197,7 +197,7 @@ export const noteTools = defineTools({\n                 newContent = existingContent + (existingContent.endsWith(\"\\n\") ? \"\" : \"\\n\") + content;\n             }\n \n-            note.saveRevision({ source: \"llm\" });\n+            saveLlmRevision(note);\n             note.setContent(newContent);\n             scanWrittenContent(note);\n             return {\n@@ -262,7 +262,7 @@ export const noteTools = defineTools({\n                 return { error: svgError };\n             }\n \n-            note.saveRevision({ source: \"llm\" });\n+            saveLlmRevision(note);\n             note.setContent(result.content);\n             scanWrittenContent(note);\n             return {\n@@ -421,6 +421,17 @@ export const noteTools = defineTools({\n     }\n });\n \n+/**\n+ * Snapshots the note before a tool overwrites it, unless the note has `#disableVersioning`, own or\n+ * inherited, as `saveRevisionIfNeeded()` does for the editor.\n+ */\n+function saveLlmRevision(note: BNote) {\n+    if (note.isLabelTruthy(\"disableVersioning\")) {\n+        return;\n+    }\n+    note.saveRevision({ source: \"llm\" });\n+}\n+\n /** Records the `internalLink` relations of what a tool wrote, as `updateNoteData()` does for the editor. */\n function scanWrittenContent(note: BNote) {\n     const content = note.getContent();"
+  }
+ ],
+ "test_files": [
+  "packages/trilium-core/src/services/llm/tools/note_tools.spec.ts"
+ ]
+}

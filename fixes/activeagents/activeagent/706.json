@@ -1,0 +1,33 @@
+{
+ "repo": "activeagents/activeagent",
+ "number": 706,
+ "url": "https://github.com/activeagents/activeagent/pull/706",
+ "title": "fix: preserve Responses streaming error details",
+ "merged_at": "2026-11-12T18:40:28Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -39,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0\n \n ### Fixed\n \n+- **Responses streaming failures retain their error details** (`activeagent`).\n+  `error` and `response.failed` events raise a provider error with the API\n+  code and message instead of an unexpected chunk type error.\n - **The dashboard keeps a catalog's pass bars** (`actionagent`). A\n   product's and a set's `pass` blocks (`min_pass_rate`, `threshold`,\n   `gated`) parsed in `ActiveAgent::Evals::Catalog`, but neither"
+  },
+  {
+   "filename": "lib/active_agent/providers/open_ai/responses_provider.rb",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -110,6 +110,7 @@ def api_response_normalize(api_response)\n         #   reasoning progress, kept from the reasoning item once it is done\n         # - `:\"response.content_part.done\"` - content part completed\n         # - `:\"response.output_item.done\"` - message, reasoning or function call completed\n+        # - `:error`, `:\"response.failed\"` - provider failure\n         # - `:\"response.completed\"` - response finished\n         # - `:\"response.incomplete\"` - response cut short (e.g. max_output_tokens)\n         #\n@@ -174,6 +175,12 @@ def process_stream_chunk(api_response_event)\n           when :\"response.output_item.done\"\n             process_stream_output_item_done(api_response_event)\n \n+          # Errors arrive as events even though the HTTP request succeeded.\n+          when :error, :\"response.failed\"\n+            error = api_response_event.type == :error ? api_response_event : api_response_event.response.error\n+            message = [ error&.code, error&.message ].compact.join(\": \")\n+            raise Errors::ProviderError.new(message.presence || \"OpenAI response failed\", provider_tag: tag_name)\n+\n           # Response Completed, or cut short (e.g. by max_output_tokens) with\n           # the output it has so far\n           when :\"response.completed\", :\"response.incomplete\""
+  },
+  {
+   "filename": "test/providers/open_ai/responses/streaming_errors_test.rb",
+   "status": "added",
+   "additions": 53,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,53 @@\n+# frozen_string_literal: true\n+\n+require \"test_helper\"\n+require_relative \"../../../../lib/active_agent/providers/open_ai/responses_provider\"\n+\n+module Providers\n+  module OpenAI\n+    module Responses\n+      class StreamingErrorsTest < ActiveSupport::TestCase\n+        include WebMock::API\n+\n+        test \"an error event preserves the API error message and code\" do\n+          assert_stream_error({ type: \"error\", code: \"server_error\", message: \"Please try again\", param: nil },\n+            \"server_error: Please try again\")\n+        end\n+\n+        test \"a failed response preserves its nested error\" do\n+          assert_stream_error({ type: \"response.failed\", response: {\n+            id: \"resp_failed\", status: \"failed\", error: { code: \"server_error\", message: \"Generation failed\" }\n+          } }, \"server_error: Generation failed\")\n+        end\n+\n+        test \"a failed response without error details still raises a provider error\" do\n+          assert_stream_error({ type: \"response.failed\", response: {\n+            id: \"resp_failed\", status: \"failed\", error: nil\n+          } }, \"OpenAI response failed\")\n+        end\n+\n+        private\n+\n+        def assert_stream_error(event, message)\n+          events = [ { type: \"response.created\", response: {\n+            id: \"resp_failed\", status: \"in_progress\", output: []\n+          } }, event ]\n+          body = events.each_with_index.map do |chunk, index|\n+            \"event: #{chunk[:type]}\\ndata: #{chunk.merge(sequence_number: index).to_json}\\n\\n\"\n+          end.join\n+          stub_request(:post, \"https://api.openai.com/v1/responses\").to_return(\n+            status: 200, headers: { \"Content-Type\" => \"text/event-stream\" }, body:\n+          )\n+          provider = ActiveAgent::Providers::OpenAI::ResponsesProvider.new(\n+            service: \"OpenAI\", api_key: \"test-key\", model: \"gpt-5\", stream: true,\n+            messages: [ { role: \"user\", content: \"Hello\" } ],\n+            stream_broadcaster: ->(_message, _delta, _event_type) { }\n+          )\n+\n+          error = assert_raises(ActiveAgent::Providers::Errors::ProviderError) { provider.prompt }\n+          assert_equal message, error.message\n+        end\n+      end\n+    end\n+  end\n+end"
+  }
+ ],
+ "test_files": [
+  "test/providers/open_ai/responses/streaming_errors_test.rb"
+ ]
+}

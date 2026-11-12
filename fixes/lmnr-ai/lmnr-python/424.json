@@ -1,0 +1,26 @@
+{
+ "repo": "lmnr-ai/lmnr-python",
+ "number": 424,
+ "url": "https://github.com/lmnr-ai/lmnr-python/pull/424",
+ "title": "fix(groq): record API errors on the span instead of leaving it open",
+ "merged_at": "2026-11-12T18:09:23Z",
+ "files": [
+  {
+   "filename": "src/lmnr/opentelemetry_lib/opentelemetry/instrumentation/groq/__init__.py",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 2,
+   "patch": "@@ -41,6 +41,7 @@\n from lmnr.opentelemetry_lib.opentelemetry.instrumentation.shared.wrapper_helpers import (\n     stamp_instrumentation_scope,\n )\n+from lmnr.opentelemetry_lib.tracing.context import get_event_attributes_from_context\n from lmnr.sdk.log import get_default_logger\n \n logger = get_default_logger(__name__)\n@@ -102,6 +103,15 @@ async def _create_async_stream_processor(\n     span.end()\n \n \n+def _record_error(span: Span, error: BaseException):\n+    \"\"\"End the span as failed; the caller re-raises.\"\"\"\n+    if span.is_recording():\n+        span.set_attribute(\"error.type\", type(error).__name__)\n+        span.record_exception(error, attributes=get_event_attributes_from_context())\n+        span.set_status(Status(StatusCode.ERROR, str(error)))\n+    span.end()\n+\n+\n @dont_throw\n def _handle_input(span: Span, kwargs: dict[str, Any]):\n     set_model_input_attributes(span, kwargs)\n@@ -134,7 +144,11 @@ def _wrap(\n     stamp_instrumentation_scope(span, to_wrap)\n     _handle_input(span, kwargs)\n \n-    response = wrapped(*args, **kwargs)\n+    try:\n+        response = wrapped(*args, **kwargs)\n+    except Exception as e:\n+        _record_error(span, e)\n+        raise\n \n     if is_streaming_response(response):\n         try:\n@@ -178,7 +192,11 @@ async def _awrap(\n     stamp_instrumentation_scope(span, to_wrap)\n     _handle_input(span, kwargs)\n \n-    response = await wrapped(*args, **kwargs)\n+    try:\n+        response = await wrapped(*args, **kwargs)\n+    except Exception as e:\n+        _record_error(span, e)\n+        raise\n \n     if is_streaming_response(response):\n         try:"
+  },
+  {
+   "filename": "tests/test_instrumentations/test_groq/traces/test_chat_tracing.py",
+   "status": "modified",
+   "additions": 40,
+   "deletions": 1,
+   "patch": "@@ -9,14 +9,15 @@\n \n import httpx\n import pytest\n-from groq import AsyncGroq, Groq\n+from groq import AsyncGroq, Groq, RateLimitError\n from groq.types.chat import (\n     ChatCompletionContentPartImageParam,\n     ChatCompletionMessageParam,\n     ChatCompletionToolParam,\n )\n from opentelemetry.sdk.trace import ReadableSpan\n from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter\n+from opentelemetry.trace import StatusCode\n \n with open(\n     Path(__file__).parent.parent.joinpath(\"data/logo.jpg\"),\n@@ -388,3 +389,41 @@ def test_chat_content_not_traced(\n     assert \"gen_ai.output.messages\" not in attrs\n     assert \"gen_ai.tool.definitions\" not in attrs\n     assert attrs[\"gen_ai.usage.input_tokens\"] == 120\n+\n+\n+def _error_handler(_request: httpx.Request) -> httpx.Response:\n+    return httpx.Response(429, json={\"error\": {\"message\": \"rate limited\"}})\n+\n+\n+def test_chat_api_error_ends_span_with_error(\n+    instrument_legacy: MagicMock, span_exporter: InMemorySpanExporter\n+):\n+    client = Groq(\n+        api_key=\"test\",\n+        max_retries=0,\n+        http_client=httpx.Client(transport=httpx.MockTransport(_error_handler)),\n+    )\n+    with pytest.raises(RateLimitError):\n+        client.chat.completions.create(model=MODEL, messages=TOOL_MESSAGES)\n+\n+    span = _only_span(span_exporter)\n+    assert span.status.status_code == StatusCode.ERROR\n+    assert _attrs(span)[\"error.type\"] == \"RateLimitError\"\n+    assert [event.name for event in span.events] == [\"exception\"]\n+\n+\n+@pytest.mark.asyncio\n+async def test_async_chat_api_error_ends_span_with_error(\n+    instrument_legacy: MagicMock, span_exporter: InMemorySpanExporter\n+):\n+    client = AsyncGroq(\n+        api_key=\"test\",\n+        max_retries=0,\n+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(_error_handler)),\n+    )\n+    with pytest.raises(RateLimitError):\n+        await client.chat.completions.create(model=MODEL, messages=TOOL_MESSAGES)\n+\n+    span = _only_span(span_exporter)\n+    assert span.status.status_code == StatusCode.ERROR\n+    assert _attrs(span)[\"error.type\"] == \"RateLimitError\""
+  }
+ ],
+ "test_files": [
+  "tests/test_instrumentations/test_groq/traces/test_chat_tracing.py"
+ ]
+}

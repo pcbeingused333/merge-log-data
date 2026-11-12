@@ -2,8 +2,27 @@
  "repo": "upstash/redis-js",
  "number": 1470,
  "url": "https://github.com/upstash/redis-js/pull/1470",
- "state": "open",
- "reviews": [],
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-12T12:44:09Z",
+   "body": "<!-- ccr-overview-v2 -->\n\n### 🔵 Needs a closer look\n\nThe new integration test assumes XAUTOCLAIM COUNT 0 succeeds with an empty result, but that behavior remains unverified against the supported Upstash backend.\n\n**No open issues** 🎉\n\n<details>\n<summary><strong>What changed in this PR</strong></summary>\n\nThis PR fixes Redis command construction so explicit zero and empty-string arguments are preserved, and corrects when XCLAIM emits `TIME`.\n\n**Changes:**\n- Fix XCLAIM’s `TIME` guard and preserve zero-valued claim options.\n- Preserve zero or empty arguments in expiration, geospatial, stream, and scan commands.\n- Add regression tests and patch-release changesets.\n\n| File | Description |\r\n| ---- | ----------- |\r\n| `packages/​redis/​pkg/​commands/​zscan.ts` | Preserve empty `MATCH` patterns. |\r\n| `packages/​redis/​pkg/​commands/​zscan.test.ts` | Test matching an empty sorted-set member. |\r\n| `packages/​redis/​pkg/​commands/​xtrim.ts` | Include explicit `LIMIT 0`. |\r\n| `packages/​redis/​pkg/​commands/​xtrim.test.ts` | Test trimming with `LIMIT 0`. |\r\n| `packages/​redis/​pkg/​commands/​xclaim.ts` | Correct the `TIME` guard and retain zero options. |\r\n| `packages/​redis/​pkg/​commands/​xclaim.test.ts` | Verify independent time options and zero-valued arguments. |\r\n| `packages/​redis/​pkg/​commands/​xautoclaim.ts` | Forward explicit zero counts. |\r\n| `packages/​redis/​pkg/​commands/​xautoclaim.test.ts` | Add a zero-count claim test. |\r\n| `packages/​redis/​pkg/​commands/​sscan.ts` | Preserve empty `MATCH` patterns. |\r\n| `packages/​redis/​pkg/​commands/​sscan.test.ts` | Test matching an empty set member. |\r\n| `packages/​redis/​pkg/​commands/​scan.ts` | Preserve empty `MATCH` patterns. |\r\n| `packages/​redis/​pkg/​commands/​hscan.ts` | Preserve empty `MATCH` patterns. |\r\n| `packages/​redis/​pkg/​commands/​hscan.test.ts` | Test matching an empty hash field. |\r\n| `packages/​redis/​pkg/​commands/​geo_add.ts` | Retain the first member when latitude is zero. |\r\n| `packages/​redis/​pkg/​commands/​geo_add.test.ts` | Test adding a member at latitude zero. |\r\n| `packages/​redis/​pkg/​commands/​expire.ts` | Filter only undefined arguments. |\r\n| `packages/​redis/​pkg/​commands/​expire.test.ts` | Test immediate expiration with zero seconds. |\r\n| `.changeset/​fix-xclaim-time.md` | Document the XCLAIM patch. |\r\n| `.changeset/​fix-dropped-falsy-arguments.md` | Document the broader argument-preservation fixes. |\n</details>\n\n<sub>Review effort: Balanced</sub>"
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-12T12:49:45Z",
+   "body": ""
+  }
+ ],
  "review_comments": [],
- "comments": []
+ "comments": [
+  {
+   "role": "contributor",
+   "created_at": "2026-11-12T12:37:15Z",
+   "body": "Thanks for the fix. I went through the other commands for the same kind of problem (a valid zero or empty value being dropped by a truthiness check) and pushed the ones I found to this branch, so they can ship together. I also merged `main` into the branch.\n\nAdded in 9fbc4c6:\n\n| Command | Before | Now |\n|---|---|---|\n| `expire(key, 0)` | `seconds` was dropped and the server returned a wrong-number-of-arguments error | sent as is, the key is deleted |\n| `geoadd` | a first member with `latitude: 0` was not added | added |\n| `xtrim` | `limit: 0` was dropped, so the default eviction limit applied | `LIMIT 0` is sent |\n| `xautoclaim` | `count: 0` was dropped, so up to the default number of entries were claimed | `COUNT 0` is sent |\n| `hscan`, `sscan`, `zscan` | `match: \"\"` was dropped and everything was returned | `MATCH \"\"` is sent |\n| `scan` | same check as above | changed for consistency |\n\nEach fix has a test that fails without it and passes with it, except `scan`: an empty pattern makes no observable difference there, so that one has no test.\n\nOne behavior change to be aware of: `xtrim` with `exactness: \"=\"` and `limit: 0` now gets the server's `LIMIT cannot be used without the special ~ option` error. Before, the `0` was silently dropped."
+  }
+ ]
 }

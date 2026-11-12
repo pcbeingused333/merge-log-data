@@ -1,0 +1,41 @@
+{
+ "repo": "open-multi-agent/open-multi-agent",
+ "number": 663,
+ "url": "https://github.com/open-multi-agent/open-multi-agent/pull/663",
+ "title": "fix(core): omit unsupported Anthropic sampling parameters",
+ "merged_at": "2026-11-12T10:47:35Z",
+ "files": [
+  {
+   "filename": "docs/providers.md",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -188,6 +188,10 @@ Two caveats the table cannot express:\n   field simply leaves it out of the request, so one config is safe to reuse\n   across a mixed-provider team.\n \n+Anthropic omits `temperature`, `topP`, and `topK` for Claude Opus 4.7,\n+Sonnet 5, and later models that reject these sampling parameters. Explicit\n+provider-native values in `extraBody` are still forwarded.\n+\n `extraBody` is spread between the sampling parameters and the structural fields.\n It can therefore override `temperature`, `topP`, and the rest, but not\n transport-level fields (`model`, `messages`, `tools`, `stream`, and Anthropic's"
+  },
+  {
+   "filename": "packages/core/src/llm/anthropic.ts",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 7,
+   "patch": "@@ -62,7 +62,7 @@ import {\n   resolveReasoningOutboundMaxChars,\n   type ReasoningOutboundOptions,\n } from './reasoning-fallback.js'\n-import { requiresBudgetThinking } from './anthropic-models.js'\n+import { acceptsSamplingParams, requiresBudgetThinking } from './anthropic-models.js'\n import { assertValidMessages } from './validate.js'\n import { createEgressFetch } from './egress.js'\n import { UnsupportedContentBlockError, UnsupportedToolResultContentError } from '../errors.js'\n@@ -435,9 +435,11 @@ export class AnthropicAdapter implements LLMAdapter {\n         // fields (model/messages/system/tools/thinking) come after extraBody\n         // so users cannot accidentally clobber them via extraBody.\n         max_tokens: effectiveMaxTokens,\n-        temperature: options.temperature,\n-        top_p: options.topP,\n-        top_k: options.topK,\n+        ...(acceptsSamplingParams(options.model) ? {\n+          temperature: options.temperature,\n+          top_p: options.topP,\n+          top_k: options.topK,\n+        } : {}),\n         ...options.extraBody,\n         model: options.model,\n         messages: anthropicMessages,\n@@ -494,9 +496,11 @@ export class AnthropicAdapter implements LLMAdapter {\n       {\n         // See chat() above for the rationale behind this field ordering.\n         max_tokens: effectiveMaxTokens,\n-        temperature: options.temperature,\n-        top_p: options.topP,\n-        top_k: options.topK,\n+        ...(acceptsSamplingParams(options.model) ? {\n+          temperature: options.temperature,\n+          top_p: options.topP,\n+          top_k: options.topK,\n+        } : {}),\n         ...options.extraBody,\n         model: options.model,\n         messages: anthropicMessages,"
+  },
+  {
+   "filename": "packages/core/tests/anthropic-adapter.test.ts",
+   "status": "modified",
+   "additions": 37,
+   "deletions": 1,
+   "patch": "@@ -72,6 +72,42 @@ describe('AnthropicAdapter', () => {\n     })\n   })\n \n+  describe.each(['chat', 'stream'] as const)('%s sampling parameters', (method) => {\n+    async function send(model: string, extraBody?: Record<string, unknown>) {\n+      mockCreate.mockResolvedValue(makeAnthropicResponse())\n+      mockStream.mockReturnValue(makeStreamMock([], makeAnthropicResponse()))\n+      const options = chatOpts({ model, temperature: 0.5, topP: 0.8, topK: 20, extraBody })\n+      if (method === 'chat') {\n+        await adapter.chat([textMsg('user', 'Hi')], options)\n+        return mockCreate.mock.calls[0][0]\n+      }\n+      await collectEvents(adapter.stream([textMsg('user', 'Hi')], options))\n+      return mockStream.mock.calls[0][0]\n+    }\n+\n+    it.each(['claude-opus-4-7', 'claude-sonnet-5', 'claude-opus-4-7-20261001'])(\n+      'omits unsupported sampling parameters for %s', async (model) => {\n+        const request = await send(model)\n+        for (const key of ['temperature', 'top_p', 'top_k']) {\n+          expect(request).not.toHaveProperty(key)\n+        }\n+      },\n+    )\n+\n+    it.each(['claude-3-7-sonnet-latest', 'claude-sonnet-4-6', 'claude-haiku-4-5'])(\n+      'preserves sampling parameters for %s', async (model) => {\n+        expect(await send(model)).toMatchObject({ temperature: 0.5, top_p: 0.8, top_k: 20 })\n+      },\n+    )\n+\n+    it.each(['claude-sonnet-4-6', 'claude-opus-4-7'])(\n+      'preserves explicit extraBody overrides for %s', async (model) => {\n+        const overrides = { temperature: 0.9, top_p: 0.7, top_k: 10 }\n+        expect(await send(model, overrides)).toMatchObject(overrides)\n+      },\n+    )\n+  })\n+\n   // =========================================================================\n   // chat()\n   // =========================================================================\n@@ -281,7 +317,7 @@ describe('AnthropicAdapter', () => {\n \n       await adapter.chat(\n         [textMsg('user', 'Hi')],\n-        chatOpts({ temperature: 0.5 }),\n+        chatOpts({ model: 'claude-sonnet-4-6', temperature: 0.5 }),\n       )\n \n       expect(mockCreate.mock.calls[0][0].temperature).toBe(0.5)"
+  },
+  {
+   "filename": "packages/core/tests/sampling-wire-format.test.ts",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 2,
+   "patch": "@@ -162,7 +162,7 @@ describe('Anthropic adapter wire format', () => {\n \n     const adapter = new AnthropicAdapter('test-key')\n     await adapter.chat([userMessage], {\n-      model: 'claude-test',\n+      model: 'claude-sonnet-4-5',\n       maxTokens: 200,\n       temperature: 0.6,\n       topP: 0.85,\n@@ -177,7 +177,27 @@ describe('Anthropic adapter wire format', () => {\n     expect(body['temperature']).toBe(0.6)\n     expect(body['max_tokens']).toBe(200)\n     expect(body['metadata']).toEqual({ user_id: 'u1' })\n-    expect(body['model']).toBe('claude-test')\n+    expect(body['model']).toBe('claude-sonnet-4-5')\n+  })\n+\n+  it('omits unsupported sampling parameters from the messages payload', async () => {\n+    mockAnthropicCreate.mockResolvedValueOnce(okAnthropicResponse)\n+\n+    const adapter = new AnthropicAdapter('test-key')\n+    await adapter.chat([userMessage], {\n+      model: 'claude-opus-4-7',\n+      maxTokens: 200,\n+      temperature: 0.6,\n+      topP: 0.85,\n+      topK: 25,\n+    })\n+\n+    const body = mockAnthropicCreate.mock.calls[0]?.[0] as Record<string, unknown>\n+    expect(body).not.toHaveProperty('temperature')\n+    expect(body).not.toHaveProperty('top_p')\n+    expect(body).not.toHaveProperty('top_k')\n+    expect(body['max_tokens']).toBe(200)\n+    expect(body['model']).toBe('claude-opus-4-7')\n   })\n \n   it('refuses to let extraBody override transport-level fields (model)', async () => {"
+  }
+ ],
+ "test_files": [
+  "packages/core/tests/anthropic-adapter.test.ts",
+  "packages/core/tests/sampling-wire-format.test.ts"
+ ]
+}

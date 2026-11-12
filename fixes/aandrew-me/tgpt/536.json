@@ -1,0 +1,26 @@
+{
+ "repo": "aandrew-me/tgpt",
+ "number": 536,
+ "url": "https://github.com/aandrew-me/tgpt/pull/536",
+ "title": "fix(openai): trim trailing slash from Cerebras base URL",
+ "merged_at": "2026-11-12T08:20:22Z",
+ "files": [
+  {
+   "filename": "src/providers/openai/openai.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -53,7 +53,7 @@ func NewRequest(input string, params structs.Params) (*http.Response, error) {\n \turl := params.Url\n \tif url == \"\" {\n \t\tif envUrl := os.Getenv(\"CEREBRAS_BASE_URL\"); envUrl != \"\" {\n-\t\t\turl = envUrl + \"/chat/completions\"\n+\t\t\turl = strings.TrimSuffix(envUrl, \"/\") + \"/chat/completions\"\n \t\t} else if envUrl := os.Getenv(\"OPENAI_URL\"); envUrl != \"\" {\n \t\t\turl = envUrl\n \t\t}"
+  },
+  {
+   "filename": "src/providers/openai/openai_test.go",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -44,3 +44,22 @@ func TestRequestLeavesOutUnsetSampling(t *testing.T) {\n \tassert.NotContains(t, body, \"temperature\")\n \tassert.NotContains(t, body, \"top_p\")\n }\n+\n+func TestCerebrasBaseURL(t *testing.T) {\n+\tfor _, suffix := range []string{\"\", \"/\"} {\n+\t\tt.Run(\"suffix=\"+suffix, func(t *testing.T) {\n+\t\t\tvar path string\n+\t\t\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\t\t\tpath = r.URL.Path\n+\t\t\t}))\n+\t\t\tdefer server.Close()\n+\n+\t\t\tt.Setenv(\"CEREBRAS_BASE_URL\", server.URL+\"/v1\"+suffix)\n+\t\t\tresp, err := NewRequest(\"hello\", structs.Params{})\n+\t\t\trequire.NoError(t, err)\n+\t\t\tdefer resp.Body.Close()\n+\n+\t\t\tassert.Equal(t, \"/v1/chat/completions\", path)\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "src/providers/openai/openai_test.go"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "getsentry/sentry-elixir",
+ "number": 1265,
+ "url": "https://github.com/getsentry/sentry-elixir/pull/1265",
+ "title": "fix(quantum): apply monitor_config_defaults to cron check-ins",
+ "merged_at": "2026-11-12T13:37:09Z",
+ "files": [
+  {
+   "filename": "lib/sentry/integrations/quantum/cron.ex",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -74,7 +74,12 @@ defmodule Sentry.Integrations.Quantum.Cron do\n             check_in_id: id,\n             # This is already a binary.\n             monitor_slug: \"quantum-#{slugify(job.name)}\",\n-            monitor_config: [schedule: schedule_opts, timezone: timezone_to_string(job)]\n+            monitor_config:\n+              Keyword.merge(\n+                Sentry.Config.integrations()[:monitor_config_defaults],\n+                schedule: schedule_opts,\n+                timezone: timezone_to_string(job)\n+              )\n           ]\n       end\n     else"
+  },
+  {
+   "filename": "test/sentry/integrations/quantum/cron_test.exs",
+   "status": "modified",
+   "additions": 39,
+   "deletions": 0,
+   "patch": "@@ -78,6 +78,45 @@ defmodule Sentry.Integrations.Quantum.CronTest do\n     )\n   end\n \n+  test \"uses default monitor configuration in Sentry's config if present\", %{ref: ref} do\n+    put_test_config(\n+      integrations: [\n+        monitor_config_defaults: [\n+          checkin_margin: 10,\n+          max_runtime: 42,\n+          failure_issue_threshold: 84\n+        ]\n+      ]\n+    )\n+\n+    span_ref = make_ref()\n+\n+    :telemetry.execute([:quantum, :job, :start], %{}, %{\n+      job:\n+        Scheduler.new_job(\n+          name: :test_job,\n+          schedule: Crontab.CronExpression.Parser.parse!(\"@daily\"),\n+          timezone: \"Europe/Rome\"\n+        ),\n+      telemetry_span_context: span_ref\n+    })\n+\n+    [check_in_body] = SentryTest.collect_sentry_check_ins(ref, 1)\n+\n+    assert_sentry_report(check_in_body,\n+      monitor_config: %{\n+        \"checkin_margin\" => 10,\n+        \"failure_issue_threshold\" => 84,\n+        \"max_runtime\" => 42,\n+        \"schedule\" => %{\n+          \"type\" => \"crontab\",\n+          \"value\" => \"0 0 * * * *\"\n+        },\n+        \"timezone\" => \"Europe/Rome\"\n+      }\n+    )\n+  end\n+\n   test \"captures exception events with monitor config\", %{ref: ref} do\n     span_ref = make_ref()\n     id = CheckInIDMappings.lookup_or_insert_new(\"quantum-#{:erlang.phash2(span_ref)}\")"
+  }
+ ],
+ "test_files": [
+  "test/sentry/integrations/quantum/cron_test.exs"
+ ]
+}
