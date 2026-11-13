@@ -1,0 +1,33 @@
+{
+ "repo": "posit-dev/rsconnect-python",
+ "number": 877,
+ "url": "https://github.com/posit-dev/rsconnect-python/pull/877",
+ "title": "fix: pass --package-installer to write-manifest <framework> and deploy quarto",
+ "merged_at": "2026-11-12T21:11:15Z",
+ "files": [
+  {
+   "filename": "docs/CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0\n ### Fixed\n \n - Follows symlinks when bundling content: linked files are archived with their target contents and linked directories are included, instead of archiving broken links or omitting the directories. [#955](https://github.com/posit-dev/rsconnect-python/pull/955)\n+- Passes `--package-installer` through in `write-manifest <framework>` and `deploy quarto`. The option was accepted but ignored, so the manifest always recorded `pip`. [#877](https://github.com/posit-dev/rsconnect-python/pull/877)\n \n ## [1.33.2] - 2026-11-10\n "
+  },
+  {
+   "filename": "rsconnect/main.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -3187,6 +3187,7 @@ def deploy_quarto(\n                 requirements_file=requirements_file,\n                 python=python,\n                 override_python_version=override_python_version,\n+                package_manager=package_installer,\n             )\n \n     # R/Quarto content can use renv regardless of the Quarto engine, so detect it\n@@ -4898,6 +4899,7 @@ def _write_framework_manifest(\n             requirements_file=requirements_file,\n             override_python_version=override_python_version,\n             python=python,\n+            package_manager=package_installer,\n         )\n     r_environment = None if exclude_renv else REnvironment.create(directory)\n "
+  },
+  {
+   "filename": "tests/test_package_installer.py",
+   "status": "added",
+   "additions": 75,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,75 @@\n+import json\n+import pathlib\n+import typing\n+from unittest import mock\n+\n+import pytest\n+from click.testing import CliRunner\n+\n+from rsconnect.environment import Environment\n+from rsconnect.main import cli\n+\n+from .utils import apply_common_args\n+\n+\n+def _fake_env_info() -> Environment:\n+    environment = Environment.from_dict(\n+        {\n+            \"contents\": \"flask\\n\",\n+            \"filename\": \"requirements.txt\",\n+            \"locale\": \"en_US.UTF-8\",\n+            \"package_manager\": \"pip\",\n+            \"pip\": \"23.0.1\",\n+            \"python\": \"3.11.0\",\n+            \"source\": \"file\",\n+        }\n+    )\n+    environment.uv_executable = \"uv\"\n+    return environment\n+\n+\n+@pytest.mark.parametrize(\"installer\", [\"uv\", \"pip\"])\n+@pytest.mark.parametrize(\"framework\", [\"shiny\", \"streamlit\", \"fastapi\"])\n+def test_write_manifest_framework_passes_package_installer(tmp_path: pathlib.Path, framework: str, installer: str):\n+    (tmp_path / \"app.py\").write_text(\"\")\n+    (tmp_path / \"requirements.txt\").write_text(\"flask\\n\")\n+\n+    with mock.patch.object(Environment, \"_get_python_env_info\", return_value=_fake_env_info()):\n+        result = CliRunner().invoke(\n+            cli,\n+            [\"write-manifest\", framework, \"--overwrite\", \"--package-installer\", installer, str(tmp_path)],\n+        )\n+\n+    assert result.exit_code == 0, result.output\n+    package_manager = json.loads((tmp_path / \"manifest.json\").read_text())[\"python\"][\"package_manager\"]\n+    assert package_manager[\"name\"] == installer\n+    assert package_manager[\"allow_uv\"] is (installer == \"uv\")\n+\n+\n+def test_deploy_quarto_passes_package_installer(tmp_path: pathlib.Path):\n+    (tmp_path / \"doc.qmd\").write_text(\"---\\ntitle: t\\n---\\n\")\n+    (tmp_path / \"requirements.txt\").write_text(\"jupyter\\n\")\n+    real_create = Environment.create_python_environment\n+    environments: typing.List[Environment] = []\n+\n+    def recording_create(*args: typing.Any, **kwargs: typing.Any) -> Environment:\n+        environment = real_create(*args, **kwargs)\n+        environments.append(environment)\n+        return environment\n+\n+    with mock.patch.object(Environment, \"_get_python_env_info\", return_value=_fake_env_info()), mock.patch.object(\n+        Environment, \"create_python_environment\", side_effect=recording_create\n+    ), mock.patch(\"rsconnect.main.which_quarto\", return_value=\"quarto\"), mock.patch(\n+        \"rsconnect.main.quarto_inspect\", return_value={\"quarto\": {\"version\": \"1.4.0\"}, \"engines\": [\"jupyter\"]}\n+    ), mock.patch(\"rsconnect.main.RSConnectExecutor\"):\n+        args = apply_common_args(\n+            [\"deploy\", \"quarto\", str(tmp_path / \"doc.qmd\"), \"--package-installer\", \"uv\", \"--no-verify\"],\n+            server=\"http://fake_server\",\n+            key=\"FAKE_API_KEY\",\n+        )\n+        result = CliRunner().invoke(cli, args)\n+\n+    assert result.exit_code == 0, result.output\n+    assert len(environments) == 1\n+    assert environments[0].package_manager == \"uv\"\n+    assert environments[0].package_manager_allow_uv is True"
+  }
+ ],
+ "test_files": [
+  "tests/test_package_installer.py"
+ ]
+}

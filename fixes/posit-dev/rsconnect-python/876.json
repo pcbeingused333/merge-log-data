@@ -1,0 +1,33 @@
+{
+ "repo": "posit-dev/rsconnect-python",
+ "number": 876,
+ "url": "https://github.com/posit-dev/rsconnect-python/pull/876",
+ "title": "fix: exit non-zero when `system caches delete` task fails",
+ "merged_at": "2026-11-12T21:23:20Z",
+ "files": [
+  {
+   "filename": "docs/CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0\n \n - Follows symlinks when bundling content: linked files are archived with their target contents and linked directories are included, instead of archiving broken links or omitting the directories. [#955](https://github.com/posit-dev/rsconnect-python/pull/955)\n - Passes `--package-installer` through in `write-manifest <framework>` and `deploy quarto`. The option was accepted but ignored, so the manifest always recorded `pip`. [#877](https://github.com/posit-dev/rsconnect-python/pull/877)\n+- `system caches delete` exits with status 1 when the Connect task that deletes the cache fails. [#876](https://github.com/posit-dev/rsconnect-python/pull/876)\n \n ## [1.33.2] - 2026-11-10\n "
+  },
+  {
+   "filename": "rsconnect/api.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -2995,7 +2995,7 @@ def delete_runtime_cache(self, language: str, version: str, image_name: str, dry\n             print(\"Dry run finished\")\n             return result, None\n         else:\n-            (_, task) = self.client.wait_for_task(result[\"task_id\"], connect_logger.info, raise_on_error=False)\n+            (_, task) = self.client.wait_for_task(result[\"task_id\"], connect_logger.info)\n             return result, task\n \n "
+  },
+  {
+   "filename": "tests/test_main_system_caches.py",
+   "status": "modified",
+   "additions": 60,
+   "deletions": 0,
+   "patch": "@@ -117,6 +117,66 @@ def test_system_caches_delete_happy_path(self):\n         self.assertEqual(body[\"version\"], \"1.2.3\")\n         self.assertEqual(body[\"image_name\"], \"Local\")\n \n+    @httpretty.activate(verbose=True, allow_net_connect=False)\n+    def test_system_caches_delete_task_failed(self):\n+        \"\"\"A task that finishes with a non-zero code is surfaced as exit code 1.\"\"\"\n+        register_server_validation_uris(CONNECT_SERVER)\n+        httpretty.register_uri(\n+            httpretty.DELETE,\n+            f\"{CONNECT_SERVER}/__api__/v1/system/caches/runtime\",\n+            status=200,\n+            body=json.dumps(\n+                {\"language\": \"Python\", \"version\": \"1.2.3\", \"image_name\": \"Local\", \"dry_run\": False, \"task_id\": \"abc123\"}\n+            ),\n+            adding_headers={\"Content-Type\": \"application/json\"},\n+        )\n+        httpretty.register_uri(\n+            httpretty.GET,\n+            f\"{CONNECT_SERVER}/__api__/v1/tasks/abc123\",\n+            body=json.dumps(\n+                {\n+                    \"id\": \"abc123\",\n+                    \"output\": [],\n+                    \"result\": {\"type\": \"\", \"data\": \"\"},\n+                    \"finished\": True,\n+                    \"code\": 1,\n+                    \"error\": \"failed to delete cache\",\n+                    \"last\": 0,\n+                }\n+            ),\n+            adding_headers={\"Content-Type\": \"application/json\"},\n+        )\n+\n+        runner = CliRunner()\n+        args = [\"system\", \"caches\", \"delete\", \"--language\", \"Python\", \"--version\", \"1.2.3\", \"--image-name\", \"Local\"]\n+        apply_common_args(args, server=CONNECT_SERVER, key=API_KEY)\n+        result = runner.invoke(cli, args)\n+\n+        self.assertEqual(result.exit_code, 1, result.output)\n+        self.assertRegex(result.output, \"Task exited with status 1.\")\n+\n+    @httpretty.activate(verbose=True, allow_net_connect=False)\n+    def test_system_caches_delete_dry_run(self):\n+        \"\"\"A dry run has no task to wait for and exits 0.\"\"\"\n+        register_server_validation_uris(CONNECT_SERVER)\n+        httpretty.register_uri(\n+            httpretty.DELETE,\n+            f\"{CONNECT_SERVER}/__api__/v1/system/caches/runtime\",\n+            status=200,\n+            body=json.dumps(\n+                {\"language\": \"Python\", \"version\": \"1.2.3\", \"image_name\": \"Local\", \"dry_run\": True, \"task_id\": None}\n+            ),\n+            adding_headers={\"Content-Type\": \"application/json\"},\n+        )\n+\n+        runner = CliRunner()\n+        args = [\"system\", \"caches\", \"delete\", \"--language\", \"Python\", \"--version\", \"1.2.3\", \"--image-name\", \"Local\"]\n+        args.append(\"--dry-run\")\n+        apply_common_args(args, server=CONNECT_SERVER, key=API_KEY)\n+        result = runner.invoke(cli, args)\n+\n+        self.assertEqual(result.exit_code, 0, result.output)\n+\n     def test_system_caches_delete_missing_all_flags(self):\n         \"\"\"Omitting both --language and --version yields exit code 2 (Click validation).\"\"\"\n         runner = CliRunner()"
+  }
+ ],
+ "test_files": [
+  "tests/test_main_system_caches.py"
+ ]
+}

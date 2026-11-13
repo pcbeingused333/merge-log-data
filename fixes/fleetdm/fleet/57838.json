@@ -1,0 +1,31 @@
+{
+ "repo": "fleetdm/fleet",
+ "number": 57838,
+ "url": "https://github.com/fleetdm/fleet/pull/57838",
+ "title": "Show an error instead of a perpetual spinner on the script batch details page when the batch no longer exists",
+ "merged_at": "2026-11-12T21:12:41Z",
+ "files": [
+  {
+   "filename": "changes/57738-script-batch-details-not-found",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+- Fixed the script batch details page spinning forever when the batch no longer exists; it now shows an error."
+  },
+  {
+   "filename": "frontend/pages/ManageControlsPage/Scripts/ScriptBatchDetailsPage/ScriptBatchDetailsPage.tests.tsx",
+   "status": "added",
+   "additions": 57,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,57 @@\n+import { screen, waitFor } from \"@testing-library/react\";\n+import { http, HttpResponse } from \"msw\";\n+import React from \"react\";\n+import { RouteComponentProps } from \"react-router\";\n+\n+import mockServer from \"test/mock-server\";\n+import {\n+  baseUrl,\n+  createCustomRenderer,\n+  createMockLocation,\n+  createMockRouter,\n+} from \"test/test-utils\";\n+\n+import ScriptBatchDetailsPage from \"./ScriptBatchDetailsPage\";\n+\n+const BATCH_ID = \"missing-batch-id\";\n+\n+const renderPage = () => {\n+  const render = createCustomRenderer({ withBackendMock: true });\n+  const props = ({\n+    router: createMockRouter(),\n+    routeParams: { batch_execution_id: BATCH_ID },\n+    location: createMockLocation({\n+      search: \"?status=ran&page=0\",\n+      query: { status: \"ran\", page: \"0\" },\n+    }),\n+  } as unknown) as RouteComponentProps<\n+    undefined,\n+    { batch_execution_id: string }\n+  >;\n+  return render(<ScriptBatchDetailsPage {...props} />);\n+};\n+\n+describe(\"ScriptBatchDetailsPage\", () => {\n+  it(\"shows an error instead of spinning forever when the batch no longer exists\", async () => {\n+    mockServer.use(\n+      http.get(baseUrl(`/scripts/batch/${BATCH_ID}`), () =>\n+        HttpResponse.json(\n+          {\n+            message: \"Not Found\",\n+            errors: [{ name: \"base\", reason: \"Not Found\" }],\n+          },\n+          { status: 404 }\n+        )\n+      )\n+    );\n+\n+    const { container } = renderPage();\n+\n+    await waitFor(() => {\n+      expect(\n+        screen.getByText(\"Could not load script batch details.\")\n+      ).toBeInTheDocument();\n+    });\n+    expect(container.querySelector(\".loading-spinner\")).not.toBeInTheDocument();\n+  });\n+});"
+  },
+  {
+   "filename": "frontend/pages/ManageControlsPage/Scripts/ScriptBatchDetailsPage/ScriptBatchDetailsPage.tsx",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 3,
+   "patch": "@@ -222,12 +222,15 @@ const ScriptBatchDetailsPage = ({\n   };\n \n   const renderContent = () => {\n-    if (isLoading || !batchDetails) {\n-      return <Spinner />;\n-    }\n+    // Check the error first: a failed request (e.g. 404 for a batch that no\n+    // longer exists) leaves batchDetails undefined, which would otherwise keep\n+    // the spinner up forever.\n     if (isError) {\n       return <DataError description=\"Could not load script batch details.\" />;\n     }\n+    if (isLoading || !batchDetails) {\n+      return <Spinner />;\n+    }\n     const {\n       script_name,\n       status,"
+  }
+ ],
+ "test_files": []
+}

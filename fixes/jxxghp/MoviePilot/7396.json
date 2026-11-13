@@ -1,0 +1,26 @@
+{
+ "repo": "jxxghp/MoviePilot",
+ "number": 7396,
+ "url": "https://github.com/jxxghp/MoviePilot/pull/7396",
+ "title": "fix(jellyfin): use dedicated routes for additional library types",
+ "merged_at": "2026-11-12T22:52:38Z",
+ "files": [
+  {
+   "filename": "app/modules/jellyfin/jellyfin.py",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -248,6 +248,19 @@ def get_librarys(\n             elif library.get(\"CollectionType\") in (\"music\", \"musicvideos\"):\n                 library_type = MediaType.MUSIC.value\n                 link = f\"{self._playhost or self._host}web/index.html#!/music.html?topParentId={library.get('Id')}\"\n+            elif library.get(\"CollectionType\") in (\"boxsets\", \"books\", \"playlists\"):\n+                library_type = MediaType.UNKNOWN.value\n+                collection_type = library.get(\"CollectionType\")\n+                link = (\n+                    f\"{self._playhost or self._host}web/index.html#!/{collection_type}\"\n+                    f\"?topParentId={library.get('Id')}&collectionType={collection_type}\"\n+                )\n+            elif library.get(\"CollectionType\") in (\"homevideos\", \"livetv\"):\n+                library_type = MediaType.UNKNOWN.value\n+                link = (\n+                    f\"{self._playhost or self._host}web/index.html#!/{library.get('CollectionType')}\"\n+                    f\"?topParentId={library.get('Id')}\"\n+                )\n             elif library.get(\"CollectionType\") is None and library.get(\"Type\") == \"CollectionFolder\":\n                 # 混合内容库：Jellyfin 前端没有 library 路由，自身对该类库使用 mixed 路由。\n                 library_type = MediaType.UNKNOWN.value"
+  },
+  {
+   "filename": "tests/test_jellyfin.py",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 2,
+   "patch": "@@ -3,8 +3,11 @@\n \"\"\"\n \n import sys\n+from typing import Optional\n from unittest.mock import patch\n \n+import pytest\n+\n from app.modules.jellyfin import jellyfin as jellyfin_module\n from app.modules.jellyfin.jellyfin import Jellyfin\n from app.schemas.mediaserver import MediaServerField, MediaServerQueryOptions\n@@ -249,13 +252,13 @@ def test_get_librarys_other_unknown_types_keep_library_route() -> None:\n     非混合的其他未知类型库不改走 mixed 路由，保持原有链接。\n \n     Jellyfin 只对 CollectionType 为空且类型为 CollectionFolder 的库使用 mixed 路由；\n-    书籍等有专属路由的类型不在本次修复范围，仍走原有分支。\n+    未识别的类型仍保留原有兜底行为。\n     \"\"\"\n     client = _build_client()\n     libraries = _get_librarys_with_mocked_views(\n         client,\n         [\n-            {\"Id\": \"b1\", \"Name\": \"书籍\", \"CollectionType\": \"books\", \"Type\": \"CollectionFolder\"},\n+            {\"Id\": \"b1\", \"Name\": \"未知\", \"CollectionType\": \"unsupported\", \"Type\": \"CollectionFolder\"},\n             {\"Id\": \"u1\", \"Name\": \"视图\", \"CollectionType\": None, \"Type\": \"UserView\"},\n         ],\n     )\n@@ -264,3 +267,34 @@ def test_get_librarys_other_unknown_types_keep_library_route() -> None:\n         \"http://jellyfin.local:8096/web/index.html#!/library.html?topParentId=b1\",\n         \"http://jellyfin.local:8096/web/index.html#!/library.html?topParentId=u1\",\n     ]\n+\n+\n+@pytest.mark.parametrize(\"play_host\", [None, \"https://play.example/jellyfin/\"])\n+@pytest.mark.parametrize(\n+    \"collection_type,query_suffix\",\n+    [\n+        (\"boxsets\", \"&collectionType=boxsets\"),\n+        (\"books\", \"&collectionType=books\"),\n+        (\"homevideos\", \"\"),\n+        (\"playlists\", \"&collectionType=playlists\"),\n+        (\"livetv\", \"\"),\n+    ],\n+)\n+def test_get_librarys_uses_dedicated_routes(\n+    play_host: Optional[str], collection_type: str, query_suffix: str,\n+) -> None:\n+    \"\"\"\n+    特殊类型库使用对应前端路由，并优先使用外网播放地址。\n+    \"\"\"\n+    client = _build_client()\n+    client._playhost = play_host\n+    libraries = _get_librarys_with_mocked_views(\n+        client,\n+        [{\"Id\": \"library-id\", \"Name\": \"媒体库\", \"CollectionType\": collection_type}],\n+    )\n+\n+    host = play_host or \"http://jellyfin.local:8096/\"\n+    assert libraries[0].link == (\n+        f\"{host}web/index.html#!/{collection_type}?topParentId=library-id{query_suffix}\"\n+    )\n+    assert libraries[0].type == MediaType.UNKNOWN.value"
+  }
+ ],
+ "test_files": [
+  "tests/test_jellyfin.py"
+ ]
+}

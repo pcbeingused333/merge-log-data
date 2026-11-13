@@ -1,0 +1,26 @@
+{
+ "repo": "microsoft/qdk",
+ "number": 4219,
+ "url": "https://github.com/microsoft/qdk/pull/4219",
+ "title": "fix(openqasm): reject invalid random seeds",
+ "merged_at": "2026-11-12T20:47:34Z",
+ "files": [
+  {
+   "filename": "source/qdk_package/src/interop.rs",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 6,
+   "patch": "@@ -93,7 +93,7 @@ pub(crate) fn run_qasm_program(\n     let user_profile = get_target_profile(&kwargs)?;\n     let operation_name = get_operation_name(&kwargs)?;\n     let output_semantics = get_output_semantics(&kwargs, || OutputSemantics::OpenQasm)?;\n-    let seed = get_seed(&kwargs);\n+    let seed = get_seed(&kwargs)?;\n     let shots = get_shots(&kwargs)?;\n     let search_path = get_search_path(&kwargs)?;\n     let sim_type = get_sim_type(&kwargs)?;\n@@ -960,10 +960,10 @@ pub(crate) fn get_shots(kwargs: &Bound<'_, PyDict>) -> PyResult<usize> {\n }\n \n /// Extracts the seed from the kwargs dictionary.\n-/// If the seed is not present, or is not a valid u64, returns None.\n-pub(crate) fn get_seed(kwargs: &Bound<'_, PyDict>) -> Option<u64> {\n+/// If the seed is not present or is None, returns None.\n+/// Otherwise, returns an error if it is not a valid u64.\n+pub(crate) fn get_seed(kwargs: &Bound<'_, PyDict>) -> PyResult<Option<u64>> {\n     kwargs\n-        .get_item(\"seed\")\n-        .ok()?\n-        .map_or_else(|| None::<u64>, |x| x.extract::<u64>().ok())\n+        .get_item(\"seed\")?\n+        .map_or(Ok(None), |x| x.extract::<Option<u64>>())\n }"
+  },
+  {
+   "filename": "source/qdk_package/tests/test_openqasm_seed.py",
+   "status": "added",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,27 @@\n+# Copyright (c) Microsoft Corporation.\n+# Licensed under the MIT License.\n+\n+import pytest\n+\n+from qdk.openqasm import run\n+\n+SOURCE = 'include \"stdgates.inc\"; qubit[16] q; h q; output bit[16] c; c = measure q;'\n+\n+\n+@pytest.mark.parametrize(\n+    \"seed, error\",\n+    [(1.5, TypeError), (-1, OverflowError), (2**64, OverflowError)],\n+)\n+def test_run_rejects_invalid_seed(seed, error) -> None:\n+    with pytest.raises(error):\n+        run(SOURCE, shots=1, seed=seed)\n+\n+\n+@pytest.mark.parametrize(\"seed\", [0, 1, 2**64 - 1])\n+def test_run_with_seed_is_reproducible(seed) -> None:\n+    assert run(SOURCE, shots=1, seed=seed) == run(SOURCE, shots=1, seed=seed)\n+\n+\n+def test_run_accepts_optional_seed() -> None:\n+    assert len(run(SOURCE, shots=1)) == 1\n+    assert len(run(SOURCE, shots=1, seed=None)) == 1"
+  }
+ ],
+ "test_files": [
+  "source/qdk_package/tests/test_openqasm_seed.py"
+ ]
+}

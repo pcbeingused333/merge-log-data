@@ -1,0 +1,26 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 683,
+ "url": "https://github.com/labring/aiproxy/pull/683",
+ "title": "fix(anthropic): preserve input usage across OpenAI stream deltas",
+ "merged_at": "2026-11-13T03:04:22Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/anthropic/openai.go",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 2,
+   "patch": "@@ -341,6 +341,7 @@ func batchPatchImage2Base64(ctx context.Context, imageTasks []*relaymodel.Claude\n \n // StreamState maintains state during streaming response conversion\n type StreamState struct {\n+\tstartUsage relaymodel.ClaudeUsage\n \t// claudeIndexToToolCallIndex maps Claude's content block index to OpenAI tool call index\n \t// Claude's index includes all content blocks (text, thinking, tool_use), but OpenAI only counts tool calls\n \tclaudeIndexToToolCallIndex map[int]int\n@@ -448,12 +449,31 @@ func (s *StreamState) StreamResponse2OpenAI(\n \t\t\treturn nil, nil\n \t\t}\n \n-\t\topenAIUsage := claudeResponse.Message.Usage.ToOpenAIUsage()\n+\t\ts.startUsage = claudeResponse.Message.Usage\n+\t\topenAIUsage := s.startUsage.ToOpenAIUsage()\n \t\tusage = &openAIUsage\n \t\tupstreamID = claudeResponse.Message.ID\n \tcase \"message_delta\":\n \t\tif claudeResponse.Usage != nil {\n-\t\t\topenAIUsage := claudeResponse.Usage.ToOpenAIUsage()\n+\t\t\tmerged := *claudeResponse.Usage\n+\n+\t\t\tif merged.InputTokens == 0 {\n+\t\t\t\tmerged.InputTokens = s.startUsage.InputTokens\n+\t\t\t}\n+\n+\t\t\tif merged.CacheReadInputTokens == 0 {\n+\t\t\t\tmerged.CacheReadInputTokens = s.startUsage.CacheReadInputTokens\n+\t\t\t}\n+\n+\t\t\tif merged.CacheCreationInputTokens == 0 {\n+\t\t\t\tmerged.CacheCreationInputTokens = s.startUsage.CacheCreationInputTokens\n+\t\t\t}\n+\n+\t\t\tif merged.ServerToolUse == nil {\n+\t\t\t\tmerged.ServerToolUse = s.startUsage.ServerToolUse\n+\t\t\t}\n+\n+\t\t\topenAIUsage := merged.ToOpenAIUsage()\n \t\t\tusage = &openAIUsage\n \t\t}\n "
+  },
+  {
+   "filename": "core/relay/adaptor/anthropic/openai_test.go",
+   "status": "modified",
+   "additions": 41,
+   "deletions": 0,
+   "patch": "@@ -642,3 +642,44 @@ func TestResponse2OpenAI_StopReasonMapping(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestStreamResponse2OpenAIUsageMerge(t *testing.T) {\n+\tfor _, tc := range []struct {\n+\t\tname                              string\n+\t\tdelta                             string\n+\t\tinput, cached, creation, searches int64\n+\t}{\n+\t\t{\"output only\", `{\"output_tokens\":5}`, 100, 30, 20, 2},\n+\t\t{\"updated usage\", `{\"input_tokens\":110,\"output_tokens\":5,\"cache_read_input_tokens\":40,\"cache_creation_input_tokens\":25,\"server_tool_use\":{\"web_search_requests\":3}}`, 110, 40, 25, 3},\n+\t} {\n+\t\tt.Run(tc.name, func(t *testing.T) {\n+\t\t\tstate := anthropic.NewStreamState()\n+\t\t\tm := &meta.Meta{OriginModel: \"claude-sonnet-4-5\"}\n+\t\t\tstart, err := state.StreamResponse2OpenAI(\n+\t\t\t\tm,\n+\t\t\t\t[]byte(\n+\t\t\t\t\t`{\"type\":\"message_start\",\"message\":{\"id\":\"msg_usage\",\"usage\":{\"input_tokens\":100,\"output_tokens\":1,\"cache_read_input_tokens\":30,\"cache_creation_input_tokens\":20,\"server_tool_use\":{\"web_search_requests\":2}}}}`,\n+\t\t\t\t),\n+\t\t\t)\n+\t\t\trequire.NoError(t, err)\n+\t\t\trequire.NotNil(t, start.Usage)\n+\n+\t\t\tfinal, err := state.StreamResponse2OpenAI(\n+\t\t\t\tm,\n+\t\t\t\t[]byte(\n+\t\t\t\t\t`{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":`+tc.delta+`}`,\n+\t\t\t\t),\n+\t\t\t)\n+\t\t\trequire.NoError(t, err)\n+\t\t\trequire.NotNil(t, final.Usage)\n+\t\t\tassert.Equal(t, tc.input+tc.cached+tc.creation, final.Usage.PromptTokens)\n+\t\t\tassert.EqualValues(t, 5, final.Usage.CompletionTokens)\n+\t\t\tassert.Equal(t, tc.input+tc.cached+tc.creation+5, final.Usage.TotalTokens)\n+\t\t\trequire.NotNil(t, final.Usage.PromptTokensDetails)\n+\t\t\tassert.Equal(t, tc.cached, final.Usage.PromptTokensDetails.CachedTokens)\n+\t\t\tassert.Equal(t, tc.creation, final.Usage.PromptTokensDetails.CacheCreationTokens)\n+\t\t\tassert.EqualValues(t, tc.searches, final.Usage.WebSearchCount)\n+\t\t\tassert.EqualValues(t, 150, start.Usage.PromptTokens)\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/anthropic/openai_test.go"
+ ]
+}

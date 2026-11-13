@@ -1,0 +1,26 @@
+{
+ "repo": "NPC-Worldwide/npcpy",
+ "number": 356,
+ "url": "https://github.com/NPC-Worldwide/npcpy/pull/356",
+ "title": "fix: forward generation parameters to LiteLLM",
+ "merged_at": "2026-11-12T22:59:35Z",
+ "files": [
+  {
+   "filename": "npcpy/gen/response.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -2851,6 +2851,7 @@ def get_litellm_response(\n                 continue\n             if key in [\n                 \"stop\", \"temperature\", \"top_p\", \"max_tokens\", \"max_completion_tokens\",\n+                \"seed\", \"frequency_penalty\", \"presence_penalty\", \"logit_bias\",\n                  \"extra_headers\", \"parallel_tool_calls\",\n                 \"response_format\", \"user\", \"timeout\", \"think\", \"thinking\", \"reasoning_effort\",\n             ]:"
+  },
+  {
+   "filename": "tests/test_litellm_generation_params.py",
+   "status": "added",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,34 @@\n+from types import SimpleNamespace\n+from unittest.mock import Mock\n+\n+import pytest\n+\n+import npcpy.gen.response as resp_mod\n+\n+\n+@pytest.mark.parametrize(\"stream\", [False, True])\n+@pytest.mark.parametrize(\n+    \"params\",\n+    [\n+        {\"seed\": 42, \"frequency_penalty\": 0.5, \"presence_penalty\": -0.5,\n+         \"logit_bias\": {\"123\": -100}},\n+        {\"seed\": 0, \"frequency_penalty\": 0, \"presence_penalty\": 0,\n+         \"logit_bias\": {}},\n+    ],\n+)\n+def test_generation_params_reach_completion(monkeypatch, stream, params):\n+    response = SimpleNamespace(\n+        choices=[SimpleNamespace(message=SimpleNamespace(content=\"hello\", tool_calls=None))],\n+        usage=None,\n+    )\n+    completion = Mock(return_value=iter(()) if stream else response)\n+    monkeypatch.setattr(resp_mod, \"completion\", completion)\n+\n+    resp_mod.get_litellm_response(\n+        provider=\"openai\", model=\"gpt-4o-mini\", api_key=\"sk-test\",\n+        messages=[{\"role\": \"user\", \"content\": \"hi\"}], stream=stream, **params,\n+    )\n+\n+    completion.assert_called_once()\n+    for key, value in params.items():\n+        assert completion.call_args.kwargs.get(key) == value"
+  }
+ ],
+ "test_files": [
+  "tests/test_litellm_generation_params.py"
+ ]
+}

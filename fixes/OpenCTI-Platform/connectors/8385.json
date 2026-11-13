@@ -1,0 +1,26 @@
+{
+ "repo": "OpenCTI-Platform/connectors",
+ "number": 8385,
+ "url": "https://github.com/OpenCTI-Platform/connectors/pull/8385",
+ "title": "fix(first-epss): reset TLP between messages so unmarked vulnerabilities are not refused (#8366)",
+ "merged_at": "2026-11-12T22:38:11Z",
+ "files": [
+  {
+   "filename": "internal-enrichment/first-epss/src/internal_enrichment_connector/connector.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -120,6 +120,8 @@ def extract_and_check_markings(self, opencti_entity: dict) -> None:\n         :param opencti_entity: Dict of vulnerability from OpenCTI\n         :return: Boolean\n         \"\"\"\n+        # Reset so the TLP of a previous message is never reused\n+        self.tlp = None\n         if len(opencti_entity[\"objectMarking\"]) != 0:\n             for marking_definition in opencti_entity[\"objectMarking\"]:\n                 if marking_definition[\"definition_type\"] == \"TLP\":"
+  },
+  {
+   "filename": "internal-enrichment/first-epss/tests/tests_connector/test_connector.py",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 0,
+   "patch": "@@ -78,3 +78,24 @@ def test_process_message_should_raise_when_api_fails(connector, helper, message)\n         connector.process_message(message)\n \n     helper.send_stix2_bundle.assert_not_called()\n+\n+\n+def test_process_message_should_not_reuse_tlp_of_previous_message(\n+    connector, helper, message\n+):\n+    connector.api.get_epss_scores.return_value = []\n+    helper.check_max_tlp.side_effect = lambda tlp, max_tlp: tlp != \"TLP:RED\"\n+    red_message = {\n+        **message,\n+        \"enrichment_entity\": {\n+            \"objectMarking\": [{\"definition_type\": \"TLP\", \"definition\": \"TLP:RED\"}]\n+        },\n+    }\n+\n+    with pytest.raises(ValueError, match=\"greater than MAX TLP\"):\n+        connector.process_message(red_message)\n+\n+    # A following vulnerability without any marking must not inherit TLP:RED\n+    result = connector.process_message(message)\n+\n+    assert result == \"[CONNECTOR] No information found\""
+  }
+ ],
+ "test_files": [
+  "internal-enrichment/first-epss/tests/tests_connector/test_connector.py"
+ ]
+}

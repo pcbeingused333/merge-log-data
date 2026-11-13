@@ -1,0 +1,26 @@
+{
+ "repo": "werf/werf",
+ "number": 8171,
+ "url": "https://github.com/werf/werf/pull/8171",
+ "title": "fix(build): remove deleted files with quoted git paths",
+ "merged_at": "2026-11-12T22:26:35Z",
+ "files": [
+  {
+   "filename": "pkg/true_git/diff_parser.go",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 2,
+   "patch": "@@ -387,9 +387,24 @@ func (p *diffParser) trimFileBaseFilepath(path string) string {\n }\n \n func (p *diffParser) handleDeleteFilePath(line string) error {\n-\tpath := p.applyFileRenames(strings.TrimPrefix(line, \"--- a/\"))\n+\tline = strings.TrimRight(line, \"\\t\")\n+\tpathWithPrefix := strings.TrimPrefix(line, \"--- \")\n+\tisPathQuoted := strings.HasPrefix(pathWithPrefix, \"\\\"\") && strings.HasSuffix(pathWithPrefix, \"\\\"\")\n+\tif isPathQuoted {\n+\t\tunquotedPath, err := strconv.Unquote(pathWithPrefix)\n+\t\tif err != nil {\n+\t\t\treturn fmt.Errorf(\"unquote deleted diff path %#v: %w\", pathWithPrefix, err)\n+\t\t}\n+\t\tpathWithPrefix = unquotedPath\n+\t}\n+\n+\tpath := p.applyFileRenames(strings.TrimPrefix(pathWithPrefix, \"a/\"))\n \tnewPath := p.trimFileBaseFilepath(path)\n-\tnewLine := fmt.Sprintf(\"--- a/%s\", newPath)\n+\tnewPathWithPrefix := \"a/\" + newPath\n+\tif isPathQuoted {\n+\t\tnewPathWithPrefix = strconv.Quote(newPathWithPrefix)\n+\t}\n+\tnewLine := \"--- \" + newPathWithPrefix\n \n \tp.state = diffBody\n \tp.PathsToRemove = appendUnique(p.PathsToRemove, newPath)"
+  },
+  {
+   "filename": "pkg/true_git/diff_parser_test.go",
+   "status": "modified",
+   "additions": 39,
+   "deletions": 0,
+   "patch": "@@ -2,6 +2,9 @@ package true_git\n \n import (\n \t\"bytes\"\n+\t\"os\"\n+\t\"os/exec\"\n+\t\"path/filepath\"\n \n \t. \"github.com/onsi/ginkgo/v2\"\n \t. \"github.com/onsi/gomega\"\n@@ -21,6 +24,42 @@ var _ = Describe(\"diffParser\", func() {\n \t\tpathMatcher = path_matcher.NewTruePathMatcher()\n \t})\n \n+\tDescribeTable(\"deleted text file paths\",\n+\t\tfunc(filename string) {\n+\t\t\tisolateGitConfig()\n+\t\t\tdir := GinkgoT().TempDir()\n+\t\t\tExpect(os.Mkdir(filepath.Join(dir, \"src\"), 0o755)).To(Succeed())\n+\t\t\tpath := \"src/\" + filename\n+\t\t\tExpect(os.WriteFile(filepath.Join(dir, path), []byte(\"content\\n\"), 0o644)).To(Succeed())\n+\n+\t\t\tcmd := exec.Command(\"git\", \"-c\", \"core.quotePath=false\", \"diff\", \"--no-index\", \"--\", path, \"/dev/null\")\n+\t\t\tcmd.Dir = dir\n+\t\t\tdiff, err := cmd.Output()\n+\t\t\tExpect(err).To(BeAssignableToTypeOf(&exec.ExitError{}))\n+\t\t\tExpect(err.(*exec.ExitError).ExitCode()).To(Equal(1))\n+\n+\t\t\tparser = makeDiffParser(out, \"\", pathMatcher, nil)\n+\t\t\tExpect(parser.HandleStdout(diff)).To(Succeed())\n+\t\t\tExpect(parser.PathsToRemove).To(Equal([]string{path}))\n+\n+\t\t\tparser = makeDiffParser(out, \"src\", pathMatcher, nil)\n+\t\t\tExpect(parser.HandleStdout(diff)).To(Succeed())\n+\t\t\tExpect(parser.PathsToRemove).To(Equal([]string{filename}))\n+\n+\t\t\tparser = makeDiffParser(out, \"src\", pathMatcher, map[string]string{path: \"renamed.txt\"})\n+\t\t\tExpect(parser.HandleStdout(diff)).To(Succeed())\n+\t\t\tExpect(parser.PathsToRemove).To(Equal([]string{\"renamed.txt\"}))\n+\t\t},\n+\t\tEntry(\"plain name\", \"normal.txt\"),\n+\t\tEntry(\"space\", \"with space.txt\"),\n+\t\tEntry(\"double quote\", \"we\\\"ird.txt\"),\n+\t\tEntry(\"quote and space\", \"we\\\"ird name.txt\"),\n+\t\tEntry(\"backslash\", \"back\\\\slash.txt\"),\n+\t\tEntry(\"tab\", \"tab\\tname.txt\"),\n+\t\tEntry(\"newline\", \"new\\nline.txt\"),\n+\t\tEntry(\"non-ASCII\", \"caf\\u00e9.txt\"),\n+\t)\n+\n \tDescribe(\"handleShortBinaryHeader\", func() {\n \t\tContext(\"when deleting a binary file with short format (Binary files ... differ)\", func() {\n \t\t\tIt(\"should add path to PathsToRemove\", func() {"
+  }
+ ],
+ "test_files": [
+  "pkg/true_git/diff_parser_test.go"
+ ]
+}

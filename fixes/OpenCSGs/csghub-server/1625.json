@@ -1,0 +1,26 @@
+{
+ "repo": "OpenCSGs/csghub-server",
+ "number": 1625,
+ "url": "https://github.com/OpenCSGs/csghub-server/pull/1625",
+ "title": "fix(aigateway): write full buffered body for non-stream empty-choices responses",
+ "merged_at": "2026-11-13T01:23:17Z",
+ "files": [
+  {
+   "filename": "aigateway/handler/response_writer_wrapper_non_stream.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -105,7 +105,7 @@ func (nsw *nonStreamResponseWriter) nonStreamWrite(originData []byte) (int, erro\n \n \t// Step 5: Handle case with empty choices array\n \tif len(completion.Choices) == 0 {\n-\t\treturn originLen, nsw.writeToInternal(originData)\n+\t\treturn originLen, nsw.writeToInternal(nsw.buffer.Bytes())\n \t}\n \n \t// Step 6: Perform content moderation if service is available"
+  },
+  {
+   "filename": "aigateway/handler/response_writer_wrapper_non_stream_test.go",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -422,3 +422,23 @@ func TestNonStreamResponseWriter_BlockedResponseStripsToolCalls(t *testing.T) {\n \tassert.Equal(t, \"The message includes inappropriate content and has been blocked. We appreciate your understanding and cooperation.\", out.Choices[0].Message.Content)\n \tassert.Empty(t, out.Choices[0].Message.ToolCalls, \"a gated response must not carry executable tool calls\")\n }\n+\n+func TestNonStreamResponseWriter_EmptyChoicesSplitAcrossWrites(t *testing.T) {\n+\tgin.SetMode(gin.TestMode)\n+\tw := httptest.NewRecorder()\n+\tctx, _ := gin.CreateTestContext(w)\n+\tnsw := newNonStreamResponseWriter(ChatWriterParams{InternalWriter: ctx.Writer, RequestCtx: context.Background()})\n+\n+\tbody := []byte(`{\"id\":\"chatcmpl-1\",\"object\":\"chat.completion\",\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":0,\"total_tokens\":1}}`)\n+\thalf := len(body) / 2\n+\n+\tn, err := nsw.Write(body[:half])\n+\trequire.NoError(t, err)\n+\trequire.Equal(t, half, n)\n+\n+\tn, err = nsw.Write(body[half:])\n+\trequire.NoError(t, err)\n+\trequire.Equal(t, len(body)-half, n)\n+\n+\tassert.Equal(t, string(body), w.Body.String())\n+}"
+  }
+ ],
+ "test_files": [
+  "aigateway/handler/response_writer_wrapper_non_stream_test.go"
+ ]
+}

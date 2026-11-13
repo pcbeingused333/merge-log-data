@@ -1,0 +1,26 @@
+{
+ "repo": "growthbook/growthbook",
+ "number": 7701,
+ "url": "https://github.com/growthbook/growthbook/pull/7701",
+ "title": "fix(back-end): alias bandit fact metric variation column",
+ "merged_at": "2026-11-12T21:57:17Z",
+ "files": [
+  {
+   "filename": "packages/back-end/src/integrations/sql/ctes/bandit-statistics-fact-metric-cte.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -287,7 +287,7 @@ export function getBanditStatisticsFactMetricCTE(\n         ${dimensionCols.map((d) => `, ${d.alias}`).join(\"\")}\n     )\n     SELECT\n-      bps.variation\n+      bps.variation AS variation\n       ${dimensionCols.map((d) => `, bps.${d.alias} AS ${d.alias}`).join(\"\")}\n       , SUM(bps.users) AS users\n       ${metricData"
+  },
+  {
+   "filename": "packages/back-end/test/banditStatisticsFactMetricCte.test.ts",
+   "status": "added",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,36 @@\n+import { clickHouseDialect } from \"shared/dialects\";\n+import { getBanditStatisticsFactMetricCTE } from \"back-end/src/integrations/sql/ctes/bandit-statistics-fact-metric-cte\";\n+import { factTableFactory } from \"back-end/test/factories/FactTable.factory\";\n+\n+describe(\"getBanditStatisticsFactMetricCTE\", () => {\n+  it(\"aliases the final variation column so engines that keep the table prefix (ClickHouse) still return `variation`\", () => {\n+    const factTable = factTableFactory.build({ id: \"events\" });\n+    const sql = getBanditStatisticsFactMetricCTE(clickHouseDialect, {\n+      baseIdType: \"user_id\",\n+      metricData: [\n+        {\n+          alias: \"m0\",\n+          id: \"fact__m0\",\n+          ratioMetric: false,\n+          regressionAdjusted: false,\n+          isUpperPercentileCapped: false,\n+          isLowerPercentileCapped: false,\n+          capCoalesceMetric: \"\",\n+          capCoalesceDenominator: \"\",\n+          capCoalesceCovariate: \"\",\n+          numeratorSourceIndex: 0,\n+          denominatorSourceIndex: 0,\n+        },\n+      ],\n+      dimensionCols: [],\n+      factTablesWithIndices: [{ factTable, index: 0 }],\n+      regressionAdjustedTableIndices: new Set<number>(),\n+      percentileTableIndices: new Set<number>(),\n+    });\n+\n+    const finalSelect = sql.slice(\n+      sql.lastIndexOf(\"SELECT\\n      bps.variation\"),\n+    );\n+    expect(finalSelect).toMatch(/bps\\.variation AS variation\\b/);\n+  });\n+});"
+  }
+ ],
+ "test_files": [
+  "packages/back-end/test/banditStatisticsFactMetricCte.test.ts"
+ ]
+}
