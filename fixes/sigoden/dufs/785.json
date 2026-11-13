@@ -1,0 +1,33 @@
+{
+ "repo": "sigoden/dufs",
+ "number": 785,
+ "url": "https://github.com/sigoden/dufs/pull/785",
+ "title": "fix: serve whole file for suffix range longer than the file",
+ "merged_at": "2026-11-13T09:19:42Z",
+ "files": [
+  {
+   "filename": "src/server.rs",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -1039,7 +1039,11 @@ impl Server {\n             }\n         }\n \n-        let ranges = if use_range {\n+        // RFC 9110 §14.2: a server MAY ignore Range when the selected\n+        // representation has no content. A zero-length representation has no\n+        // non-empty byte range to serve and a 206 response cannot express an\n+        // empty one, so ignore Range and fall through to a 200 response.\n+        let ranges = if use_range && size != 0 {\n             headers.get(RANGE).map(|range| {\n                 range\n                     .to_str()"
+  },
+  {
+   "filename": "src/utils.rs",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 5,
+   "patch": "@@ -112,12 +112,20 @@ pub fn parse_range(range: &str, size: u64) -> Option<Vec<(u64, u64)>> {\n         let (start, end) = range.trim().split_once('-')?;\n         let item = if start.is_empty() {\n             let offset = end.parse::<u64>().ok()?;\n-            // A zero-length suffix range is unsatisfiable and, on an empty\n-            // file, `size - 1` would underflow.\n-            if offset == 0 || offset > size {\n+            // A zero-length suffix range is unsatisfiable.\n+            if offset == 0 {\n                 return None;\n             }\n-            (size - offset, size - 1)\n+            // A zero-length representation has no representable byte range\n+            // (`size - 1` would also underflow). The file-serving path ignores\n+            // Range entirely for zero-length representations (RFC 9110 §14.2),\n+            // so this only affects callers such as X-Update-Range.\n+            if size == 0 {\n+                return None;\n+            }\n+            // RFC 9110 §14.1.2: a suffix longer than the representation\n+            // selects the whole representation.\n+            (size.saturating_sub(offset), size - 1)\n         } else {\n             let start = start.parse::<u64>().ok()?;\n             if start >= size {\n@@ -226,7 +234,12 @@ mod tests {\n         assert_eq!(parse_range(\"bytes=0-5\", 5), Some(vec![(0, 4)]));\n         assert_eq!(parse_range(\"bytes=0-9\", 5), Some(vec![(0, 4)]));\n         assert_eq!(parse_range(\"bytes=5-\", 5), None);\n-        assert_eq!(parse_range(\"bytes=-501\", 500), None);\n+        // RFC 9110 §14.1.2: a suffix longer than the file selects the whole file\n+        assert_eq!(parse_range(\"bytes=-501\", 500), Some(vec![(0, 499)]));\n+        assert_eq!(parse_range(\"bytes=-65536\", 18), Some(vec![(0, 17)]));\n+        // A zero-length representation has no representable byte range; the\n+        // server ignores Range for it and answers 200 (RFC 9110 §14.2).\n+        assert_eq!(parse_range(\"bytes=-5\", 0), None);\n         assert_eq!(parse_range(\"bytes=0-199,\", 500), None);\n         assert_eq!(parse_range(\"bytes=0-199, 500-\", 500), None);\n         // a zero-length suffix range is unsatisfiable and must not underflow"
+  },
+  {
+   "filename": "tests/range.rs",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -35,6 +35,41 @@ fn get_file_range_beyond(server: TestServer) -> Result<(), Error> {\n     Ok(())\n }\n \n+#[rstest]\n+fn get_file_range_suffix_beyond_eof(server: TestServer) -> Result<(), Error> {\n+    // RFC 9110 §14.1.2: a suffix longer than the file selects the whole file\n+    let resp = fetch!(b\"GET\", format!(\"{}index.html\", server.url()))\n+        .header(\"range\", HeaderValue::from_static(\"bytes=-65536\"))\n+        .send()?;\n+    assert_eq!(resp.status(), 206);\n+    assert_eq!(\n+        resp.headers().get(\"content-range\").unwrap(),\n+        \"bytes 0-17/18\"\n+    );\n+    assert_eq!(resp.headers().get(\"accept-ranges\").unwrap(), \"bytes\");\n+    assert_eq!(resp.headers().get(\"content-length\").unwrap(), \"18\");\n+    assert_eq!(resp.text()?, \"This is index.html\");\n+    Ok(())\n+}\n+\n+#[rstest]\n+fn get_empty_file_range_ignored(server: TestServer) -> Result<(), Error> {\n+    // RFC 9110 §14.2: Range may be ignored when the selected representation\n+    // has no content, since a 206 cannot express a zero-length byte range.\n+    std::fs::write(server.path().join(\"empty.txt\"), \"\")?;\n+    for range in [\"bytes=-5\", \"bytes=0-\", \"bytes=0-0\"] {\n+        let resp = fetch!(b\"GET\", format!(\"{}empty.txt\", server.url()))\n+            .header(\"range\", HeaderValue::from_str(range)?)\n+            .send()?;\n+        assert_eq!(resp.status(), 200, \"range: {range}\");\n+        assert_eq!(resp.headers().get(\"accept-ranges\").unwrap(), \"bytes\");\n+        assert_eq!(resp.headers().get(\"content-length\").unwrap(), \"0\");\n+        assert!(resp.headers().get(\"content-range\").is_none());\n+        assert_eq!(resp.text()?, \"\");\n+    }\n+    Ok(())\n+}\n+\n #[rstest]\n fn get_file_range_invalid(server: TestServer) -> Result<(), Error> {\n     let resp = fetch!(b\"GET\", format!(\"{}index.html\", server.url()))"
+  }
+ ],
+ "test_files": [
+  "tests/range.rs"
+ ]
+}

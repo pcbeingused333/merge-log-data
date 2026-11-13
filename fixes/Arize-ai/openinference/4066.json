@@ -1,0 +1,26 @@
+{
+ "repo": "Arize-ai/openinference",
+ "number": 4066,
+ "url": "https://github.com/Arize-ai/openinference/pull/4066",
+ "title": "fix(agentspec): handle spans opened with async with instead of raising NotImplementedError",
+ "merged_at": "2026-11-13T13:32:21Z",
+ "files": [
+  {
+   "filename": "python/instrumentation/openinference-instrumentation-agentspec/src/openinference/instrumentation/agentspec/_opentelemetry_spanprocessor.py",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 5,
+   "patch": "@@ -402,20 +402,23 @@ def shutdown(self) -> None:\n             # but we warn the user\n             logger.warning(f\"Exception raised during SpanProcessor `shutdown`: {e}\")\n \n+    # Agent Spec calls the async variants for spans opened with `async with` (e.g. the LangGraph\n+    # adapter's async runs). The wrapped OpenTelemetry span processor is synchronous, so they share\n+    # the sync implementations.\n     async def on_start_async(self, span: AgentSpecSpan) -> None:\n-        raise NotImplementedError(f\"Async stack not implemented for {self.__class__.__name__} yet\")\n+        self.on_start(span)\n \n     async def on_end_async(self, span: AgentSpecSpan) -> None:\n-        raise NotImplementedError(f\"Async stack not implemented for {self.__class__.__name__} yet\")\n+        self.on_end(span)\n \n     async def on_event_async(self, event: AgentSpecEvent, span: AgentSpecSpan) -> None:\n-        raise NotImplementedError(f\"Async stack not implemented for {self.__class__.__name__} yet\")\n+        self.on_event(event, span)\n \n     async def startup_async(self) -> None:\n-        raise NotImplementedError(f\"Async stack not implemented for {self.__class__.__name__} yet\")\n+        self.startup()\n \n     async def shutdown_async(self) -> None:\n-        raise NotImplementedError(f\"Async stack not implemented for {self.__class__.__name__} yet\")\n+        self.shutdown()\n \n     def force_flush(self, timeout_millis: int = 30000) -> bool:\n         \"\"\""
+  },
+  {
+   "filename": "python/instrumentation/openinference-instrumentation-agentspec/tests/test_instrumentor.py",
+   "status": "modified",
+   "additions": 47,
+   "deletions": 0,
+   "patch": "@@ -29,6 +29,9 @@\n from pyagentspec.tracing.trace import get_trace\n \n from openinference.instrumentation.agentspec import AgentSpecInstrumentor\n+from openinference.instrumentation.agentspec._openinference_spanprocessor import (\n+    OpenInferenceSpanProcessor,\n+)\n from openinference.semconv.trace import (\n     OpenInferenceSpanKindValues,\n     SpanAttributes,\n@@ -125,6 +128,50 @@ def test_instrumentor_triggers_processors_and_exports_agent_spans(\n     assert trace is None\n \n \n+async def test_instrumentor_exports_spans_opened_with_async_with(\n+    tracer_provider: trace_api.TracerProvider,\n+    in_memory_span_exporter: InMemorySpanExporter,\n+    agentspec_agent: Agent,\n+) -> None:\n+    AgentSpecInstrumentor().instrument(skip_dep_check=True, tracer_provider=tracer_provider)\n+\n+    # Agent Spec calls the processors' async methods for spans opened with `async with`\n+    async with AgentExecutionSpan(agent=agentspec_agent) as span:\n+        await span.add_event_async(\n+            AgentExecutionStart(agent=agentspec_agent, inputs={\"question\": \"hi\"})\n+        )\n+        await span.add_event_async(\n+            AgentExecutionEnd(agent=agentspec_agent, outputs={\"answer\": \"hello\"})\n+        )\n+\n+    spans = in_memory_span_exporter.get_finished_spans()\n+    assert len(spans) == 1\n+    attrs = dict(spans[0].attributes or {})\n+    assert attrs[SpanAttributes.OPENINFERENCE_SPAN_KIND] == OpenInferenceSpanKindValues.AGENT.value\n+    assert attrs[SpanAttributes.AGENT_NAME] == \"assistant\"\n+    assert attrs[SpanAttributes.INPUT_VALUE] == '{\"question\": \"hi\"}'\n+    assert attrs[SpanAttributes.OUTPUT_VALUE] == '{\"answer\": \"hello\"}'\n+\n+\n+async def test_async_trace_starts_and_shuts_down_the_processors(\n+    in_memory_span_exporter: InMemorySpanExporter,\n+    agentspec_agent: Agent,\n+) -> None:\n+    span_processor = OpenInferenceSpanProcessor(\n+        span_exporter=in_memory_span_exporter, use_batch_span_processor=False\n+    )\n+\n+    # An async Trace calls startup_async and shutdown_async\n+    async with AgentSpecTrace(span_processors=[span_processor]):\n+        async with AgentExecutionSpan(agent=agentspec_agent):\n+            pass\n+\n+    assert [s.name for s in in_memory_span_exporter.get_finished_spans()] == [\n+        \"AgentExecutionSpan\",\n+        \"RootSpan\",\n+    ]\n+\n+\n def test_instrumentor_context_triggers_processors_and_exports_agent_spans(\n     tracer_provider: trace_api.TracerProvider,\n     in_memory_span_exporter: InMemorySpanExporter,"
+  }
+ ],
+ "test_files": [
+  "python/instrumentation/openinference-instrumentation-agentspec/tests/test_instrumentor.py"
+ ]
+}

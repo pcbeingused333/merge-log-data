@@ -1,0 +1,48 @@
+{
+ "repo": "dbcli/mycli",
+ "number": 2429,
+ "url": "https://github.com/dbcli/mycli/pull/2429",
+ "title": "fix: open audit log and tee/once files as UTF-8",
+ "merged_at": "2026-11-13T09:42:36Z",
+ "files": [
+  {
+   "filename": "changelog.md",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -1,3 +1,11 @@\n+Upcoming (TBD)\n+==============\n+\n+Bug Fixes\n+--------\n+* Open the audit log and the `\\T`/`\\o` output files as UTF-8, so non-ASCII output no longer fails under non-UTF-8 locales.\n+\n+\n v2.30.4 (2026/11/12)\n ==============\n "
+  },
+  {
+   "filename": "mycli/client.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -180,7 +180,7 @@ def __init__(\n         # audit log\n         if self.logfile is None and \"audit_log\" in c[\"main\"]:\n             try:\n-                self.logfile = open(os.path.expanduser(c[\"main\"][\"audit_log\"]), \"a\")\n+                self.logfile = open(os.path.expanduser(c[\"main\"][\"audit_log\"]), \"a\", encoding=\"utf-8\")\n             except (IOError, OSError):\n                 self.echo(\"Error: Unable to open the audit log file. Your queries will not be logged.\", err=True, fg=\"red\")\n                 self.logfile = False"
+  },
+  {
+   "filename": "mycli/packages/special_commands/io_commands.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -899,7 +899,7 @@ def set_tee(arg: str, **_) -> list[SQLResult]:\n     global tee_file\n \n     try:\n-        tee_file = open(*parseargfile(arg))\n+        tee_file = open(*parseargfile(arg), encoding='utf-8')\n     except (IOError, OSError) as e:\n         raise OSError(f\"Cannot write to file '{e.filename}': {e.strerror}\") from e\n \n@@ -949,7 +949,7 @@ def _set_once_file(filename: str, mode: str) -> list[SQLResult]:\n     global once_file, written_to_once_file\n \n     try:\n-        once_file = open(os.path.expanduser(filename), mode)\n+        once_file = open(os.path.expanduser(filename), mode, encoding='utf-8')\n     except (IOError, OSError) as e:\n         raise OSError(f\"Cannot write to file '{e.filename}': {e.strerror}\") from e\n     written_to_once_file = False\n@@ -1096,7 +1096,7 @@ def flush_pipe_once_if_written(\n     returncode = PIPE_ONCE['process'].returncode\n     if PIPE_ONCE['stdout_file']:\n         if not timed_out and not returncode and (stdout_data or force):\n-            with open(PIPE_ONCE['stdout_file'], PIPE_ONCE['stdout_mode']) as f:\n+            with open(PIPE_ONCE['stdout_file'], PIPE_ONCE['stdout_mode'], encoding='utf-8') as f:\n                 if stdout_data:\n                     print(stdout_data, file=f)\n             _run_post_redirect_hook(post_redirect_command, PIPE_ONCE['stdout_file'])"
+  },
+  {
+   "filename": "mycli_test/pytests/test_client.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -423,6 +423,7 @@ def test_init_opens_audit_log_from_config(monkeypatch: pytest.MonkeyPatch, tmp_p\n     try:\n         assert isinstance(cli.logfile, TextIOWrapper)\n         assert Path(cli.logfile.name) == audit_log\n+        assert cli.logfile.encoding.lower().replace('_', '-') == 'utf-8'\n     finally:\n         if isinstance(cli.logfile, TextIOWrapper):\n             cli.logfile.close()"
+  },
+  {
+   "filename": "mycli_test/pytests/test_special_io_commands.py",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -274,6 +274,23 @@ def test_tee_command():\n         print(f\"An error occurred while attempting to delete the file: {e}\")\n \n \n+def test_tee_and_once_files_are_opened_as_utf8(tmp_path: Path) -> None:\n+    tee_path = tmp_path / 'tee.out'\n+    once_path = tmp_path / 'once.out'\n+    try:\n+        mycli.packages.special_commands.execute(None, f'tee {tee_path}')\n+        assert io_commands.tee_file.encoding.lower().replace('_', '-') == 'utf-8'\n+        io_commands.write_tee('日本語 🙂')\n+        mycli.packages.special_commands.execute(None, 'notee')\n+\n+        io_commands._set_once_file(str(once_path), 'w')\n+        assert io_commands.once_file.encoding.lower().replace('_', '-') == 'utf-8'\n+    finally:\n+        io_commands.unset_once_if_written('')\n+        io_commands.close_tee()\n+    assert '日本語 🙂' in tee_path.read_text(encoding='utf-8')\n+\n+\n @pytest.mark.skipif('wsl2' in platform.uname().release.lower(), reason='todo: unknown')\n def test_tee_command_error():\n     with pytest.raises(TypeError):"
+  }
+ ],
+ "test_files": [
+  "mycli_test/pytests/test_client.py",
+  "mycli_test/pytests/test_special_io_commands.py"
+ ]
+}

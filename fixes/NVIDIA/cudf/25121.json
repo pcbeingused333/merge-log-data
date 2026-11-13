@@ -1,0 +1,26 @@
+{
+ "repo": "NVIDIA/cudf",
+ "number": 25121,
+ "url": "https://github.com/NVIDIA/cudf/pull/25121",
+ "title": "fix(cudf-polars): read local wall-clock for tz-aware datetime fields",
+ "merged_at": "2026-11-13T18:07:59Z",
+ "files": [
+  {
+   "filename": "python/cudf_polars/cudf_polars/dsl/expressions/datetime.py",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 2,
+   "patch": "@@ -1149,6 +1149,21 @@ def from_polars(cls, obj: polars._expr_nodes.TemporalFunction) -> Self:\n         Name.Millennium: 1_000,\n         Name.Century: 100,\n     }\n+    # Functions that read calendar fields; on a time-zone-aware column polars\n+    # reads them from the local wall clock, not from the UTC instant.\n+    _LOCAL_FIELDS: ClassVar[frozenset[Name]] = frozenset(\n+        {\n+            *_COMPONENT_MAP.keys(),\n+            Name.Date,\n+            Name.DaysInMonth,\n+            Name.IsLeapYear,\n+            Name.IsoYear,\n+            Name.OrdinalDay,\n+            Name.Quarter,\n+            Name.Week,\n+            *_CENTURY_MILLENNIUM_DIVISOR.keys(),\n+        }\n+    )\n     _valid_ops: ClassVar[set[Name]] = {\n         *_COMPONENT_MAP.keys(),\n         Name.Combine,\n@@ -1221,8 +1236,11 @@ def __init__(\n                 \"pl.Datetime\", self.children[0].dtype.polars_type\n             ).time_zone\n             self.tz_descs = (_get_tz_desc(from_zone), _get_tz_desc(self.options[0]))\n-        elif self.name is TemporalFunction.Name.ToString:\n-            # polars formats time zone aware datetimes in local wall time.\n+        elif (\n+            self.name in self._LOCAL_FIELDS\n+            or self.name is TemporalFunction.Name.ToString\n+        ):\n+            # Calendar fields and formatted datetimes use the column's local wall clock.\n             child_dtype = self.children[0].dtype.polars_type\n             if isinstance(child_dtype, pl.Datetime):\n                 self.tz_descs = (_get_tz_desc(child_dtype.time_zone), None)\n@@ -1266,6 +1284,14 @@ def do_evaluate(\n     ) -> Column:\n         \"\"\"Evaluate this expression given a dataframe for context.\"\"\"\n         columns = [child.evaluate(df, context=context) for child in self.children]\n+        if self.name in self._LOCAL_FIELDS and self.tz_descs[0] is not None:\n+            (column,) = columns\n+            columns = [\n+                Column(\n+                    _local_wall_clock(column.obj, self.tz_descs[0], df.stream),\n+                    dtype=column.dtype,\n+                )\n+            ]\n         if self.name is TemporalFunction.Name.ConvertTimeZone:\n             (column,) = columns\n             return Column("
+  },
+  {
+   "filename": "python/cudf_polars/tests/expressions/test_datetime_basic.py",
+   "status": "modified",
+   "additions": 47,
+   "deletions": 0,
+   "patch": "@@ -1339,3 +1339,50 @@ def test_datetime_combine_integer_time_unsupported(in_memory_engine: pl.GPUEngin\n     ldf = pl.LazyFrame({\"a\": [datetime.date(2024, 1, 1)], \"b\": [1]})\n     q = ldf.select(pl.col(\"a\").dt.combine(pl.col(\"b\")))\n     assert_ir_translation_raises(q, in_memory_engine, NotImplementedError)\n+\n+\n+@pytest.mark.parametrize(\"time_zone\", [\"Asia/Kathmandu\", \"America/New_York\"])\n+@pytest.mark.parametrize(\n+    \"func\",\n+    [\n+        \"year\",\n+        \"month\",\n+        \"day\",\n+        \"hour\",\n+        \"minute\",\n+        \"second\",\n+        \"weekday\",\n+        \"ordinal_day\",\n+        \"quarter\",\n+        \"week\",\n+        \"iso_year\",\n+        \"date\",\n+        \"is_leap_year\",\n+        \"days_in_month\",\n+        \"century\",\n+        \"millennium\",\n+    ],\n+)\n+def test_datetime_fields_read_local_wall_clock(\n+    engine: pl.GPUEngine, time_zone: str, func: str\n+):\n+    # Fields come from the local wall clock of the column's zone, so instants\n+    # near midnight, a year end and a DST change land on different local values.\n+    ldf = pl.LazyFrame(\n+        {\n+            \"a\": pl.Series(\n+                [\n+                    datetime.datetime(2020, 1, 1, 0, 0),\n+                    datetime.datetime(2019, 12, 31, 23, 30),\n+                    datetime.datetime(2020, 2, 29, 21, 15, 7),\n+                    datetime.datetime(2021, 3, 14, 6, 59, 59),\n+                    datetime.datetime(2021, 3, 14, 7, 0, 0),\n+                    datetime.datetime(2021, 12, 31, 20, 0, 0),\n+                    None,\n+                ],\n+                dtype=pl.Datetime(\"us\", time_zone=\"UTC\"),\n+            )\n+        }\n+    )\n+    local = pl.col(\"a\").dt.convert_time_zone(time_zone)\n+    assert_gpu_result_equal(ldf.select(getattr(local.dt, func)()), engine=engine)"
+  }
+ ],
+ "test_files": [
+  "python/cudf_polars/tests/expressions/test_datetime_basic.py"
+ ]
+}

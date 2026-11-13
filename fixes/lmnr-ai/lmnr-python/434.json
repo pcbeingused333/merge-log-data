@@ -1,0 +1,26 @@
+{
+ "repo": "lmnr-ai/lmnr-python",
+ "number": 434,
+ "url": "https://github.com/lmnr-ai/lmnr-python/pull/434",
+ "title": "fix(groq): record and end the span when a chat stream raises",
+ "merged_at": "2026-11-13T15:24:51Z",
+ "files": [
+  {
+   "filename": "src/lmnr/opentelemetry_lib/opentelemetry/instrumentation/groq/__init__.py",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 17,
+   "patch": "@@ -62,13 +62,20 @@ def _create_stream_processor(\n     \"\"\"Create a generator that processes a stream while collecting telemetry.\"\"\"\n     accumulator = StreamAccumulator()\n \n-    for chunk in response:\n-        try:\n-            accumulator.add(chunk)\n-        except Exception:\n-            logger.warning(\"Failed to process streaming chunk for groq span\", exc_info=True)\n-        finally:\n-            yield chunk\n+    try:\n+        for chunk in response:\n+            try:\n+                accumulator.add(chunk)\n+            except Exception:\n+                logger.warning(\"Failed to process streaming chunk for groq span\", exc_info=True)\n+            finally:\n+                yield chunk\n+    except Exception as e:\n+        # Iteration errors (SSE error events, a dropped connection) escape the\n+        # generator. The try around the call in `_wrap` never sees them, because\n+        # the body runs only when the caller iterates.\n+        _record_error(span, e)\n+        raise\n \n     _handle_response(span, accumulator.response())\n \n@@ -84,16 +91,20 @@ async def _create_async_stream_processor(\n     \"\"\"Create an async generator that processes a stream while collecting telemetry.\"\"\"\n     accumulator = StreamAccumulator()\n \n-    async for chunk in response:\n-        try:\n-            accumulator.add(chunk)\n-        except Exception:\n-            logger.warning(\n-                \"Failed to process streaming chunk for groq span\",\n-                exc_info=True,\n-            )\n-        finally:\n-            yield chunk\n+    try:\n+        async for chunk in response:\n+            try:\n+                accumulator.add(chunk)\n+            except Exception:\n+                logger.warning(\n+                    \"Failed to process streaming chunk for groq span\",\n+                    exc_info=True,\n+                )\n+            finally:\n+                yield chunk\n+    except Exception as e:\n+        _record_error(span, e)\n+        raise\n \n     _handle_response(span, accumulator.response())\n "
+  },
+  {
+   "filename": "tests/test_instrumentations/test_groq/traces/test_chat_tracing.py",
+   "status": "modified",
+   "additions": 43,
+   "deletions": 1,
+   "patch": "@@ -9,7 +9,7 @@\n \n import httpx\n import pytest\n-from groq import AsyncGroq, Groq, RateLimitError\n+from groq import APIError, AsyncGroq, Groq, RateLimitError\n from groq.types.chat import (\n     ChatCompletionContentPartImageParam,\n     ChatCompletionMessageParam,\n@@ -427,3 +427,45 @@ async def test_async_chat_api_error_ends_span_with_error(\n     span = _only_span(span_exporter)\n     assert span.status.status_code == StatusCode.ERROR\n     assert _attrs(span)[\"error.type\"] == \"RateLimitError\"\n+\n+\n+def _stream_error_handler(_request: httpx.Request) -> httpx.Response:\n+    chunk = _chunk({\"role\": \"assistant\", \"content\": \"Hel\"})\n+    error = {\"error\": {\"message\": \"stream failed\", \"type\": \"server_error\"}}\n+    payload = f\"data: {json.dumps(chunk)}\\n\\ndata: {json.dumps(error)}\\n\\n\"\n+    return httpx.Response(\n+        200, content=payload.encode(), headers={\"content-type\": \"text/event-stream\"}\n+    )\n+\n+\n+def test_chat_stream_error_ends_span(\n+    instrument_legacy: MagicMock, span_exporter: InMemorySpanExporter\n+):\n+    stream = _client(_stream_error_handler).chat.completions.create(\n+        model=MODEL, messages=TOOL_MESSAGES, stream=True\n+    )\n+    with pytest.raises(APIError):\n+        for _ in stream:\n+            pass\n+\n+    span = _only_span(span_exporter)\n+    assert span.status.status_code == StatusCode.ERROR\n+    assert _attrs(span)[\"error.type\"] == \"APIError\"\n+    assert [event.name for event in span.events] == [\"exception\"]\n+\n+\n+@pytest.mark.asyncio\n+async def test_async_chat_stream_error_ends_span(\n+    instrument_legacy: MagicMock, span_exporter: InMemorySpanExporter\n+):\n+    stream = await _async_client(_stream_error_handler).chat.completions.create(\n+        model=MODEL, messages=TOOL_MESSAGES, stream=True\n+    )\n+    with pytest.raises(APIError):\n+        async for _ in stream:\n+            pass\n+\n+    span = _only_span(span_exporter)\n+    assert span.status.status_code == StatusCode.ERROR\n+    assert _attrs(span)[\"error.type\"] == \"APIError\"\n+    assert [event.name for event in span.events] == [\"exception\"]"
+  }
+ ],
+ "test_files": [
+  "tests/test_instrumentations/test_groq/traces/test_chat_tracing.py"
+ ]
+}

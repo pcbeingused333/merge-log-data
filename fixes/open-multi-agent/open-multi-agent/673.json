@@ -1,0 +1,26 @@
+{
+ "repo": "open-multi-agent/open-multi-agent",
+ "number": 673,
+ "url": "https://github.com/open-multi-agent/open-multi-agent/pull/673",
+ "title": "fix(core): map Bedrock guardrail stops to content_filter",
+ "merged_at": "2026-11-13T15:47:56Z",
+ "files": [
+  {
+   "filename": "packages/core/src/llm/bedrock.ts",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 2,
+   "patch": "@@ -319,6 +319,22 @@ function buildInferenceConfig(options: LLMChatOptions): InferenceConfiguration |\n   return Object.keys(cfg).length > 0 ? cfg : undefined\n }\n \n+/**\n+ * Bedrock Converse stop reasons that mean a guardrail or content filter\n+ * withheld the response. Mapped to `content_filter`, matching the\n+ * OpenAI-family and Gemini adapters. Other reasons pass through;\n+ * `end_turn`, `tool_use`, and `max_tokens` already match.\n+ */\n+const BEDROCK_CONTENT_FILTER_REASONS = new Set([\n+  'guardrail_intervened',\n+  'content_filtered',\n+])\n+\n+function mapBedrockStopReason(reason: string | undefined): string {\n+  const raw = reason ?? 'end_turn'\n+  return BEDROCK_CONTENT_FILTER_REASONS.has(raw) ? 'content_filter' : raw\n+}\n+\n // ---------------------------------------------------------------------------\n // Adapter implementation\n // ---------------------------------------------------------------------------\n@@ -379,7 +395,7 @@ export class BedrockAdapter implements LLMAdapter {\n       id: response.$metadata.requestId ?? '',\n       content,\n       model: options.model,\n-      stop_reason: (response.stopReason as string) ?? 'end_turn',\n+      stop_reason: mapBedrockStopReason(response.stopReason),\n       usage: {\n         input_tokens: response.usage?.inputTokens ?? 0,\n         output_tokens: response.usage?.outputTokens ?? 0,\n@@ -509,7 +525,7 @@ export class BedrockAdapter implements LLMAdapter {\n         }\n \n         if (event.messageStop) {\n-          stopReason = (event.messageStop.stopReason as string) ?? 'end_turn'\n+          stopReason = mapBedrockStopReason(event.messageStop.stopReason)\n         }\n \n         if (event.metadata?.usage) {"
+  },
+  {
+   "filename": "packages/core/tests/bedrock-adapter.test.ts",
+   "status": "modified",
+   "additions": 31,
+   "deletions": 0,
+   "patch": "@@ -188,6 +188,23 @@ describe('BedrockAdapter', () => {\n       expect(result.stop_reason).toBe('max_tokens')\n     })\n \n+    it.each(['guardrail_intervened', 'content_filtered'])(\n+      'maps %s stopReason to content_filter',\n+      async (stopReason) => {\n+        mockSend.mockResolvedValue(makeConverseResponse({ stopReason }))\n+\n+        const result = await adapter.chat([textMsg('user', 'Hi')], chatOpts())\n+        expect(result.stop_reason).toBe('content_filter')\n+      },\n+    )\n+\n+    it('leaves stop_sequence unchanged', async () => {\n+      mockSend.mockResolvedValue(makeConverseResponse({ stopReason: 'stop_sequence' }))\n+\n+      const result = await adapter.chat([textMsg('user', 'Hi')], chatOpts())\n+      expect(result.stop_reason).toBe('stop_sequence')\n+    })\n+\n     it('maps inputTokens/outputTokens to usage', async () => {\n       mockSend.mockResolvedValue(makeConverseResponse({\n         usage: { inputTokens: 42, outputTokens: 17 },\n@@ -411,6 +428,20 @@ describe('BedrockAdapter', () => {\n       expect(response.usage).toEqual({ input_tokens: 10, output_tokens: 5 })\n     })\n \n+    it.each(['guardrail_intervened', 'content_filtered'])(\n+      'maps %s messageStop to content_filter on done',\n+      async (stopReason) => {\n+        mockSend.mockResolvedValue(makeStreamResponse([\n+          { messageStop: { stopReason } },\n+          { metadata: { usage: { inputTokens: 3, outputTokens: 0 } } },\n+        ]))\n+\n+        const events = await collectEvents(adapter.stream([textMsg('user', 'Hi')], chatOpts()))\n+        const done = events.find(e => e.type === 'done')\n+        expect((done!.data as LLMResponse).stop_reason).toBe('content_filter')\n+      },\n+    )\n+\n     it('emits error event when stream throws', async () => {\n       mockSend.mockRejectedValue(new Error('Stream failed'))\n "
+  }
+ ],
+ "test_files": [
+  "packages/core/tests/bedrock-adapter.test.ts"
+ ]
+}

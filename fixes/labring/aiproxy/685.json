@@ -1,0 +1,40 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 685,
+ "url": "https://github.com/labring/aiproxy/pull/685",
+ "title": "fix(gemini): exclude reasoning tokens from candidatesTokenCount",
+ "merged_at": "2026-11-13T14:57:13Z",
+ "files": [
+  {
+   "filename": "core/relay/model/chat.go",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 4,
+   "patch": "@@ -119,20 +119,27 @@ func (u ChatUsage) ToResponseUsage() ResponseUsage {\n \treturn usage\n }\n \n-// ToGeminiUsage converts ChatUsage to GeminiUsageMetadata (Google Gemini format)\n+// ToGeminiUsage converts ChatUsage to GeminiUsageMetadata (Google Gemini format).\n+// OpenAI completion_tokens include reasoning_tokens. Gemini candidatesTokenCount\n+// does not include thoughtsTokenCount, and ToUsage adds them back together.\n func (u ChatUsage) ToGeminiUsage() GeminiUsageMetadata {\n+\tvar reasoningTokens int64\n+\tif u.CompletionTokensDetails != nil {\n+\t\treasoningTokens = u.CompletionTokensDetails.ReasoningTokens\n+\t}\n+\n \tusage := GeminiUsageMetadata{\n \t\tPromptTokenCount:     u.PromptTokens,\n-\t\tCandidatesTokenCount: u.CompletionTokens,\n+\t\tCandidatesTokenCount: max(0, u.CompletionTokens-reasoningTokens),\n \t\tTotalTokenCount:      u.TotalTokens,\n \t}\n \n \tif u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens > 0 {\n \t\tusage.CachedContentTokenCount = u.PromptTokensDetails.CachedTokens\n \t}\n \n-\tif u.CompletionTokensDetails != nil && u.CompletionTokensDetails.ReasoningTokens > 0 {\n-\t\tusage.ThoughtsTokenCount = u.CompletionTokensDetails.ReasoningTokens\n+\tif reasoningTokens > 0 {\n+\t\tusage.ThoughtsTokenCount = reasoningTokens\n \t}\n \n \treturn usage"
+  },
+  {
+   "filename": "core/relay/model/gemini.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -320,7 +320,7 @@ func (u *GeminiUsageMetadata) ToModelUsage() model.Usage {\n func (u *GeminiUsageMetadata) ToResponseUsage() ResponseUsage {\n \tusage := ResponseUsage{\n \t\tInputTokens:  u.PromptTokenCount,\n-\t\tOutputTokens: u.CandidatesTokenCount,\n+\t\tOutputTokens: u.CandidatesTokenCount + u.ThoughtsTokenCount,\n \t\tTotalTokens:  u.TotalTokenCount,\n \t}\n "
+  },
+  {
+   "filename": "core/relay/model/response.go",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 4,
+   "patch": "@@ -521,20 +521,27 @@ func (u *ResponseUsage) ToClaudeUsage() ClaudeUsage {\n \treturn usage\n }\n \n-// ToGeminiUsage converts ResponseUsage to GeminiUsageMetadata (Google Gemini format)\n+// ToGeminiUsage converts ResponseUsage to GeminiUsageMetadata (Google Gemini format).\n+// OpenAI output_tokens include reasoning_tokens. Gemini candidatesTokenCount\n+// does not include thoughtsTokenCount, and ToUsage adds them back together.\n func (u *ResponseUsage) ToGeminiUsage() GeminiUsageMetadata {\n+\tvar reasoningTokens int64\n+\tif u.OutputTokensDetails != nil {\n+\t\treasoningTokens = u.OutputTokensDetails.ReasoningTokens\n+\t}\n+\n \tusage := GeminiUsageMetadata{\n \t\tPromptTokenCount:     u.InputTokens,\n-\t\tCandidatesTokenCount: u.OutputTokens,\n+\t\tCandidatesTokenCount: max(0, u.OutputTokens-reasoningTokens),\n \t\tTotalTokenCount:      u.TotalTokens,\n \t}\n \n \tif u.InputTokensDetails != nil && u.InputTokensDetails.CachedTokens > 0 {\n \t\tusage.CachedContentTokenCount = u.InputTokensDetails.CachedTokens\n \t}\n \n-\tif u.OutputTokensDetails != nil && u.OutputTokensDetails.ReasoningTokens > 0 {\n-\t\tusage.ThoughtsTokenCount = u.OutputTokensDetails.ReasoningTokens\n+\tif reasoningTokens > 0 {\n+\t\tusage.ThoughtsTokenCount = reasoningTokens\n \t}\n \n \treturn usage"
+  },
+  {
+   "filename": "core/relay/model/usage_conversion_test.go",
+   "status": "modified",
+   "additions": 40,
+   "deletions": 3,
+   "patch": "@@ -83,8 +83,13 @@ func TestChatUsageConversions(t *testing.T) {\n \tt.Run(\"ChatUsage to GeminiUsage\", func(t *testing.T) {\n \t\tgeminiUsage := chatUsage.ToGeminiUsage()\n \t\tassert.Equal(t, int64(100), geminiUsage.PromptTokenCount)\n-\t\tassert.Equal(t, int64(50), geminiUsage.CandidatesTokenCount)\n+\t\tassert.Equal(t, int64(20), geminiUsage.CandidatesTokenCount) // 50 - 30 reasoning\n \t\tassert.Equal(t, int64(150), geminiUsage.TotalTokenCount)\n+\t\tassert.Equal(\n+\t\t\tt,\n+\t\t\tgeminiUsage.TotalTokenCount,\n+\t\t\tgeminiUsage.PromptTokenCount+geminiUsage.CandidatesTokenCount+geminiUsage.ThoughtsTokenCount,\n+\t\t)\n \t\tassert.Equal(t, int64(20), geminiUsage.CachedContentTokenCount)\n \t\tassert.Equal(t, int64(30), geminiUsage.ThoughtsTokenCount)\n \t})\n@@ -149,11 +154,32 @@ func TestResponseUsageConversions(t *testing.T) {\n \tt.Run(\"ResponseUsage to GeminiUsage\", func(t *testing.T) {\n \t\tgeminiUsage := responseUsage.ToGeminiUsage()\n \t\tassert.Equal(t, int64(100), geminiUsage.PromptTokenCount)\n-\t\tassert.Equal(t, int64(50), geminiUsage.CandidatesTokenCount)\n+\t\tassert.Equal(t, int64(20), geminiUsage.CandidatesTokenCount) // 50 - 30 reasoning\n \t\tassert.Equal(t, int64(150), geminiUsage.TotalTokenCount)\n+\t\tassert.Equal(\n+\t\t\tt,\n+\t\t\tgeminiUsage.TotalTokenCount,\n+\t\t\tgeminiUsage.PromptTokenCount+geminiUsage.CandidatesTokenCount+geminiUsage.ThoughtsTokenCount,\n+\t\t)\n \t\tassert.Equal(t, int64(20), geminiUsage.CachedContentTokenCount)\n \t\tassert.Equal(t, int64(30), geminiUsage.ThoughtsTokenCount)\n \t})\n+\n+\tt.Run(\"ResponseUsage to GeminiUsage reasoning only\", func(t *testing.T) {\n+\t\treasoningOnly := model.ResponseUsage{\n+\t\t\tInputTokens:  268,\n+\t\t\tOutputTokens: 192,\n+\t\t\tTotalTokens:  460,\n+\t\t\tOutputTokensDetails: &model.ResponseUsageDetails{\n+\t\t\t\tReasoningTokens: 192,\n+\t\t\t},\n+\t\t}\n+\n+\t\tgeminiUsage := reasoningOnly.ToGeminiUsage()\n+\t\tassert.Equal(t, int64(0), geminiUsage.CandidatesTokenCount)\n+\t\tassert.Equal(t, int64(192), geminiUsage.ThoughtsTokenCount)\n+\t\tassert.Equal(t, int64(460), geminiUsage.TotalTokenCount)\n+\t})\n }\n \n func TestClaudeUsageConversions(t *testing.T) {\n@@ -229,7 +255,7 @@ func TestGeminiUsageConversions(t *testing.T) {\n \tt.Run(\"GeminiUsage to ResponseUsage\", func(t *testing.T) {\n \t\tresponseUsage := geminiUsage.ToResponseUsage()\n \t\tassert.Equal(t, int64(100), responseUsage.InputTokens)\n-\t\tassert.Equal(t, int64(50), responseUsage.OutputTokens)\n+\t\tassert.Equal(t, int64(80), responseUsage.OutputTokens) // 50 candidates + 30 thoughts\n \t\tassert.Equal(t, int64(150), responseUsage.TotalTokens)\n \t\tassert.NotNil(t, responseUsage.InputTokensDetails)\n \t\tassert.Equal(t, int64(5), responseUsage.InputTokensDetails.AudioTokens)\n@@ -311,6 +337,9 @@ func TestRoundTripConversions(t *testing.T) {\n \t\t}\n \n \t\tgeminiUsage := original.ToGeminiUsage()\n+\t\tassert.Equal(t, int64(20), geminiUsage.CandidatesTokenCount)\n+\t\tassert.Equal(t, int64(30), geminiUsage.ThoughtsTokenCount)\n+\n \t\tconverted := geminiUsage.ToResponseUsage()\n \t\tassert.Equal(t, original.InputTokens, converted.InputTokens)\n \t\tassert.Equal(t, original.OutputTokens, converted.OutputTokens)\n@@ -325,6 +354,14 @@ func TestRoundTripConversions(t *testing.T) {\n \t\t\toriginal.OutputTokensDetails.ReasoningTokens,\n \t\t\tconverted.OutputTokensDetails.ReasoningTokens,\n \t\t)\n+\n+\t\trestored := geminiUsage.ToUsage()\n+\t\tassert.Equal(t, original.OutputTokens, restored.CompletionTokens)\n+\t\tassert.Equal(\n+\t\t\tt,\n+\t\t\toriginal.OutputTokensDetails.ReasoningTokens,\n+\t\t\trestored.CompletionTokensDetails.ReasoningTokens,\n+\t\t)\n \t})\n }\n "
+  }
+ ],
+ "test_files": [
+  "core/relay/model/usage_conversion_test.go"
+ ]
+}

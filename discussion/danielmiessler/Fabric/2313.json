@@ -2,13 +2,19 @@
  "repo": "danielmiessler/Fabric",
  "number": 2313,
  "url": "https://github.com/danielmiessler/Fabric/pull/2313",
- "state": "open",
+ "state": "merged",
  "reviews": [
   {
    "role": "collaborator",
    "state": "CHANGES_REQUESTED",
    "submitted_at": "2026-11-13T02:50:26Z",
    "body": "Thank you for this fix. The bug is still on `main`: the native Bedrock plugin did not get the sampling changes from #2338. `SendStream` still sends `temperature` to every model, so Opus 4.7 and later and the Claude 5 models fail with a 400. `Send` still ignores `--temperature`.\n\nThe PR cannot merge in its current form. Please make these changes.\n\n### 1. Rebase onto `main`\n\n#2338 (the Anthropic SDK v2 upgrade) removed `anthropic.ModelDisallowsSamplingParams`. The PR calls it, so the branch does not compile on `main`. The CI checks passed before #2338 merged, so they do not show this.\n\nThe current function is `ModelAcceptsSamplingParams` in `internal/plugins/ai/anthropic/anthropic.go`. It is an allowlist of the older Claude models that accept `temperature` and `top_p`.\n\n### 2. Do not change non-Claude models\n\nThe Bedrock plugin also sends requests to Nova, Llama, Mistral, and other models. `ModelAcceptsSamplingParams` returns false for all of them. A direct change to `!ModelAcceptsSamplingParams(opts.Model)` removes `temperature` from those models too.\n\nApply the allowlist to Claude models only:\n\n```go\n// inferenceConfig returns the sampling settings for a Converse or ConverseStream request.\n// Claude models reject a request that sets both temperature and top_p, so the request\n// sends temperature only. Newer Claude models reject all sampling parameters and get none.\nfunc inferenceConfig(opts *domain.ChatOptions) *types.InferenceConfiguration {\n\tif strings.Contains(opts.Model, \"anthropic.claude\") && !anthropicplugin.ModelAcceptsSamplingParams(opts.Model) {\n\t\treturn nil\n\t}\n\treturn &types.InferenceConfiguration{\n\t\tTemperature: aws.Float32(float32(opts.Temperature)),\n\t}\n}\n```\n\nThe `anthropic.claude` substring matches the base IDs and the `us.`, `eu.`, `ap.`, and `global.` inference profile IDs.\n\n### 3. Add a test for a non-Claude model\n\nAdd a non-Claude model to `TestSampling_KeptForOtherModels`, for example `us.meta.llama3-3-70b-instruct-v1:0` or `us.amazon.nova-pro-v1:0`. This test fails if a later change removes `temperature` from non-Claude models.\n\n```go\nfor _, model := range []string{\n\t\"anthropic.claude-sonnet-4-5-20250929-v1:0\",\n\t\"us.amazon.nova-pro-v1:0\",\n} {\n\tconfig := inferenceConfigOf(t, sendOnce(t, stream, model))\n\tassert.InDelta(t, 0.7, config[\"temperature\"], 0.001, \"stream=%v model=%s\", stream, model)\n}\n```\n\nThe other parts of the PR are good: the one helper for both send paths, and the tests against a local server. After these changes, I will review it again.\n"
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-13T16:19:19Z",
+   "body": "LGTM now. Thanks @pcbeingused333 "
   }
  ],
  "review_comments": [],

@@ -1,0 +1,41 @@
+{
+ "repo": "aandrew-me/tgpt",
+ "number": 540,
+ "url": "https://github.com/aandrew-me/tgpt/pull/540",
+ "title": "fix(ollamacloud): enable and forward configured tools",
+ "merged_at": "2026-11-13T07:21:26Z",
+ "files": [
+  {
+   "filename": "src/providers/ollama/ollama_cloud.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -70,10 +70,12 @@ func cloudRequestBody(input string, params structs.Params, model string) ([]byte\n \t\tMessages    []any    `json:\"messages\"`\n \t\tTemperature *float64 `json:\"temperature,omitempty\"`\n \t\tTopP        *float64 `json:\"top_p,omitempty\"`\n+\t\tTools       []any    `json:\"tools,omitempty\"`\n \t}{\n \t\tModel:    model,\n \t\tStream:   true,\n \t\tMessages: messages,\n+\t\tTools:    params.Tools,\n \t}\n \trequestInfo.Temperature, requestInfo.TopP = params.SamplingOptions()\n "
+  },
+  {
+   "filename": "src/providers/ollama/ollama_cloud_test.go",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -34,3 +34,33 @@ func TestCloudRequestBodyOmitsUnsetSampling(t *testing.T) {\n \tassert.Equal(t, true, decoded[\"stream\"])\n \tassert.Len(t, decoded[\"messages\"], 1)\n }\n+\n+func TestCloudRequestBodyTools(t *testing.T) {\n+\ttools := []any{map[string]any{\n+\t\t\"type\": \"function\",\n+\t\t\"function\": map[string]any{\n+\t\t\t\"name\": \"get_weather\",\n+\t\t\t\"parameters\": map[string]any{\n+\t\t\t\t\"type\":       \"object\",\n+\t\t\t\t\"properties\": map[string]any{\"city\": map[string]any{\"type\": \"string\"}},\n+\t\t\t},\n+\t\t},\n+\t}}\n+\n+\tt.Run(\"configured\", func(t *testing.T) {\n+\t\tdecoded := decodeCloudBody(t, structs.Params{Tools: tools})\n+\t\tassert.Equal(t, tools, decoded[\"tools\"])\n+\t})\n+\tfor _, tc := range []struct {\n+\t\tname  string\n+\t\ttools []any\n+\t}{\n+\t\t{name: \"nil\"},\n+\t\t{name: \"empty\", tools: []any{}},\n+\t} {\n+\t\tt.Run(tc.name, func(t *testing.T) {\n+\t\t\tdecoded := decodeCloudBody(t, structs.Params{Tools: tc.tools})\n+\t\t\tassert.NotContains(t, decoded, \"tools\")\n+\t\t})\n+\t}\n+}"
+  },
+  {
+   "filename": "src/providers/providers.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -51,7 +51,7 @@ func SupportsTools(provider string) bool {\n \t\tprovider = \"opencode\"\n \t}\n \tswitch provider {\n-\tcase \"anyapi\", \"atlascloud\", \"apiroute\", \"cheaperinference\", \"deepseek\", \"demonroute\", \"gemini\", \"groq\", \"litellm\", \"obscurifyai\", \"ollama\", \"omniroute\", \"opencode\", \"openai\", \"openrouter\", \"pollinations\", \"runcrate\":\n+\tcase \"anyapi\", \"atlascloud\", \"apiroute\", \"cheaperinference\", \"deepseek\", \"demonroute\", \"gemini\", \"groq\", \"litellm\", \"obscurifyai\", \"ollama\", \"ollamacloud\", \"omniroute\", \"opencode\", \"openai\", \"openrouter\", \"pollinations\", \"runcrate\":\n \t\treturn true\n \tdefault:\n \t\treturn false"
+  },
+  {
+   "filename": "src/providers/providers_test.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -3,14 +3,14 @@ package providers\n import \"testing\"\n \n func TestSupportsTools(t *testing.T) {\n-\tsupported := []string{\"openai\", \"opencode\", \"gemini\", \"groq\", \"deepseek\", \"ollama\", \"litellm\", \"omniroute\", \"openrouter\", \"anyapi\", \"atlascloud\", \"apiroute\", \"cheaperinference\", \"demonroute\", \"obscurifyai\", \"pollinations\", \"runcrate\", \"\"}\n+\tsupported := []string{\"openai\", \"opencode\", \"gemini\", \"groq\", \"deepseek\", \"ollama\", \"ollamacloud\", \"litellm\", \"omniroute\", \"openrouter\", \"anyapi\", \"atlascloud\", \"apiroute\", \"cheaperinference\", \"demonroute\", \"obscurifyai\", \"pollinations\", \"runcrate\", \"\"}\n \tfor _, p := range supported {\n \t\tif !SupportsTools(p) {\n \t\t\tt.Errorf(\"expected provider %q to support tools\", p)\n \t\t}\n \t}\n \n-\tunsupported := []string{\"aihorde\", \"deepseek-web\", \"fx\", \"isou\", \"koboldai\", \"minimax\", \"ollamacloud\", \"powerbrain\", \"invalid\"}\n+\tunsupported := []string{\"aihorde\", \"deepseek-web\", \"fx\", \"isou\", \"koboldai\", \"minimax\", \"powerbrain\", \"invalid\"}\n \tfor _, p := range unsupported {\n \t\tif SupportsTools(p) {\n \t\t\tt.Errorf(\"expected provider %q NOT to support tools\", p)"
+  }
+ ],
+ "test_files": [
+  "src/providers/ollama/ollama_cloud_test.go",
+  "src/providers/providers_test.go"
+ ]
+}

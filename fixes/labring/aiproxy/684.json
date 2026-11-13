@@ -1,0 +1,26 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 684,
+ "url": "https://github.com/labring/aiproxy/pull/684",
+ "title": "fix(cohere): map stream finish_reason like non-stream",
+ "merged_at": "2026-11-13T09:28:24Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/cohere/main.go",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -28,6 +28,12 @@ func stopReasonCohere2OpenAI(reason *string) string {\n \tswitch *reason {\n \tcase \"COMPLETE\":\n \t\treturn relaymodel.FinishReasonStop\n+\tcase \"MAX_TOKENS\":\n+\t\treturn relaymodel.FinishReasonLength\n+\tcase \"ERROR_TOXIC\":\n+\t\treturn relaymodel.FinishReasonContentFilter\n+\tcase \"ERROR\":\n+\t\treturn relaymodel.FinishReasonStop\n \tdefault:\n \t\treturn *reason\n \t}\n@@ -105,7 +111,7 @@ func StreamResponse2OpenAI(\n \t\t\t\t},\n \t\t\t},\n \t\t}\n-\t\tfinishReason = *cohereResponse.Response.FinishReason\n+\t\tfinishReason = stopReasonCohere2OpenAI(cohereResponse.Response.FinishReason)\n \tdefault:\n \t\treturn nil\n \t}"
+  },
+  {
+   "filename": "core/relay/adaptor/cohere/main_test.go",
+   "status": "added",
+   "additions": 60,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,60 @@\n+//nolint:testpackage\n+package cohere\n+\n+import (\n+\t\"testing\"\n+\n+\t\"github.com/labring/aiproxy/core/relay/meta\"\n+\trelaymodel \"github.com/labring/aiproxy/core/relay/model\"\n+)\n+\n+func TestStreamResponse2OpenAIMapsFinishReason(t *testing.T) {\n+\tt.Parallel()\n+\n+\treason := \"COMPLETE\"\n+\tresp := StreamResponse2OpenAI(&meta.Meta{}, &StreamResponse{\n+\t\tEventType: \"stream-end\",\n+\t\tResponse:  &Response{FinishReason: &reason},\n+\t})\n+\n+\tif resp == nil || len(resp.Choices) != 1 {\n+\t\tt.Fatalf(\"unexpected response: %+v\", resp)\n+\t}\n+\n+\tif got := resp.Choices[0].FinishReason; got != relaymodel.FinishReasonStop {\n+\t\tt.Fatalf(\"finish reason = %q, want %q\", got, relaymodel.FinishReasonStop)\n+\t}\n+}\n+\n+func TestStreamResponse2OpenAINilFinishReason(t *testing.T) {\n+\tt.Parallel()\n+\n+\tresp := StreamResponse2OpenAI(&meta.Meta{}, &StreamResponse{\n+\t\tEventType: \"stream-end\",\n+\t\tResponse:  &Response{},\n+\t})\n+\n+\tif resp == nil || resp.Choices[0].FinishReason != \"\" {\n+\t\tt.Fatalf(\"unexpected response: %+v\", resp)\n+\t}\n+}\n+\n+func TestStopReasonCohere2OpenAI(t *testing.T) {\n+\tt.Parallel()\n+\n+\tfor _, tt := range []struct {\n+\t\treason *string\n+\t\twant   string\n+\t}{\n+\t\t{nil, \"\"},\n+\t\t{new(\"COMPLETE\"), relaymodel.FinishReasonStop},\n+\t\t{new(\"MAX_TOKENS\"), relaymodel.FinishReasonLength},\n+\t\t{new(\"ERROR\"), relaymodel.FinishReasonStop},\n+\t\t{new(\"ERROR_TOXIC\"), relaymodel.FinishReasonContentFilter},\n+\t\t{new(\"COMPLETE_UNEXPECTED\"), \"COMPLETE_UNEXPECTED\"},\n+\t} {\n+\t\tif got := stopReasonCohere2OpenAI(tt.reason); got != tt.want {\n+\t\t\tt.Fatalf(\"stopReasonCohere2OpenAI(%v) = %q, want %q\", tt.reason, got, tt.want)\n+\t\t}\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/cohere/main_test.go"
+ ]
+}

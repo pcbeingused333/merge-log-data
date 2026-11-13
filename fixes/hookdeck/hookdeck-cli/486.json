@@ -1,0 +1,26 @@
+{
+ "repo": "hookdeck/hookdeck-cli",
+ "number": 486,
+ "url": "https://github.com/hookdeck/hookdeck-cli/pull/486",
+ "title": "fix(transformations): keep the execution fields the API returns",
+ "merged_at": "2026-11-13T13:55:24Z",
+ "files": [
+  {
+   "filename": "pkg/hookdeck/transformations.go",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 1,
+   "patch": "@@ -138,7 +138,16 @@ func (r *TransformationRunResponse) ConsoleText() string {\n type TransformationExecution struct {\n \tID        string    `json:\"id\"`\n \tCreatedAt time.Time `json:\"created_at\"`\n-\t// Additional fields may be present from API\n+\n+\t// The remaining fields are what the execution endpoints return besides the\n+\t// ID. The event payloads and logs are kept as raw JSON so their shape is\n+\t// passed through untouched, including by `--output json`.\n+\tWebhookID            string          `json:\"webhook_id,omitempty\"`\n+\tIssueID              string          `json:\"issue_id,omitempty\"`\n+\tLogLevel             string          `json:\"log_level,omitempty\"`\n+\tOriginalEventData    json.RawMessage `json:\"original_event_data,omitempty\"`\n+\tTransformedEventData json.RawMessage `json:\"transformed_event_data,omitempty\"`\n+\tLogs                 json.RawMessage `json:\"logs,omitempty\"`\n }\n \n // TransformationExecutionListResponse represents the response from listing executions"
+  },
+  {
+   "filename": "pkg/hookdeck/transformations_test.go",
+   "status": "modified",
+   "additions": 31,
+   "deletions": 1,
+   "patch": "@@ -1,6 +1,9 @@\n package hookdeck\n \n-import \"testing\"\n+import (\n+\t\"encoding/json\"\n+\t\"testing\"\n+)\n \n // TestTransformationRunResponse_Failed pins the success predicate against\n // behaviour observed from the live API. The cases below are transcribed from\n@@ -82,3 +85,30 @@ func TestTransformationRunResponse_ConsoleText(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestTransformationExecution_KeepsAPIFields(t *testing.T) {\n+\tbody := `{\"id\":\"exec_1\",\"created_at\":\"2026-01-02T03:04:05Z\",\"webhook_id\":\"web_1\",\"issue_id\":\"iss_1\",\"log_level\":\"error\",` +\n+\t\t`\"original_event_data\":{\"body\":{\"a\":1}},\"transformed_event_data\":{\"body\":{\"a\":2}},\"logs\":[{\"type\":\"error\",\"message\":\"boom\"}]}`\n+\n+\tvar e TransformationExecution\n+\tif err := json.Unmarshal([]byte(body), &e); err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tif e.WebhookID != \"web_1\" || e.IssueID != \"iss_1\" || e.LogLevel != \"error\" {\n+\t\tt.Fatalf(\"scalar fields lost: %+v\", e)\n+\t}\n+\n+\tout, err := json.Marshal(e)\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tvar got map[string]json.RawMessage\n+\tif err := json.Unmarshal(out, &got); err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tfor _, k := range []string{\"original_event_data\", \"transformed_event_data\", \"logs\", \"log_level\", \"webhook_id\", \"issue_id\"} {\n+\t\tif _, ok := got[k]; !ok {\n+\t\t\tt.Errorf(\"field %q missing from re-encoded execution: %s\", k, out)\n+\t\t}\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "pkg/hookdeck/transformations_test.go"
+ ]
+}

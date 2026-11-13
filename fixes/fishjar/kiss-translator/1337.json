@@ -1,0 +1,26 @@
+{
+ "repo": "fishjar/kiss-translator",
+ "number": 1337,
+ "url": "https://github.com/fishjar/kiss-translator/pull/1337",
+ "title": "fix(translator): stop Gemini generateContent streams on error events",
+ "merged_at": "2026-11-13T15:40:01Z",
+ "files": [
+  {
+   "filename": "src/builtin-plugins/streamResponses.js",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -75,6 +75,13 @@ export function getStreamDelta(json, apiType) {\n           : \"\";\n       }\n \n+      // generateContent (alt=sse) 没有 event_type：中途的 {error:{...}} 必须终止，交由上层回退到非流式\n+      if (json.error) {\n+        const error = new Error(json.error?.message || \"Gemini stream failed\");\n+        error.isAIStreamTerminal = true;\n+        throw error;\n+      }\n+\n       // 谷歌原生 Gemini API 的 delta 提取逻辑 (排除思维链思考过程)\n       const parts = json.candidates?.[0]?.content?.parts;\n       return ("
+  },
+  {
+   "filename": "src/libs/stream.test.js",
+   "status": "modified",
+   "additions": 42,
+   "deletions": 0,
+   "patch": "@@ -234,6 +234,48 @@ describe(\"getStreamDelta\", () => {\n     ).toThrow(\"bad request\");\n   });\n \n+  test(\"turns Gemini generateContent mid-stream errors into terminal fallback errors\", () => {\n+    expect(\n+      getStreamDelta(\n+        {\n+          candidates: [{ content: { parts: [{ text: \"partial\" }] } }],\n+        },\n+        OPT_TRANS_GEMINI\n+      )\n+    ).toBe(\"partial\");\n+    expect(() =>\n+      getStreamDelta(\n+        {\n+          error: {\n+            code: 503,\n+            message: \"The model is overloaded. Please try again later.\",\n+            status: \"UNAVAILABLE\",\n+          },\n+        },\n+        OPT_TRANS_GEMINI\n+      )\n+    ).toThrow(\n+      expect.objectContaining({\n+        message: \"The model is overloaded. Please try again later.\",\n+        isAIStreamTerminal: true,\n+      })\n+    );\n+  });\n+\n+  test(\"uses a fallback message for Gemini generateContent errors without a message\", () => {\n+    expect(() =>\n+      getStreamDelta(\n+        { error: { code: 500, status: \"INTERNAL\" } },\n+        OPT_TRANS_GEMINI\n+      )\n+    ).toThrow(\n+      expect.objectContaining({\n+        message: \"Gemini stream failed\",\n+        isAIStreamTerminal: true,\n+      })\n+    );\n+  });\n+\n   test(\"extracts only text deltas from Claude content_block_delta events\", () => {\n     expect(\n       getStreamDelta("
+  }
+ ],
+ "test_files": [
+  "src/libs/stream.test.js"
+ ]
+}

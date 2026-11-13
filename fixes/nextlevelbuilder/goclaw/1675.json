@@ -1,0 +1,33 @@
+{
+ "repo": "nextlevelbuilder/goclaw",
+ "number": 1675,
+ "url": "https://github.com/nextlevelbuilder/goclaw/pull/1675",
+ "title": "fix(providers): map Anthropic model_context_window_exceeded to length",
+ "merged_at": "2026-11-13T10:11:29Z",
+ "files": [
+  {
+   "filename": "internal/providers/anthropic.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -240,7 +240,7 @@ func (p *AnthropicProvider) parseResponse(resp *anthropicResponse) *ChatResponse\n \tswitch resp.StopReason {\n \tcase \"tool_use\":\n \t\tresult.FinishReason = \"tool_calls\"\n-\tcase \"max_tokens\":\n+\tcase \"max_tokens\", \"model_context_window_exceeded\":\n \t\tresult.FinishReason = \"length\"\n \tdefault:\n \t\tresult.FinishReason = \"stop\""
+  },
+  {
+   "filename": "internal/providers/anthropic_finish_reason_test.go",
+   "status": "added",
+   "additions": 62,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,62 @@\n+package providers\n+\n+import (\n+\t\"context\"\n+\t\"testing\"\n+)\n+\n+func TestParseResponse_StopReason(t *testing.T) {\n+\tp := &AnthropicProvider{}\n+\tcases := []struct {\n+\t\tstop string\n+\t\twant string\n+\t}{\n+\t\t{\"end_turn\", \"stop\"},\n+\t\t{\"stop_sequence\", \"stop\"},\n+\t\t{\"max_tokens\", \"length\"},\n+\t\t{\"model_context_window_exceeded\", \"length\"},\n+\t\t{\"tool_use\", \"tool_calls\"},\n+\t}\n+\tfor _, tc := range cases {\n+\t\tgot := p.parseResponse(&anthropicResponse{StopReason: tc.stop}).FinishReason\n+\t\tif got != tc.want {\n+\t\t\tt.Errorf(\"stop_reason %q: FinishReason = %q, want %q\", tc.stop, got, tc.want)\n+\t\t}\n+\t}\n+}\n+\n+func TestStreamChat_ContextWindowStopReason(t *testing.T) {\n+\tevents := []string{\n+\t\t\"event: message_start\\n\",\n+\t\t`data: {\"message\":{\"usage\":{\"input_tokens\":10}}}` + \"\\n\\n\",\n+\t\t\"event: content_block_start\\n\",\n+\t\t`data: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}` + \"\\n\\n\",\n+\t\t\"event: content_block_delta\\n\",\n+\t\t`data: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}` + \"\\n\\n\",\n+\t\t\"event: content_block_stop\\n\",\n+\t\t\"data: {}\\n\\n\",\n+\t\t\"event: message_delta\\n\",\n+\t\t`data: {\"delta\":{\"stop_reason\":\"model_context_window_exceeded\"},\"usage\":{\"output_tokens\":20}}` + \"\\n\\n\",\n+\t\t\"event: message_stop\\n\",\n+\t\t\"data: {}\\n\\n\",\n+\t}\n+\tserver := newAnthropicSSEServer(t, events)\n+\tp := newTestAnthropicProvider(server.URL)\n+\n+\tresult, err := p.ChatStream(context.Background(), ChatRequest{\n+\t\tModel:    \"claude-sonnet-4-5-20250929\",\n+\t\tMessages: []Message{{Role: \"user\", Content: \"hello\"}},\n+\t}, nil)\n+\tif err != nil {\n+\t\tt.Fatalf(\"unexpected error: %v\", err)\n+\t}\n+\tif result == nil {\n+\t\tt.Fatal(\"expected non-nil result\")\n+\t}\n+\tif result.FinishReason != \"length\" {\n+\t\tt.Errorf(\"FinishReason = %q, want length\", result.FinishReason)\n+\t}\n+\tif result.Content != \"partial\" {\n+\t\tt.Errorf(\"Content = %q, want partial\", result.Content)\n+\t}\n+}"
+  },
+  {
+   "filename": "internal/providers/anthropic_stream.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -135,7 +135,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req ChatRequest, onC\n \t\t\t\t\tswitch ev.Delta.StopReason {\n \t\t\t\t\tcase \"tool_use\":\n \t\t\t\t\t\tresult.FinishReason = \"tool_calls\"\n-\t\t\t\t\tcase \"max_tokens\":\n+\t\t\t\t\tcase \"max_tokens\", \"model_context_window_exceeded\":\n \t\t\t\t\t\tresult.FinishReason = \"length\"\n \t\t\t\t\tdefault:\n \t\t\t\t\t\tresult.FinishReason = \"stop\""
+  }
+ ],
+ "test_files": [
+  "internal/providers/anthropic_finish_reason_test.go"
+ ]
+}

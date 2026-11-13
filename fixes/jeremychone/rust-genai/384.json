@@ -1,0 +1,17 @@
+{
+ "repo": "jeremychone/rust-genai",
+ "number": 384,
+ "url": "https://github.com/jeremychone/rust-genai/pull/384",
+ "title": "fix(bedrock): omit temperature/topP for Anthropic models without sampling support",
+ "merged_at": "2026-11-13T19:32:39Z",
+ "files": [
+  {
+   "filename": "src/adapter/adapters/bedrock/converse.rs",
+   "status": "modified",
+   "additions": 40,
+   "deletions": 5,
+   "patch": "@@ -89,11 +89,24 @@ pub(super) fn build_converse_payload(\n \t} else {\n \t\tlet max_tokens = resolve_max_tokens(model_name, &options_set);\n \t\tinference.insert(\"maxTokens\".to_string(), json!(max_tokens));\n-\t\tif let Some(temperature) = options_set.temperature() {\n-\t\t\tinference.insert(\"temperature\".to_string(), json!(temperature));\n-\t\t}\n-\t\tif let Some(top_p) = options_set.top_p() {\n-\t\t\tinference.insert(\"topP\".to_string(), json!(top_p));\n+\t\t// Some Anthropic models only accept default sampling values and answer temperature / topP with a 400.\n+\t\tlet supports_sampling = match publisher {\n+\t\t\tBedrockPublisher::Anthropic => {\n+\t\t\t\tAnthropicModel::parse(anthropic_model_name(model_name))\n+\t\t\t\t\t.capabilities()\n+\t\t\t\t\t.supports_sampling_params\n+\t\t\t}\n+\t\t\t_ => true,\n+\t\t};\n+\t\tif supports_sampling {\n+\t\t\tif let Some(temperature) = options_set.temperature() {\n+\t\t\t\tinference.insert(\"temperature\".to_string(), json!(temperature));\n+\t\t\t}\n+\t\t\tif let Some(top_p) = options_set.top_p() {\n+\t\t\t\tinference.insert(\"topP\".to_string(), json!(top_p));\n+\t\t\t}\n+\t\t} else if options_set.temperature().is_some() || options_set.top_p().is_some() {\n+\t\t\twarn!(\"Bedrock '{model_name}': temperature and top_p are not supported by this model and were not sent\");\n \t\t}\n \t}\n \tif !options_set.stop_sequences().is_empty() {\n@@ -856,6 +869,28 @@ mod tests {\n \t\tOk(())\n \t}\n \n+\t#[test]\n+\tfn anthropic_sampling_params_follow_model_capabilities() -> Result<()> {\n+\t\t// -- Setup & Fixtures\n+\t\tlet options = ChatOptions::default()\n+\t\t\t.with_max_tokens(4000)\n+\t\t\t.with_temperature(0.5)\n+\t\t\t.with_top_p(0.9);\n+\t\tlet chat_req = || ChatRequest::new(vec![ChatMessage::user(\"hi\")]);\n+\n+\t\t// -- Exec\n+\t\tlet opus_4_7 = payload_for(\"global.anthropic.claude-opus-4-7\", chat_req(), &options)?;\n+\t\tlet sonnet_4_5 = payload_for(\"global.anthropic.claude-sonnet-4-5-20250929-v1:0\", chat_req(), &options)?;\n+\n+\t\t// -- Check\n+\t\tassert_eq!(opus_4_7[\"inferenceConfig\"], json!({ \"maxTokens\": 4000 }));\n+\t\tassert_eq!(\n+\t\t\tsonnet_4_5[\"inferenceConfig\"],\n+\t\t\tjson!({ \"maxTokens\": 4000, \"temperature\": 0.5, \"topP\": 0.9 })\n+\t\t);\n+\t\tOk(())\n+\t}\n+\n \t#[test]\n \tfn openai_gets_reasoning_effort() -> Result<()> {\n \t\t// -- Setup & Fixtures"
+  }
+ ],
+ "test_files": []
+}

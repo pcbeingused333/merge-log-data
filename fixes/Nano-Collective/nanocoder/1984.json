@@ -1,0 +1,48 @@
+{
+ "repo": "Nano-Collective/nanocoder",
+ "number": 1984,
+ "url": "https://github.com/Nano-Collective/nanocoder/pull/1984",
+ "title": "fix(bash-executor): close stdin of execute_bash commands",
+ "merged_at": "2026-11-13T18:20:46Z",
+ "files": [
+  {
+   "filename": ".changeset/bash-executor-close-stdin.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+\"@nanocollective/nanocoder\": patch\n+---\n+\n+`execute_bash` now closes the command's stdin on every spawn path (Unix, Windows `cmd.exe`, and the macOS/Linux sandbox), so commands that wait for input (interactive prompts, `cat` with no file, editors) get EOF and fail fast instead of hanging until the 2 minute timeout. Closes #1978."
+  },
+  {
+   "filename": "source/services/bash-executor-cwd.spec.ts",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -47,3 +47,20 @@ test.serial('a failed cd leaves the session cwd untouched', async t => {\n \t\trmSync(base, {recursive: true, force: true});\n \t}\n });\n+\n+test.serial('a command that reads stdin gets EOF instead of hanging', async t => {\n+\tif (platform === 'win32') {\n+\t\tt.pass('stdin handling is checked on unix only');\n+\t\treturn;\n+\t}\n+\tlet timer: NodeJS.Timeout | undefined;\n+\tconst result = await Promise.race([\n+\t\trun('cat; echo done'),\n+\t\tnew Promise<'hung'>(resolve => {\n+\t\t\ttimer = setTimeout(() => resolve('hung'), 5000);\n+\t\t}),\n+\t]);\n+\tclearTimeout(timer);\n+\tt.not(result, 'hung', 'cat returned instead of waiting on an open stdin pipe');\n+\tif (result !== 'hung') t.regex(result.fullOutput, /done/);\n+});"
+  },
+  {
+   "filename": "source/services/bash-executor.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -277,6 +277,8 @@ export class BashExecutor extends EventEmitter {\n \t\t\t\tcwd,\n \t\t\t\tenv: childEnv,\n \t\t\t\twindowsVerbatimArguments: true,\n+\t\t\t\t// Close stdin so commands that wait for input get EOF.\n+\t\t\t\tstdio: ['ignore', 'pipe', 'pipe'],\n \t\t\t});\n \t\t} else {\n \t\t\t// codeql[js/shell-command-built-from-environment] -c script uses $NC_CWD_FILE; path is env, not argv\n@@ -285,6 +287,9 @@ export class BashExecutor extends EventEmitter {\n \t\t\t\tcwd,\n \t\t\t\tdetached: true,\n \t\t\t\tenv: childEnv,\n+\t\t\t\t// Close stdin so commands that wait for input get EOF and fail fast\n+\t\t\t\t// instead of hanging until the timeout.\n+\t\t\t\tstdio: ['ignore', 'pipe', 'pipe'],\n \t\t\t});\n \t\t}\n "
+  },
+  {
+   "filename": "source/services/bash-sandbox.spec.ts",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -19,6 +19,7 @@ import {\n \tfindBwrap,\n \tmacSandboxProfile,\n \tplanBashSpawn,\n+\tspawnPlanned,\n } from './bash-sandbox.js';\n \n console.log('\\nbash-sandbox.spec.ts');\n@@ -190,6 +191,40 @@ test('findBwrap walks PATH', t => {\n \t}\n });\n \n+test('spawnPlanned closes stdin so waiting commands get EOF', async t => {\n+\tif (platform === 'win32') {\n+\t\tt.pass('uses sh as a stand-in for bwrap; unix only');\n+\t\treturn;\n+\t}\n+\t// `sh` stands in for the bwrap binary: only the stdio wiring is under test.\n+\tconst proc = spawnPlanned(\n+\t\t{\n+\t\t\tbin: 'bwrap',\n+\t\t\tbwrap: '/bin/sh',\n+\t\t\targs: ['-c', 'cat; echo done'],\n+\t\t\tdetached: true,\n+\t\t} as unknown as Parameters<typeof spawnPlanned>[0],\n+\t\t{cwd: tmpdir(), env: process.env},\n+\t);\n+\tt.is(proc.stdin, null, 'stdin is not an open pipe');\n+\tlet out = '';\n+\tproc.stdout?.on('data', (c: Buffer) => {\n+\t\tout += c.toString();\n+\t});\n+\tlet timer: NodeJS.Timeout | undefined;\n+\tconst hung = new Promise<'hung'>(resolve => {\n+\t\ttimer = setTimeout(() => resolve('hung'), 5000);\n+\t});\n+\tconst closed = new Promise<'closed'>(resolve =>\n+\t\tproc.on('close', () => resolve('closed')),\n+\t);\n+\tconst result = await Promise.race([closed, hung]);\n+\tclearTimeout(timer);\n+\tif (result === 'hung') proc.kill();\n+\tt.is(result, 'closed');\n+\tt.regex(out, /done/);\n+});\n+\n // Writes to these run code outside the jail: git config and hooks the next\n // time nanocoder's git tools run, nanocoder's own config on its next start.\n test('macSandboxProfile keeps git and nanocoder config read-only inside the project', t => {"
+  },
+  {
+   "filename": "source/services/bash-sandbox.ts",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 2,
+   "patch": "@@ -426,8 +426,12 @@ export function spawnPlanned(\n \t// codeql[js/shell-command-constructed-from-input]\n \tconst proc = spawn(bin, plan.args, {\n \t\t...spawnOpts,\n-\t\t// fd 3 carries bwrap's --info-fd report.\n-\t\tstdio: plan.bin === 'bwrap' ? ['pipe', 'pipe', 'pipe', 'pipe'] : 'pipe',\n+\t\t// stdin is closed so commands that wait for input get EOF. fd 3 carries\n+\t\t// bwrap's --info-fd report.\n+\t\tstdio:\n+\t\t\tplan.bin === 'bwrap'\n+\t\t\t\t? ['ignore', 'pipe', 'pipe', 'pipe']\n+\t\t\t\t: ['ignore', 'pipe', 'pipe'],\n \t});\n \tif (plan.bin === 'bwrap') {\n \t\tlet info = '';"
+  }
+ ],
+ "test_files": [
+  "source/services/bash-executor-cwd.spec.ts",
+  "source/services/bash-sandbox.spec.ts"
+ ]
+}

@@ -2,13 +2,19 @@
  "repo": "Arize-ai/openinference",
  "number": 4066,
  "url": "https://github.com/Arize-ai/openinference/pull/4066",
- "state": "open",
+ "state": "merged",
  "reviews": [
   {
    "role": "bot",
    "state": "COMMENTED",
    "submitted_at": "2026-10-31T03:34:34Z",
    "body": "## Factory review of 2aa4bd2: Approve\n\nFit, Checks and Tests all pass and there are no blocking findings: the async hooks now call the sync ones, and both new tests fail on `main` with the reported `NotImplementedError`.\n\n| Criterion | Result | Notes |\n|---|---|---|\n| Fit | Pass | does what it claims |\n| Checks | Pass | `ci-agentspec`, `ci-agentspec-latest` |\n| Tests | Pass | both new tests fail on main with `NotImplementedError` |\n| Blocking findings | 0 | |\n| Non-blocking findings | 1 | test doesn't check that shutdown delegates `tests/test_instrumentor.py:156` |\n| Risk | Low | side effects/perf: async hooks now export, blocking on the event loop like the sync path |\n| Review depth | Focused | small internal fix in one instrumentor, no public API change |\n\n<details><summary>Details</summary>\n\n**Intent:** Fix #4065. `_OtelSpanProcessor`'s five async hooks (`on_start_async`, `on_end_async`, `on_event_async`, `startup_async`, `shutdown_async`) raised `NotImplementedError`. They now call their sync counterparts, so Agent Spec spans opened with `async with`, and async `Trace`s, are exported instead of crashing the app.\n**Fit:** The diff changes only those five methods and adds two async tests. The sync methods already catch and log exceptions (`on_start`, `on_end`, `shutdown`) or are no-ops (`on_event`, `startup`), so failures still never reach user code. The sync bodies never attach an OTel context. Their only state is a registry dict keyed by `span.id` and they contain no `await`, so calling them from async code is safe. Parent links come from pyagentspec's own ContextVar span stack. pyagentspec 26.1.0 and 26.3.1 define exactly these five async hooks, so none is missed.\n**Verified:** `tox run -e ci-agentspec` passed: ruff format, ruff check, mypy, and pytest 12/12 on pyagentspec 26.1.0. `tox run -e ci-agentspec-latest` passed: 12/12 on pyagentspec 26.3.1. With main's `_opentelemetry_spanprocessor.py` swapped into the env, both new tests fail with `NotImplementedError: Async stack not implemented for OpenInferenceSpanProcessor yet` and the other 10 pass. Async tests run because `asyncio_mode = \"auto\"`. The area reviewer ran 3 concurrent `asyncio.gather` tasks with nested async spans: all 6 spans exported, each child under the correct parent.\n**Not verified:** The real pyagentspec LangGraph `ainvoke`/`astream` path, because langgraph is not in the test env. Python 3.10 and 3.14, because only 3.11 is in the sandbox.\n**Findings without a diff line:** none\n**Risk:** side effects low, performance low, backwards compatibility none, from the Python reviewer. On the async path, `SimpleSpanProcessor` export and `BatchSpanProcessor` shutdown now block the event loop. They block the same way on the sync path today.\n\nGraded against the [review criteria](https://github.com/Arize-ai/openinference/blob/main/factory/agents/pr-reviewer.md#verdict).\n\n</details>"
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-13T13:31:46Z",
+   "body": "looks good to me, it's a clean and simple fix. Thanks!"
   }
  ],
  "review_comments": [

@@ -1,0 +1,33 @@
+{
+ "repo": "warpstreamlabs/bento",
+ "number": 1159,
+ "url": "https://github.com/warpstreamlabs/bento/pull/1159",
+ "title": "fix(elasticsearch_v2): abort in-flight bulk request on context cancel",
+ "merged_at": "2026-11-13T12:03:35Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -20,6 +20,7 @@ All notable changes to this project will be documented in this file.\n \n  - `sftp` output now drops its client after a lost connection, so the next `Connect` re-establishes it instead of reusing the dead client and never delivering messages again\n  - `elasticsearch_v2` output no longer acks a batch whose whole `_bulk` request failed (unreachable cluster, non-2xx response): `github.com/elastic/go-elasticsearch/v9` is bumped to v9.3.6, which reports such failures per document, so they reach `fallback`/nacks like any other write error\n+ - `elasticsearch_v2` output now aborts the in-flight `_bulk` request when the write context is cancelled, instead of leaving it running in the background until `timeout`\n  - `http` processor now sends its requests with the processing context, so a forced stop of the stream ends their rate limit waits instead of leaving them to retry forever @weird-oecophylla\n \n ## 1.22.0 - 2026-10-09"
+  },
+  {
+   "filename": "internal/impl/elasticsearch/output_v2.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 2,
+   "patch": "@@ -328,8 +328,9 @@ func (eso *EsOutput) WriteBatch(ctx context.Context, batch service.MessageBatch)\n \t\tOnError: func(ctx context.Context, err error) {\n \t\t\teso.log.Errorf(\"Bulk Indexer Error: %v\", err)\n \t\t},\n-\t\tTimeout:    eso.conf.timeout,\n-\t\tNumWorkers: eso.conf.numWorkers,\n+\t\tOnFlushStart: func(context.Context) context.Context { return ctx },\n+\t\tTimeout:      eso.conf.timeout,\n+\t\tNumWorkers:   eso.conf.numWorkers,\n \t})\n \tif err != nil {\n \t\treturn err"
+  },
+  {
+   "filename": "internal/impl/elasticsearch/output_v2_test.go",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 0,
+   "patch": "@@ -5,10 +5,12 @@ import (\n \t\"context\"\n \t\"encoding/json\"\n \t\"fmt\"\n+\t\"io\"\n \t\"net/http\"\n \t\"net/http/httptest\"\n \t\"strings\"\n \t\"testing\"\n+\t\"time\"\n \n \t\"github.com/stretchr/testify/assert\"\n \t\"github.com/stretchr/testify/require\"\n@@ -143,3 +145,29 @@ func TestOutputV2BulkSuccess(t *testing.T) {\n \n \trequire.NoError(t, out.WriteBatch(context.Background(), testBatch(\"a\", \"b\")))\n }\n+\n+func TestOutputV2ContextCancelAbortsBulkRequest(t *testing.T) {\n+\tstarted := make(chan struct{})\n+\taborted := make(chan bool, 1)\n+\tsrv := fakeES(t, func(w http.ResponseWriter, r *http.Request) {\n+\t\t_, _ = io.Copy(io.Discard, r.Body)\n+\t\tclose(started)\n+\t\tselect {\n+\t\tcase <-r.Context().Done():\n+\t\t\taborted <- true\n+\t\tcase <-time.After(2 * time.Second):\n+\t\t\taborted <- false\n+\t\t}\n+\t})\n+\tout := newTestOutputV2(t, srv.URL)\n+\n+\tctx, cancel := context.WithCancel(context.Background())\n+\tdefer cancel()\n+\tgo func() {\n+\t\t<-started\n+\t\tcancel()\n+\t}()\n+\n+\trequire.Error(t, out.WriteBatch(ctx, testBatch(\"a\")))\n+\tassert.True(t, <-aborted, \"cancelling the context must abort the in-flight _bulk request\")\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/impl/elasticsearch/output_v2_test.go"
+ ]
+}

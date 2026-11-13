@@ -1,0 +1,16 @@
+{
+ "repo": "nextlevelbuilder/goclaw",
+ "number": 1675,
+ "url": "https://github.com/nextlevelbuilder/goclaw/pull/1675",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-13T10:11:22Z",
+   "body": "## Review: fix(providers): map Anthropic `model_context_window_exceeded` to `length`\n\n**Summary**: Maps the Anthropic `model_context_window_exceeded` stop reason to `length` on both the unary (`parseResponse`) and streaming (`message_delta`) paths, so a context-window cutoff is treated as truncation instead of a normal `stop`. Adds regression tests for both paths.\n\n**Risk level**: Low — a two-line behaviour change inside an existing provider stop-reason switch plus one new test file; no API, schema, or config surface touched.\n\n**Mandatory gates**\n- Duplicate / prior implementation: **clear**. `git grep model_context_window_exceeded origin/dev` returns nothing and no merged PR implements this. The only other open hit, #408, is an orthogonal agent-level overflow *recovery* PR (conflicting, stale since 2026-04-12), not a provider stop-reason mapping.\n- Project standards: **clear**. The change is a minimal, idiomatic extension of the existing `switch resp.StopReason` / `switch ev.Delta.StopReason` blocks; gofmt/go vet clean per the PR checklist and the `go` CI job.\n- Strategic necessity: **clear value**. A truncation that looks like a normal completion silently keeps partial output and suppresses the length-based retries in the knowledge-graph extractor, channel-memory extraction, and the think stage.\n\n**Findings**\n- Critical: none.\n- Important: none.\n- Suggestion: none blocking. (Optional follow-up, not required here: the unary and streaming switches could share one `stopReasonToFinishReason` helper so the two lists cannot drift.)\n\n**Verification**\n- `model_context_window_exceeded` is a real Anthropic stop reason (Claude 4.5+; opt-in via the `model-context-window-exceeded-2025-08-26` beta header) and Anthropic's handling-stop-reasons guidance groups it with truncation — `length` is the correct mapping.\n- Both call sites updated: `internal/providers/anthropic.go` (parseResponse) and `internal/providers/anthropic_stream.go` (ChatStream `message_delta`).\n- New tests `TestParseResponse_StopReason` / `TestStreamChat_ContextWindowStopReason` reuse helpers (`newAnthropicSSEServer`, `newTestAnthropicProvider`) that exist on `dev`; `end_turn`/`stop_sequence`→`stop`, `max_tokens`→`length`, `tool_use`→`tool_calls` are all still asserted.\n- CI: `go` pass, `release-versioning` pass, `web` pass. `mergeable: MERGEABLE`, `mergeStateStatus: CLEAN`.\n\n**Verdict**: **Approve** — no critical or important issues; merge-ready.\n\n*Posted by /github-maintain (ck:review-pr) at 2026-11-13T10:12:00Z*\n"
+  }
+ ],
+ "review_comments": [],
+ "comments": []
+}

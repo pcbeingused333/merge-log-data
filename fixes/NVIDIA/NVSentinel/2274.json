@@ -1,0 +1,69 @@
+{
+ "repo": "NVIDIA/NVSentinel",
+ "number": 2274,
+ "url": "https://github.com/NVIDIA/NVSentinel/pull/2274",
+ "title": "fix(mongodb-store): make the create-mongodb-database Job deadline configurable",
+ "merged_at": "2026-11-13T09:02:09Z",
+ "files": [
+  {
+   "filename": "distros/kubernetes/nvsentinel/charts/mongodb-store/templates/jobs.yaml",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 2,
+   "patch": "@@ -74,7 +74,11 @@ metadata:\n     argocd.argoproj.io/sync-options: Force=true,Replace=true\n spec:\n   ttlSecondsAfterFinished: 86400\n-  activeDeadlineSeconds: 600\n+  {{- $job := .Values.job | default dict }}\n+  {{- $deadline := include \"nvsentinel.jobActiveDeadlineSeconds\" (dict \"raw\" $job.activeDeadlineSeconds \"default\" 1800 \"key\" \"mongodb-store.job.activeDeadlineSeconds\") | int }}\n+  {{- if $deadline }}\n+  activeDeadlineSeconds: {{ $deadline }}\n+  {{- end }}\n   template:\n     spec:\n       serviceAccountName: mongodb-job-sa\n@@ -374,7 +378,7 @@ spec:\n \n             # replSetResizeOplog is per-member; replica-set URI would only hit primary.\n             # Percona databaseAdmin cannot run this; clusterAdmin can. Bitnami uses root.\n-            # Bound retries so a down member cannot eat the 600s deadline (TTL still\n+            # Bound retries so a down member cannot eat the Job deadline (TTL still\n             # applies). Skip at most one unreachable member; never shrink unless\n             # MONGODB_OPLOG_ALLOW_SHRINK=true (see oplogEval).\n {{- if eq (include \"mongodb-store.oplogResizeEnabled\" . | trim) \"true\" }}"
+  },
+  {
+   "filename": "distros/kubernetes/nvsentinel/charts/mongodb-store/values.yaml",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -73,6 +73,14 @@ scramAppUser:\n job:\n   nodeSelector: {}\n   tolerations: []\n+  # Deadline for the create-mongodb-database Job. A Job that exceeds it ends\n+  # Failed and is not re-created by Helm, so keep it long enough for cold nodes\n+  # where image pulls queue up before MongoDB can start.\n+  # Set to 0 to omit the deadline.\n+  # Raising the value does not restart a Job that already failed: delete the\n+  # Job (kubectl delete job -l app.kubernetes.io/name=create-mongodb-database)\n+  # and run helm upgrade again.\n+  activeDeadlineSeconds: 1800\n \n # NetworkPolicy configuration\n networkPolicy:"
+  },
+  {
+   "filename": "distros/kubernetes/nvsentinel/templates/_helpers.tpl",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -23,6 +23,42 @@ Nil/empty → 2592000. Strings must be base-10 digits in 0–2147483647 (int(\"ab\n {{- $v -}}\n {{- end }}\n \n+{{/*\n+activeDeadlineSeconds for a MongoDB setup Job. Takes a dict with \"raw\" (the\n+configured value), \"default\" and \"key\" (the values path, for the error message).\n+Nil/empty -> default. Strings must be base-10 digits and numbers must be whole\n+(int(\"abc\"), int 0.5 and int {} are all 0, which would silently drop the deadline). 0 is valid and means \"no deadline\": callers omit the field.\n+*/}}\n+{{- define \"nvsentinel.jobActiveDeadlineSeconds\" -}}\n+{{- $raw := .raw -}}\n+{{- if or (kindIs \"invalid\" $raw) (eq ($raw | toString) \"\") -}}\n+{{- $raw = .default -}}\n+{{- end -}}\n+{{- if kindIs \"bool\" $raw -}}\n+{{- fail (printf \"%s must be an integer from 0 through 2147483647, got %v\" .key $raw) -}}\n+{{- end -}}\n+{{- if kindIs \"string\" $raw -}}\n+{{- if not (regexMatch \"^[0-9]+$\" $raw) -}}\n+{{- fail (printf \"%s must be an integer from 0 through 2147483647, got %v\" .key $raw) -}}\n+{{- end -}}\n+{{- if or (gt (len $raw) 10) (and (eq (len $raw) 10) (gt $raw \"2147483647\")) -}}\n+{{- fail (printf \"%s must be an integer from 0 through 2147483647, got %v\" .key $raw) -}}\n+{{- end -}}\n+{{- end -}}\n+{{- if kindIs \"float64\" $raw -}}\n+{{- if or (ne $raw (floor $raw)) (lt $raw 0.0) (gt $raw 2147483647.0) -}}\n+{{- fail (printf \"%s must be an integer from 0 through 2147483647, got %v\" .key $raw) -}}\n+{{- end -}}\n+{{- else if not (or (kindIs \"string\" $raw) (kindIs \"int\" $raw) (kindIs \"int64\" $raw)) -}}\n+{{- fail (printf \"%s must be an integer from 0 through 2147483647, got %v\" .key $raw) -}}\n+{{- end -}}\n+{{- $v := int $raw -}}\n+{{- if or (lt $v 0) (gt $v 2147483647) -}}\n+{{- fail (printf \"%s must be an integer from 0 through 2147483647, got %v\" .key $raw) -}}\n+{{- end -}}\n+{{- $v -}}\n+{{- end }}\n+\n {{/*\n <release>-external-mongodb-setup-<ttl>-<scriptHash> so a TTL or init-script\n change is a new Job, not a patch on a completed one."
+  },
+  {
+   "filename": "distros/kubernetes/nvsentinel/templates/job-external-mongodb-setup.yaml",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -78,7 +78,10 @@ metadata:\n     argocd.argoproj.io/sync-options: Force=true,Replace=true\n spec:\n   ttlSecondsAfterFinished: 86400\n-  activeDeadlineSeconds: 600\n+  {{- $deadline := include \"nvsentinel.jobActiveDeadlineSeconds\" (dict \"raw\" $setupJob.activeDeadlineSeconds \"default\" 600 \"key\" \"global.datastore.setupJob.activeDeadlineSeconds\") | int }}\n+  {{- if $deadline }}\n+  activeDeadlineSeconds: {{ $deadline }}\n+  {{- end }}\n   template:\n     spec:\n       {{- with .Values.global.imagePullSecrets }}"
+  },
+  {
+   "filename": "distros/kubernetes/nvsentinel/tests/external_mongodb_setup_job_test.yaml",
+   "status": "modified",
+   "additions": 57,
+   "deletions": 0,
+   "patch": "@@ -75,3 +75,60 @@ tests:\n       - matchRegex:\n           path: metadata.name\n           pattern: ^customer-production-gpu-external-mongodb-setup-[0-9]+-[0-9a-f]{8}$\n+\n+  - it: gives the Job a 10 minute deadline by default\n+    asserts:\n+      - equal:\n+          path: spec.activeDeadlineSeconds\n+          value: 600\n+\n+  - it: takes the deadline from global.datastore.setupJob.activeDeadlineSeconds\n+    set:\n+      global.datastore.setupJob.activeDeadlineSeconds: 3600\n+    asserts:\n+      - equal:\n+          path: spec.activeDeadlineSeconds\n+          value: 3600\n+\n+  - it: omits the deadline when set to 0\n+    set:\n+      global.datastore.setupJob.activeDeadlineSeconds: 0\n+    asserts:\n+      - notExists:\n+          path: spec.activeDeadlineSeconds\n+\n+  - it: omits the deadline when given the string \"0\"\n+    set:\n+      global.datastore.setupJob.activeDeadlineSeconds: \"0\"\n+    asserts:\n+      - notExists:\n+          path: spec.activeDeadlineSeconds\n+\n+  - it: ignores mongodb-store.job.activeDeadlineSeconds\n+    set:\n+      mongodb-store.job.activeDeadlineSeconds: 3600\n+    asserts:\n+      - equal:\n+          path: spec.activeDeadlineSeconds\n+          value: 600\n+\n+  - it: rejects a non-numeric deadline instead of dropping it\n+    set:\n+      global.datastore.setupJob.activeDeadlineSeconds: soon\n+    asserts:\n+      - failedTemplate:\n+          errorPattern: global.datastore.setupJob.activeDeadlineSeconds must be an integer\n+\n+  - it: rejects a negative deadline\n+    set:\n+      global.datastore.setupJob.activeDeadlineSeconds: -5\n+    asserts:\n+      - failedTemplate:\n+          errorPattern: global.datastore.setupJob.activeDeadlineSeconds must be an integer\n+\n+  - it: rejects a boolean deadline instead of turning it into 0\n+    set:\n+      global.datastore.setupJob.activeDeadlineSeconds: false\n+    asserts:\n+      - failedTemplate:\n+          errorPattern: global.datastore.setupJob.activeDeadlineSeconds must be an integer"
+  },
+  {
+   "filename": "distros/kubernetes/nvsentinel/tests/mongodb_init_job_deadline_test.yaml",
+   "status": "added",
+   "additions": 112,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,112 @@\n+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\");\n+# you may not use this file except in compliance with the License.\n+# You may obtain a copy of the License at\n+#\n+#     http://www.apache.org/licenses/LICENSE-2.0\n+#\n+# Unless required by applicable law or agreed to in writing, software\n+# distributed under the License is distributed on an \"AS IS\" BASIS,\n+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+# See the License for the specific language governing permissions and\n+# limitations under the License.\n+\n+\n+# Lives in the umbrella suite because the mongodb-store Job calls umbrella\n+# helpers, so it cannot render with its subchart alone.\n+suite: mongodb init job deadline\n+release:\n+  name: nvsentinel\n+  namespace: nvsentinel\n+templates:\n+  - charts/mongodb-store/templates/jobs.yaml\n+set:\n+  global.mongodbStore.enabled: true\n+tests:\n+  - it: gives the init Job a 30 minute deadline by default\n+    documentSelector:\n+      path: kind\n+      value: Job\n+    asserts:\n+      - equal:\n+          path: spec.activeDeadlineSeconds\n+          value: 1800\n+\n+  - it: lets the init Job deadline be configured\n+    set:\n+      mongodb-store.job.activeDeadlineSeconds: 3600\n+    documentSelector:\n+      path: kind\n+      value: Job\n+    asserts:\n+      - equal:\n+          path: spec.activeDeadlineSeconds\n+          value: 3600\n+\n+  - it: omits the init Job deadline when set to 0\n+    set:\n+      mongodb-store.job.activeDeadlineSeconds: 0\n+    documentSelector:\n+      path: kind\n+      value: Job\n+    asserts:\n+      - notExists:\n+          path: spec.activeDeadlineSeconds\n+\n+  - it: omits the init Job deadline when given the string \"0\"\n+    set:\n+      mongodb-store.job.activeDeadlineSeconds: \"0\"\n+    documentSelector:\n+      path: kind\n+      value: Job\n+    asserts:\n+      - notExists:\n+          path: spec.activeDeadlineSeconds\n+\n+  - it: keeps the default deadline when the job map is null\n+    set:\n+      mongodb-store.job: null\n+    documentSelector:\n+      path: kind\n+      value: Job\n+    asserts:\n+      - equal:\n+          path: spec.activeDeadlineSeconds\n+          value: 1800\n+\n+  - it: rejects a non-numeric deadline instead of dropping it\n+    set:\n+      mongodb-store.job.activeDeadlineSeconds: soon\n+    asserts:\n+      - failedTemplate:\n+          errorPattern: mongodb-store.job.activeDeadlineSeconds must be an integer\n+\n+  - it: rejects a negative deadline\n+    set:\n+      mongodb-store.job.activeDeadlineSeconds: -5\n+    asserts:\n+      - failedTemplate:\n+          errorPattern: mongodb-store.job.activeDeadlineSeconds must be an integer\n+\n+  - it: rejects a boolean deadline instead of turning it into 0\n+    set:\n+      mongodb-store.job.activeDeadlineSeconds: false\n+    asserts:\n+      - failedTemplate:\n+          errorPattern: mongodb-store.job.activeDeadlineSeconds must be an integer\n+\n+  - it: rejects a fractional deadline instead of turning it into 0\n+    set:\n+      mongodb-store.job.activeDeadlineSeconds: 0.5\n+    asserts:\n+      - failedTemplate:\n+          errorPattern: mongodb-store.job.activeDeadlineSeconds must be an integer\n+\n+  - it: rejects a non-scalar deadline instead of turning it into 0\n+    set:\n+      mongodb-store.job.activeDeadlineSeconds:\n+        nested: 1\n+    asserts:\n+      - failedTemplate:\n+          errorPattern: mongodb-store.job.activeDeadlineSeconds must be an integer"
+  },
+  {
+   "filename": "distros/kubernetes/nvsentinel/values.yaml",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -240,6 +240,10 @@ global:\n   #     # for the setup job to authenticate. Secret must have keys: username, password.\n   #     # Not needed if MONGODB_URI in credentialsFromSecret has sufficient privileges.\n   #     adminSecret: \"\"\n+  #     # Deadline for the setup job in seconds (default 600; 0 omits the deadline).\n+  #     # A Job that exceeds it ends Failed; raising the value does not restart it,\n+  #     # so delete the failed Job and run helm upgrade again.\n+  #     activeDeadlineSeconds: 600\n \n   # Certificate rotation (MongoDB only)\n   # When enabled, client certificates can be rotated without restarting pods."
+  },
+  {
+   "filename": "docs/configuration/mongodb-store.md",
+   "status": "modified",
+   "additions": 31,
+   "deletions": 0,
+   "patch": "@@ -209,6 +209,37 @@ kubectl get pods -n {namespace} -l app.kubernetes.io/component=mongod\n \n The `perconaservermongodb` resource must reach `ready`, and the init Job (`-l app.kubernetes.io/name=create-mongodb-database`) must complete.\n \n+### Init Job deadline\n+\n+The init Job that creates the database users (`create-mongodb-database`) fails once it runs longer than `activeDeadlineSeconds`. On a cold node, image pulls can queue long enough to hit it, and Helm does not re-create a failed Job. Set the deadline next to `nodeSelector` and `tolerations`:\n+\n+```yaml\n+mongodb-store:\n+  job:\n+    activeDeadlineSeconds: 1800   # default; 0 omits the deadline\n+```\n+\n+With an external MongoDB (`mongodbStore.enabled=false`), the setup Job reads its own value instead (default `600`):\n+\n+```yaml\n+global:\n+  datastore:\n+    setupJob:\n+      activeDeadlineSeconds: 600\n+```\n+\n+Raising the value does not restart a Job that already failed. Delete the failed Job and run `helm upgrade` again. For the mongodb-store Job:\n+\n+```bash\n+kubectl delete job -l app.kubernetes.io/name=create-mongodb-database -n {namespace}\n+```\n+\n+For the external MongoDB setup Job:\n+\n+```bash\n+kubectl delete job -l app.kubernetes.io/name=external-mongodb-setup -n {namespace}\n+```\n+\n ## Configuration Reference\n \n ### Module Enable/Disable"
+  }
+ ],
+ "test_files": [
+  "distros/kubernetes/nvsentinel/tests/external_mongodb_setup_job_test.yaml",
+  "distros/kubernetes/nvsentinel/tests/mongodb_init_job_deadline_test.yaml"
+ ]
+}
