@@ -1,0 +1,33 @@
+{
+ "repo": "redis/redisctl",
+ "number": 1323,
+ "url": "https://github.com/redis/redisctl/pull/1323",
+ "title": "fix(cli): propagate enterprise session and cluster API failures",
+ "merged_at": "2026-11-14T19:38:45Z",
+ "files": [
+  {
+   "filename": "crates/redisctl/src/commands/enterprise/cluster_impl.rs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 10,
+   "patch": "@@ -565,11 +565,7 @@ pub async fn get_cluster_events(\n         \"/v1/cluster/events\".to_string()\n     };\n \n-    let events = client.get_raw(&endpoint).await.unwrap_or_else(|_| {\n-        serde_json::json!({\n-            \"message\": \"Events endpoint not available\"\n-        })\n-    });\n+    let events = client.get_raw(&endpoint).await?;\n \n     let data = handle_output(events, output_format, query)?;\n     print_formatted_output(data, output_format)?;\n@@ -591,11 +587,7 @@ pub async fn get_audit_log(\n         \"/v1/cluster/audit_log\".to_string()\n     };\n \n-    let audit_log = client.get_raw(&endpoint).await.unwrap_or_else(|_| {\n-        serde_json::json!({\n-            \"message\": \"Audit log endpoint not available\"\n-        })\n-    });\n+    let audit_log = client.get_raw(&endpoint).await?;\n \n     let data = handle_output(audit_log, output_format, query)?;\n     print_formatted_output(data, output_format)?;"
+  },
+  {
+   "filename": "crates/redisctl/src/commands/enterprise/rbac_impl.rs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 10,
+   "patch": "@@ -882,11 +882,7 @@ pub async fn list_sessions(\n ) -> CliResult<()> {\n     let client = conn_mgr.create_enterprise_client(profile_name).await?;\n \n-    let sessions = client.get_raw(\"/v1/sessions\").await.unwrap_or_else(|_| {\n-        serde_json::json!({\n-            \"message\": \"Sessions endpoint not available\"\n-        })\n-    });\n+    let sessions = client.get_raw(\"/v1/sessions\").await?;\n \n     let data = handle_output(sessions, output_format, query)?;\n     print_formatted_output(data, output_format)?;\n@@ -920,11 +916,7 @@ pub async fn revoke_all_user_sessions(\n \n     client\n         .delete_raw(&format!(\"/v1/users/{}/sessions\", user_id))\n-        .await\n-        .unwrap_or_else(|_| {\n-            println!(\"Note: Session revocation endpoint may not be available\");\n-            serde_json::Value::Null\n-        });\n+        .await?;\n \n     println!(\"All sessions for user {} revoked\", user_id);\n     Ok(())"
+  },
+  {
+   "filename": "crates/redisctl/tests/cli_integration_mocked_tests.rs",
+   "status": "modified",
+   "additions": 61,
+   "deletions": 0,
+   "patch": "@@ -1917,3 +1917,64 @@ async fn test_enterprise_cluster_alerts_uses_cluster_alerts_route() {\n         .success()\n         .stdout(predicate::str::contains(\"cluster_too_many_nodes\"));\n }\n+\n+// API failures must not turn into successful placeholder output or revocation claims.\n+#[tokio::test]\n+async fn enterprise_session_and_cluster_errors_are_propagated() {\n+    let server = MockServer::start().await;\n+    let temp_dir = TempDir::new().unwrap();\n+    create_enterprise_profile(&temp_dir, &server.uri()).unwrap();\n+\n+    for status in [403, 404, 500] {\n+        for (verb, endpoint, args) in [\n+            (\n+                \"DELETE\",\n+                \"/v1/users/42/sessions\",\n+                vec![\"auth\", \"session-revoke-all\", \"--user\", \"42\"],\n+            ),\n+            (\"GET\", \"/v1/sessions\", vec![\"auth\", \"session-list\"]),\n+            (\"GET\", \"/v1/cluster/events\", vec![\"cluster\", \"events\"]),\n+            (\"GET\", \"/v1/cluster/audit_log\", vec![\"cluster\", \"audit-log\"]),\n+        ] {\n+            server.reset().await;\n+            Mock::given(method(verb))\n+                .and(path(endpoint))\n+                .respond_with(\n+                    ResponseTemplate::new(status).set_body_json(json!({\"error\": \"denied\"})),\n+                )\n+                .expect(1..)\n+                .mount(&server)\n+                .await;\n+\n+            test_cmd(&temp_dir)\n+                .timeout(std::time::Duration::from_secs(30))\n+                .arg(\"enterprise\")\n+                .args(args)\n+                .assert()\n+                .failure()\n+                .stdout(predicate::str::is_empty())\n+                .stderr(predicate::str::is_empty().not());\n+            server.verify().await;\n+        }\n+    }\n+}\n+\n+#[tokio::test]\n+async fn enterprise_session_revocation_reports_success_after_api_success() {\n+    let server = MockServer::start().await;\n+    let temp_dir = TempDir::new().unwrap();\n+    create_enterprise_profile(&temp_dir, &server.uri()).unwrap();\n+    Mock::given(method(\"DELETE\"))\n+        .and(path(\"/v1/users/42/sessions\"))\n+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))\n+        .expect(1)\n+        .mount(&server)\n+        .await;\n+\n+    test_cmd(&temp_dir)\n+        .timeout(std::time::Duration::from_secs(30))\n+        .args([\"enterprise\", \"auth\", \"session-revoke-all\", \"--user\", \"42\"])\n+        .assert()\n+        .success()\n+        .stdout(predicate::str::contains(\"All sessions for user 42 revoked\"));\n+}"
+  }
+ ],
+ "test_files": [
+  "crates/redisctl/tests/cli_integration_mocked_tests.rs"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "rommapp/romm",
+ "number": 5582,
+ "url": "https://github.com/rommapp/romm/pull/5582",
+ "title": "fix(roms): parse TOSEC compound region and language tags",
+ "merged_at": "2026-11-14T20:33:32Z",
+ "files": [
+  {
+   "filename": "backend/handler/filesystem/roms_handler.py",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 1,
+   "patch": "@@ -6,7 +6,7 @@\n import os\n import re\n import struct\n-from collections.abc import Mapping, Sequence\n+from collections.abc import Callable, Mapping, Sequence\n from dataclasses import dataclass, field, replace\n from datetime import datetime, timezone\n from pathlib import Path\n@@ -251,6 +251,18 @@ def _make_file_hash(\n # The regional variant that opens a GoodTools patch (\"-BR\" in \"T+Pt-BR1.1_Grp\").\n TRANSLATION_VARIANT_REGEX = re.compile(r\"^-([a-z]{2})(?![a-z])\", re.I)\n \n+# TOSEC joins two-letter country or language codes with hyphens (\"(EU-US)\",\n+# \"(en-fr)\"). Single letters stay out: \"(SW-R)\" is a TOSEC copyright status.\n+TOSEC_COMPOUND_TAG_REGEX = re.compile(r\"^[a-z]{2}(?:-[a-z]{2})+$\", re.I)\n+\n+\n+def _resolve_every(\n+    parts: Sequence[str], resolve: Callable[[str], str | None]\n+) -> list[str]:\n+    \"\"\"Resolve every part, or return nothing if any part is unrecognized.\"\"\"\n+    resolved = [name for part in parts if (name := resolve(part))]\n+    return resolved if len(resolved) == len(parts) else []\n+\n \n @dataclass(frozen=True)\n class ParsedTags:\n@@ -579,6 +591,23 @@ def parse_tags(self, fs_name: str) -> ParsedTags:\n                 revision = revision_match[1] or revision_match[2] or \"\"\n                 continue\n \n+            # Same precedence as a single tag, so \"Nl-No\" reads as languages.\n+            # Unknown compounds stay intact rather than yielding a partial match.\n+            if TOSEC_COMPOUND_TAG_REGEX.match(raw_tag):\n+                parts = raw_tag.split(\"-\")\n+                for resolve, target in (\n+                    (REGIONS_BY_SHORTCODE.get, regions),\n+                    (LANGUAGES_BY_SHORTCODE.get, languages),\n+                    (normalize_region, regions),\n+                    (normalize_language, languages),\n+                ):\n+                    if resolved := _resolve_every(parts, resolve):\n+                        target.extend(resolved)\n+                        break\n+                else:\n+                    other_tags.append(raw_tag)\n+                continue\n+\n             # Anything else\n             other_tags.append(raw_tag)\n "
+  },
+  {
+   "filename": "backend/tests/handler/filesystem/test_roms_handler.py",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -164,6 +164,33 @@ def test_parse_tags_regions_and_languages(self, handler: FSRomsHandler):\n         assert \"French\" in parsed_tags.languages\n         assert \"Test\" in parsed_tags.other_tags\n \n+    @pytest.mark.parametrize(\n+        \"tag, regions, languages, other_tags\",\n+        [\n+            (\"EU-US\", [\"Europe\", \"USA\"], [], []),\n+            (\"en-fr\", [], [\"English\", \"French\"], []),\n+            (\"EU-US, en-fr\", [\"Europe\", \"USA\"], [\"English\", \"French\"], []),\n+            (\"Pt-BR\", [], [\"Brazilian Portuguese\"], []),\n+            (\"En-US\", [], [], [\"En-US\"]),\n+            (\"EU-XX\", [], [], [\"EU-XX\"]),\n+            (\"en-zz\", [], [], [\"en-zz\"]),\n+            (\"EU-en\", [], [], [\"EU-en\"]),\n+            (\"EU-\", [], [], [\"EU-\"]),\n+            (\"Nl-No\", [], [\"Dutch\", \"Norwegian\"], []),\n+            (\"NL-NO\", [\"Netherlands\", \"Norway\"], [], []),\n+            (\"SW-R\", [], [], [\"SW-R\"]),\n+            (\"T-Br\", [], [], [\"T-Br\"]),\n+        ],\n+    )\n+    def test_parse_tags_tosec_compound_tags(\n+        self, handler: FSRomsHandler, tag, regions, languages, other_tags\n+    ):\n+        parsed = handler.parse_tags(f\"Game (1986)(Devstudio)({tag}).tap\")\n+\n+        assert parsed.regions == regions\n+        assert parsed.languages == languages\n+        assert parsed.other_tags == [\"1986\", \"Devstudio\", *other_tags]\n+\n     @pytest.mark.parametrize(\n         \"fs_name,regions\",\n         ["
+  }
+ ],
+ "test_files": [
+  "backend/tests/handler/filesystem/test_roms_handler.py"
+ ]
+}

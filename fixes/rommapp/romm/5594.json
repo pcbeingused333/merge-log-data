@@ -1,0 +1,26 @@
+{
+ "repo": "rommapp/romm",
+ "number": 5594,
+ "url": "https://github.com/rommapp/romm/pull/5594",
+ "title": "fix(auth): redirect to login when OIDC discovery fails",
+ "merged_at": "2026-11-14T20:42:08Z",
+ "files": [
+  {
+   "filename": "backend/endpoints/auth.py",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 4,
+   "patch": "@@ -7,6 +7,7 @@\n from fastapi import BackgroundTasks, Body, Depends, HTTPException, Request, status\n from fastapi.responses import RedirectResponse\n from fastapi.security.http import HTTPBasic, HTTPBasicCredentials\n+from httpx2 import HTTPError\n from joserfc.errors import JoseError\n \n from config import (\n@@ -359,10 +360,20 @@ async def login_via_openid(request: Request) -> RedirectResponse:\n     if not oauth.openid:\n         raise OIDCNotConfiguredException\n \n-    return cast(\n-        RedirectResponse,\n-        await oauth.openid.authorize_redirect(request, OIDC_REDIRECT_URI),\n-    )\n+    # Authlib fetches the provider's discovery document here, so a wrong\n+    # OIDC_SERVER_APPLICATION_URL surfaces as an HTTP error\n+    try:\n+        return cast(\n+            RedirectResponse,\n+            await oauth.openid.authorize_redirect(request, OIDC_REDIRECT_URI),\n+        )\n+    except HTTPError as exc:\n+        log.error(\n+            f\"OIDC provider discovery failed, check OIDC_SERVER_APPLICATION_URL: {exc!r}\"\n+        )\n+        # Without the bypass, OIDC autologin would send the failure straight\n+        # back here and loop\n+        return RedirectResponse(url=\"/login?bypass_autologin=true\")\n \n \n @router.get(\"/oauth/openid\")"
+  },
+  {
+   "filename": "backend/tests/endpoints/test_auth.py",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -263,6 +263,26 @@ def test_oidc_callback_for_a_disabled_user_is_unauthorized(\n     assert (event.action, event.data[\"reason\"]) == (\"auth.login_failed\", \"disabled\")\n \n \n+def test_oidc_login_survives_an_unreachable_discovery_document(client: TestClient):\n+    fake_oauth = mock.MagicMock()\n+    fake_oauth.openid.authorize_redirect = mock.AsyncMock(\n+        side_effect=httpx2.HTTPStatusError(\n+            \"404 Not Found\",\n+            request=httpx2.Request(\"GET\", \"https://idp.example/.well-known\"),\n+            response=httpx2.Response(404),\n+        )\n+    )\n+    with (\n+        mock.patch(\"endpoints.auth.OIDC_ENABLED\", True),\n+        mock.patch(\"endpoints.auth.oauth\", fake_oauth),\n+    ):\n+        response = client.get(\"/api/login/openid\", follow_redirects=False)\n+\n+    # Same landing as a rejected callback: no 500, and no autologin loop\n+    assert response.status_code == HTTPStatus.TEMPORARY_REDIRECT\n+    assert response.headers[\"location\"] == \"/login?bypass_autologin=true\"\n+\n+\n @pytest.mark.parametrize(\"path\", [\"/api/login/openid\", \"/api/oauth/openid\"])\n def test_oidc_endpoints_refuse_when_oidc_is_disabled(client: TestClient, path: str):\n     with mock.patch(\"endpoints.auth.OIDC_ENABLED\", False):"
+  }
+ ],
+ "test_files": [
+  "backend/tests/endpoints/test_auth.py"
+ ]
+}

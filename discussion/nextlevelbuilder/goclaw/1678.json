@@ -1,0 +1,16 @@
+{
+ "repo": "nextlevelbuilder/goclaw",
+ "number": 1678,
+ "url": "https://github.com/nextlevelbuilder/goclaw/pull/1678",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-14T19:09:49Z",
+   "body": "**APPROVED — clean, non-duplicate, merge-ready.**\n\nVerified on dev `c39bf921` (this PR's base, so no re-cut needed):\n\n- `providers.Usage` already carries `ThinkingTokens` (`internal/providers/types.go:219`), and `tracing.CalculateCost` documents the exact semantics this change relies on — thinking tokens are a **sub-count of `CompletionTokens`** (`internal/tracing/cost.go:16-22`), priced at the output rate unless a distinct `ReasoningPerMillion` is set (then `visible = CompletionTokens - ThinkingTokens`).\n- Gemini's `usageMetadata` reports `thoughtsTokenCount` beside `candidatesTokenCount` (visible output) while `totalTokenCount` already includes both. The three prior parser sites (`parseGeminiResponse`, the inline copy in `read_document_gemini.go`, and the native image struct in `create_image.go`) each copied only `candidatesTokenCount` into `CompletionTokens` and never set `ThinkingTokens`, so thinking tokens were silently unbilled. This is a real accounting bug.\n- The fix is correct and minimal: one shared `geminiUsageMetadata` + `usageFromGeminiMetadata` folds thoughts into `CompletionTokens` and records `ThinkingTokens`; a response with no thoughts keeps the previous three counts. `read_document_gemini.go` now delegates to `parseGeminiResponse`, removing the second copy of the parser so the document path cannot drift from the File API path. `totalTokenCount` is passed through unchanged (already inclusive), so no double-count.\n- Duplicate gate clear: repo-wide search for `thoughtsTokenCount` returns only this PR; no other open/merged PR touches Gemini usage accounting.\n- Tests are meaningful: `TestParseGeminiResponse_ThoughtsFoldedIntoCompletion` (11/74/825/910 → thinking 825, completion 899) and `TestParseGeminiResponse_NoThoughtsUnchanged`. Ran `go test ./internal/tools/ -count=1 -run TestParseGeminiResponse` locally — green.\n- CI green at head `52343c07` (go, web, release-versioning); `mergeable` MERGEABLE, `mergeStateStatus` CLEAN, `rebaseable` true, 0 prior reviews.\n\nMerging to `dev`.\n"
+  }
+ ],
+ "review_comments": [],
+ "comments": []
+}
