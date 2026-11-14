@@ -1,0 +1,26 @@
+{
+ "repo": "aws/aws-network-policy-agent",
+ "number": 798,
+ "url": "https://github.com/aws/aws-network-policy-agent/pull/798",
+ "title": "fix(events): avoid panic when CloudWatch stream creation fails",
+ "merged_at": "2026-11-13T23:35:58Z",
+ "files": [
+  {
+   "filename": "pkg/ebpf/events/cloudwatch_test.go",
+   "status": "added",
+   "additions": 46,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,46 @@\n+package events\n+\n+import (\n+\t\"context\"\n+\t\"errors\"\n+\t\"testing\"\n+\n+\t\"github.com/aws/aws-network-policy-agent/pkg/aws/services\"\n+\t\"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs\"\n+)\n+\n+type failingLogStreamClient struct {\n+\tservices.CloudWatchLogs\n+\tcreateCalls int\n+\tputCalls    int\n+}\n+\n+func (c *failingLogStreamClient) CreateLogStream(context.Context, *cloudwatchlogs.CreateLogStreamInput, ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.CreateLogStreamOutput, error) {\n+\tc.createCalls++\n+\treturn nil, errors.New(\"access denied\")\n+}\n+\n+func (c *failingLogStreamClient) PutLogEvents(context.Context, *cloudwatchlogs.PutLogEventsInput, ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.PutLogEventsOutput, error) {\n+\tc.putCalls++\n+\treturn &cloudwatchlogs.PutLogEventsOutput{}, nil\n+}\n+\n+func TestPublishDataToCloudwatchRetriesFailedLogStream(t *testing.T) {\n+\toldClient, oldStream, oldToken := cwl, logStreamName, sequenceToken\n+\tt.Cleanup(func() { cwl, logStreamName, sequenceToken = oldClient, oldStream, oldToken })\n+\tclient := &failingLogStreamClient{}\n+\tcwl, logStreamName, sequenceToken = client, \"\", \"\"\n+\n+\tfor i := 1; i <= 2; i++ {\n+\t\tpublishDataToCloudwatch(context.Background(), \"policy event\")\n+\t\tif client.createCalls != i {\n+\t\t\tt.Fatalf(\"CreateLogStream calls = %d, want %d\", client.createCalls, i)\n+\t\t}\n+\t\tif client.putCalls != 0 {\n+\t\t\tt.Fatalf(\"PutLogEvents called %d times after failed stream creation\", client.putCalls)\n+\t\t}\n+\t\tif sequenceToken != \"\" {\n+\t\t\tt.Fatalf(\"sequence token = %q after failed stream creation\", sequenceToken)\n+\t\t}\n+\t}\n+}"
+  },
+  {
+   "filename": "pkg/ebpf/events/events.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -258,7 +258,7 @@ func publishDataToCloudwatch(ctx context.Context, message string) {\n \t\terr := createLogStream(ctx)\n \t\tif err != nil {\n \t\t\tlog().Errorf(\"Failed to create log stream %v\", err)\n-\t\t\tpanic(err)\n+\t\t\treturn\n \t\t}\n \t} else {\n \t\tinput.SequenceToken = aws.String(sequenceToken)"
+  }
+ ],
+ "test_files": [
+  "pkg/ebpf/events/cloudwatch_test.go"
+ ]
+}

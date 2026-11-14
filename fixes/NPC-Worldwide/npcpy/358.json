@@ -1,0 +1,26 @@
+{
+ "repo": "NPC-Worldwide/npcpy",
+ "number": 358,
+ "url": "https://github.com/NPC-Worldwide/npcpy/pull/358",
+ "title": "fix(litellm): forward top_k to providers that support it",
+ "merged_at": "2026-11-14T02:59:33Z",
+ "files": [
+  {
+   "filename": "npcpy/gen/response.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -2880,6 +2880,13 @@ def get_litellm_response(\n                 else:\n                     api_params[key] = value\n \n+    # top_k is not an OpenAI parameter (LiteLLM rejects it there), so only\n+    # forward it to providers that accept it natively.\n+    if kwargs.get(\"top_k\") is not None and normalized_provider in (\n+        \"anthropic\", \"gemini\", \"vertex_ai\", \"ollama\", \"ollama_chat\"\n+    ):\n+        api_params[\"top_k\"] = kwargs[\"top_k\"]\n+\n     if not auto_process_tool_calls or not (tools and tool_map):\n         api_params[\"stream\"] = stream\n         resp = completion(**api_params)"
+  },
+  {
+   "filename": "tests/test_litellm_top_k.py",
+   "status": "added",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,33 @@\n+from types import SimpleNamespace\n+from unittest.mock import Mock\n+\n+import pytest\n+\n+import npcpy.gen.response as resp_mod\n+\n+\n+def _call(monkeypatch, provider, model, **kwargs):\n+    response = SimpleNamespace(\n+        choices=[SimpleNamespace(message=SimpleNamespace(content=\"hello\", tool_calls=None))],\n+        usage=None,\n+    )\n+    completion = Mock(return_value=response)\n+    monkeypatch.setattr(resp_mod, \"completion\", completion)\n+    resp_mod.get_litellm_response(\n+        provider=provider, model=model, api_key=\"k\",\n+        messages=[{\"role\": \"user\", \"content\": \"hi\"}], **kwargs,\n+    )\n+    completion.assert_called_once()\n+    return completion.call_args.kwargs\n+\n+\n+@pytest.mark.parametrize(\"provider,model\", [\n+    (\"anthropic\", \"claude-sonnet-4-5\"),\n+    (\"gemini\", \"gemini-2.5-flash\"),\n+])\n+def test_top_k_reaches_completion(monkeypatch, provider, model):\n+    assert _call(monkeypatch, provider, model, top_k=7).get(\"top_k\") == 7\n+\n+\n+def test_top_k_not_sent_to_openai(monkeypatch):\n+    assert \"top_k\" not in _call(monkeypatch, \"openai\", \"gpt-4o-mini\", top_k=7)"
+  }
+ ],
+ "test_files": [
+  "tests/test_litellm_top_k.py"
+ ]
+}

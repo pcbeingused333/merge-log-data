@@ -1,0 +1,26 @@
+{
+ "repo": "looplj/axonhub",
+ "number": 3008,
+ "url": "https://github.com/looplj/axonhub/pull/3008",
+ "title": "fix(responses): map incomplete content_filter to content_filter in non-stream responses",
+ "merged_at": "2026-11-14T03:08:09Z",
+ "files": [
+  {
+   "filename": "llm/transformer/openai/responses/outbound.go",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -464,7 +464,13 @@ func (t *OutboundTransformer) transformStandardResponse(\n \t\tcase \"failed\":\n \t\t\tchoice.FinishReason = lo.ToPtr(\"error\")\n \t\tcase \"incomplete\":\n-\t\t\tchoice.FinishReason = lo.ToPtr(\"length\")\n+\t\t\t// Distinguish truncation from content-filter rejection, matching the\n+\t\t\t// streaming path.\n+\t\t\tif resp.IncompleteDetails != nil && resp.IncompleteDetails.Reason == \"content_filter\" {\n+\t\t\t\tchoice.FinishReason = lo.ToPtr(\"content_filter\")\n+\t\t\t} else {\n+\t\t\t\tchoice.FinishReason = lo.ToPtr(\"length\")\n+\t\t\t}\n \t\tcase \"canceled\", \"cancelled\":\n \t\t\tchoice.FinishReason = lo.ToPtr(\"cancelled\")\n \t\t}"
+  },
+  {
+   "filename": "llm/transformer/openai/responses/outbound_test.go",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 0,
+   "patch": "@@ -81,6 +81,34 @@ func TestOutboundTransformer_TransformResponse_CanceledFinishReason(t *testing.T\n \trequire.Equal(t, \"cancelled\", *result.Choices[0].FinishReason)\n }\n \n+func TestOutboundTransformer_TransformResponse_IncompleteFinishReason(t *testing.T) {\n+\ttests := []struct {\n+\t\tname     string\n+\t\tdetails  string\n+\t\texpected string\n+\t}{\n+\t\t{name: \"content_filter reason\", details: `,\"incomplete_details\":{\"reason\":\"content_filter\"}`, expected: \"content_filter\"},\n+\t\t{name: \"max_output_tokens reason\", details: `,\"incomplete_details\":{\"reason\":\"max_output_tokens\"}`, expected: \"length\"},\n+\t\t{name: \"no details\", details: ``, expected: \"length\"},\n+\t}\n+\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\ttransformer, err := NewOutboundTransformer(\"https://api.openai.com\", \"test-api-key\")\n+\t\t\trequire.NoError(t, err)\n+\n+\t\t\tresult, err := transformer.TransformResponse(context.Background(), &httpclient.Response{\n+\t\t\t\tStatusCode: http.StatusOK,\n+\t\t\t\tBody:       []byte(`{\"id\":\"resp_incomplete\",\"object\":\"response\",\"created_at\":1700000000,\"status\":\"incomplete\",\"model\":\"gpt-5\",\"output\":[]` + tt.details + `}`),\n+\t\t\t})\n+\t\t\trequire.NoError(t, err)\n+\t\t\trequire.Len(t, result.Choices, 1)\n+\t\t\trequire.NotNil(t, result.Choices[0].FinishReason)\n+\t\t\trequire.Equal(t, tt.expected, *result.Choices[0].FinishReason)\n+\t\t})\n+\t}\n+}\n+\n func TestOutboundTransformer_buildFullRequestURL(t *testing.T) {\n \ttests := []struct {\n \t\tname     string"
+  }
+ ],
+ "test_files": [
+  "llm/transformer/openai/responses/outbound_test.go"
+ ]
+}

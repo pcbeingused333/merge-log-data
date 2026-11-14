@@ -1,0 +1,40 @@
+{
+ "repo": "temporalio/ai-integrations",
+ "number": 538,
+ "url": "https://github.com/temporalio/ai-integrations/pull/538",
+ "title": "fix(spring-ai): preserve generation finish reason across the activity boundary",
+ "merged_at": "2026-11-14T05:20:24Z",
+ "files": [
+  {
+   "filename": "java/spring-ai/src/main/java/io/temporal/springai/activity/ChatModelActivityImpl.java",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -308,7 +308,8 @@ private ChatModelTypes.ChatModelActivityOutput toOutput(ChatResponse response) {\n             .map(\n                 gen ->\n                     new ChatModelTypes.ChatModelActivityOutput.Generation(\n-                        fromAssistantMessage(gen.getOutput())))\n+                        fromAssistantMessage(gen.getOutput()),\n+                        gen.getMetadata() != null ? gen.getMetadata().getFinishReason() : null))\n             .collect(Collectors.toList());\n \n     ChatModelTypes.ChatModelActivityOutput.ChatResponseMetadata metadata = null;"
+  },
+  {
+   "filename": "java/spring-ai/src/main/java/io/temporal/springai/model/ActivityChatModel.java",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 1,
+   "patch": "@@ -15,6 +15,7 @@\n import java.util.stream.Collectors;\n import javax.annotation.Nullable;\n import org.springframework.ai.chat.messages.*;\n+import org.springframework.ai.chat.metadata.ChatGenerationMetadata;\n import org.springframework.ai.chat.metadata.ChatResponseMetadata;\n import org.springframework.ai.chat.metadata.DefaultUsage;\n import org.springframework.ai.chat.metadata.RateLimit;\n@@ -434,7 +435,15 @@ private ChatModelTypes.MediaContent toMediaContent(Media media) {\n   private ChatResponse toResponse(ChatModelTypes.ChatModelActivityOutput output) {\n     List<Generation> generations =\n         output.generations().stream()\n-            .map(gen -> new Generation(toAssistantMessage(gen.message())))\n+            .map(\n+                gen -> {\n+                  AssistantMessage message = toAssistantMessage(gen.message());\n+                  return gen.finishReason() != null\n+                      ? new Generation(\n+                          message,\n+                          ChatGenerationMetadata.builder().finishReason(gen.finishReason()).build())\n+                      : new Generation(message);\n+                })\n             .collect(Collectors.toList());\n \n     var builder = ChatResponse.builder().generations(generations);"
+  },
+  {
+   "filename": "java/spring-ai/src/main/java/io/temporal/springai/model/ChatModelTypes.java",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -109,7 +109,13 @@ public record ChatModelActivityOutput(\n       @JsonProperty(\"metadata\") ChatResponseMetadata metadata) {\n     @JsonInclude(JsonInclude.Include.NON_NULL)\n     @JsonIgnoreProperties(ignoreUnknown = true)\n-    public record Generation(@JsonProperty(\"message\") Message message) {}\n+    public record Generation(\n+        @JsonProperty(\"message\") Message message,\n+        @JsonProperty(\"finish_reason\") String finishReason) {\n+      public Generation(Message message) {\n+        this(message, null);\n+      }\n+    }\n \n     @JsonInclude(JsonInclude.Include.NON_NULL)\n     @JsonIgnoreProperties(ignoreUnknown = true)"
+  },
+  {
+   "filename": "java/spring-ai/src/test/java/io/temporal/springai/FinishReasonTest.java",
+   "status": "added",
+   "additions": 89,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,89 @@\n+package io.temporal.springai;\n+\n+import static org.junit.jupiter.api.Assertions.assertEquals;\n+\n+import io.temporal.client.WorkflowClient;\n+import io.temporal.client.WorkflowOptions;\n+import io.temporal.springai.activity.ChatModelActivityImpl;\n+import io.temporal.springai.model.ActivityChatModel;\n+import io.temporal.testing.TestWorkflowEnvironment;\n+import io.temporal.worker.Worker;\n+import io.temporal.workflow.WorkflowInterface;\n+import io.temporal.workflow.WorkflowMethod;\n+import java.util.List;\n+import org.junit.jupiter.api.AfterEach;\n+import org.junit.jupiter.api.BeforeEach;\n+import org.junit.jupiter.api.Test;\n+import org.springframework.ai.chat.messages.AssistantMessage;\n+import org.springframework.ai.chat.metadata.ChatGenerationMetadata;\n+import org.springframework.ai.chat.model.ChatModel;\n+import org.springframework.ai.chat.model.ChatResponse;\n+import org.springframework.ai.chat.model.Generation;\n+import org.springframework.ai.chat.prompt.Prompt;\n+\n+/** Verifies the generation finish reason survives the activity boundary. */\n+class FinishReasonTest {\n+\n+  private static final String TASK_QUEUE = \"test-spring-ai-finish-reason\";\n+\n+  private TestWorkflowEnvironment testEnv;\n+  private WorkflowClient client;\n+\n+  @BeforeEach\n+  void setUp() {\n+    testEnv = TestWorkflowEnvironment.newInstance();\n+    client = testEnv.getWorkflowClient();\n+  }\n+\n+  @AfterEach\n+  void tearDown() {\n+    testEnv.close();\n+  }\n+\n+  @Test\n+  void finishReason_isPreservedAcrossActivityBoundary() {\n+    Worker worker = testEnv.newWorker(TASK_QUEUE);\n+    worker.registerWorkflowImplementationTypes(FinishReasonWorkflowImpl.class);\n+    worker.registerActivitiesImplementations(new ChatModelActivityImpl(new LengthStubChatModel()));\n+    testEnv.start();\n+\n+    FinishReasonWorkflow workflow =\n+        client.newWorkflowStub(\n+            FinishReasonWorkflow.class,\n+            WorkflowOptions.newBuilder().setTaskQueue(TASK_QUEUE).build());\n+\n+    assertEquals(\"length\", workflow.finishReason(\"Hi\"));\n+  }\n+\n+  @WorkflowInterface\n+  public interface FinishReasonWorkflow {\n+    @WorkflowMethod\n+    String finishReason(String message);\n+  }\n+\n+  public static class FinishReasonWorkflowImpl implements FinishReasonWorkflow {\n+    @Override\n+    public String finishReason(String message) {\n+      ChatResponse response = ActivityChatModel.forDefault().call(new Prompt(message));\n+      return response.getResult().getMetadata().getFinishReason();\n+    }\n+  }\n+\n+  private static class LengthStubChatModel implements ChatModel {\n+    @Override\n+    public ChatResponse call(Prompt prompt) {\n+      return ChatResponse.builder()\n+          .generations(\n+              List.of(\n+                  new Generation(\n+                      new AssistantMessage(\"truncated\"),\n+                      ChatGenerationMetadata.builder().finishReason(\"length\").build())))\n+          .build();\n+    }\n+\n+    @Override\n+    public reactor.core.publisher.Flux<ChatResponse> stream(Prompt prompt) {\n+      throw new UnsupportedOperationException();\n+    }\n+  }\n+}"
+  }
+ ],
+ "test_files": [
+  "java/spring-ai/src/test/java/io/temporal/springai/FinishReasonTest.java"
+ ]
+}

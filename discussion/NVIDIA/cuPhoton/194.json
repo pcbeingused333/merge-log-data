@@ -1,0 +1,40 @@
+{
+ "repo": "NVIDIA/cuPhoton",
+ "number": 194,
+ "url": "https://github.com/NVIDIA/cuPhoton/pull/194",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-14T02:50:18Z",
+   "body": "Thanks for picking these up. The hint only adds text, and a failed mountinfo read falls back to the old message. I reviewed this by reading the code and did not run it.\n\nAlso:\n\n- `read()` adds the hint only when `cuFileRead` raises. cuda-python's `check_status` raises only for a `-1` return. Other negative cuFile statuses reach the `received < 0` branch (`cufile_io.py:379`), which keeps the bare `status N` message. Adding the hint there would cover both.\n- `fields[4].encode().decode(\"unicode_escape\")` reads non-ASCII bytes as Latin-1, so `/mnt/données` becomes `/mnt/donnÃ©es`. A tmpfs mounted there gets no hint. The kernel escapes only space, tab, newline and backslash, as `\\ooo`. `re.sub(r\"\\\\([0-7]{3})\", lambda m: chr(int(m[1], 8)), fields[4])` decodes just those.\n- No test has two entries for the same mount point, where `>=` picks the later one, or an escaped mount point. One more `mountinfo` line for each in `test_filesystem_type_uses_longest_mount_prefix` would pin both."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "collaborator",
+   "path": "docs/troubleshooting.md",
+   "created_at": "2026-11-14T02:50:15Z",
+   "body": "When `TMPDIR` is unset, as it is by default on many systems, `\"$TMPDIR\"` expands to an empty string. The command then checks an empty path instead of `/tmp`, which is the case this section describes.\n\nSuggest `findmnt -T \"${TMPDIR:-/tmp}\" -o TARGET,FSTYPE`. For an input outside `TMPDIR`, `findmnt -T <input path>` checks that file directly.\n\nOn ramfs, and on tmpfs before Linux 6.6, the open fails earlier with `Invalid argument` rather than `HANDLE_NOT_REGISTERED`. Naming that error in the first paragraph would help those readers find this section."
+  },
+  {
+   "role": "collaborator",
+   "path": "src/cuphoton/xbeam/cufile_io.py",
+   "created_at": "2026-11-14T02:50:16Z",
+   "body": "From code reading: on ramfs, and on tmpfs before Linux 6.6, the file never reaches registration. Linux rejects an `O_DIRECT` open with `EINVAL` unless the file has `FMODE_CAN_ODIRECT` (`do_dentry_open` in `fs/open.c`). ramfs never sets it: `ram_aops` in `fs/libfs.c` has no `direct_IO`, and `ramfs_file_operations` has no `open`. tmpfs sets it in `shmem_file_open` since 6.6. Those opens fail at line 149, and the message at line 152 has no hint. So the `ramfs` entry in `_RAM_FILESYSTEMS` cannot produce a hint.\n\nI expected the open failure to name the filesystem too. Suggest appending `_ram_filesystem_hint(selected)` to the message at line 152. A test modeled on `test_register_failure_on_tmpfs_names_filesystem`, with `os.open` raising `OSError(errno.EINVAL, ...)`, would cover it."
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-11-14T02:03:10Z",
+   "body": "This pull request requires additional validation before any workflows can run on NVIDIA's runners.\n\nPull request vetters can view their responsibilities [here](https://docs.gha-runners.nvidia.com/cpr/vetters).\n\nContributors can view more details about this message [here](https://docs.gha-runners.nvidia.com/cpr/contributors).\n"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-14T02:03:14Z",
+   "body": "<!-- coderabbit-ai-generated:v1 -->\n\n<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n<!-- This is an auto-generated comment: skip review by coderabbit.ai -->\n\n> [!IMPORTANT]\n> ## Review skipped\n> \n> Auto reviews are limited based on label configuration.\n> \n> <details>\n> <summary><strong>:label: Required labels (at least one): 1</strong></summary>\n> <dl>\n> <dd>\n> <br>\n> \n> * ai-review\n> \n> </dd>\n> </dl>\n> </details>\n> \n> Please check the settings in the CodeRabbit UI or the `.coderabbit.yaml` file in this repository. To trigger a single review, invoke the `@coderabbitai review` command.\n> \n> <details>\n> <summary><strong><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/cog-dark.svg\"><img src=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/cog.svg\" width=\"16\" height=\"16\" align=\"absmiddle\" alt=\"\"></picture> Run configuration</strong></summary>\n> <dl>\n> <dd>\n> <br>\n> \n> - **Source mode**: Auto\n> - **Repository**: [NVIDIA/cuPhoton](<https://github.com/NVIDIA/cuPhoton>)\n> - **Branch**: [main](<https://github.com/NVIDIA/cuPhoton/tree/main>)\n> - **File**: [.coderabbit.yaml](<https://github.com/NVIDIA/cuPhoton/blob/c04d1a5018773ce0e30f00d881916a886340c384/.coderabbit.yaml>)\n> - **Commit**: [c04d1a5](<https://github.com/NVIDIA/cuPhoton/commit/c04d1a5018773ce0e30f00d881916a886340c384>)\n> - **Layers**: Repository YAML\n> - **Review profile**: CHILL\n> - **Plan**: Enterprise\n> - **Run ID**: `2770b26b-bd86-44a3-ab0f-3ef77b57fbf6`\n> \n> </dd>\n> </dl>\n> </details>\n> \n> You can disable this status message by setting the `reviews.review_status` to `false` in the CodeRabbit configuration file.\n> \n> Use the checkbox below for a quick retry:\n> - [ ] <!-- {\"checkboxId\":\"e9bb8d72-00e8-4f67-9cb2-caf3b22574fe\"} --> Trigger review\n\n<!-- end of auto-generated comment: skip review by coderabbit.ai -->\n"
+  }
+ ]
+}

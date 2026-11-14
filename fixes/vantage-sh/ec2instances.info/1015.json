@@ -1,0 +1,26 @@
+{
+ "repo": "vantage-sh/ec2instances.info",
+ "number": 1015,
+ "url": "https://github.com/vantage-sh/ec2instances.info/pull/1015",
+ "title": "fix(azure): omit unit prices for invalid capacity",
+ "merged_at": "2026-11-13T22:38:13Z",
+ "files": [
+  {
+   "filename": "next/utils/colunnData/azure.test.ts",
+   "status": "added",
+   "additions": 62,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,62 @@\n+import { describe, it, expect } from \"vitest\";\n+import { calculateAndFormatCost, type AzureInstance } from \"./azure\";\n+\n+const currency = { code: \"USD\", usdRate: 1 };\n+\n+describe(\"Azure unit pricing\", () => {\n+    it.each([0, undefined, -1, NaN, Infinity, -Infinity])(\n+        \"omits prices for invalid capacity %s\",\n+        (capacity) => {\n+            const instance = {\n+                ACU: capacity,\n+                vcpu: capacity,\n+                memory: capacity,\n+            } as AzureInstance;\n+            for (const unit of [\"ecu\", \"vcpu\", \"memory\"] as const) {\n+                expect(\n+                    calculateAndFormatCost(\n+                        0.499,\n+                        instance,\n+                        unit,\n+                        \"hourly\",\n+                        currency,\n+                    ),\n+                ).toBeUndefined();\n+            }\n+        },\n+    );\n+\n+    it(\"preserves valid unit and per-instance prices\", () => {\n+        const instance = { ACU: 0, vcpu: 12, memory: 48 } as AzureInstance;\n+        expect(\n+            calculateAndFormatCost(\n+                0.499,\n+                instance,\n+                \"instance\",\n+                \"hourly\",\n+                currency,\n+            ),\n+        ).toBe(\"$0.4990 hourly\");\n+        expect(\n+            calculateAndFormatCost(0.499, instance, \"vcpu\", \"hourly\", currency),\n+        ).toBe(\"$0.0416 hourly / vCPU\");\n+        expect(\n+            calculateAndFormatCost(\n+                0.499,\n+                instance,\n+                \"memory\",\n+                \"hourly\",\n+                currency,\n+            ),\n+        ).toBe(\"$0.0104 hourly / GiB\");\n+        expect(\n+            calculateAndFormatCost(\n+                0.499,\n+                { ACU: 100 } as AzureInstance,\n+                \"ecu\",\n+                \"hourly\",\n+                currency,\n+            ),\n+        ).toBe(\"$0.0050 hourly / ACU\");\n+    });\n+});"
+  },
+  {
+   "filename": "next/utils/colunnData/azure.tsx",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -152,6 +152,10 @@ function calculateCost(\n         ] as number;\n     }\n \n+    if (!Number.isFinite(pricingUnitModifier) || pricingUnitModifier <= 0) {\n+        return -1;\n+    }\n+\n     return (\n         ((Number(price) * durationMultiplier) / pricingUnitModifier) * usdRate\n     );"
+  }
+ ],
+ "test_files": [
+  "next/utils/colunnData/azure.test.ts"
+ ]
+}

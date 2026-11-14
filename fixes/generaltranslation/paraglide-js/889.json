@@ -1,0 +1,33 @@
+{
+ "repo": "generaltranslation/paraglide-js",
+ "number": 889,
+ "url": "https://github.com/generaltranslation/paraglide-js/pull/889",
+ "title": "fix(vite): key Vitest's module cache on the effective virtual output",
+ "merged_at": "2026-11-14T06:04:22Z",
+ "files": [
+  {
+   "filename": ".changeset/vitest-cache-key-virtual-modules.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+\"@inlang/paraglide-js\": patch\n+---\n+\n+Fix Vitest reusing stale cached transforms of rewritten message imports after `outputStructure` changes outside the Vite config file. The plugin now registers a Vitest cache key (`defineCacheKeyGenerator`) derived from the effective virtual output and its message ids."
+  },
+  {
+   "filename": "src/bundler-plugins/virtual-messages.ts",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 1,
+   "patch": "@@ -245,9 +245,29 @@ export function createVirtualMessagesPlugins(\n       return transport?.load(id);\n     },\n   };\n-  const optimize: Plugin = {\n+  const optimize: Plugin & {\n+    // Vitest 5 hook; older Vitest versions ignore it.\n+    configureVitest(context: {\n+      defineCacheKeyGenerator?: (\n+        callback: () => string | undefined | null | false\n+      ) => void;\n+    }): void;\n+  } = {\n     name: \"paraglide-virtual-message-imports\",\n     enforce: \"post\",\n+    // Vitest caches transformed modules on disk and its default key does not\n+    // cover Paraglide's project configuration. Without this, a cached\n+    // transform keeps importing a virtual id that is no longer served after\n+    // the output structure changes outside the Vite config file.\n+    configureVitest(context) {\n+      context.defineCacheKeyGenerator?.(() =>\n+        createHash(\"sha256\")\n+          .update(directory && transport ? virtualMessagePrefix(directory) : \"\")\n+          .update(\"\\0\")\n+          .update([...messages].sort().flat().join(\"\\0\"))\n+          .digest(\"hex\")\n+      );\n+    },\n     async transform(code, id) {\n       if (\n         !transport ||"
+  },
+  {
+   "filename": "src/bundler-plugins/virtual-messages.vitest-cache.test.ts",
+   "status": "added",
+   "additions": 87,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,87 @@\n+import { expect, test } from \"vitest\";\n+import fs from \"node:fs/promises\";\n+import path from \"node:path\";\n+import { tmpdir } from \"node:os\";\n+import { createServer } from \"vite\";\n+import { paraglideVitePlugin } from \"./vite.js\";\n+\n+test(\"the Vitest cache key follows the output structure set in the project config\", async () => {\n+  const root = await fs.realpath(\n+    await fs.mkdtemp(path.join(tmpdir(), \"paraglide-vitest-cache-\"))\n+  );\n+  const originalEnv = process.env.NODE_ENV;\n+  let server: Awaited<ReturnType<typeof createServer>> | undefined;\n+  try {\n+    process.env.NODE_ENV = \"development\";\n+    const project = path.join(root, \"project.inlang\");\n+    const config = path.join(project, \"paraglide.config.js\");\n+    await fs.mkdir(project);\n+    await fs.writeFile(path.join(root, \"package.json\"), '{\"type\":\"module\"}');\n+    await fs.writeFile(\n+      path.join(project, \"settings.json\"),\n+      JSON.stringify({\n+        baseLocale: \"en\",\n+        locales: [\"en\"],\n+        modules: [\"./plugin.js\"],\n+      })\n+    );\n+    await fs.writeFile(path.join(root, \"messages.json\"), \"{}\");\n+    await fs.writeFile(\n+      path.join(root, \"plugin.js\"),\n+      `export default {key:\"plugin.fixture.cache\",toBeImportedFiles:async()=>[{path:\"./messages.json\",locale:\"en\"}],importFiles:()=>({bundles:[{id:\"greeting\"}],messages:[{bundleId:\"greeting\",locale:\"en\"}],variants:[{messageBundleId:\"greeting\",messageLocale:\"en\",pattern:[{type:\"text\",value:\"HELLO\"}]}]})};`\n+    );\n+    await fs.writeFile(config, \"export default {};\");\n+    server = await createServer({\n+      root,\n+      configFile: false,\n+      logLevel: \"silent\",\n+      plugins: [\n+        paraglideVitePlugin({\n+          project,\n+          outdir: path.join(root, \"out\"),\n+          strategy: [\"baseLocale\"],\n+          emitGitIgnore: false,\n+          emitReadme: false,\n+          emitPrettierIgnore: false,\n+        }),\n+      ],\n+      optimizeDeps: { noDiscovery: true },\n+      server: { port: 0, watch: null },\n+    });\n+    await server.listen();\n+    await server.pluginContainer.buildStart({});\n+\n+    // What Vitest 5 does with `configureVitest` plugins.\n+    let generate: (() => string | undefined | null | false) | undefined;\n+    const optimize = server.config.plugins.find(\n+      (plugin) => plugin.name === \"paraglide-virtual-message-imports\"\n+    ) as { configureVitest?: (context: unknown) => void } | undefined;\n+    optimize!.configureVitest!({\n+      defineCacheKeyGenerator: (callback: typeof generate) => {\n+        generate = callback;\n+      },\n+    });\n+    expect(generate).toBeDefined();\n+\n+    // `serve` defaults to physical locale modules, so the key starts empty.\n+    const physical = generate!();\n+    expect(generate!()).toBe(physical);\n+\n+    await fs.writeFile(\n+      config,\n+      \"export default { outputStructure: 'virtual-modules' };\"\n+    );\n+    await server.pluginContainer.watchChange(config, { event: \"update\" });\n+    const virtual = generate!();\n+    expect(virtual).not.toBe(physical);\n+\n+    await fs.writeFile(config, \"export default {};\");\n+    await server.pluginContainer.watchChange(config, { event: \"update\" });\n+    expect(generate!()).toBe(physical);\n+  } finally {\n+    await server?.close();\n+    if (originalEnv === undefined) delete process.env.NODE_ENV;\n+    else process.env.NODE_ENV = originalEnv;\n+    await fs.rm(root, { recursive: true, force: true });\n+  }\n+});"
+  }
+ ],
+ "test_files": [
+  "src/bundler-plugins/virtual-messages.vitest-cache.test.ts"
+ ]
+}

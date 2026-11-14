@@ -9,6 +9,12 @@
    "state": "COMMENTED",
    "submitted_at": "2026-11-11T02:07:32Z",
    "body": "Suggestion: Approve\nBot suggestion\n\nReviewed `ac6b64ced6c4b4d0b232bc1903ae4f0095b0a5c5`. No blocking issue found.\n\nThe check belongs in the per-worker iteration loop: a shard can be large enough globally while a worker's slice, or the tokens remaining after BOS alignment, cannot produce a sample. Checking after the complete pass also allows unusable shards to coexist with valid ones. The change preserves the existing token/label slicing and file reshuffling without adding a new dataset abstraction.\n\nValidation on PDX CPU:\n\n- All **11 native NanoGPT dataset tests passed**.\n- **19 additional review-only cases passed** through the existing Dataset and the recipe's real StatefulDataLoader: 0/2 workers, repeated passes, exact `seq_len + 1` boundaries, indexed and linear BOS lookup, missing/late BOS, undersized worker slices, mixed usable/unusable shards with shuffling, and data-progress save/restore across passes. Worker errors propagated as `ValueError` instead of hanging.\n- Both new native regression tests were also run against parent `c63e99ad9b943` with only the test file overlaid: each entered the test and hung until the 30-second timeout, while the parent's 9 native normal cases and 12 additional normal-operation controls passed.\n- Ruff passed for the changed production file. The reviewed production checkout remained clean.\n\nThe supplemental tests only construct binary input shards and exercise the production interfaces; no dataset or loader implementation was replaced. No GPU or multi-rank training was needed for this iterator change. Raw commands, fixtures, logs and source hashes are retained under PDX `automodel-pr-review/pr4684-ac6b64ced6c4/cpu_validation`.\n\n<!-- automodel-thorough-review:ac6b64ced6c4b4d0b232bc1903ae4f0095b0a5c5 -->"
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-13T23:20:38Z",
+   "body": "Suggestion: Approve\n\nBot suggestion\n\nReviewed `314ed5e312384354ce4bffc258684422b2d65b76` against `dfae99c230c8aad00de2a6db5ee9637d36a7d178`. No blocking issue found in this second review. The two PR files are byte-identical to the previously reviewed revision; I checked the main-merge integration and reran the affected behavior on this head.\n\nThe per-pass guard is appropriately scoped: it observes the actual worker slice and BOS alignment, permits unusable shards alongside usable ones, and raises only when the entire assigned pass yields nothing. Setting the flag before yielding preserves iteration after the last sample, valid-stream ordering and the existing shuffle/resume behavior. A constructor-only length check would miss worker-specific and BOS-specific failures; no new dataset abstraction is needed.\n\nValidation on PDX CPU:\n\n- **11 native tests and 19 supplemental cases passed**, including actual StatefulDataLoader with 0/2 workers, exact sample boundaries, indexed/linear BOS lookup, missing/late BOS, undersized worker slices, mixed valid/invalid shards, shuffling, repeated passes and state restoration.\n- On the unmodified base production code, **9 native and 12 supplemental valid-input controls passed**. Each of the two new regression tests entered its test call and failed to return within 30 seconds; the recorded inner timeout terminated it with exit 124. Import/collection time and the outer startup timeout were not counted as hang evidence.\n- Ruff passed. All six pytest invocations verified the actual imported dataset source; head/base source hashes remained unchanged and the temporary baseline test overlay was restored.\n\nThe supplemental fixtures exercise production Dataset/DataLoader interfaces without replacing their implementations. Coverage is CPU iteration, actual local fork workers and DataLoader state restoration; no GPU or multi-rank training claim. Scripts, source hashes, JUnit results and timeout events are retained under PDX `automodel-pr-review/pr4684-314ed5e31238/root_validation`.\n\nCI has already been requested for this exact SHA in [the existing test request](https://github.com/NVIDIA-NeMo/Automodel/pull/4684#issuecomment-6864511215); I did not trigger it again.\n\n<!-- automodel-thorough-review:314ed5e312384354ce4bffc258684422b2d65b76 -->"
   }
  ],
  "review_comments": [],
@@ -22,6 +28,11 @@
    "role": "contributor",
    "created_at": "2026-11-11T02:07:48Z",
    "body": "/ok to test ac6b64ced6c4b4d0b232bc1903ae4f0095b0a5c5"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-11-13T20:46:06Z",
+   "body": "/ok to test 314ed5e312384354ce4bffc258684422b2d65b76"
   }
  ]
 }

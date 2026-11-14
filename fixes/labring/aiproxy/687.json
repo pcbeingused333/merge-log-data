@@ -1,0 +1,26 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 687,
+ "url": "https://github.com/labring/aiproxy/pull/687",
+ "title": "fix(coze): set finish_reason stop on the final streamed chunk",
+ "merged_at": "2026-11-14T01:43:06Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/coze/main.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 24,
+   "patch": "@@ -20,31 +20,11 @@ import (\n \n // https://www.coze.com/open\n \n-func stopReasonCoze2OpenAI(reason *string) relaymodel.FinishReason {\n-\tif reason == nil {\n-\t\treturn \"\"\n-\t}\n-\n-\tswitch *reason {\n-\tcase relaymodel.ClaudeStopReasonEndTurn:\n-\t\treturn relaymodel.FinishReasonLength\n-\tcase relaymodel.ClaudeStopReasonStopSequence:\n-\t\treturn relaymodel.FinishReasonStop\n-\tcase relaymodel.ClaudeStopReasonMaxTokens:\n-\t\treturn relaymodel.FinishReasonLength\n-\tdefault:\n-\t\treturn *reason\n-\t}\n-}\n-\n func StreamResponse2OpenAI(\n \tmeta *meta.Meta,\n \tcozeResponse *StreamResponse,\n ) *relaymodel.ChatCompletionsStreamResponse {\n-\tvar (\n-\t\tstopReason string\n-\t\tchoice     relaymodel.ChatCompletionsStreamResponseChoice\n-\t)\n+\tvar choice relaymodel.ChatCompletionsStreamResponseChoice\n \n \tif cozeResponse.Message != nil {\n \t\tif cozeResponse.Message.Type != messagetype.Answer {\n@@ -56,9 +36,8 @@ func StreamResponse2OpenAI(\n \n \tchoice.Delta.Role = \"assistant\"\n \n-\tfinishReason := stopReasonCoze2OpenAI(&stopReason)\n-\tif finishReason != \"null\" {\n-\t\tchoice.FinishReason = finishReason\n+\tif cozeResponse.IsFinish {\n+\t\tchoice.FinishReason = relaymodel.FinishReasonStop\n \t}\n \n \topenaiResponse := relaymodel.ChatCompletionsStreamResponse{"
+  },
+  {
+   "filename": "core/relay/adaptor/coze/stream_test.go",
+   "status": "added",
+   "additions": 43,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,43 @@\n+//nolint:testpackage\n+package coze\n+\n+import (\n+\t\"testing\"\n+\n+\t\"github.com/labring/aiproxy/core/relay/adaptor/coze/constant/messagetype\"\n+\t\"github.com/labring/aiproxy/core/relay/meta\"\n+\trelaymodel \"github.com/labring/aiproxy/core/relay/model\"\n+)\n+\n+func TestStreamResponse2OpenAIFinishReason(t *testing.T) {\n+\tt.Parallel()\n+\n+\tm := &meta.Meta{OriginModel: \"coze-bot\"}\n+\n+\tmid := StreamResponse2OpenAI(m, &StreamResponse{\n+\t\tMessage: &Message{Type: messagetype.Answer, Content: \"hi\"},\n+\t})\n+\tif mid == nil || mid.Choices[0].FinishReason != \"\" {\n+\t\tt.Fatalf(\"expected no finish_reason mid-stream, got %+v\", mid)\n+\t}\n+\n+\tlast := StreamResponse2OpenAI(m, &StreamResponse{\n+\t\tMessage:  &Message{Type: messagetype.Answer, Content: \"bye\"},\n+\t\tIsFinish: true,\n+\t})\n+\tif last == nil || last.Choices[0].FinishReason != relaymodel.FinishReasonStop {\n+\t\tt.Fatalf(\"expected finish_reason stop on is_finish, got %+v\", last)\n+\t}\n+\n+\tif last.Choices[0].Delta.Content != \"bye\" {\n+\t\tt.Fatalf(\"content lost on final chunk: %+v\", last.Choices[0].Delta)\n+\t}\n+\n+\tfollowUp := StreamResponse2OpenAI(m, &StreamResponse{\n+\t\tMessage:  &Message{Type: messagetype.FollowUp, Content: \"next?\"},\n+\t\tIsFinish: true,\n+\t})\n+\tif followUp != nil {\n+\t\tt.Fatalf(\"expected follow_up event to be skipped, got %+v\", followUp)\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/coze/stream_test.go"
+ ]
+}

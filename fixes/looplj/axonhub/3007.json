@@ -1,0 +1,34 @@
+{
+ "repo": "looplj/axonhub",
+ "number": 3007,
+ "url": "https://github.com/looplj/axonhub/pull/3007",
+ "title": "fix(anthropic): map unknown finish reasons to end_turn in non-stream responses",
+ "merged_at": "2026-11-14T03:08:24Z",
+ "files": [
+  {
+   "filename": "llm/transformer/anthropic/inbound_convert.go",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -715,8 +715,14 @@ func convertToAnthropicResponse(chatResp *llm.Response) *Message {\n \t\t\tcase \"content_filter\":\n \t\t\t\tstopReason := \"refusal\"\n \t\t\t\tresp.StopReason = &stopReason\n-\t\t\tdefault:\n+\t\t\tcase \"stop_sequence\", \"pause_turn\", \"refusal\":\n+\t\t\t\t// Already a valid Anthropic stop reason; pass through.\n \t\t\t\tresp.StopReason = choice.FinishReason\n+\t\t\tdefault:\n+\t\t\t\t// Unknown reasons (e.g. \"error\", \"cancelled\") are not valid Anthropic\n+\t\t\t\t// stop reasons; fall back to end_turn like the streaming path.\n+\t\t\t\tstopReason := \"end_turn\"\n+\t\t\t\tresp.StopReason = &stopReason\n \t\t\t}\n \t\t} else {\n \t\t\tstopReason := \"end_turn\""
+  },
+  {
+   "filename": "llm/transformer/anthropic/inbound_stop_reason_test.go",
+   "status": "modified",
+   "additions": 41,
+   "deletions": 0,
+   "patch": "@@ -62,3 +62,44 @@ func TestInboundStream_ContentFilterStopReason(t *testing.T) {\n \trequire.NotNil(t, stopReason)\n \trequire.Equal(t, \"refusal\", *stopReason)\n }\n+\n+func TestInboundTransformer_TransformResponse_UnknownFinishReason(t *testing.T) {\n+\ttests := []struct {\n+\t\tfinishReason string\n+\t\twant         string\n+\t}{\n+\t\t{\"error\", \"end_turn\"},\n+\t\t{\"cancelled\", \"end_turn\"},\n+\t\t{\"pause_turn\", \"pause_turn\"},\n+\t\t{\"stop_sequence\", \"stop_sequence\"},\n+\t}\n+\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.finishReason, func(t *testing.T) {\n+\t\t\ttransformer := NewInboundTransformer()\n+\t\t\tfinishReason := tt.finishReason\n+\t\t\ttext := \"partial\"\n+\n+\t\t\tresp, err := transformer.TransformResponse(t.Context(), &llm.Response{\n+\t\t\t\tID:      \"msg_unknown\",\n+\t\t\t\tObject:  \"chat.completion\",\n+\t\t\t\tModel:   \"claude-sonnet-4-6\",\n+\t\t\t\tCreated: 1234567890,\n+\t\t\t\tChoices: []llm.Choice{{\n+\t\t\t\t\tIndex: 0,\n+\t\t\t\t\tMessage: &llm.Message{\n+\t\t\t\t\t\tRole:    \"assistant\",\n+\t\t\t\t\t\tContent: llm.MessageContent{Content: &text},\n+\t\t\t\t\t},\n+\t\t\t\t\tFinishReason: &finishReason,\n+\t\t\t\t}},\n+\t\t\t})\n+\t\t\trequire.NoError(t, err)\n+\n+\t\t\tvar msg Message\n+\t\t\trequire.NoError(t, json.Unmarshal(resp.Body, &msg))\n+\t\t\trequire.NotNil(t, msg.StopReason)\n+\t\t\trequire.Equal(t, tt.want, *msg.StopReason)\n+\t\t})\n+\t}\n+}"
+  },
+  {
+   "filename": "llm/transformer/anthropic/inbound_test.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -2438,7 +2438,7 @@ func TestInboundTransformer_TransformResponse_EdgeCases(t *testing.T) {\n \t\t\texpectError: false,\n \t\t\tvalidate: func(t *testing.T, resp *Message) {\n \t\t\t\tt.Helper()\n-\t\t\t\trequire.Equal(t, \"unknown_reason\", *resp.StopReason)\n+\t\t\t\trequire.Equal(t, \"end_turn\", *resp.StopReason)\n \t\t\t},\n \t\t},\n \t\t{"
+  }
+ ],
+ "test_files": [
+  "llm/transformer/anthropic/inbound_stop_reason_test.go",
+  "llm/transformer/anthropic/inbound_test.go"
+ ]
+}

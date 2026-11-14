@@ -62,6 +62,11 @@
    "role": "contributor",
    "created_at": "2026-11-12T20:37:14Z",
    "body": "[InstrumentedChatModel.kt](https://github.com/embabel/embabel-agent/pull/2231/files/bd54e348a9c3de51eaa83fbb0a913da475b42037#diff-2e906c1f1e6bf2f37264ca9c0099a953a381513132b74d90b74d31af24d2cff6), ln 105"
+  },
+  {
+   "role": "collaborator",
+   "created_at": "2026-11-14T02:33:51Z",
+   "body": "Thanks @pcbeingused333  for the update. \r\n\r\n**There is still a gap in the implementation: with the default retry settings, the call never reaches the new retry.**\r\n\r\nWhen Gemini rejects the penalties, two steps react to the error, in this order:\r\n\r\n1. The Google GenAI retry template. It retries failed calls up to 10 times by default, which helps when Google is overloaded.\r\n2. The new retry in `InstrumentedChatModel`, which removes the penalties and sends the request again.\r\n\r\nThe problem is step 1. Spring AI wraps Google's `ClientException: 400 . Penalty is not enabled` in a plain `RuntimeException`. `LlmRetryDecision.isRetryable` does not look at the HTTP status for a plain `RuntimeException`, so it falls into the default case and is retried. The same request, with the penalties, is sent again and again. After 60 seconds the call times out and everything starts over, for about 10 minutes. Step 2 is never reached.\r\n\r\n\r\n`stream()` has the same issue (no retry, so a streaming call with penalties will still fail on Gemini), but we can handle it in a separate issue/PR\r\n"
   }
  ]
 }

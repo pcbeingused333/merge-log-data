@@ -1,0 +1,40 @@
+{
+ "repo": "nextlevelbuilder/goclaw",
+ "number": 1676,
+ "url": "https://github.com/nextlevelbuilder/goclaw/pull/1676",
+ "title": "fix(providers): count Claude CLI cache tokens in context usage",
+ "merged_at": "2026-11-13T22:09:27Z",
+ "files": [
+  {
+   "filename": "internal/providers/claude_cli_chat.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 5,
+   "patch": "@@ -228,11 +228,7 @@ func (p *ClaudeCLIProvider) ChatStream(ctx context.Context, req ChatRequest, onC\n \t\t\t\t\t}\n \t\t\t\t}\n \t\t\t\tif ev.Usage != nil {\n-\t\t\t\t\tfinalResp.Usage = &Usage{\n-\t\t\t\t\t\tPromptTokens:     ev.Usage.InputTokens,\n-\t\t\t\t\t\tCompletionTokens: ev.Usage.OutputTokens,\n-\t\t\t\t\t\tTotalTokens:      ev.Usage.InputTokens + ev.Usage.OutputTokens,\n-\t\t\t\t\t}\n+\t\t\t\t\tfinalResp.Usage = usageFromCLI(ev.Usage)\n \t\t\t\t}\n \t\t\t}\n \t\t}"
+  },
+  {
+   "filename": "internal/providers/claude_cli_parse.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 10,
+   "patch": "@@ -73,11 +73,7 @@ func parseJSONArray(data []byte) *ChatResponse {\n \t\t\t\tfinishReason = \"error\"\n \t\t\t}\n \t\t\tif ev.Usage != nil {\n-\t\t\t\tusage = &Usage{\n-\t\t\t\t\tPromptTokens:     ev.Usage.InputTokens,\n-\t\t\t\t\tCompletionTokens: ev.Usage.OutputTokens,\n-\t\t\t\t\tTotalTokens:      ev.Usage.InputTokens + ev.Usage.OutputTokens,\n-\t\t\t\t}\n+\t\t\t\tusage = usageFromCLI(ev.Usage)\n \t\t\t}\n \n \t\tcase \"assistant\":\n@@ -128,11 +124,7 @@ func parseSingleJSONResult(line []byte) *ChatResponse {\n \t\tcr.FinishReason = \"error\"\n \t}\n \tif resp.Usage != nil {\n-\t\tcr.Usage = &Usage{\n-\t\t\tPromptTokens:     resp.Usage.InputTokens,\n-\t\t\tCompletionTokens: resp.Usage.OutputTokens,\n-\t\t\tTotalTokens:      resp.Usage.InputTokens + resp.Usage.OutputTokens,\n-\t\t}\n+\t\tcr.Usage = usageFromCLI(resp.Usage)\n \t}\n \treturn cr\n }"
+  },
+  {
+   "filename": "internal/providers/claude_cli_types.go",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 3,
+   "patch": "@@ -14,10 +14,28 @@ type cliJSONResponse struct {\n \tUsage     *cliUsage `json:\"usage\"`\n }\n \n-// cliUsage maps Claude CLI usage counters.\n+// cliUsage maps Claude CLI usage counters. input_tokens excludes cached\n+// segments; cache read and creation are separate, as in the Anthropic API.\n type cliUsage struct {\n-\tInputTokens  int `json:\"input_tokens\"`\n-\tOutputTokens int `json:\"output_tokens\"`\n+\tInputTokens              int `json:\"input_tokens\"`\n+\tOutputTokens             int `json:\"output_tokens\"`\n+\tCacheCreationInputTokens int `json:\"cache_creation_input_tokens,omitempty\"`\n+\tCacheReadInputTokens     int `json:\"cache_read_input_tokens,omitempty\"`\n+}\n+\n+// usageFromCLI maps CLI counters. Cache fields stay separate so ContextTokens\n+// can add them back. Nil in, nil out.\n+func usageFromCLI(u *cliUsage) *Usage {\n+\tif u == nil {\n+\t\treturn nil\n+\t}\n+\treturn &Usage{\n+\t\tPromptTokens:        u.InputTokens,\n+\t\tCompletionTokens:    u.OutputTokens,\n+\t\tTotalTokens:         u.InputTokens + u.OutputTokens,\n+\t\tCacheCreationTokens: u.CacheCreationInputTokens,\n+\t\tCacheReadTokens:     u.CacheReadInputTokens,\n+\t}\n }\n \n // cliStreamEvent is a single line from `--output-format stream-json`."
+  },
+  {
+   "filename": "internal/providers/claude_cli_usage_test.go",
+   "status": "added",
+   "additions": 46,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,46 @@\n+package providers\n+\n+import \"testing\"\n+\n+// Claude CLI result usage includes cache_read_input_tokens and\n+// cache_creation_input_tokens. input_tokens excludes those segments, and\n+// ContextTokens adds them back. Dropping the cache fields under-reports context.\n+func TestParseJSONResponse_IncludesCacheUsage(t *testing.T) {\n+\traw := []byte(`{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"ok\",\"usage\":{\"input_tokens\":12,\"cache_creation_input_tokens\":30,\"cache_read_input_tokens\":800,\"output_tokens\":7}}`)\n+\tresp, err := parseJSONResponse(raw)\n+\tif err != nil {\n+\t\tt.Fatalf(\"parseJSONResponse: %v\", err)\n+\t}\n+\tassertCLICacheUsage(t, resp, 12, 7, 30, 800, 842)\n+}\n+\n+func TestParseJSONArray_IncludesCacheUsage(t *testing.T) {\n+\traw := []byte(`[{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}},{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"ok\",\"usage\":{\"input_tokens\":4,\"cache_creation_input_tokens\":8,\"cache_read_input_tokens\":100,\"output_tokens\":2}}]`)\n+\tassertCLICacheUsage(t, parseJSONArray(raw), 4, 2, 8, 100, 112)\n+}\n+\n+func TestParseJSONResponse_OmitsAbsentCacheUsage(t *testing.T) {\n+\traw := []byte(`{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"ok\",\"usage\":{\"input_tokens\":5,\"output_tokens\":3}}`)\n+\tresp, err := parseJSONResponse(raw)\n+\tif err != nil {\n+\t\tt.Fatalf(\"parseJSONResponse: %v\", err)\n+\t}\n+\tassertCLICacheUsage(t, resp, 5, 3, 0, 0, 5)\n+}\n+\n+func assertCLICacheUsage(t *testing.T, resp *ChatResponse, prompt, completion, cacheCreate, cacheRead, context int) {\n+\tt.Helper()\n+\tif resp == nil || resp.Usage == nil {\n+\t\tt.Fatal(\"expected usage\")\n+\t}\n+\tu := resp.Usage\n+\tif u.PromptTokens != prompt || u.CompletionTokens != completion || u.CacheCreationTokens != cacheCreate || u.CacheReadTokens != cacheRead {\n+\t\tt.Errorf(\"usage = %+v, want prompt=%d completion=%d cacheCreate=%d cacheRead=%d\", u, prompt, completion, cacheCreate, cacheRead)\n+\t}\n+\tif got := u.ContextTokens(); got != context {\n+\t\tt.Errorf(\"ContextTokens() = %d, want %d\", got, context)\n+\t}\n+\tif u.TotalTokens != prompt+completion {\n+\t\tt.Errorf(\"TotalTokens = %d, want %d\", u.TotalTokens, prompt+completion)\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/providers/claude_cli_usage_test.go"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "electerm/electerm",
+ "number": 4732,
+ "url": "https://github.com/electerm/electerm/pull/4732",
+ "title": "fix(ai): refuse an Anthropic tool call cut off by max_tokens",
+ "merged_at": "2026-11-14T02:25:14Z",
+ "files": [
+  {
+   "filename": "src/app/lib/ai-format.js",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -474,6 +474,12 @@ function parseAnthropicResponse (data) {\n       }\n     }\n   }\n+  // max_tokens means the model was cut off. A tool_use block in that reply\n+  // can carry a partial input, and the agent would run it. A stop_reason of\n+  // tool_use means the call finished; that one is returned below.\n+  if (data.stop_reason === 'max_tokens' && toolCalls.length) {\n+    return { error: 'AI response truncated (max_tokens)' }\n+  }\n   const message = {\n     role: 'assistant',\n     content: text || null\n@@ -608,6 +614,14 @@ function createStreamParser (format) {\n         const call = getToolCall(`b:${data.index}`)\n         call.function.arguments += delta.partial_json\n       }\n+    } else if (type === 'message_delta') {\n+      // Same cut-off as the non-streaming parser: a proxy that ignores\n+      // stream:false still delivers the reply as SSE, and a partial tool\n+      // argument must not be executed.\n+      const reason = data.delta && data.delta.stop_reason\n+      if (reason === 'max_tokens' && toolCalls.size) {\n+        setError('AI response truncated (max_tokens)')\n+      }\n     } else if (type === 'message_stop') {\n       state.completed = true\n     }"
+  },
+  {
+   "filename": "src/test/unit-ci/ai-format.spec.js",
+   "status": "modified",
+   "additions": 69,
+   "deletions": 0,
+   "patch": "@@ -497,6 +497,53 @@ describe('parseResponse - anthropic', () => {\n     ])\n   })\n \n+  it('refuses a tool call cut off by max_tokens', () => {\n+    const res = parseResponse(FORMAT_ANTHROPIC, {\n+      type: 'message',\n+      stop_reason: 'max_tokens',\n+      content: [\n+        { type: 'text', text: 'running' },\n+        {\n+          type: 'tool_use',\n+          id: 'toolu_1',\n+          name: 'run_command',\n+          input: { cmd: 'ls' }\n+        }\n+      ]\n+    })\n+    assert.match(res.error, /truncated \\(max_tokens\\)/)\n+    assert.equal(res.message, undefined)\n+  })\n+\n+  it('still returns a tool call that finished with stop_reason tool_use', () => {\n+    const res = parseResponse(FORMAT_ANTHROPIC, {\n+      type: 'message',\n+      stop_reason: 'tool_use',\n+      content: [\n+        {\n+          type: 'tool_use',\n+          id: 'toolu_1',\n+          name: 'run_command',\n+          input: { cmd: 'ls' }\n+        }\n+      ]\n+    })\n+    assert.equal(res.error, undefined)\n+    assert.equal(res.message.tool_calls[0].function.arguments, '{\"cmd\":\"ls\"}')\n+  })\n+\n+  it('still returns partial text when max_tokens cuts a reply with no tool call', () => {\n+    const res = parseResponse(FORMAT_ANTHROPIC, {\n+      type: 'message',\n+      stop_reason: 'max_tokens',\n+      content: [\n+        { type: 'text', text: 'partial answer' }\n+      ]\n+    })\n+    assert.equal(res.error, undefined)\n+    assert.equal(res.message.content, 'partial answer')\n+  })\n+\n   it('reports anthropic error bodies', () => {\n     const res = parseResponse(FORMAT_ANTHROPIC, {\n       type: 'error',\n@@ -723,6 +770,28 @@ describe('createStreamParser - anthropic', () => {\n     assert.equal(parser.error, 'overloaded')\n     assert.equal(parser.completed, true)\n   })\n+\n+  it('refuses a tool call cut off by a max_tokens message_delta', () => {\n+    const parser = runStream(FORMAT_ANTHROPIC, [\n+      'event: content_block_start\\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"run_command\",\"input\":{}}}\\n\\n',\n+      'event: content_block_delta\\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\\\"cmd\\\\\":\\\\\"ls\"}}\\n\\n',\n+      'event: message_delta\\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\",\"stop_sequence\":null}}\\n\\n',\n+      'event: message_stop\\ndata: {\"type\":\"message_stop\"}\\n\\n'\n+    ])\n+    assert.match(parser.error, /truncated \\(max_tokens\\)/)\n+    assert.equal(parser.completed, true)\n+  })\n+\n+  it('keeps a finished tool call when message_delta says tool_use', () => {\n+    const parser = runStream(FORMAT_ANTHROPIC, [\n+      'event: content_block_start\\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"run_command\",\"input\":{}}}\\n\\n',\n+      'event: content_block_delta\\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\\\"cmd\\\\\":\\\\\"ls\\\\\"}\"}}\\n\\n',\n+      'event: message_delta\\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\",\"stop_sequence\":null}}\\n\\n',\n+      'event: message_stop\\ndata: {\"type\":\"message_stop\"}\\n\\n'\n+    ])\n+    assert.equal(parser.error, null)\n+    assert.equal(parser.toolCalls[0].function.arguments, '{\"cmd\":\"ls\"}')\n+  })\n })\n \n describe('streamResultToMessage', () => {"
+  }
+ ],
+ "test_files": [
+  "src/test/unit-ci/ai-format.spec.js"
+ ]
+}

@@ -1,0 +1,31 @@
+{
+ "repo": "jeremychone/rust-genai",
+ "number": 388,
+ "url": "https://github.com/jeremychone/rust-genai/pull/388",
+ "title": "fix(ollama_cloud): send reasoning_effort as think",
+ "merged_at": "2026-11-14T03:07:23Z",
+ "files": [
+  {
+   "filename": "src/adapter/adapters/all_adapters_tests.rs",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 1,
+   "patch": "@@ -1,4 +1,4 @@\n-use super::{DeepSeekAdapter, MistralAdapter, OllamaAdapter};\n+use super::{DeepSeekAdapter, MistralAdapter, OllamaAdapter, OllamaCloudAdapter};\n use crate::adapter::AdapterDispatcher;\n use crate::adapter::{Adapter, AdapterKind, ServiceType};\n use crate::chat::{\n@@ -366,6 +366,30 @@ fn test_ollama_think_enabled_for_budget_effort() -> Result<()> {\n \tOk(())\n }\n \n+#[test]\n+fn test_ollama_cloud_think_maps_reasoning_effort() -> Result<()> {\n+\t// -- Setup & Fixtures\n+\tlet chat_options = ChatOptions::default().with_reasoning_effort(ReasoningEffort::High);\n+\tlet options_set = ChatOptionsSet::default().with_chat_options(Some(&chat_options));\n+\n+\t// -- Exec\n+\tlet request = OllamaCloudAdapter::to_web_request_data(\n+\t\tServiceTarget {\n+\t\t\tmodel: ModelIden::new(AdapterKind::OllamaCloud, \"gpt-oss:120b\"),\n+\t\t\tauth: AuthData::from_single(\"test-key\"),\n+\t\t\tendpoint: Endpoint::from_static(\"https://ollama.com/\"),\n+\t\t},\n+\t\tServiceType::Chat,\n+\t\tChatRequest::from_user(\"hello\"),\n+\t\toptions_set,\n+\t)?;\n+\n+\t// -- Check\n+\tassert_eq!(request.payload[\"think\"], \"high\");\n+\n+\tOk(())\n+}\n+\n // endregion: --- Ollama\n \n // region:    --- Mistral"
+  },
+  {
+   "filename": "src/adapter/adapters/ollama/adapter_impl.rs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -283,7 +283,7 @@ impl OllamaAdapter {\n \t/// \"minimal\" level, so `Minimal` maps to \"low\"; `XHigh`/`Max` both map to \"max\";\n \t/// `Budget` maps to `true` (Ollama has no token-budget knob, so thinking runs\n \t/// at the model's default level).\n-\tfn into_think_value(effort: &ReasoningEffort) -> Value {\n+\tpub(in crate::adapter::adapters) fn into_think_value(effort: &ReasoningEffort) -> Value {\n \t\tmatch effort {\n \t\t\tReasoningEffort::Zero => json!(false),\n \t\t\tReasoningEffort::Minimal | ReasoningEffort::Low => json!(\"low\"),"
+  },
+  {
+   "filename": "src/adapter/adapters/ollama_cloud/adapter_impl.rs",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -99,6 +99,11 @@ impl Adapter for OllamaCloudAdapter {\n \t\t\tpayload.x_insert(\"format\", OllamaAdapter::response_format_to_format(format))?;\n \t\t}\n \n+\t\t// -- Reasoning (`think`), same top-level body param as the local Ollama adapter\n+\t\tif let Some(reasoning_effort) = chat_options.reasoning_effort() {\n+\t\t\tpayload.x_insert(\"think\", OllamaAdapter::into_think_value(reasoning_effort))?;\n+\t\t}\n+\n \t\tlet mut headers = Headers::default();\n \t\tif let Some(extra_headers) = chat_options.extra_headers() {\n \t\t\theaders.merge_with(extra_headers);"
+  }
+ ],
+ "test_files": []
+}

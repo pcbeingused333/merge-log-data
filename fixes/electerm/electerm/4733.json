@@ -1,0 +1,26 @@
+{
+ "repo": "electerm/electerm",
+ "number": 4733,
+ "url": "https://github.com/electerm/electerm/pull/4733",
+ "title": "fix(ai): report an empty response.incomplete in the Responses stream",
+ "merged_at": "2026-11-14T02:25:31Z",
+ "files": [
+  {
+   "filename": "src/app/lib/ai-format.js",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -638,6 +638,16 @@ function createStreamParser (format) {\n       }\n     } else if (type === 'response.completed') {\n       state.completed = true\n+    } else if (type === 'response.incomplete') {\n+      // Keep any partial output; only an empty reply is an error, same as\n+      // parseResponsesResponse.\n+      state.completed = true\n+      if (!state.content && !toolCalls.size) {\n+        const resp = data.response\n+        const details = resp && resp.incomplete_details\n+        const reason = details && details.reason\n+        setError(`AI response incomplete${reason ? `: ${reason}` : ''}`)\n+      }\n     } else if (type === 'response.failed' || type === 'error') {\n       const resp = data.response\n       const msg = (resp && resp.error && resp.error.message) ||"
+  },
+  {
+   "filename": "src/test/unit-ci/ai-format.spec.js",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -679,6 +679,24 @@ describe('createStreamParser - openai responses', () => {\n     assert.equal(parser.error, 'boom')\n     assert.equal(parser.completed, true)\n   })\n+\n+  it('reports an incomplete response that produced no output', () => {\n+    const parser = runStream(FORMAT_OPENAI_RESPONSES, [\n+      'event: response.incomplete\\ndata: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\\n\\n'\n+    ])\n+    assert.equal(parser.error, 'AI response incomplete: max_output_tokens')\n+    assert.equal(parser.completed, true)\n+  })\n+\n+  it('keeps partial text of an incomplete response without an error', () => {\n+    const parser = runStream(FORMAT_OPENAI_RESPONSES, [\n+      'event: response.output_text.delta\\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"Hel\"}\\n\\n',\n+      'event: response.incomplete\\ndata: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\\n\\n'\n+    ])\n+    assert.equal(parser.content, 'Hel')\n+    assert.equal(parser.error, null)\n+    assert.equal(parser.completed, true)\n+  })\n })\n \n describe('createStreamParser - anthropic', () => {"
+  }
+ ],
+ "test_files": [
+  "src/test/unit-ci/ai-format.spec.js"
+ ]
+}

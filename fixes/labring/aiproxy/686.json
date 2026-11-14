@@ -1,0 +1,26 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 686,
+ "url": "https://github.com/labring/aiproxy/pull/686",
+ "title": "fix(baidu): report finish_reason length when is_truncated is set",
+ "merged_at": "2026-11-14T01:43:02Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/baidu/main.go",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 2,
+   "patch": "@@ -90,14 +90,23 @@ func ConvertRequest(meta *meta.Meta, req *http.Request) (adaptor.ConvertResult,\n \t}, nil\n }\n \n+// finishReason maps Baidu's is_truncated flag to an OpenAI finish_reason.\n+func finishReason(truncated bool) relaymodel.FinishReason {\n+\tif truncated {\n+\t\treturn relaymodel.FinishReasonLength\n+\t}\n+\n+\treturn relaymodel.FinishReasonStop\n+}\n+\n func response2OpenAI(meta *meta.Meta, response *ChatResponse) *relaymodel.TextResponse {\n \tchoice := relaymodel.TextResponseChoice{\n \t\tIndex: 0,\n \t\tMessage: relaymodel.Message{\n \t\t\tRole:    \"assistant\",\n \t\t\tContent: response.Result,\n \t\t},\n-\t\tFinishReason: relaymodel.FinishReasonStop,\n+\t\tFinishReason: finishReason(response.IsTruncated),\n \t}\n \n \tfullTextResponse := relaymodel.TextResponse{\n@@ -122,7 +131,7 @@ func streamResponse2OpenAI(\n \n \tchoice.Delta.Content = baiduResponse.Result\n \tif baiduResponse.IsEnd {\n-\t\tchoice.FinishReason = relaymodel.FinishReasonStop\n+\t\tchoice.FinishReason = finishReason(baiduResponse.IsTruncated)\n \t}\n \n \tresponse := relaymodel.ChatCompletionsStreamResponse{"
+  },
+  {
+   "filename": "core/relay/adaptor/baidu/main_test.go",
+   "status": "added",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,45 @@\n+//nolint:testpackage\n+package baidu\n+\n+import (\n+\t\"testing\"\n+\n+\t\"github.com/labring/aiproxy/core/relay/meta\"\n+\trelaymodel \"github.com/labring/aiproxy/core/relay/model\"\n+)\n+\n+func TestResponse2OpenAI_FinishReason(t *testing.T) {\n+\tm := &meta.Meta{OriginModel: \"ernie\"}\n+\n+\tgot := response2OpenAI(m, &ChatResponse{Result: \"hi\"})\n+\tif fr := got.Choices[0].FinishReason; fr != relaymodel.FinishReasonStop {\n+\t\tt.Fatalf(\"finish_reason = %q, want stop\", fr)\n+\t}\n+\n+\tgot = response2OpenAI(m, &ChatResponse{Result: \"hi\", IsTruncated: true})\n+\tif fr := got.Choices[0].FinishReason; fr != relaymodel.FinishReasonLength {\n+\t\tt.Fatalf(\"truncated finish_reason = %q, want length\", fr)\n+\t}\n+}\n+\n+func TestStreamResponse2OpenAI_FinishReason(t *testing.T) {\n+\tm := &meta.Meta{OriginModel: \"ernie\"}\n+\n+\tgot := streamResponse2OpenAI(m, &ChatStreamResponse{IsEnd: false})\n+\tif fr := got.Choices[0].FinishReason; fr != \"\" {\n+\t\tt.Fatalf(\"mid-stream finish_reason = %q, want empty\", fr)\n+\t}\n+\n+\tgot = streamResponse2OpenAI(m, &ChatStreamResponse{IsEnd: true})\n+\tif fr := got.Choices[0].FinishReason; fr != relaymodel.FinishReasonStop {\n+\t\tt.Fatalf(\"finish_reason = %q, want stop\", fr)\n+\t}\n+\n+\tgot = streamResponse2OpenAI(m, &ChatStreamResponse{\n+\t\tChatResponse: ChatResponse{IsTruncated: true},\n+\t\tIsEnd:        true,\n+\t})\n+\tif fr := got.Choices[0].FinishReason; fr != relaymodel.FinishReasonLength {\n+\t\tt.Fatalf(\"truncated finish_reason = %q, want length\", fr)\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/baidu/main_test.go"
+ ]
+}
