@@ -1,0 +1,31 @@
+{
+ "repo": "resend/resend-rust",
+ "number": 130,
+ "url": "https://github.com/resend/resend-rust/pull/130",
+ "title": "fix(rate_limit): don't block the executor thread while waiting to retry",
+ "merged_at": "2026-11-14T12:33:01Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -6,7 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),\n and this project adheres to\n [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n \n-<!--## Unreleased-->\n+## Unreleased\n+\n+### Fixed\n+\n+- `send_with_retry_opts` (and the `retry!`/`retry_opts!` macros) no longer block the executor thread while waiting\n+  between retries, so other tasks keep running during a rate limit backoff\n+\n \n ## [0.36.0] - 2026-11-13\n "
+  },
+  {
+   "filename": "Cargo.toml",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -126,6 +126,7 @@ ecow = { version = \"0.3.1\", features = [\"serde\"] }\n thiserror = { version = \"2.0\" }\n maybe-async = { version = \"0.2.11\" }\n governor = \"0.10.4\"\n+futures-timer = \"3.0\"\n rand = \"0.10.3\"\n getrandom = { version = \"0.4.3\", features = [\"wasm_js\"] }\n serde_json = \"1.0.154\""
+  },
+  {
+   "filename": "src/rate_limit.rs",
+   "status": "modified",
+   "additions": 47,
+   "deletions": 1,
+   "patch": "@@ -116,7 +116,7 @@ pub async fn send_with_retry_opts<A: Future<Output = Result<B>> + Send, B: Send>\n \n         let sleep_millis = ratelimit_reset.map_or(opts.duration_ms, |r| r.saturating_mul(1000));\n         let jitter = rand::rng().random_range(opts.jitter_range_ms.clone());\n-        std::thread::sleep(Duration::from_millis(sleep_millis + jitter));\n+        futures_timer::Delay::new(Duration::from_millis(sleep_millis + jitter)).await;\n \n         #[cfg(test)]\n         {\n@@ -247,6 +247,52 @@ mod test {\n         assert_eq!(run_count, 0);\n     }\n \n+    /// The wait between retries must not block the executor thread: another task running on\n+    /// the same single-threaded runtime has to make progress while a retry is pending.\n+    #[tokio::test(flavor = \"current_thread\")]\n+    #[cfg(not(feature = \"blocking\"))]\n+    async fn test_retry_does_not_block_executor() {\n+        use std::sync::atomic::{AtomicU32, Ordering};\n+\n+        let ticks = AtomicU32::new(0);\n+        let ticks_seen_on_retry = AtomicU32::new(0);\n+        let calls = AtomicU32::new(0);\n+\n+        let f = || async {\n+            if calls.fetch_add(1, Ordering::SeqCst) == 1 {\n+                ticks_seen_on_retry.store(ticks.load(Ordering::SeqCst), Ordering::SeqCst);\n+                return Result::<(), Error>::Ok(());\n+            }\n+            Err(Error::RateLimit {\n+                ratelimit_limit: None,\n+                ratelimit_remaining: None,\n+                ratelimit_reset: None,\n+            })\n+        };\n+        let opts = RetryOptions {\n+            duration_ms: 200,\n+            jitter_range_ms: 0..1,\n+            max_retries: 1,\n+        };\n+\n+        let ticker = async {\n+            for _ in 0..5 {\n+                let _ = ticks.fetch_add(1, Ordering::SeqCst);\n+                tokio::task::yield_now().await;\n+            }\n+        };\n+\n+        let mut retry_count = 0u32;\n+        let (res, ()) = tokio::join!(send_with_retry_opts(f, &opts, &mut retry_count), ticker);\n+\n+        assert!(res.is_ok());\n+        assert_eq!(retry_count, 1);\n+        assert!(\n+            ticks_seen_on_retry.load(Ordering::SeqCst) > 0,\n+            \"other tasks were starved while waiting to retry\"\n+        );\n+    }\n+\n     #[tokio_shared_rt::test(shared = true)]\n     #[serial_test::serial]\n     #[cfg(not(feature = \"blocking\"))]"
+  }
+ ],
+ "test_files": []
+}

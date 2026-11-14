@@ -1,0 +1,26 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 689,
+ "url": "https://github.com/labring/aiproxy/pull/689",
+ "title": "fix(cohere): skip stream events that produce no chunk instead of panicking",
+ "merged_at": "2026-11-14T08:29:40Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/cohere/main.go",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -110,6 +110,10 @@ func StreamResponse2OpenAI(\n \tcase \"text-generation\":\n \t\tresponseText += cohereResponse.Text\n \tcase \"stream-end\":\n+\t\tif cohereResponse.Response == nil {\n+\t\t\treturn nil\n+\t\t}\n+\n \t\tusage := cohereResponse.Response.Meta.Tokens\n \t\tresponse = &Response{\n \t\t\tMeta: Meta{\n@@ -208,6 +212,10 @@ func StreamHandler(\n \t\t}\n \n \t\tresponse := StreamResponse2OpenAI(meta, &cohereResponse)\n+\t\tif response == nil {\n+\t\t\tcontinue\n+\t\t}\n+\n \t\tif response.Usage != nil {\n \t\t\tusage = *response.Usage\n \t\t}"
+  },
+  {
+   "filename": "core/relay/adaptor/cohere/main_test.go",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -2,8 +2,13 @@\n package cohere\n \n import (\n+\t\"io\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"strings\"\n \t\"testing\"\n \n+\t\"github.com/gin-gonic/gin\"\n \t\"github.com/labring/aiproxy/core/relay/meta\"\n \trelaymodel \"github.com/labring/aiproxy/core/relay/model\"\n )\n@@ -59,6 +64,39 @@ func TestStopReasonCohere2OpenAI(t *testing.T) {\n \t}\n }\n \n+func TestStreamHandlerSkipsEventsWithoutChunk(t *testing.T) {\n+\tt.Parallel()\n+\n+\tgin.SetMode(gin.TestMode)\n+\n+\tbody := strings.Join([]string{\n+\t\t`{\"event_type\":\"stream-start\",\"generation_id\":\"g1\",\"is_finished\":false}`,\n+\t\t`{\"event_type\":\"text-generation\",\"text\":\"hi\",\"is_finished\":false}`,\n+\t\t`{\"event_type\":\"search-queries-generation\",\"is_finished\":false}`,\n+\t\t`{\"event_type\":\"stream-end\",\"finish_reason\":\"COMPLETE\",\"is_finished\":true,\"response\":{\"finish_reason\":\"COMPLETE\",\"meta\":{\"tokens\":{\"input_tokens\":3,\"output_tokens\":2}}}}`,\n+\t}, \"\\n\")\n+\n+\tw := httptest.NewRecorder()\n+\tc, _ := gin.CreateTestContext(w)\n+\tc.Request = httptest.NewRequestWithContext(t.Context(), http.MethodPost, \"/\", nil)\n+\n+\tresult, err := StreamHandler(&meta.Meta{}, c, &http.Response{\n+\t\tStatusCode: http.StatusOK,\n+\t\tBody:       io.NopCloser(strings.NewReader(body)),\n+\t})\n+\tif err != nil {\n+\t\tt.Fatalf(\"unexpected error: %v\", err)\n+\t}\n+\n+\tif result.Usage.InputTokens != 3 || result.Usage.OutputTokens != 2 {\n+\t\tt.Fatalf(\"unexpected usage: %+v\", result.Usage)\n+\t}\n+\n+\tif !strings.Contains(w.Body.String(), `\"content\":\"hi\"`) {\n+\t\tt.Fatalf(\"missing text chunk: %s\", w.Body.String())\n+\t}\n+}\n+\n func TestConvertRequestKeepsEarlierUserTurnsInHistory(t *testing.T) {\n \tt.Parallel()\n "
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/cohere/main_test.go"
+ ]
+}

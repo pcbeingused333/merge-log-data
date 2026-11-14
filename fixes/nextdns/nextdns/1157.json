@@ -1,0 +1,50 @@
+{
+ "repo": "nextdns/nextdns",
+ "number": 1157,
+ "url": "https://github.com/nextdns/nextdns/pull/1157",
+ "title": "bug: disable dnsmasq DNS after removing explicit port 53",
+ "merged_at": "2026-11-14T08:51:07Z",
+ "files": [
+  {
+   "filename": "host/service/run_unix_test.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -1,4 +1,4 @@\n-//go:build !windows\n+//go:build unix\n \n package service\n "
+  },
+  {
+   "filename": "router/openwrt/relay_integration_test.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -1,3 +1,5 @@\n+//go:build linux\n+\n package openwrt\n \n import ("
+  },
+  {
+   "filename": "router/openwrt/relay_test.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 4,
+   "patch": "@@ -1,3 +1,5 @@\n+//go:build unix\n+\n package openwrt\n \n import (\n@@ -8,7 +10,6 @@ import (\n \t\"os\"\n \t\"path/filepath\"\n \t\"reflect\"\n-\t\"runtime\"\n \t\"strings\"\n \t\"testing\"\n \n@@ -352,9 +353,6 @@ func TestRouterCachedSetupIncludesRelay(t *testing.T) {\n \n func fakeLegacyUCI(t *testing.T) {\n \tt.Helper()\n-\tif runtime.GOOS == \"windows\" {\n-\t\tt.Skip(\"UCI shell fixture requires Unix\")\n-\t}\n \tdir := t.TempDir()\n \tscript := `#!/bin/sh\n case \"$1 $2\" in"
+  },
+  {
+   "filename": "router/openwrt/setup.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -98,6 +98,7 @@ func (r *Router) setupDNSMasq() (err error) {\n \t\t\tif _, err = uci(\"commit\"); err != nil {\n \t\t\t\treturn err\n \t\t\t}\n+\t\t\tr.SetPort0 = true\n \t\t}\n \t} else {\n \t\t// No need change forwarders settings, we are going to replace dnsmasq"
+  },
+  {
+   "filename": "router/openwrt/setup_port_test.go",
+   "status": "added",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,36 @@\n+//go:build unix\n+\n+package openwrt\n+\n+import (\n+\t\"os\"\n+\t\"path/filepath\"\n+\t\"strings\"\n+\t\"testing\"\n+)\n+\n+func TestSetupDNSMasqExplicitPort53(t *testing.T) {\n+\td := t.TempDir()\n+\tscript := `#!/bin/sh\n+case \"$*\" in\n+\"get dhcp.@dnsmasq[0].port\") echo 53;;\n+\"get network.lan.ipaddr\") echo 192.168.1.1;;\n+\"get dhcp.lan.dhcp_option\") echo 6,192.168.1.1;;\n+esac\n+`\n+\tif err := os.WriteFile(filepath.Join(d, \"uci\"), []byte(script), 0755); err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tt.Setenv(\"PATH\", d+\":\"+os.Getenv(\"PATH\"))\n+\tr := &Router{DNSMasqPath: filepath.Join(d, \"nextdns.conf\"), CacheEnabled: true, dnsmasqRestart: func() error { return nil }}\n+\tif err := r.setupDNSMasq(); err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tb, err := os.ReadFile(r.DNSMasqPath)\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tif !strings.Contains(string(b), \"port=0\") {\n+\t\tt.Fatalf(\"explicit port=53 removed but dnsmasq still binds default 53: generated config %q\", b)\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "host/service/run_unix_test.go",
+  "router/openwrt/relay_integration_test.go",
+  "router/openwrt/relay_test.go",
+  "router/openwrt/setup_port_test.go"
+ ]
+}

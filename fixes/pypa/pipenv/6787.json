@@ -1,0 +1,48 @@
+{
+ "repo": "pypa/pipenv",
+ "number": 6787,
+ "url": "https://github.com/pypa/pipenv/pull/6787",
+ "title": "fix(uninstall): keep going and exit non-zero when pip uninstall fails in clean/uninstall",
+ "merged_at": "2026-11-14T15:57:27Z",
+ "files": [
+  {
+   "filename": "news/uninstall-failure-continues.bugfix.rst",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+Fix ``pipenv clean`` and ``pipenv uninstall`` aborting with a traceback at the first failing ``pip uninstall`` instead of continuing with the remaining packages and exiting non-zero."
+  },
+  {
+   "filename": "pipenv/routines/clean.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -73,7 +73,9 @@ def remove_extraneous_packages(project, dry_run=False, bare=False, system=False)\n                 apparent_bad_package,\n                 \"-y\",\n             ]\n-            c = run_command(cmd, is_verbose=project.s.is_verbose())\n+            c = run_command(\n+                cmd, is_verbose=project.s.is_verbose(), catch_exceptions=False\n+            )\n             if c.returncode != 0:\n                 failure = True\n     return failure"
+  },
+  {
+   "filename": "pipenv/routines/uninstall.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -38,7 +38,9 @@ def _uninstall_from_environment(project: Project, package, system=False):\n             package,\n             \"-y\",\n         ]\n-        c = run_command(cmd, is_verbose=project.s.is_verbose())\n+        c = run_command(\n+            cmd, is_verbose=project.s.is_verbose(), catch_exceptions=False\n+        )\n         console.print(c.stdout, style=\"cyan\")\n         if c.returncode != 0:\n             console.print(f\"Error occurred while uninstalling package {package}.\")"
+  },
+  {
+   "filename": "tests/unit/test_clean_routine.py",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -57,3 +57,23 @@ def test_reports_uninstall_failure(clean_project, run_command):\n \n     run_command.return_value.returncode = 1\n     assert remove_extraneous_packages(clean_project) is True\n+\n+\n+def test_failed_uninstall_does_not_stop_remaining_packages(clean_project, monkeypatch):\n+    \"\"\"The real ``run_command`` raises on a non-zero exit unless told not to.\"\"\"\n+    from pipenv.routines.clean import remove_extraneous_packages\n+\n+    clean_project.installed_package_names = [\"stale-a\", \"stale-b\"]\n+    clean_project.lockfile.content = {\"default\": {}, \"develop\": {}}\n+    attempted = []\n+\n+    def fake_subprocess_run(command, *args, **kwargs):\n+        attempted.append(command[3])\n+        return mock.MagicMock(returncode=1, stdout=\"\", stderr=\"boom\")\n+\n+    monkeypatch.setattr(\"pipenv.utils.processes.subprocess_run\", fake_subprocess_run)\n+    monkeypatch.setattr(\"pipenv.routines.clean.project_python\", lambda *a, **k: \"py\")\n+    monkeypatch.setattr(\"pipenv.routines.clean.get_runnable_pip\", lambda: \"pip\")\n+\n+    assert remove_extraneous_packages(clean_project) is True\n+    assert attempted == [\"stale-a\", \"stale-b\"]"
+  },
+  {
+   "filename": "tests/unit/test_uninstall_exit_code.py",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -64,3 +64,17 @@ def test_uninstall_without_virtualenv_explains_the_failure():\n     message = print_mock.call_args.args[0]\n     assert \"No virtualenv found\" in message\n     assert \"requests\" in message\n+\n+\n+def test_uninstall_from_environment_reports_failure_instead_of_raising(monkeypatch):\n+    \"\"\"A failing ``pip uninstall`` must give ``False``, not a PipenvCmdError.\"\"\"\n+    project = mock.MagicMock()\n+    project.environment.activated.return_value.__enter__.return_value = True\n+    monkeypatch.setattr(\"pipenv.routines.uninstall.project_python\", lambda *a, **k: \"py\")\n+    monkeypatch.setattr(\"pipenv.routines.uninstall.get_runnable_pip\", lambda: \"pip\")\n+    monkeypatch.setattr(\n+        \"pipenv.utils.processes.subprocess_run\",\n+        lambda *a, **k: mock.MagicMock(returncode=1, stdout=\"\", stderr=\"boom\"),\n+    )\n+\n+    assert _uninstall_from_environment(project, \"requests\") is False"
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_clean_routine.py",
+  "tests/unit/test_uninstall_exit_code.py"
+ ]
+}

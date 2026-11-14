@@ -1,0 +1,55 @@
+{
+ "repo": "nextlevelbuilder/goclaw",
+ "number": 1677,
+ "url": "https://github.com/nextlevelbuilder/goclaw/pull/1677",
+ "title": "fix(cron): honor 'due' run mode in the PG and SQLite stores",
+ "merged_at": "2026-11-14T10:09:20Z",
+ "files": [
+  {
+   "filename": "internal/gateway/methods/cron.go",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -6,6 +6,7 @@ import (\n \t\"errors\"\n \t\"log/slog\"\n \t\"regexp\"\n+\t\"time\"\n \n \t\"github.com/nextlevelbuilder/goclaw/internal/bus\"\n \t\"github.com/nextlevelbuilder/goclaw/internal/config\"\n@@ -342,6 +343,18 @@ func (m *CronMethods) handleRun(ctx context.Context, client *gateway.Client, req\n \t\treturn\n \t}\n \n+\t// \"due\" mode only runs a job whose scheduled time has arrived. The store\n+\t// applies the same check, but its result is lost in the background goroutine,\n+\t// so report the skip here instead of answering ran:true for a job that won't run.\n+\tif !force && (job.State.NextRunAtMS == nil || *job.State.NextRunAtMS > time.Now().UnixMilli()) {\n+\t\tclient.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{\n+\t\t\t\"ok\":     true,\n+\t\t\t\"ran\":    false,\n+\t\t\t\"reason\": \"not-due\",\n+\t\t}))\n+\t\treturn\n+\t}\n+\n \t// Respond immediately — job execution happens in background\n \tclient.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{\n \t\t\"ok\":  true,"
+  },
+  {
+   "filename": "internal/gateway/methods/cron_test.go",
+   "status": "modified",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -24,6 +24,7 @@ type stubCronStore struct {\n \tupdateCnt int\n \tenableCnt int\n \trunCnt    int\n+\tran       chan struct{} // optional: signalled on every RunJob call (handleRun runs it in a goroutine)\n }\n \n func newStubCronStore() *stubCronStore {\n@@ -113,6 +114,9 @@ func (s *stubCronStore) SetOnJob(_ func(*store.CronJob) (*store.CronJobResult, e\n func (s *stubCronStore) SetOnEvent(_ func(store.CronEvent))                            {}\n func (s *stubCronStore) RunJob(_ context.Context, _ string, _ bool) (bool, string, error) {\n \ts.runCnt++\n+\tif s.ran != nil {\n+\t\ts.ran <- struct{}{}\n+\t}\n \treturn true, \"\", nil\n }\n func (s *stubCronStore) SetDefaultTimezone(_ string)            {}\n@@ -378,6 +382,51 @@ func TestCronRun_BlocksCredentialBoundJobByDifferentUser(t *testing.T) {\n \t}\n }\n \n+// handleRun answers before the job runs in the background, so a \"due\" run of a\n+// job that is not due must be skipped up front instead of reporting ran:true.\n+func TestCronRun_DueModeSkipsJobThatIsNotDue(t *testing.T) {\n+\tfuture := time.Now().Add(time.Hour).UnixMilli()\n+\tpast := time.Now().Add(-time.Minute).UnixMilli()\n+\n+\ttests := []struct {\n+\t\tname    string\n+\t\tnextRun *int64\n+\t\tparams  map[string]any\n+\t\twantRun bool\n+\t}{\n+\t\t{\"due mode, next run in the future\", &future, map[string]any{\"jobId\": \"job-1\"}, false},\n+\t\t{\"explicit due mode, next run in the future\", &future, map[string]any{\"jobId\": \"job-1\", \"mode\": \"due\"}, false},\n+\t\t{\"due mode, no next run\", nil, map[string]any{\"jobId\": \"job-1\"}, false},\n+\t\t{\"due mode, next run reached\", &past, map[string]any{\"jobId\": \"job-1\"}, true},\n+\t\t{\"force mode, next run in the future\", &future, map[string]any{\"jobId\": \"job-1\", \"mode\": \"force\"}, true},\n+\t\t{\"force mode, no next run\", nil, map[string]any{\"jobId\": \"job-1\", \"mode\": \"force\"}, true},\n+\t}\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tsvc := newStubCronStore()\n+\t\t\tsvc.ran = make(chan struct{}, 1)\n+\t\t\tsvc.jobs[\"job-1\"] = &store.CronJob{ID: \"job-1\", State: store.CronJobState{NextRunAtMS: tt.nextRun}}\n+\t\t\tm := buildCronMethods(t, svc)\n+\n+\t\t\tm.handleRun(context.Background(), nullClient(), cronReqFrame(t, protocol.MethodCronRun, tt.params))\n+\n+\t\t\tif tt.wantRun {\n+\t\t\t\tselect {\n+\t\t\t\tcase <-svc.ran:\n+\t\t\t\tcase <-time.After(2 * time.Second):\n+\t\t\t\t\tt.Fatal(\"RunJob was not called\")\n+\t\t\t\t}\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t\tselect {\n+\t\t\tcase <-svc.ran:\n+\t\t\t\tt.Fatal(\"RunJob called for a job that is not due\")\n+\t\t\tcase <-time.After(200 * time.Millisecond):\n+\t\t\t}\n+\t\t})\n+\t}\n+}\n+\n // ---- Tests: handleUpdate command gate ----\n \n // A normal job must not be mutable into a command job when the gateway has"
+  },
+  {
+   "filename": "internal/store/pg/cron_exec.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -25,6 +25,12 @@ func (s *PGCronStore) RunJob(ctx context.Context, jobID string, force bool) (boo\n \t\treturn false, \"\", fmt.Errorf(\"no job handler configured\")\n \t}\n \n+\t// \"due\" mode only runs a job whose scheduled time has arrived; a job with no\n+\t// next_run_at (disabled, or already claimed by the scheduler) is never due.\n+\tif !force && (job.State.NextRunAtMS == nil || *job.State.NextRunAtMS > time.Now().UnixMilli()) {\n+\t\treturn false, \"not-due\", nil\n+\t}\n+\n \t// Claim the job for forced execution by clearing next_run_at.\n \t// executeOneJob calls loadClaimedJob which requires next_run_at IS NULL — same\n \t// invariant that claimDueJob establishes for scheduled runs."
+  },
+  {
+   "filename": "internal/store/sqlitestore/cron_crud_test.go",
+   "status": "modified",
+   "additions": 71,
+   "deletions": 0,
+   "patch": "@@ -333,6 +333,77 @@ func TestSQLiteCronStore_AddJobNilTenantContext_ReturnsJob(t *testing.T) {\n \t}\n }\n \n+func TestSQLiteCronStore_RunJob_DueModeSkipsJobThatIsNotDue(t *testing.T) {\n+\tcronStore, ctx, db := newTestSQLiteCronStore(t)\n+\teveryMS := int64(time.Minute / time.Millisecond)\n+\n+\tjob, err := cronStore.AddJob(ctx, \"job-run-due\", store.CronSchedule{\n+\t\tKind:    \"every\",\n+\t\tEveryMS: &everyMS,\n+\t}, \"hello\", false, \"\", \"\", \"\", \"user-1\")\n+\tif err != nil {\n+\t\tt.Fatalf(\"AddJob error: %v\", err)\n+\t}\n+\tif job == nil {\n+\t\tjob = mustOnlyJob(t, cronStore, ctx)\n+\t}\n+\tjobUUID := uuid.MustParse(job.ID)\n+\n+\tvar calls atomic.Int32\n+\tcronStore.SetOnJob(func(*store.CronJob) (*store.CronJobResult, error) {\n+\t\tcalls.Add(1)\n+\t\treturn &store.CronJobResult{Content: \"ok\"}, nil\n+\t})\n+\n+\t// The job fires in a minute, so a \"due\" run must leave it alone.\n+\tbefore := mustRawJob(t, db, jobUUID)\n+\tran, reason, err := cronStore.RunJob(ctx, job.ID, false)\n+\tif err != nil {\n+\t\tt.Fatalf(\"RunJob(force=false) error: %v\", err)\n+\t}\n+\tif ran || reason != \"not-due\" {\n+\t\tt.Fatalf(\"RunJob(force=false) = (%v, %q), want (false, \\\"not-due\\\")\", ran, reason)\n+\t}\n+\tif got := calls.Load(); got != 0 {\n+\t\tt.Fatalf(\"handler calls after due-mode run = %d, want 0\", got)\n+\t}\n+\tafter := mustRawJob(t, db, jobUUID)\n+\tif after.nextRunAt == nil || before.nextRunAt == nil || !after.nextRunAt.Equal(*before.nextRunAt) {\n+\t\tt.Fatalf(\"next_run_at changed by skipped run: before %v, after %v\", before.nextRunAt, after.nextRunAt)\n+\t}\n+\n+\t// Once next_run_at has passed, the same call runs the job.\n+\tif _, err := db.ExecContext(ctx,\n+\t\t\"UPDATE cron_jobs SET next_run_at = ? WHERE id = ?\",\n+\t\ttime.Now().Add(-time.Second), jobUUID,\n+\t); err != nil {\n+\t\tt.Fatalf(\"backdate next_run_at error: %v\", err)\n+\t}\n+\tcronStore.InvalidateCache()\n+\tran, reason, err = cronStore.RunJob(ctx, job.ID, false)\n+\tif err != nil {\n+\t\tt.Fatalf(\"RunJob(force=false) on due job error: %v\", err)\n+\t}\n+\tif !ran || reason != \"\" {\n+\t\tt.Fatalf(\"RunJob(force=false) on due job = (%v, %q), want (true, \\\"\\\")\", ran, reason)\n+\t}\n+\tif got := calls.Load(); got != 1 {\n+\t\tt.Fatalf(\"handler calls after due run = %d, want 1\", got)\n+\t}\n+\n+\t// force ignores the schedule.\n+\tran, _, err = cronStore.RunJob(ctx, job.ID, true)\n+\tif err != nil {\n+\t\tt.Fatalf(\"RunJob(force=true) error: %v\", err)\n+\t}\n+\tif !ran {\n+\t\tt.Fatal(\"RunJob(force=true) did not run the job\")\n+\t}\n+\tif got := calls.Load(); got != 2 {\n+\t\tt.Fatalf(\"handler calls after forced run = %d, want 2\", got)\n+\t}\n+}\n+\n func newTestSQLiteCronStore(t *testing.T) (*SQLiteCronStore, context.Context, *sql.DB) {\n \tt.Helper()\n "
+  },
+  {
+   "filename": "internal/store/sqlitestore/cron_exec.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -28,6 +28,12 @@ func (s *SQLiteCronStore) RunJob(ctx context.Context, jobID string, force bool)\n \t\treturn false, \"\", fmt.Errorf(\"no job handler configured\")\n \t}\n \n+\t// \"due\" mode only runs a job whose scheduled time has arrived; a job with no\n+\t// next_run_at (disabled, or already claimed by the scheduler) is never due.\n+\tif !force && (job.State.NextRunAtMS == nil || *job.State.NextRunAtMS > time.Now().UnixMilli()) {\n+\t\treturn false, \"not-due\", nil\n+\t}\n+\n \t// Claim the job for manual execution by clearing next_run_at (match PG behavior).\n \t// executeOneJob with reloadClaimed=false skips loadClaimedJob, using the\n \t// already-loaded job directly — allowing manual runs on disabled jobs."
+  },
+  {
+   "filename": "ui/desktop/frontend/src/services/cron-service.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -30,7 +30,7 @@ export const cronService = {\n   },\n \n   run(jobId: string): Promise<unknown> {\n-    return getWsClient().call('cron.run', { jobId })\n+    return getWsClient().call('cron.run', { jobId, mode: 'force' })\n   },\n \n   runs(jobId: string, limit = 20): Promise<{ runs: CronRunLog[] | null }> {"
+  }
+ ],
+ "test_files": [
+  "internal/gateway/methods/cron_test.go",
+  "internal/store/sqlitestore/cron_crud_test.go"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "Agent-Field/agentfield",
+ "number": 1194,
+ "url": "https://github.com/Agent-Field/agentfield/pull/1194",
+ "title": "fix(sdk/go): surface in-stream error events from StreamComplete",
+ "merged_at": "2026-11-14T14:04:04Z",
+ "files": [
+  {
+   "filename": "sdk/go/ai/client.go",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -404,6 +404,12 @@ func (d *SSEDecoder) Decode() (StreamChunk, error) {\n \t\t\t\tif err := json.Unmarshal([]byte(jsonData), &chunk); err != nil {\n \t\t\t\t\tcontinue // Skip malformed chunks\n \t\t\t\t}\n+\t\t\t\t// Providers (e.g. OpenRouter) report mid-stream failures as a\n+\t\t\t\t// {\"error\":{...}} data event on an HTTP 200 stream. Surface it\n+\t\t\t\t// instead of yielding an empty chunk.\n+\t\t\t\tif streamErr := parseStreamError([]byte(jsonData)); streamErr != nil {\n+\t\t\t\t\treturn StreamChunk{}, streamErr\n+\t\t\t\t}\n \t\t\t\tchunk.normalizeNativeCost()\n \n \t\t\t\treturn chunk, nil\n@@ -427,6 +433,30 @@ func (d *SSEDecoder) Decode() (StreamChunk, error) {\n \t}\n }\n \n+// parseStreamError returns an error when an SSE data payload is an in-stream\n+// {\"error\":{...}} event, or nil for ordinary chunks.\n+func parseStreamError(data []byte) error {\n+\tvar probe struct {\n+\t\tError *struct {\n+\t\t\tMessage string          `json:\"message\"`\n+\t\t\tType    string          `json:\"type\"`\n+\t\t\tCode    json.RawMessage `json:\"code\"`\n+\t\t} `json:\"error\"`\n+\t}\n+\tif err := json.Unmarshal(data, &probe); err != nil || probe.Error == nil {\n+\t\treturn nil\n+\t}\n+\tmsg := probe.Error.Message\n+\tif msg == \"\" {\n+\t\tmsg = \"unknown error\"\n+\t}\n+\tcode := strings.Trim(string(probe.Error.Code), `\"`)\n+\tif code != \"\" && code != \"null\" {\n+\t\treturn fmt.Errorf(\"stream error (code %s): %s\", code, msg)\n+\t}\n+\treturn fmt.Errorf(\"stream error: %s\", msg)\n+}\n+\n // Convenience functions for common patterns\n \n // SimpleAI makes a simple AI call with just a prompt."
+  },
+  {
+   "filename": "sdk/go/ai/client_test.go",
+   "status": "modified",
+   "additions": 41,
+   "deletions": 0,
+   "patch": "@@ -799,3 +799,44 @@ func TestSSEDecoder_CRLFAndNoSpaceDataField(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestSSEDecoder_InStreamError(t *testing.T) {\n+\tinput := \"data: {\\\"id\\\":\\\"a\\\"}\\n\\n\" +\n+\t\t\"data: {\\\"error\\\":{\\\"message\\\":\\\"upstream overloaded\\\",\\\"code\\\":429}}\\n\\n\" +\n+\t\t\"data: [DONE]\\n\\n\"\n+\tdecoder := NewSSEDecoder(strings.NewReader(input))\n+\n+\tif chunk, err := decoder.Decode(); err != nil || chunk.ID != \"a\" {\n+\t\tt.Fatalf(\"expected first chunk a, got %+v err=%v\", chunk, err)\n+\t}\n+\t_, err := decoder.Decode()\n+\tif err == nil || err == io.EOF {\n+\t\tt.Fatalf(\"expected in-stream error, got %v\", err)\n+\t}\n+\tif !strings.Contains(err.Error(), \"upstream overloaded\") {\n+\t\tt.Fatalf(\"error should carry provider message, got %q\", err.Error())\n+\t}\n+}\n+\n+func TestStreamComplete_InStreamErrorReachesErrCh(t *testing.T) {\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tw.Header().Set(\"Content-Type\", \"text/event-stream\")\n+\t\tfmt.Fprint(w, \"data: {\\\"error\\\":{\\\"message\\\":\\\"boom\\\",\\\"type\\\":\\\"server_error\\\"}}\\n\\n\")\n+\t}))\n+\tdefer server.Close()\n+\n+\tclient, err := NewClient(&Config{APIKey: \"k\", BaseURL: server.URL, Model: \"m\"})\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tchunks, errs := client.StreamComplete(context.Background(), \"hi\")\n+\tfor range chunks {\n+\t}\n+\tvar got error\n+\tfor e := range errs {\n+\t\tgot = e\n+\t}\n+\tif got == nil || !strings.Contains(got.Error(), \"boom\") {\n+\t\tt.Fatalf(\"expected stream error containing boom, got %v\", got)\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "sdk/go/ai/client_test.go"
+ ]
+}

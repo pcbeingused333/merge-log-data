@@ -1,0 +1,26 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 688,
+ "url": "https://github.com/labring/aiproxy/pull/688",
+ "title": "fix(cohere): keep earlier user turns in chat_history",
+ "merged_at": "2026-11-14T08:20:14Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/cohere/main.go",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 2,
+   "patch": "@@ -61,9 +61,17 @@ func ConvertRequest(textRequest *relaymodel.GeneralOpenAIRequest) *Request {\n \t\tcohereRequest.Connectors = append(cohereRequest.Connectors, WebSearchConnector)\n \t}\n \n-\tfor _, message := range textRequest.Messages {\n-\t\tmessageContent, _ := message.Content.(string)\n+\tlastUser := -1\n+\n+\tfor i, message := range textRequest.Messages {\n \t\tif message.Role == \"user\" {\n+\t\t\tlastUser = i\n+\t\t}\n+\t}\n+\n+\tfor i, message := range textRequest.Messages {\n+\t\tmessageContent, _ := message.Content.(string)\n+\t\tif i == lastUser {\n \t\t\tcohereRequest.Message = messageContent\n \t\t} else {\n \t\t\tvar role string"
+  },
+  {
+   "filename": "core/relay/adaptor/cohere/main_test.go",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -58,3 +58,38 @@ func TestStopReasonCohere2OpenAI(t *testing.T) {\n \t\t}\n \t}\n }\n+\n+func TestConvertRequestKeepsEarlierUserTurnsInHistory(t *testing.T) {\n+\tt.Parallel()\n+\n+\treq := &relaymodel.GeneralOpenAIRequest{\n+\t\tModel: \"command-r\",\n+\t\tMessages: []relaymodel.Message{\n+\t\t\t{Role: \"system\", Content: \"be brief\"},\n+\t\t\t{Role: \"user\", Content: \"first question\"},\n+\t\t\t{Role: \"assistant\", Content: \"first answer\"},\n+\t\t\t{Role: \"user\", Content: \"second question\"},\n+\t\t},\n+\t}\n+\n+\tgot := ConvertRequest(req)\n+\n+\tif got.Message != \"second question\" {\n+\t\tt.Fatalf(\"Message = %q, want %q\", got.Message, \"second question\")\n+\t}\n+\n+\twant := []ChatMessage{\n+\t\t{Role: \"SYSTEM\", Message: \"be brief\"},\n+\t\t{Role: \"USER\", Message: \"first question\"},\n+\t\t{Role: \"CHATBOT\", Message: \"first answer\"},\n+\t}\n+\tif len(got.ChatHistory) != len(want) {\n+\t\tt.Fatalf(\"ChatHistory = %+v, want %+v\", got.ChatHistory, want)\n+\t}\n+\n+\tfor i := range want {\n+\t\tif got.ChatHistory[i] != want[i] {\n+\t\t\tt.Fatalf(\"ChatHistory[%d] = %+v, want %+v\", i, got.ChatHistory[i], want[i])\n+\t\t}\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/cohere/main_test.go"
+ ]
+}

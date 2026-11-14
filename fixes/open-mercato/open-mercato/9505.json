@@ -1,0 +1,40 @@
+{
+ "repo": "open-mercato/open-mercato",
+ "number": 9505,
+ "url": "https://github.com/open-mercato/open-mercato/pull/9505",
+ "title": "fix(search): embed vector search queries with Cohere search_query input type",
+ "merged_at": "2026-11-14T17:22:49Z",
+ "files": [
+  {
+   "filename": "packages/search/src/__tests__/embedding.test.ts",
+   "status": "modified",
+   "additions": 39,
+   "deletions": 0,
+   "patch": "@@ -153,6 +153,45 @@ describe('EmbeddingService', () => {\n   })\n })\n \n+describe('EmbeddingService Cohere inputType', () => {\n+  const originalEnv = { ...process.env }\n+\n+  beforeEach(() => {\n+    jest.clearAllMocks()\n+    process.env = { ...originalEnv, COHERE_API_KEY: 'test-key' }\n+    mockedEmbed.mockResolvedValue({ embedding: [0.1, 0.2] } as Awaited<ReturnType<typeof embed>>)\n+  })\n+\n+  afterAll(() => {\n+    process.env = originalEnv\n+  })\n+\n+  const build = (dimension?: number) =>\n+    new EmbeddingService({\n+      config: {\n+        providerId: 'cohere',\n+        model: 'embed-english-v3.0',\n+        dimension: 1024,\n+        outputDimensionality: dimension,\n+        updatedAt: new Date().toISOString(),\n+      },\n+    })\n+\n+  const sentInputType = () =>\n+    (mockedEmbed.mock.calls[0][0] as { providerOptions?: { cohere?: { inputType?: string } } })\n+      .providerOptions?.cohere?.inputType\n+\n+  it.each([undefined, 1024])('embeds documents with search_document (outputDimensionality=%s)', async (dim) => {\n+    await build(dim).createEmbedding('some document')\n+    expect(sentInputType()).toBe('search_document')\n+  })\n+\n+  it.each([undefined, 1024])('embeds queries with search_query (outputDimensionality=%s)', async (dim) => {\n+    await build(dim).createEmbedding('what is a query', { purpose: 'query' })\n+    expect(sentInputType()).toBe('search_query')\n+  })\n+})\n+\n describe('EmbeddingService bedrock credentials', () => {\n   const originalEnv = { ...process.env }\n   const bedrockConfig = {"
+  },
+  {
+   "filename": "packages/search/src/strategies/vector.strategy.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -15,7 +15,7 @@ import { plaintextSearchFields } from '../lib/plaintext-fields'\n  * Embedding service interface - minimal subset needed by VectorSearchStrategy.\n  */\n export interface EmbeddingService {\n-  createEmbedding(text: string): Promise<number[]>\n+  createEmbedding(text: string, options?: { purpose?: 'document' | 'query' }): Promise<number[]>\n   available: boolean\n }\n \n@@ -89,7 +89,7 @@ export class VectorSearchStrategy implements SearchStrategy {\n     if (options.indexDocFilter && !this.supportsIndexDocFilter) return []\n \n     await this.ensureReady()\n-    const embedding = await this.embeddingService.createEmbedding(query)\n+    const embedding = await this.embeddingService.createEmbedding(query, { purpose: 'query' })\n \n     // Build filter - only include organizationId if it's a real value\n     // The pgvector driver treats null as \"only records with null org_id\","
+  },
+  {
+   "filename": "packages/search/src/vector/services/embedding.ts",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 5,
+   "patch": "@@ -54,6 +54,11 @@ function timeoutError(providerId: EmbeddingProviderId, timeoutMs: number): Error\n   )\n }\n \n+export type EmbeddingPurpose = 'document' | 'query'\n+\n+// Cohere v3+ embeddings are asymmetric: queries must use `search_query`, indexed content `search_document`.\n+const cohereInputType = (purpose: EmbeddingPurpose) => (purpose === 'query' ? 'search_query' : 'search_document')\n+\n export class EmbeddingService {\n   private config: EmbeddingProviderConfig\n   private clientCache: Map<EmbeddingProviderId, ProviderClient> = new Map()\n@@ -215,12 +220,12 @@ export class EmbeddingService {\n     }\n   }\n \n-  private getProviderOptions(): ProviderOptions | undefined {\n+  private getProviderOptions(purpose: EmbeddingPurpose = 'document'): ProviderOptions | undefined {\n     const { providerId, outputDimensionality, model } = this.config\n \n     if (!outputDimensionality) {\n       if (providerId === 'cohere') {\n-        return { cohere: { inputType: 'search_document' } }\n+        return { cohere: { inputType: cohereInputType(purpose) } }\n       }\n       return undefined\n     }\n@@ -236,13 +241,13 @@ export class EmbeddingService {\n       case 'bedrock':\n         return { bedrock: { dimensions: outputDimensionality } }\n       case 'cohere':\n-        return { cohere: { inputType: 'search_document' } }\n+        return { cohere: { inputType: cohereInputType(purpose) } }\n       default:\n         return undefined\n     }\n   }\n \n-  async createEmbedding(input: string | string[]): Promise<number[]> {\n+  async createEmbedding(input: string | string[], options?: { purpose?: EmbeddingPurpose }): Promise<number[]> {\n     const merged = Array.isArray(input)\n       ? input.map((part) => String(part ?? '')).filter((part) => part.length > 0).join('\\n\\n')\n       : String(input ?? '')\n@@ -256,7 +261,7 @@ export class EmbeddingService {\n     }\n \n     const model = this.getEmbeddingModel() as EmbeddingModel\n-    const providerOptions = this.getProviderOptions()\n+    const providerOptions = this.getProviderOptions(options?.purpose)\n     const timeoutMs = resolveEmbeddingTimeoutMs()\n \n     const abortController = new AbortController()"
+  },
+  {
+   "filename": "packages/search/src/vector/services/vector-index.service.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -1218,7 +1218,7 @@ export class VectorIndexService {\n     if (!this.opts.embeddingService.available) {\n       throw new Error('[vector] Embedding service unavailable (missing OPENAI_API_KEY)')\n     }\n-    const embedding = await this.opts.embeddingService.createEmbedding(request.query)\n+    const embedding = await this.opts.embeddingService.createEmbedding(request.query, { purpose: 'query' })\n     const hits = await driver.query({\n       vector: embedding,\n       limit: request.limit ?? 10,"
+  }
+ ],
+ "test_files": [
+  "packages/search/src/__tests__/embedding.test.ts"
+ ]
+}

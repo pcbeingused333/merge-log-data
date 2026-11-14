@@ -1,0 +1,26 @@
+{
+ "repo": "openai-php/client",
+ "number": 849,
+ "url": "https://github.com/openai-php/client/pull/849",
+ "title": "fix(OpenAI): keep logprobs on streamed chat choices",
+ "merged_at": "2026-11-14T11:20:12Z",
+ "files": [
+  {
+   "filename": "src/Responses/Chat/CreateStreamedResponseChoice.php",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 3,
+   "patch": "@@ -9,30 +9,38 @@ final class CreateStreamedResponseChoice\n     private function __construct(\n         public readonly int $index,\n         public readonly CreateStreamedResponseDelta $delta,\n+        public readonly ?CreateResponseChoiceLogprobs $logprobs,\n         public readonly ?string $finishReason,\n     ) {}\n \n     /**\n-     * @param  array{index: int, delta?: array{role?: string, content?: string}, finish_reason: string|null}  $attributes\n+     * @param  array{index: int, delta?: array{role?: string, content?: string}, logprobs?: ?array{content: ?array<int, array{token: string, logprob: float, bytes: ?array<int, int>}>}, finish_reason: string|null}  $attributes\n      */\n     public static function from(array $attributes): self\n     {\n         return new self(\n             $attributes['index'],\n             CreateStreamedResponseDelta::from($attributes['delta'] ?? []),\n+            isset($attributes['logprobs']) ? CreateResponseChoiceLogprobs::from($attributes['logprobs']) : null,\n             $attributes['finish_reason'] ?? null,\n         );\n     }\n \n     /**\n-     * @return array{index: int, delta: array{role?: string, content?: string}|array{role?: string, content: null, function_call: array{name?: string, arguments?: string}}, finish_reason: string|null}\n+     * @return array{index: int, delta: array{role?: string, content?: string}|array{role?: string, content: null, function_call: array{name?: string, arguments?: string}}, logprobs?: array{content: ?array<int, array{token: string, logprob: float, bytes: ?array<int, int>}>}, finish_reason: string|null}\n      */\n     public function toArray(): array\n     {\n-        return [\n+        $result = [\n             'index' => $this->index,\n             'delta' => $this->delta->toArray(),\n             'finish_reason' => $this->finishReason,\n         ];\n+\n+        if ($this->logprobs !== null) {\n+            $result['logprobs'] = $this->logprobs->toArray();\n+        }\n+\n+        return $result;\n     }\n }"
+  },
+  {
+   "filename": "tests/Responses/Chat/CreateStreamedResponseChoice.php",
+   "status": "modified",
+   "additions": 39,
+   "deletions": 0,
+   "patch": "@@ -1,5 +1,6 @@\n <?php\n \n+use OpenAI\\Responses\\Chat\\CreateResponseChoiceLogprobs;\n use OpenAI\\Responses\\Chat\\CreateStreamedResponseChoice;\n use OpenAI\\Responses\\Chat\\CreateStreamedResponseDelta;\n \n@@ -39,3 +40,41 @@\n     expect($result->toArray())\n         ->toBe(chatCompletionStreamFirstChunk()['choices'][0]);\n });\n+\n+test('from with logprobs', function () {\n+    $data = chatCompletionStreamContentChunk()['choices'][0];\n+    $data['logprobs'] = [\n+        'content' => [\n+            ['token' => 'Hello', 'logprob' => -0.31, 'bytes' => [72, 101, 108, 108, 111], 'top_logprobs' => []],\n+        ],\n+        'refusal' => null,\n+    ];\n+\n+    $result = CreateStreamedResponseChoice::from($data);\n+\n+    expect($result->logprobs)\n+        ->toBeInstanceOf(CreateResponseChoiceLogprobs::class)\n+        ->content->toHaveCount(1)\n+        ->content->{0}->token->toBe('Hello')\n+        ->content->{0}->logprob->toBe(-0.31);\n+});\n+\n+test('from without logprobs', function () {\n+    $result = CreateStreamedResponseChoice::from(chatCompletionStreamContentChunk()['choices'][0]);\n+\n+    expect($result->logprobs)->toBeNull();\n+});\n+\n+test('to array with logprobs', function () {\n+    $data = chatCompletionStreamContentChunk()['choices'][0];\n+    $data['logprobs'] = [\n+        'content' => [\n+            ['token' => 'Hello', 'logprob' => -0.31, 'bytes' => [72, 101, 108, 108, 111], 'top_logprobs' => []],\n+        ],\n+    ];\n+\n+    $array = CreateStreamedResponseChoice::from($data)->toArray();\n+\n+    expect($array['logprobs']['content'][0])\n+        ->toMatchArray(['token' => 'Hello', 'logprob' => -0.31]);\n+});"
+  }
+ ],
+ "test_files": [
+  "tests/Responses/Chat/CreateStreamedResponseChoice.php"
+ ]
+}
