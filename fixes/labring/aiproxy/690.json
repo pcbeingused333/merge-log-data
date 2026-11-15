@@ -1,0 +1,26 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 690,
+ "url": "https://github.com/labring/aiproxy/pull/690",
+ "title": "fix(anthropic): report Claude refusal and context-window stops as Gemini SAFETY/MAX_TOKENS",
+ "merged_at": "2026-11-15T03:24:42Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/anthropic/gemini.go",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 20,
+   "patch": "@@ -137,6 +137,20 @@ func ConvertGeminiRequestToStruct(\n \treturn &claudeReq, nil\n }\n \n+// stopReasonClaude2Gemini maps a Claude stop reason to a Gemini finish reason,\n+// mirroring stopReasonClaude2OpenAI so a refusal or a context-window cut-off is\n+// not reported as a normal STOP.\n+func stopReasonClaude2Gemini(reason string) string {\n+\tswitch reason {\n+\tcase relaymodel.ClaudeStopReasonMaxTokens, relaymodel.ClaudeStopReasonContextLimit:\n+\t\treturn relaymodel.GeminiFinishReasonMaxTokens\n+\tcase relaymodel.ClaudeStopReasonRefusal:\n+\t\treturn relaymodel.GeminiFinishReasonSafety\n+\tdefault:\n+\t\treturn relaymodel.GeminiFinishReasonStop\n+\t}\n+}\n+\n // ConvertClaudeToGeminiResponse converts Claude response to Gemini format\n func ConvertClaudeToGeminiResponse(\n \tmeta *meta.Meta,\n@@ -163,16 +177,7 @@ func ConvertClaudeToGeminiResponse(\n \t}\n \n \t// Convert stop reason\n-\tswitch claudeResp.StopReason {\n-\tcase relaymodel.ClaudeStopReasonEndTurn:\n-\t\tcandidate.FinishReason = relaymodel.GeminiFinishReasonStop\n-\tcase relaymodel.ClaudeStopReasonMaxTokens:\n-\t\tcandidate.FinishReason = relaymodel.GeminiFinishReasonMaxTokens\n-\tcase relaymodel.ClaudeStopReasonToolUse:\n-\t\tcandidate.FinishReason = relaymodel.GeminiFinishReasonStop\n-\tdefault:\n-\t\tcandidate.FinishReason = relaymodel.GeminiFinishReasonStop\n-\t}\n+\tcandidate.FinishReason = stopReasonClaude2Gemini(claudeResp.StopReason)\n \n \t// Convert content\n \tfor _, content := range claudeResp.Content {\n@@ -447,16 +452,7 @@ func (s *GeminiStreamState) ConvertClaudeStreamToGemini(\n \n \tcase relaymodel.ClaudeStreamTypeMessageDelta:\n \t\tif claudeResp.Delta != nil && claudeResp.Delta.StopReason != nil {\n-\t\t\tswitch *claudeResp.Delta.StopReason {\n-\t\t\tcase relaymodel.ClaudeStopReasonEndTurn:\n-\t\t\t\tcandidate.FinishReason = relaymodel.GeminiFinishReasonStop\n-\t\t\tcase relaymodel.ClaudeStopReasonMaxTokens:\n-\t\t\t\tcandidate.FinishReason = relaymodel.GeminiFinishReasonMaxTokens\n-\t\t\tcase relaymodel.ClaudeStopReasonToolUse:\n-\t\t\t\tcandidate.FinishReason = relaymodel.GeminiFinishReasonStop\n-\t\t\tdefault:\n-\t\t\t\tcandidate.FinishReason = relaymodel.GeminiFinishReasonStop\n-\t\t\t}\n+\t\t\tcandidate.FinishReason = stopReasonClaude2Gemini(*claudeResp.Delta.StopReason)\n \t\t}\n \n \t\tif claudeResp.Usage != nil {"
+  },
+  {
+   "filename": "core/relay/adaptor/anthropic/gemini_test.go",
+   "status": "modified",
+   "additions": 43,
+   "deletions": 0,
+   "patch": "@@ -440,3 +440,46 @@ func TestGeminiStreamHandlerBillsLikeNonStream(t *testing.T) {\n \t\tt.Fatalf(\"stream usage %+v != non-stream usage %+v\", got.Usage, exp)\n \t}\n }\n+\n+func TestClaudeStopReasonToGeminiFinishReason(t *testing.T) {\n+\tm := &meta.Meta{}\n+\n+\tcases := []struct {\n+\t\tclaude string\n+\t\twant   string\n+\t}{\n+\t\t{relaymodel.ClaudeStopReasonEndTurn, relaymodel.GeminiFinishReasonStop},\n+\t\t{relaymodel.ClaudeStopReasonToolUse, relaymodel.GeminiFinishReasonStop},\n+\t\t{relaymodel.ClaudeStopReasonMaxTokens, relaymodel.GeminiFinishReasonMaxTokens},\n+\t\t{relaymodel.ClaudeStopReasonContextLimit, relaymodel.GeminiFinishReasonMaxTokens},\n+\t\t{relaymodel.ClaudeStopReasonRefusal, relaymodel.GeminiFinishReasonSafety},\n+\t}\n+\n+\tfor _, tc := range cases {\n+\t\tt.Run(\"non-stream \"+tc.claude, func(t *testing.T) {\n+\t\t\tresp := anthropic.ConvertClaudeToGeminiResponse(m, &relaymodel.ClaudeResponse{\n+\t\t\t\tStopReason: tc.claude,\n+\t\t\t})\n+\t\t\tif got := resp.Candidates[0].FinishReason; got != tc.want {\n+\t\t\t\tt.Fatalf(\"finish reason = %q, want %q\", got, tc.want)\n+\t\t\t}\n+\t\t})\n+\n+\t\tt.Run(\"stream \"+tc.claude, func(t *testing.T) {\n+\t\t\tstate := &anthropic.GeminiStreamState{}\n+\t\t\tstop := tc.claude\n+\n+\t\t\tresp := state.ConvertClaudeStreamToGemini(m, &relaymodel.ClaudeStreamResponse{\n+\t\t\t\tType:  relaymodel.ClaudeStreamTypeMessageDelta,\n+\t\t\t\tDelta: &relaymodel.ClaudeDelta{StopReason: &stop},\n+\t\t\t})\n+\t\t\tif resp == nil || len(resp.Candidates) == 0 {\n+\t\t\t\tt.Fatal(\"expected a candidate\")\n+\t\t\t}\n+\n+\t\t\tif got := resp.Candidates[0].FinishReason; got != tc.want {\n+\t\t\t\tt.Fatalf(\"finish reason = %q, want %q\", got, tc.want)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/anthropic/gemini_test.go"
+ ]
+}

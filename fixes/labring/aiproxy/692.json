@@ -1,0 +1,26 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 692,
+ "url": "https://github.com/labring/aiproxy/pull/692",
+ "title": "fix(baidu): report content_filter when Wenxin sets need_clear_history",
+ "merged_at": "2026-11-15T03:24:46Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/baidu/main.go",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 4,
+   "patch": "@@ -90,8 +90,14 @@ func ConvertRequest(meta *meta.Meta, req *http.Request) (adaptor.ConvertResult,\n \t}, nil\n }\n \n-// finishReason maps Baidu's is_truncated flag to an OpenAI finish_reason.\n-func finishReason(truncated bool) relaymodel.FinishReason {\n+// finishReason maps Wenxin flags to an OpenAI finish_reason.\n+// need_clear_history means the input tripped the safety check and the\n+// session must be cleared, so it takes precedence over is_truncated.\n+func finishReason(truncated, needClearHistory bool) relaymodel.FinishReason {\n+\tif needClearHistory {\n+\t\treturn relaymodel.FinishReasonContentFilter\n+\t}\n+\n \tif truncated {\n \t\treturn relaymodel.FinishReasonLength\n \t}\n@@ -106,7 +112,7 @@ func response2OpenAI(meta *meta.Meta, response *ChatResponse) *relaymodel.TextRe\n \t\t\tRole:    \"assistant\",\n \t\t\tContent: response.Result,\n \t\t},\n-\t\tFinishReason: finishReason(response.IsTruncated),\n+\t\tFinishReason: finishReason(response.IsTruncated, response.NeedClearHistory),\n \t}\n \n \tfullTextResponse := relaymodel.TextResponse{\n@@ -131,7 +137,10 @@ func streamResponse2OpenAI(\n \n \tchoice.Delta.Content = baiduResponse.Result\n \tif baiduResponse.IsEnd {\n-\t\tchoice.FinishReason = finishReason(baiduResponse.IsTruncated)\n+\t\tchoice.FinishReason = finishReason(\n+\t\t\tbaiduResponse.IsTruncated,\n+\t\t\tbaiduResponse.NeedClearHistory,\n+\t\t)\n \t}\n \n \tresponse := relaymodel.ChatCompletionsStreamResponse{"
+  },
+  {
+   "filename": "core/relay/adaptor/baidu/main_test.go",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -20,6 +20,20 @@ func TestResponse2OpenAI_FinishReason(t *testing.T) {\n \tif fr := got.Choices[0].FinishReason; fr != relaymodel.FinishReasonLength {\n \t\tt.Fatalf(\"truncated finish_reason = %q, want length\", fr)\n \t}\n+\n+\tgot = response2OpenAI(m, &ChatResponse{Result: \"blocked\", NeedClearHistory: true})\n+\tif fr := got.Choices[0].FinishReason; fr != relaymodel.FinishReasonContentFilter {\n+\t\tt.Fatalf(\"need_clear_history finish_reason = %q, want content_filter\", fr)\n+\t}\n+\n+\tgot = response2OpenAI(m, &ChatResponse{\n+\t\tResult:           \"blocked\",\n+\t\tIsTruncated:      true,\n+\t\tNeedClearHistory: true,\n+\t})\n+\tif fr := got.Choices[0].FinishReason; fr != relaymodel.FinishReasonContentFilter {\n+\t\tt.Fatalf(\"safety+truncated finish_reason = %q, want content_filter\", fr)\n+\t}\n }\n \n func TestStreamResponse2OpenAI_FinishReason(t *testing.T) {\n@@ -42,4 +56,20 @@ func TestStreamResponse2OpenAI_FinishReason(t *testing.T) {\n \tif fr := got.Choices[0].FinishReason; fr != relaymodel.FinishReasonLength {\n \t\tt.Fatalf(\"truncated finish_reason = %q, want length\", fr)\n \t}\n+\n+\tgot = streamResponse2OpenAI(m, &ChatStreamResponse{\n+\t\tChatResponse: ChatResponse{Result: \"blocked\", NeedClearHistory: true},\n+\t\tIsEnd:        false,\n+\t})\n+\tif fr := got.Choices[0].FinishReason; fr != \"\" {\n+\t\tt.Fatalf(\"mid-stream need_clear_history finish_reason = %q, want empty\", fr)\n+\t}\n+\n+\tgot = streamResponse2OpenAI(m, &ChatStreamResponse{\n+\t\tChatResponse: ChatResponse{Result: \"blocked\", NeedClearHistory: true},\n+\t\tIsEnd:        true,\n+\t})\n+\tif fr := got.Choices[0].FinishReason; fr != relaymodel.FinishReasonContentFilter {\n+\t\tt.Fatalf(\"need_clear_history finish_reason = %q, want content_filter\", fr)\n+\t}\n }"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/baidu/main_test.go"
+ ]
+}
