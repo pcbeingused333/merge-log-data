@@ -1,0 +1,33 @@
+{
+ "repo": "beetbox/beets",
+ "number": 7156,
+ "url": "https://github.com/beetbox/beets/pull/7156",
+ "title": "importer: use library field names for duplicate detection of applied matches",
+ "merged_at": "2026-11-15T17:36:53Z",
+ "files": [
+  {
+   "filename": "beets/importer/tasks.py",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 4,
+   "patch": "@@ -327,7 +327,11 @@ def chosen_info(self) -> dict[str, Any]:\n         if self.choice_flag in (Action.ASIS, Action.RETAG):\n             return self.source.data.copy()\n         if self.choice_flag is Action.APPLY and self.match:\n-            return self.match.info.copy()\n+            # Library field names (e.g. ``mb_albumid``), which\n+            # ``duplicate_keys`` refer to.\n+            # Copy since ``item_data`` is cached and callers mutate the\n+            # result.\n+            return self.match.info.item_data.copy()\n         assert False\n \n     def imported_items(self) -> list[library.Item]:\n@@ -568,10 +572,13 @@ def find_duplicates(self, lib: library.Library) -> list[library.Album]:\n         album name as the task.\n         \"\"\"\n         info = self.chosen_info()\n-        info[\"albumartist\"] = info[\"artist\"]\n+        if \"artist\" in info:\n+            # As-is import: the files' ``artist`` is the album artist.\n+            info[\"albumartist\"] = info[\"artist\"]\n \n-        if info[\"artist\"] is None:\n-            # As-is import with no artist. Skip check.\n+        if info.get(\"albumartist\") is None:\n+            # No album artist to query: an as-is import with none, or an\n+            # applied match where ``item_data`` dropped a ``None`` artist.\n             return []\n \n         # Construct a query to find duplicates with this metadata. We"
+  },
+  {
+   "filename": "docs/changelog.rst",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -53,6 +53,9 @@ New features\n Bug fixes\n ~~~~~~~~~\n \n+- Import: ``duplicate_keys`` that use library field names such as ``mb_albumid``\n+  or ``mb_trackid`` now detect duplicates when a metadata-source match is\n+  applied, instead of treating the key as missing. :bug:`7067`\n - :doc:`plugins/missing`: Fix the documentation of the ``--release-types``\n   command-line option and the ``release_types`` configuration option, which\n   still used their old names. :bug:`7172`"
+  },
+  {
+   "filename": "test/test_importer.py",
+   "status": "modified",
+   "additions": 72,
+   "deletions": 1,
+   "patch": "@@ -23,7 +23,7 @@\n from mediafile import MediaFile\n \n from beets import importer, logging, plugins, ui, util\n-from beets.autotag import AlbumInfo, AlbumMatch, Distance, TrackInfo\n+from beets.autotag import AlbumInfo, AlbumMatch, Distance, TrackInfo, TrackMatch\n from beets.importer.state import ImportState\n from beets.importer.tasks import (\n     ImportTaskFactory,\n@@ -2584,3 +2584,74 @@ def test_remux_mpeglayer3_wav_disabled(self):\n \n         self.run_asis_importer()\n         assert dest.exists()\n+\n+\n+class TestDuplicateKeysUseLibraryFieldNames(BeetsTestCase):\n+    \"\"\"Duplicate detection of applied matches must see library field names.\n+\n+    ``AlbumInfo.album_id`` / ``TrackInfo.track_id`` are exposed to the library\n+    as ``mb_albumid`` / ``mb_trackid``, which is what ``duplicate_keys`` use.\n+    \"\"\"\n+\n+    def test_album_duplicate_found_by_mb_albumid(self):\n+        existing = self.add_item_fixture(\n+            albumartist=\"artist\", album=\"album\", mb_albumid=\"rel-1\"\n+        )\n+        self.lib.add_album([existing])\n+        self.config[\"import\"][\"duplicate_keys\"][\"album\"] = [\"mb_albumid\"]\n+\n+        new_item = Item(path=b\"/nonexistent/new.mp3\")\n+        task = importer.ImportTask(None, [new_item.path], [new_item])\n+        info = AlbumInfo(\n+            tracks=[],\n+            album=\"other album\",\n+            album_id=\"rel-1\",\n+            artist=\"other artist\",\n+        )\n+        task.match = AlbumMatch(\n+            distance=Distance(),\n+            info=info,\n+            mapping={},\n+            extra_items=[],\n+            extra_tracks=[],\n+        )\n+        task.choice_flag = importer.Action.APPLY\n+\n+        assert len(task.find_duplicates(self.lib)) == 1\n+\n+    def test_singleton_duplicate_found_by_mb_trackid(self):\n+        self.add_item_fixture(title=\"title\", mb_trackid=\"track-1\")\n+        self.config[\"import\"][\"duplicate_keys\"][\"item\"] = [\"mb_trackid\"]\n+\n+        new_item = Item(path=b\"/nonexistent/new.mp3\")\n+        task = importer.SingletonImportTask(None, new_item)\n+        task.match = TrackMatch(\n+            distance=Distance(),\n+            info=TrackInfo(title=\"other title\", track_id=\"track-1\"),\n+            item=new_item,\n+        )\n+        task.choice_flag = importer.Action.APPLY\n+\n+        assert len(task.find_duplicates(self.lib)) == 1\n+\n+    def test_applied_album_without_artist_skips_duplicate_check(self):\n+        existing = self.add_item_fixture(\n+            albumartist=\"artist\", album=\"album\", mb_albumid=\"rel-1\"\n+        )\n+        self.lib.add_album([existing])\n+        self.config[\"import\"][\"duplicate_keys\"][\"album\"] = [\"mb_albumid\"]\n+\n+        new_item = Item(path=b\"/nonexistent/new.mp3\")\n+        task = importer.ImportTask(None, [new_item.path], [new_item])\n+        task.match = AlbumMatch(\n+            distance=Distance(),\n+            info=AlbumInfo(\n+                tracks=[], album=\"album\", album_id=\"rel-1\", artist=None\n+            ),\n+            mapping={},\n+            extra_items=[],\n+            extra_tracks=[],\n+        )\n+        task.choice_flag = importer.Action.APPLY\n+\n+        assert task.find_duplicates(self.lib) == []"
+  }
+ ],
+ "test_files": [
+  "test/test_importer.py"
+ ]
+}

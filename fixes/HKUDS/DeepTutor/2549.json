@@ -1,0 +1,41 @@
+{
+ "repo": "HKUDS/DeepTutor",
+ "number": 2549,
+ "url": "https://github.com/HKUDS/DeepTutor/pull/2549",
+ "title": "fix(llm): map Anthropic context-window, refusal and stop_sequence stop reasons",
+ "merged_at": "2026-11-15T18:17:56Z",
+ "files": [
+  {
+   "filename": "deeptutor/agents/loop/loop_host.py",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -165,6 +165,16 @@ async def call_round(self, *, settling: bool, first: bool) -> dict[str, bool]:\n             defer_visible_output=self.pipeline._capability_buffers_visible_output(self.context),\n             tool_choice=self.pipeline.initial_tool_choice if first else None,\n         )\n+        if str(self.result.finish_reason or \"\").strip().lower() == \"context_length_exceeded\":\n+            # The input context is full, so resuming (``continue_truncated``) would\n+            # resend the same history. Finish the round and tell the reader why.\n+            await self.warning(\n+                \"notices.context_length_exceeded\",\n+                (\n+                    \"The conversation filled the model's context window, so the answer was cut \"\n+                    \"off. Start a new chat or shorten the history and try again.\"\n+                ),\n+            )\n         rejected = self.recovery_tools is not None and any(\n             str(call.get(\"name\") or \"\").strip() not in self.recovery_tools\n             for call in self.result.tool_calls"
+  },
+  {
+   "filename": "deeptutor/services/llm/provider_core/anthropic_provider.py",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 1,
+   "patch": "@@ -35,6 +35,11 @@ def _gen_tool_id() -> str:\n     return \"toolu_\" + \"\".join(secrets.choice(_ALNUM) for _ in range(22))\n \n \n+#: Canonical finish reason for a response cut off because the context window\n+#: was full (distinct from the output-cap reasons in ``TRUNCATED_FINISH_REASONS``).\n+CONTEXT_LENGTH_EXCEEDED_FINISH = \"context_length_exceeded\"\n+\n+\n class AnthropicProvider(LLMProvider):\n     \"\"\"LLM provider using the native Anthropic SDK for Claude models.\"\"\"\n \n@@ -482,7 +487,17 @@ def _parse_response(response: Any) -> LLMResponse:\n                     }\n                 )\n \n-        stop_map = {\"tool_use\": \"tool_calls\", \"end_turn\": \"stop\", \"max_tokens\": \"length\"}\n+        stop_map = {\n+            \"tool_use\": \"tool_calls\",\n+            \"end_turn\": \"stop\",\n+            \"stop_sequence\": \"stop\",\n+            \"max_tokens\": \"length\",\n+            # The *input* context filled up. This is not an output cap, so it must\n+            # not map to \"length\": callers read that as \"continue the answer\",\n+            # which would resend the same full history.\n+            \"model_context_window_exceeded\": CONTEXT_LENGTH_EXCEEDED_FINISH,\n+            \"refusal\": \"content_filter\",\n+        }\n         finish_reason = stop_map.get(response.stop_reason or \"\", response.stop_reason or \"stop\")\n \n         usage: dict[str, int] = {}"
+  },
+  {
+   "filename": "tests/agents/chat/test_agent_loop.py",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 0,
+   "patch": "@@ -2540,6 +2540,34 @@ async def test_truncated_round_with_visible_text_still_continues(\n     assert _answer_text(events) == \"答案的前半段和后半段。\"\n \n \n+@pytest.mark.asyncio\n+async def test_context_full_round_is_reported_not_continued(\n+    monkeypatch: pytest.MonkeyPatch,\n+) -> None:\n+    \"\"\"A full input context ends the round with a notice instead of a futile continuation.\"\"\"\n+    client = _ScriptedChatClient(\n+        [\n+            [_llm_chunk(content=\"Partial answer\", finish_reason=\"context_length_exceeded\")],\n+            [_llm_chunk(content=\" and a continuation that must never be requested.\")],\n+        ]\n+    )\n+    pipeline = AgenticChatPipeline(language=\"en\")\n+    pipeline.registry = _Registry()\n+    monkeypatch.setattr(pipeline, \"_compose_enabled_tools\", lambda _context: [])\n+    monkeypatch.setattr(pipeline, \"_build_openai_client\", lambda: client)\n+\n+    events = await _run(pipeline, UnifiedContext(session_id=\"s1\", user_message=\"explain\"))\n+\n+    assert client.call_count == 1\n+    warnings = [\n+        str(event.content)\n+        for event in events\n+        if (event.metadata or {}).get(\"trace_kind\") == \"warning\"\n+    ]\n+    assert any(\"context window\" in text for text in warnings)\n+    assert _answer_text(events) == \"Partial answer\"\n+\n+\n @pytest.mark.asyncio\n async def test_forced_tool_round_keeps_inline_reasoning_in_the_trace(\n     monkeypatch: pytest.MonkeyPatch,"
+  },
+  {
+   "filename": "tests/services/llm/test_anthropic_provider_fixes.py",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -296,3 +296,37 @@ def test_assistant_blocks_omit_unsigned_history_blocks() -> None:\n     )\n \n     assert all(block.get(\"type\") != \"thinking\" for block in blocks)\n+\n+\n+def _response(stop_reason: str) -> Any:\n+    from types import SimpleNamespace\n+\n+    return SimpleNamespace(\n+        content=[SimpleNamespace(type=\"text\", text=\"partial\")],\n+        stop_reason=stop_reason,\n+        usage=None,\n+    )\n+\n+\n+@pytest.mark.parametrize(\n+    (\"stop_reason\", \"expected\"),\n+    [\n+        (\"end_turn\", \"stop\"),\n+        (\"stop_sequence\", \"stop\"),\n+        (\"tool_use\", \"tool_calls\"),\n+        (\"max_tokens\", \"length\"),\n+        (\"model_context_window_exceeded\", \"context_length_exceeded\"),\n+        (\"refusal\", \"content_filter\"),\n+    ],\n+)\n+def test_stop_reason_is_mapped_to_canonical_finish_reason(stop_reason: str, expected: str) -> None:\n+    result = AnthropicProvider._parse_response(_response(stop_reason))\n+    assert result.finish_reason == expected\n+\n+\n+def test_context_window_exceeded_is_not_an_output_truncation() -> None:\n+    \"\"\"A full input context must not drive the \"continue the answer\" recovery.\"\"\"\n+    from deeptutor.services.llm import finish_was_truncated\n+\n+    result = AnthropicProvider._parse_response(_response(\"model_context_window_exceeded\"))\n+    assert not finish_was_truncated(result.finish_reason)"
+  }
+ ],
+ "test_files": [
+  "tests/agents/chat/test_agent_loop.py",
+  "tests/services/llm/test_anthropic_provider_fixes.py"
+ ]
+}

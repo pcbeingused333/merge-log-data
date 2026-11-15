@@ -1,0 +1,42 @@
+{
+ "repo": "stackql/stackql",
+ "number": 905,
+ "url": "https://github.com/stackql/stackql/pull/905",
+ "title": "fix(output): flush CSV rows already written when the result stream fails",
+ "merged_at": "2026-11-15T06:42:08Z",
+ "files": [
+  {
+   "filename": "internal/stackql/output/output.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -399,6 +399,9 @@ func (csvw *CSVWriter) Write(res sqldata.ISQLResultStream) error {\n \t\t\t\tw.Flush()\n \t\t\t\treturn w.Error()\n \t\t\t}\n+\t\t\tif w != nil {\n+\t\t\t\tw.Flush()\n+\t\t\t}\n \t\t\treturn err\n \t\t}\n \t\tif !isHeaderRead {"
+  },
+  {
+   "filename": "internal/stackql/output/partial_table_test.go",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -47,3 +47,22 @@ func TestTableWriterRetainsCompletedRowsOnStreamFailure(t *testing.T) {\n \t\tt.Fatalf(\"completed table was discarded: %q\", output.String())\n \t}\n }\n+\n+func TestCSVWriterRetainsCompletedRowsOnStreamFailure(t *testing.T) {\n+\tfailure := errors.New(\"continuation failed\")\n+\ttable := sqldata.NewSQLTable(0, \"partial\")\n+\tcolumn := sqldata.NewSQLColumn(table, \"id\", 0, 25, 1024, 0, \"TextFormat\")\n+\tbatch := sqldata.NewSQLResult([]sqldata.ISQLColumn{column}, 1, 0, []sqldata.ISQLRow{sqldata.NewSQLRow([]interface{}{\"one\"})})\n+\tstream := &partialTableStream{batch: batch, failure: failure}\n+\tvar output, stderr bytes.Buffer\n+\twriter, err := GetOutputWriter(&output, &stderr, internaldto.OutputContext{RuntimeContext: dto.RuntimeCtx{OutputFormat: \"csv\", Delimiter: \",\"}, Result: stream})\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tif err := writer.Write(stream); !errors.Is(err, failure) {\n+\t\tt.Fatalf(\"stream failure = %v\", err)\n+\t}\n+\tif !strings.Contains(output.String(), \"one\") || !strings.Contains(output.String(), \"id\") {\n+\t\tt.Fatalf(\"completed csv rows were discarded: %q\", output.String())\n+\t}\n+}"
+  },
+  {
+   "filename": "test/python/stackql_test_tooling/flask/native_test/app.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -322,6 +322,9 @@ def cursor_items():\n         # A percent-escaped cursor is rejected the way strict cursor parsers do.\n         raw = _raw_query()\n         raw_page = re.search(r\"(?:^|&)page=([^&]*)\", raw)\n+        # The regression query gets malformed JSON only on its continuation page.\n+        if request.args.get(\"group_by\") == \"stream_error\" and request.args.get(\"page\"):\n+            return \"{\", 200, {\"Content-Type\": \"application/json\"}\n         if raw_page and \"%\" in raw_page.group(1):\n             return jsonify({\"error\": {\"message\": \"The page token is invalid: percent-escaped cursor\"}}), 400\n         names, next_page = _cursor_pages.get(request.args.get(\"page\", \"\"), ([], None))"
+  },
+  {
+   "filename": "test/robot/functional/stackql_rest_pagination.robot",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -180,6 +180,30 @@ Cursor Request Token Default Encoding Unchanged\n     ...    timeout=120s\n     ...    on_timeout=terminate\n \n+CSV Pagination Stream Failure Flushes Completed Rows\n+    [Documentation]    The first cursor page completes before the mock returns malformed\n+    ...                JSON for the second page. CSV stdout must retain its header and both\n+    ...                rows, while stderr still reports the stream failure.\n+    [Timeout]    120 seconds\n+    ${output} =    Run Stackql Exec Command No Errors\n+    ...    ${STACKQL_EXE}\n+    ...    ${OKTA_SECRET_STR}\n+    ...    ${GITHUB_SECRET_STR}\n+    ...    ${K8S_SECRET_STR}\n+    ...    ${REGISTRY_NO_VERIFY_CFG_STR}\n+    ...    ${AUTH_CFG_STR}\n+    ...    ${SQL_BACKEND_CFG_STR_CANONICAL}\n+    ...    select name from stackql_native_test.cursor.items_default_encoding where group_by \\= 'stream_error';\n+    ...    stackql_output=csv\n+    ...    timeout=120s\n+    ...    on_timeout=terminate\n+    ${rows} =    Evaluate    list(csv.reader(io.StringIO($output.stdout)))    modules=csv,io\n+    Length Should Be    ${rows}    3\n+    Should Be Equal As Strings    ${rows}[0][0]    name\n+    Should Be Equal As Strings    ${rows}[1][0]    C1\n+    Should Be Equal As Strings    ${rows}[2][0]    C2\n+    Should Contain    ${output.stderr}    unexpected EOF\n+\n Cursor Request Token Encoding None Keeps Other Parameters Escaped\n     [Documentation]    Only the cursor is verbatim: a second query parameter containing a\n     ...                space is still percent-encoded alongside it."
+  }
+ ],
+ "test_files": [
+  "internal/stackql/output/partial_table_test.go",
+  "test/python/stackql_test_tooling/flask/native_test/app.py",
+  "test/robot/functional/stackql_rest_pagination.robot"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "getsentry/toolkit",
+ "number": 1767,
+ "url": "https://github.com/getsentry/toolkit/pull/1767",
+ "title": "fix(docs-mcp): strip query strings and fragments from docs URLs",
+ "merged_at": "2026-11-15T07:48:28Z",
+ "files": [
+  {
+   "filename": "apps/docs-mcp/src/__tests__/fetcher.test.ts",
+   "status": "modified",
+   "additions": 64,
+   "deletions": 2,
+   "patch": "@@ -1,5 +1,9 @@\n-import { describe, expect, test } from \"vitest\";\n-import { normalizeDocPath } from \"../sentry-docs/fetcher\";\n+import { afterEach, describe, expect, test, vi } from \"vitest\";\n+import {\n+  buildDocsUrl,\n+  fetchDocPage,\n+  normalizeDocPath,\n+} from \"../sentry-docs/fetcher\";\n \n describe(\"normalizeDocPath\", () => {\n   test.each([\n@@ -21,3 +25,61 @@ describe(\"normalizeDocPath\", () => {\n     expect(normalizeDocPath(input)).toBe(`/${input}`);\n   });\n });\n+\n+describe(\"normalizeDocPath query strings and fragments\", () => {\n+  test.each([\n+    [\n+      \"https://docs.sentry.io/platforms/javascript/#tracing\",\n+      \"/platforms/javascript\",\n+    ],\n+    [\n+      \"https://docs.sentry.io/platforms/javascript/?platform=node\",\n+      \"/platforms/javascript\",\n+    ],\n+    [\n+      \"https://docs.sentry.io/platforms/javascript?platform=node#tracing\",\n+      \"/platforms/javascript\",\n+    ],\n+    [\"/platforms/javascript/#tracing\", \"/platforms/javascript\"],\n+    [\"platforms/javascript?x=1\", \"/platforms/javascript\"],\n+    [\"/platforms/javascript.md#tracing\", \"/platforms/javascript\"],\n+    [\"https://docs.sentry.io?x=1\", \"/\"],\n+    [\"https://docs.sentry.io#top\", \"/\"],\n+  ])(\"drops the query string and fragment from %s\", (input, expected) => {\n+    expect(normalizeDocPath(input)).toBe(expected);\n+  });\n+\n+  test(\"keeps the exact-origin boundary when a query string is present\", () => {\n+    expect(normalizeDocPath(\"https://docs.sentry.io.example.com/a?x=1\")).toBe(\n+      \"/https://docs.sentry.io.example.com/a\",\n+    );\n+  });\n+});\n+\n+describe(\"fetchDocPage\", () => {\n+  afterEach(() => {\n+    vi.unstubAllGlobals();\n+  });\n+\n+  test(\"requests <pathname>.md for a URL with a fragment and a query string\", async () => {\n+    const fetchMock = vi.fn(async () => new Response(\"# page\"));\n+    vi.stubGlobal(\"fetch\", fetchMock);\n+\n+    await fetchDocPage(\n+      \"https://docs.sentry.io/platforms/javascript/?platform=node#tracing\",\n+    );\n+\n+    const request = (fetchMock.mock.calls[0] as unknown as [Request])[0];\n+    expect(request.url).toBe(\"https://docs.sentry.io/platforms/javascript.md\");\n+  });\n+});\n+\n+describe(\"buildDocsUrl query strings and fragments\", () => {\n+  test(\"builds the canonical citation URL without the query string and fragment\", () => {\n+    expect(\n+      buildDocsUrl(\n+        \"https://docs.sentry.io/platforms/javascript/?platform=node#tracing\",\n+      ),\n+    ).toBe(\"https://docs.sentry.io/platforms/javascript/\");\n+  });\n+});"
+  },
+  {
+   "filename": "apps/docs-mcp/src/sentry-docs/fetcher.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -8,6 +8,7 @@ const FETCH_TIMEOUT_MS = 15_000; // 15s — .md endpoint is CDN-served, fail fas\n // (lint/performance/useTopLevelRegex) — avoids re-compilation on every call.\n const TRAILING_MD_RE = /\\.md$/;\n const TRAILING_SLASHES_RE = /\\/+$/;\n+const QUERY_OR_FRAGMENT_RE = /[?#].*$/s;\n \n /**\n  * Cache TTLs.\n@@ -100,11 +101,14 @@ function cachedFetch(url: string, ttlSeconds: number): Promise<string> {\n  *   - \"platforms/javascript/guides/nextjs\"\n  *   - \"https://docs.sentry.io/platforms/javascript/guides/nextjs/\"\n  *   - \"/platforms/javascript/guides/nextjs/.md\" (no-op)\n+ *   - any of the above followed by a \"?query\" and/or \"#fragment\" (dropped)\n  *\n  * Returns a path with a single leading slash and no trailing slash.\n  */\n export function normalizeDocPath(path: string): string {\n-  let p = path.trim();\n+  // Drop the query string and fragment first: they are not part of the page\n+  // path, and the \".md\" suffix has to land on the pathname.\n+  let p = path.trim().replace(QUERY_OR_FRAGMENT_RE, \"\");\n   // Strip absolute URL prefix\n   if (p === BASE_URL || p.startsWith(`${BASE_URL}/`)) {\n     p = p.slice(BASE_URL.length);"
+  }
+ ],
+ "test_files": [
+  "apps/docs-mcp/src/__tests__/fetcher.test.ts"
+ ]
+}

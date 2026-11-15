@@ -1,0 +1,26 @@
+{
+ "repo": "nextlevelbuilder/goclaw",
+ "number": 1679,
+ "url": "https://github.com/nextlevelbuilder/goclaw/pull/1679",
+ "title": "fix(cron): reject overlapping manual runs in SQLite",
+ "merged_at": "2026-11-15T10:09:22Z",
+ "files": [
+  {
+   "filename": "internal/store/sqlitestore/cron_exec.go",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 6,
+   "patch": "@@ -37,12 +37,22 @@ func (s *SQLiteCronStore) RunJob(ctx context.Context, jobID string, force bool)\n \t// Claim the job for manual execution by clearing next_run_at (match PG behavior).\n \t// executeOneJob with reloadClaimed=false skips loadClaimedJob, using the\n \t// already-loaded job directly — allowing manual runs on disabled jobs.\n-\tif id, parseErr := uuid.Parse(jobID); parseErr == nil {\n-\t\tif _, execErr := s.db.ExecContext(ctx,\n-\t\t\t\"UPDATE cron_jobs SET last_status = 'running', next_run_at = NULL, updated_at = ? WHERE id = ?\",\n-\t\t\ttime.Now(), id); execErr != nil {\n-\t\t\tslog.Warn(\"cron: failed to mark job running\", \"job\", jobID, \"error\", execErr)\n-\t\t}\n+\tid, parseErr := uuid.Parse(jobID)\n+\tif parseErr != nil {\n+\t\treturn false, \"\", fmt.Errorf(\"invalid job id %q: %w\", jobID, parseErr)\n+\t}\n+\tres, err := s.db.ExecContext(ctx,\n+\t\t\"UPDATE cron_jobs SET last_status = 'running', next_run_at = NULL, updated_at = ? WHERE id = ? AND last_status IS NOT 'running'\",\n+\t\ttime.Now(), id)\n+\tif err != nil {\n+\t\treturn false, \"\", err\n+\t}\n+\tn, err := res.RowsAffected()\n+\tif err != nil {\n+\t\treturn false, \"\", err\n+\t}\n+\tif n == 0 {\n+\t\treturn false, \"\", fmt.Errorf(\"job %s is already running\", jobID)\n \t}\n \ts.InvalidateCache()\n "
+  },
+  {
+   "filename": "internal/store/sqlitestore/cron_overlap_test.go",
+   "status": "added",
+   "additions": 72,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,72 @@\n+//go:build sqlite || sqliteonly\n+\n+package sqlitestore\n+\n+import (\n+\t\"fmt\"\n+\t\"sync/atomic\"\n+\t\"testing\"\n+\t\"time\"\n+\n+\t\"github.com/nextlevelbuilder/goclaw/internal/store\"\n+)\n+\n+func TestSQLiteCronStore_RejectOverlappingManualRun(t *testing.T) {\n+\ts, ctx, _ := newTestSQLiteCronStore(t)\n+\tms := int64(time.Hour / time.Millisecond)\n+\tjob, err := s.AddJob(ctx, \"overlap\", store.CronSchedule{Kind: \"every\", EveryMS: &ms}, \"hello\", false, \"\", \"\", \"\", \"user-1\")\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tif job == nil {\n+\t\tjob = mustOnlyJob(t, s, ctx)\n+\t}\n+\tstarted, release := make(chan struct{}), make(chan struct{})\n+\tdone := make(chan error, 1)\n+\tt.Cleanup(func() {\n+\t\tselect {\n+\t\tcase <-release:\n+\t\tdefault:\n+\t\t\tclose(release)\n+\t\t}\n+\t})\n+\tvar calls atomic.Int32\n+\ts.SetOnJob(func(*store.CronJob) (*store.CronJobResult, error) {\n+\t\tif calls.Add(1) == 1 {\n+\t\t\tclose(started)\n+\t\t\t<-release\n+\t\t}\n+\t\treturn &store.CronJobResult{Content: \"ok\"}, nil\n+\t})\n+\tgo func() {\n+\t\tran, _, err := s.RunJob(ctx, job.ID, true)\n+\t\tif err == nil && !ran {\n+\t\t\terr = fmt.Errorf(\"first run did not execute\")\n+\t\t}\n+\t\tdone <- err\n+\t}()\n+\tselect {\n+\tcase <-started:\n+\tcase <-time.After(5 * time.Second):\n+\t\tt.Fatal(\"handler did not start\")\n+\t}\n+\tran, _, secondErr := s.RunJob(ctx, job.ID, true)\n+\tclose(release)\n+\tselect {\n+\tcase err := <-done:\n+\t\tif err != nil {\n+\t\t\tt.Fatalf(\"first run failed: %v\", err)\n+\t\t}\n+\tcase <-time.After(5 * time.Second):\n+\t\tt.Fatal(\"first run did not finish\")\n+\t}\n+\tif ran || secondErr == nil || calls.Load() != 1 {\n+\t\tt.Fatalf(\"overlap accepted: ran=%v err=%v calls=%d; want rejected with one handler call\", ran, secondErr, calls.Load())\n+\t}\n+\tif ran, _, err := s.RunJob(ctx, job.ID, true); !ran || err != nil {\n+\t\tt.Fatalf(\"run after completion: ran=%v err=%v\", ran, err)\n+\t}\n+\tif calls.Load() != 2 {\n+\t\tt.Fatalf(\"handler calls after completion = %d, want 2\", calls.Load())\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/store/sqlitestore/cron_overlap_test.go"
+ ]
+}

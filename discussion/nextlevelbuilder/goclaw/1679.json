@@ -1,0 +1,16 @@
+{
+ "repo": "nextlevelbuilder/goclaw",
+ "number": 1679,
+ "url": "https://github.com/nextlevelbuilder/goclaw/pull/1679",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-15T10:09:17Z",
+   "body": "## Review — PR #1679 `fix(cron): reject overlapping manual runs in SQLite`\n\n**Summary**: Makes the manual-run claim in `SQLiteCronStore.RunJob` atomic — `UPDATE cron_jobs SET last_status='running', next_run_at=NULL ... WHERE id = ? AND last_status IS NOT 'running'` plus a `RowsAffected` check — so a second overlapping forced run returns \"job ... is already running\" before emitting the running event or invoking the handler. Also returns an explicit error on an unparseable job id instead of silently skipping the claim.\n\n**Risk level**: Low — 2 files, +88/-6, one store path, no API/UI/locale/migration surface.\n\n**Mandatory gates**\n- Duplicate / prior implementation: **clear**. Repo-wide search for \"overlapping manual runs\" / this SQLite guard returns only this PR; no open or merged PR touches SQLite `RunJob` claiming.\n- Project standards: **clear**. Conventional-commit message, no new user-facing strings, no migration. Change is a direct parity fix for the guard Postgres already enforces (`internal/store/pg/cron_exec.go`: `... AND last_status IS DISTINCT FROM 'running'` + `RowsAffected()==0` → same error string). SQLite `IS NOT 'running'` is the null-safe equivalent of `IS DISTINCT FROM`, so a NULL `last_status` is still claimable.\n- Strategic necessity: **clear value**. Without the guard two overlapping manual runs of the same job both execute the handler (the reported double-run); this closes it on the SQLite/Lite path.\n\n**Verification**\n- CI green at head `03f7c1e2`: `go`, `web`, `release-versioning` all SUCCESS; `mergeable` MERGEABLE, `mergeStateStatus` CLEAN.\n- Caller path checked: `internal/gateway/methods/cron.go` `handleRun` responds immediately and runs in a background goroutine that only `slog.Warn`s the returned error, so the new \"already running\" error is handled gracefully; the invalid-id branch is effectively unreachable because `GetJob` has already succeeded.\n- Test helper contract checked against dev: `newTestSQLiteCronStore` returns `(*SQLiteCronStore, ctx, *sql.DB)`, `mustOnlyJob(t, store, ctx)` exists in `cron_crud_test.go`, and `SetOnJob` is on `SQLiteCronStore` — the new `//go:build sqlite || sqliteonly` test compiles and exercises the reject/succeed-after-completion paths.\n- Sequential-run regression: existing `TestSQLiteCronStore_RunJob_DueModeSkipsJobThatIsNotDue` (3 sequential runs) still holds because `executeOneJob` resets `last_status` off `running` after each run.\n\n**Verdict: Approve.** Correct, minimal, well-tested parity fix. Merging to `dev`.\n\n*Posted by /ck:review-pr at 2026-11-15T10:10:00Z*"
+  }
+ ],
+ "review_comments": [],
+ "comments": []
+}

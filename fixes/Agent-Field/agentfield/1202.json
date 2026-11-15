@@ -1,0 +1,34 @@
+{
+ "repo": "Agent-Field/agentfield",
+ "number": 1202,
+ "url": "https://github.com/Agent-Field/agentfield/pull/1202",
+ "title": "fix(control-plane): read AGENTFIELD_API_CORS_* without a config file",
+ "merged_at": "2026-11-15T14:02:37Z",
+ "files": [
+  {
+   "filename": "control-plane/cmd/agentfield-server/main_test.go",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -478,3 +478,38 @@ func TestDefaultWaitForShutdown(t *testing.T) {\n \t\tt.Fatal(\"defaultWaitForShutdown did not unblock after SIGINT\")\n \t}\n }\n+\n+// The documented AGENTFIELD_API_CORS_* variables must reach the config when\n+// there is no config file (Railway, bare binary): viper's AutomaticEnv only\n+// resolves keys it already knows from a file, so nothing else carries them.\n+func TestLoadConfig_CORSFromEnvWithoutConfigFile(t *testing.T) {\n+\tt.Setenv(\"AGENTFIELD_CONFIG_FILE\", \"\")\n+\tt.Setenv(\"AGENTFIELD_API_CORS_ALLOWED_ORIGINS\", \"https://app.example.com, https://admin.example.com\")\n+\tt.Setenv(\"AGENTFIELD_API_CORS_ALLOWED_METHODS\", \"GET,POST\")\n+\tt.Setenv(\"AGENTFIELD_API_CORS_ALLOWED_HEADERS\", \"Authorization,X-API-Key\")\n+\tt.Setenv(\"AGENTFIELD_API_CORS_EXPOSED_HEADERS\", \"X-Total-Count\")\n+\tt.Setenv(\"AGENTFIELD_API_CORS_ALLOW_CREDENTIALS\", \"true\")\n+\tviper.Reset()\n+\n+\tcfg, err := loadConfig(\"/dev/null\")\n+\tif err != nil {\n+\t\tt.Fatalf(\"loadConfig returned error: %v\", err)\n+\t}\n+\n+\tcors := cfg.API.CORS\n+\tif got, want := fmt.Sprint(cors.AllowedOrigins), \"[https://app.example.com https://admin.example.com]\"; got != want {\n+\t\tt.Errorf(\"allowed origins = %s, want %s\", got, want)\n+\t}\n+\tif got, want := fmt.Sprint(cors.AllowedMethods), \"[GET POST]\"; got != want {\n+\t\tt.Errorf(\"allowed methods = %s, want %s\", got, want)\n+\t}\n+\tif got, want := fmt.Sprint(cors.AllowedHeaders), \"[Authorization X-API-Key]\"; got != want {\n+\t\tt.Errorf(\"allowed headers = %s, want %s\", got, want)\n+\t}\n+\tif got, want := fmt.Sprint(cors.ExposedHeaders), \"[X-Total-Count]\"; got != want {\n+\t\tt.Errorf(\"exposed headers = %s, want %s\", got, want)\n+\t}\n+\tif !cors.AllowCredentials {\n+\t\tt.Error(\"expected allow credentials true from env\")\n+\t}\n+}"
+  },
+  {
+   "filename": "control-plane/internal/config/config.go",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -796,6 +796,24 @@ func ApplyEnvOverrides(cfg *Config) {\n \t\tcfg.API.Auth.APIKey = apiKey\n \t}\n \n+\t// CORS. These keys are absent when no config file is loaded, so viper's\n+\t// AutomaticEnv never resolves the documented AGENTFIELD_API_CORS_* names.\n+\tif val := os.Getenv(\"AGENTFIELD_API_CORS_ALLOWED_ORIGINS\"); val != \"\" {\n+\t\tcfg.API.CORS.AllowedOrigins = splitEnvCSV(val)\n+\t}\n+\tif val := os.Getenv(\"AGENTFIELD_API_CORS_ALLOWED_METHODS\"); val != \"\" {\n+\t\tcfg.API.CORS.AllowedMethods = splitEnvCSV(val)\n+\t}\n+\tif val := os.Getenv(\"AGENTFIELD_API_CORS_ALLOWED_HEADERS\"); val != \"\" {\n+\t\tcfg.API.CORS.AllowedHeaders = splitEnvCSV(val)\n+\t}\n+\tif val := os.Getenv(\"AGENTFIELD_API_CORS_EXPOSED_HEADERS\"); val != \"\" {\n+\t\tcfg.API.CORS.ExposedHeaders = splitEnvCSV(val)\n+\t}\n+\tif val := os.Getenv(\"AGENTFIELD_API_CORS_ALLOW_CREDENTIALS\"); val != \"\" {\n+\t\tcfg.API.CORS.AllowCredentials = parseEnvBool(val)\n+\t}\n+\n \tif val := os.Getenv(\"AGENTFIELD_REGISTRATION_SERVERLESS_DISCOVERY_ALLOWED_HOSTS\"); val != \"\" {\n \t\tparts := strings.Split(val, \",\")\n \t\tcfg.AgentField.Registration.ServerlessDiscoveryAllowedHosts = cfg.AgentField.Registration.ServerlessDiscoveryAllowedHosts[:0]"
+  },
+  {
+   "filename": "control-plane/internal/config/config_cors_env_test.go",
+   "status": "added",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,49 @@\n+package config\n+\n+import (\n+\t\"testing\"\n+\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+func TestApplyEnvOverrides_CORS(t *testing.T) {\n+\tt.Setenv(\"AGENTFIELD_API_CORS_ALLOWED_ORIGINS\", \"https://app.example.com, https://admin.example.com,\")\n+\tt.Setenv(\"AGENTFIELD_API_CORS_ALLOWED_METHODS\", \"GET,POST\")\n+\tt.Setenv(\"AGENTFIELD_API_CORS_ALLOWED_HEADERS\", \"Authorization, X-API-Key\")\n+\tt.Setenv(\"AGENTFIELD_API_CORS_EXPOSED_HEADERS\", \"Content-Length,X-Total-Count\")\n+\tt.Setenv(\"AGENTFIELD_API_CORS_ALLOW_CREDENTIALS\", \"true\")\n+\n+\tcfg := &Config{}\n+\tApplyEnvOverrides(cfg)\n+\n+\trequire.Equal(t, []string{\"https://app.example.com\", \"https://admin.example.com\"}, cfg.API.CORS.AllowedOrigins)\n+\trequire.Equal(t, []string{\"GET\", \"POST\"}, cfg.API.CORS.AllowedMethods)\n+\trequire.Equal(t, []string{\"Authorization\", \"X-API-Key\"}, cfg.API.CORS.AllowedHeaders)\n+\trequire.Equal(t, []string{\"Content-Length\", \"X-Total-Count\"}, cfg.API.CORS.ExposedHeaders)\n+\trequire.True(t, cfg.API.CORS.AllowCredentials)\n+}\n+\n+func TestApplyEnvOverrides_CORSUnsetKeepsConfig(t *testing.T) {\n+\tfor _, name := range []string{\n+\t\t\"AGENTFIELD_API_CORS_ALLOWED_ORIGINS\",\n+\t\t\"AGENTFIELD_API_CORS_ALLOWED_METHODS\",\n+\t\t\"AGENTFIELD_API_CORS_ALLOWED_HEADERS\",\n+\t\t\"AGENTFIELD_API_CORS_EXPOSED_HEADERS\",\n+\t\t\"AGENTFIELD_API_CORS_ALLOW_CREDENTIALS\",\n+\t} {\n+\t\tt.Setenv(name, \"\")\n+\t}\n+\n+\tcfg := &Config{}\n+\tcfg.API.CORS = CORSConfig{\n+\t\tAllowedOrigins:   []string{\"https://from-file.example.com\"},\n+\t\tAllowedMethods:   []string{\"GET\"},\n+\t\tAllowCredentials: true,\n+\t}\n+\tApplyEnvOverrides(cfg)\n+\n+\trequire.Equal(t, []string{\"https://from-file.example.com\"}, cfg.API.CORS.AllowedOrigins)\n+\trequire.Equal(t, []string{\"GET\"}, cfg.API.CORS.AllowedMethods)\n+\trequire.Empty(t, cfg.API.CORS.AllowedHeaders)\n+\trequire.True(t, cfg.API.CORS.AllowCredentials)\n+}"
+  }
+ ],
+ "test_files": [
+  "control-plane/cmd/agentfield-server/main_test.go",
+  "control-plane/internal/config/config_cors_env_test.go"
+ ]
+}

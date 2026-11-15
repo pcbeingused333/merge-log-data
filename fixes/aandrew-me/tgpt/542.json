@@ -1,0 +1,26 @@
+{
+ "repo": "aandrew-me/tgpt",
+ "number": 542,
+ "url": "https://github.com/aandrew-me/tgpt/pull/542",
+ "title": "fix(isou): marshal the chat request body",
+ "merged_at": "2026-11-15T08:24:44Z",
+ "files": [
+  {
+   "filename": "src/providers/isou/isou.go",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 14,
+   "patch": "@@ -1,7 +1,7 @@\n package isou\n \n import (\n-\t// \"encoding/json\"\n+\t\"bytes\"\n \t\"encoding/json\"\n \t\"fmt\"\n \t\"os\"\n@@ -14,6 +14,29 @@ import (\n \t\"github.com/aandrew-me/tgpt/v2/src/structs\"\n )\n \n+type requestBody struct {\n+\tModel      string                   `json:\"model\"`\n+\tProvider   string                   `json:\"provider\"`\n+\tLanguage   string                   `json:\"language\"`\n+\tCategories []string                 `json:\"categories\"`\n+\tEngine     string                   `json:\"engine\"`\n+\tMessages   []structs.DefaultMessage `json:\"messages\"`\n+}\n+\n+func newRequestBody(input, model string) ([]byte, error) {\n+\treturn json.Marshal(requestBody{\n+\t\tModel:      model,\n+\t\tProvider:   \"openai\",\n+\t\tLanguage:   \"all\",\n+\t\tCategories: []string{\"general\"},\n+\t\tEngine:     \"SEARXNG\",\n+\t\tMessages: []structs.DefaultMessage{{\n+\t\t\tRole:    \"user\",\n+\t\t\tContent: input,\n+\t\t}},\n+\t})\n+}\n+\n // NewRequest sends a chat request to the isou.chat API and returns the streaming HTTP response.\n func NewRequest(input string, params structs.Params) (*http.Response, error) {\n \tclient, err := client.NewClient()\n@@ -29,17 +52,14 @@ func NewRequest(input string, params structs.Params) (*http.Response, error) {\n \t\tmodel = params.ApiModel\n \t}\n \n-\tvar data = strings.NewReader(fmt.Sprintf(`{\n-\t\t\"model\": \"%v\",\n-\t\t\"provider\": \"openai\",\n-\t\t\"language\": \"all\",\n-\t\t\"categories\": [\n-\t\t\t\"general\"\n-\t\t],\n-\t\t\"engine\": \"SEARXNG\",\n-\t\t\"messages\": [{\"role\": \"user\", \"content\": \"%s\"}]\n+\tpayload, err := newRequestBody(input, model)\n+\tif err != nil {\n+\t\tfmt.Println(\"\\nSome error has occurred.\")\n+\t\tfmt.Println(\"Error:\", err)\n+\t\tos.Exit(1)\n \t}\n-\t`, model, input))\n+\n+\tdata := bytes.NewReader(payload)\n \n \tlink := \"https://isou.chat/api/chat\"\n \n@@ -76,9 +96,9 @@ func GetMainText(line string) (mainText string) {\n \t}\n \n \ttype Context struct {\n-\t\tId      int    `json:\"id\"`\n-\t\tName    string `json:\"name\"`\n-\t\tSource  string `json:\"url\"`\n+\t\tId     int    `json:\"id\"`\n+\t\tName   string `json:\"name\"`\n+\t\tSource string `json:\"url\"`\n \t}\n \n \ttype InnerData struct {"
+  },
+  {
+   "filename": "src/providers/isou/isou_test.go",
+   "status": "added",
+   "additions": 41,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,41 @@\n+package isou\n+\n+import (\n+\t\"encoding/json\"\n+\t\"testing\"\n+\n+\t\"github.com/stretchr/testify/assert\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+func TestNewRequestBodyEscapesPrompt(t *testing.T) {\n+\tprompt := \"say \\\"hi\\\"\\nnext\\\\line\"\n+\traw, err := newRequestBody(prompt, \"gpt-5.4-mini\")\n+\trequire.NoError(t, err)\n+\n+\tvar got map[string]any\n+\trequire.NoError(t, json.Unmarshal(raw, &got), \"body must be valid JSON: %s\", raw)\n+\tassert.Equal(t, \"gpt-5.4-mini\", got[\"model\"])\n+\tassert.Equal(t, \"openai\", got[\"provider\"])\n+\tassert.Equal(t, \"all\", got[\"language\"])\n+\tassert.Equal(t, []any{\"general\"}, got[\"categories\"])\n+\tassert.Equal(t, \"SEARXNG\", got[\"engine\"])\n+\n+\tmsgs, ok := got[\"messages\"].([]any)\n+\trequire.True(t, ok)\n+\trequire.Len(t, msgs, 1)\n+\tmsg := msgs[0].(map[string]any)\n+\tassert.Equal(t, \"user\", msg[\"role\"])\n+\tassert.Equal(t, prompt, msg[\"content\"])\n+}\n+\n+func TestNewRequestBodyEscapesModel(t *testing.T) {\n+\traw, err := newRequestBody(\"hello\", \"model\\\"v1\")\n+\trequire.NoError(t, err)\n+\n+\tvar got map[string]any\n+\trequire.NoError(t, json.Unmarshal(raw, &got), \"body must be valid JSON: %s\", raw)\n+\tassert.Equal(t, \"model\\\"v1\", got[\"model\"])\n+\tmsgs := got[\"messages\"].([]any)\n+\tassert.Equal(t, \"hello\", msgs[0].(map[string]any)[\"content\"])\n+}"
+  }
+ ],
+ "test_files": [
+  "src/providers/isou/isou_test.go"
+ ]
+}

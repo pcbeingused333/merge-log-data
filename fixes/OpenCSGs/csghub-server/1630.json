@@ -1,0 +1,48 @@
+{
+ "repo": "OpenCSGs/csghub-server",
+ "number": 1630,
+ "url": "https://github.com/OpenCSGs/csghub-server/pull/1630",
+ "title": "fix(aigateway): moderate streamed delta.reasoning",
+ "merged_at": "2026-11-15T12:45:15Z",
+ "files": [
+  {
+   "filename": "aigateway/component/moderation.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -997,7 +997,7 @@ func chatCompletionChunkModerationText(chunk types.ChatCompletionChunk) string {\n \tvar b strings.Builder\n \tfor _, choice := range chunk.Choices {\n \t\twriteTextModerationPart(&b, choice.Delta.Content)\n-\t\twriteTextModerationPart(&b, choice.Delta.ReasoningContent)\n+\t\twriteTextModerationPart(&b, choice.Delta.ReasoningText())\n \t\twriteTextModerationPart(&b, choice.Delta.Refusal)\n \t\tfor _, call := range choice.Delta.ToolCalls {\n \t\t\twriteTextModerationPart(&b, call.Function.Name)"
+  },
+  {
+   "filename": "aigateway/component/moderation_test.go",
+   "status": "modified",
+   "additions": 46,
+   "deletions": 0,
+   "patch": "@@ -324,6 +324,52 @@ func TestModerationImpl_CheckChatStreamResponse(t *testing.T) {\n \tmockChecker.AssertExpectations(t)\n }\n \n+func TestModerationImpl_CheckChatStreamResponse_DeltaReasoning(t *testing.T) {\n+\tctx := context.Background()\n+\tmockChecker := new(MockStreamChecker)\n+\tmodImpl := &moderationImpl{streamChecker: mockChecker}\n+\tuuid := \"uuid-reasoning\"\n+\texpectedResult := &rpc.CheckResult{IsSensitive: true, Reason: \"toxic\"}\n+\n+\t// OpenRouter and vLLM stream reasoning in delta.reasoning, not reasoning_content.\n+\tmockChecker.On(\"CheckStreamResponseText\", ctx, \"secret reasoning\", uuid).Return(expectedResult, nil).Once()\n+\n+\tchunk := types.ChatCompletionChunk{\n+\t\tID: \"test-id\",\n+\t\tChoices: []types.ChatCompletionChunkChoice{{\n+\t\t\tDelta: types.ChatCompletionChunkChoiceDelta{Reasoning: \"secret reasoning\"},\n+\t\t}},\n+\t}\n+\tres, err := modImpl.CheckChatStreamResponse(ctx, chunk, uuid)\n+\n+\tassert.NoError(t, err)\n+\tassert.Equal(t, expectedResult, res)\n+\tmockChecker.AssertExpectations(t)\n+}\n+\n+func TestChatCompletionChunkModerationTextReasoningPrecedence(t *testing.T) {\n+\tonlyReasoning := chatCompletionChunkModerationText(types.ChatCompletionChunk{\n+\t\tChoices: []types.ChatCompletionChunkChoice{{\n+\t\t\tDelta: types.ChatCompletionChunkChoiceDelta{\n+\t\t\t\tContent:   \"answer\",\n+\t\t\t\tReasoning: \"secret reasoning\",\n+\t\t\t},\n+\t\t}},\n+\t})\n+\tassert.Equal(t, \"answer\\nsecret reasoning\", onlyReasoning)\n+\n+\t// Same precedence as chatDeltaReasoning: do not audit both fields when both are set.\n+\tboth := chatCompletionChunkModerationText(types.ChatCompletionChunk{\n+\t\tChoices: []types.ChatCompletionChunkChoice{{\n+\t\t\tDelta: types.ChatCompletionChunkChoiceDelta{\n+\t\t\t\tReasoningContent: \"preferred\",\n+\t\t\t\tReasoning:        \"fallback\",\n+\t\t\t},\n+\t\t}},\n+\t})\n+\tassert.Equal(t, \"preferred\", both)\n+}\n+\n func TestModerationImpl_CloseStreamCheck(t *testing.T) {\n \tctx := context.Background()\n \tmockChecker := new(MockStreamChecker)"
+  },
+  {
+   "filename": "aigateway/handler/responses_adapter_stream_writer.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 5,
+   "patch": "@@ -781,10 +781,7 @@ func (w *responsesAdapterStreamWriter) reasoningOutput(status string) responsesp\n }\n \n func chatDeltaReasoning(delta types.ChatCompletionChunkChoiceDelta) string {\n-\tif delta.ReasoningContent != \"\" {\n-\t\treturn delta.ReasoningContent\n-\t}\n-\treturn delta.Reasoning\n+\treturn delta.ReasoningText()\n }\n \n func (w *responsesAdapterStreamWriter) orderedToolCallStates() []*responsesToolCallStreamState {\n@@ -909,7 +906,7 @@ func chatChunkModerationText(chunk types.ChatCompletionChunk) string {\n \tvar b strings.Builder\n \tfor _, choice := range chunk.Choices {\n \t\twriteModerationText(&b, choice.Delta.Content)\n-\t\twriteModerationText(&b, choice.Delta.ReasoningContent)\n+\t\twriteModerationText(&b, chatDeltaReasoning(choice.Delta))\n \t\twriteModerationText(&b, choice.Delta.Refusal)\n \t\tfor _, call := range choice.Delta.ToolCalls {\n \t\t\twriteModerationText(&b, call.Function.Name)"
+  },
+  {
+   "filename": "aigateway/handler/responses_adapter_stream_writer_test.go",
+   "status": "modified",
+   "additions": 51,
+   "deletions": 0,
+   "patch": "@@ -182,6 +182,57 @@ func TestResponsesAdapterStreamWriterModeratesRefusalDelta(t *testing.T) {\n \trequire.NotContains(t, body, \"blocked refusal\")\n }\n \n+func TestResponsesAdapterStreamWriterModeratesDeltaReasoning(t *testing.T) {\n+\tgin.SetMode(gin.TestMode)\n+\trec := httptest.NewRecorder()\n+\tctx, _ := gin.CreateTestContext(rec)\n+\n+\tmoderation := mockcomp.NewMockModeration(t)\n+\tmoderation.EXPECT().CheckText(\n+\t\tmock.MatchedBy(func(ctx context.Context) bool {\n+\t\t\tdeadline, ok := ctx.Deadline()\n+\t\t\treturn ok && time.Until(deadline) <= responsespkg.ModerationTimeout\n+\t\t}),\n+\t\ttypes.TextModerationRequest{\n+\t\t\tContent: \"secret reasoning\",\n+\t\t\tKey:     \"session-1\",\n+\t\t\tPhase:   types.TextModerationPhaseResponse,\n+\t\t\tMode:    types.TextModerationModeStream,\n+\t\t},\n+\t).Return(&rpc.CheckResult{IsSensitive: true, Reason: \"toxic\"}, nil).Once()\n+\n+\tw := newResponsesAdapterStreamWriter(ctx.Writer, \"public-model\", nil, moderation, \"session-1\")\n+\tw.WriteHeader(http.StatusOK)\n+\t_, err := w.Write([]byte(`data: {\"id\":\"chatcmpl_1\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning\":\"secret reasoning\"},\"finish_reason\":\"stop\"}]}` + \"\\n\\n\"))\n+\trequire.NoError(t, err)\n+\n+\tbody := rec.Body.String()\n+\trequire.Contains(t, body, responsespkg.BlockedMessage)\n+\trequire.NotContains(t, body, \"secret reasoning\")\n+}\n+\n+func TestChatChunkModerationTextReasoningPrecedence(t *testing.T) {\n+\tonlyReasoning := chatChunkModerationText(types.ChatCompletionChunk{\n+\t\tChoices: []types.ChatCompletionChunkChoice{{\n+\t\t\tDelta: types.ChatCompletionChunkChoiceDelta{\n+\t\t\t\tContent:   \"answer\",\n+\t\t\t\tReasoning: \"secret reasoning\",\n+\t\t\t},\n+\t\t}},\n+\t})\n+\trequire.Equal(t, \"answer\\nsecret reasoning\", onlyReasoning)\n+\n+\tboth := chatChunkModerationText(types.ChatCompletionChunk{\n+\t\tChoices: []types.ChatCompletionChunkChoice{{\n+\t\t\tDelta: types.ChatCompletionChunkChoiceDelta{\n+\t\t\t\tReasoningContent: \"preferred\",\n+\t\t\t\tReasoning:        \"fallback\",\n+\t\t\t},\n+\t\t}},\n+\t})\n+\trequire.Equal(t, \"preferred\", both)\n+}\n+\n func TestResponsesAdapterStreamWriterReportsIncompleteWhenOutputIsCutOff(t *testing.T) {\n \tgin.SetMode(gin.TestMode)\n \trec := httptest.NewRecorder()"
+  },
+  {
+   "filename": "aigateway/types/chat_completion.go",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -65,6 +65,17 @@ type ChatCompletionChunkChoiceDelta struct {\n \tToolCalls []openai.ChatCompletionChunkChoiceDeltaToolCall `json:\"tool_calls\"`\n }\n \n+// ReasoningText returns the streamed reasoning the client is shown.\n+// reasoning_content wins when it is non-empty; reasoning is the fallback\n+// used by OpenRouter and vLLM. When both are set, only reasoning_content\n+// is returned so the same text is not applied twice.\n+func (d ChatCompletionChunkChoiceDelta) ReasoningText() string {\n+\tif d.ReasoningContent != \"\" {\n+\t\treturn d.ReasoningContent\n+\t}\n+\treturn d.Reasoning\n+}\n+\n type ChatCompletion struct {\n \topenai.ChatCompletion\n }"
+  }
+ ],
+ "test_files": [
+  "aigateway/component/moderation_test.go",
+  "aigateway/handler/responses_adapter_stream_writer_test.go"
+ ]
+}

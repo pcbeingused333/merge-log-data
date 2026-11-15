@@ -1,0 +1,26 @@
+{
+ "repo": "woodpecker-ci/woodpecker",
+ "number": 7561,
+ "url": "https://github.com/woodpecker-ci/woodpecker/pull/7561",
+ "title": "For gitlab do paginate loading changed files",
+ "merged_at": "2026-11-15T09:35:04Z",
+ "files": [
+  {
+   "filename": "server/forge/gitlab/gitlab.go",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 7,
+   "patch": "@@ -851,14 +851,22 @@ func (g *GitLab) loadMetadataFromMergeRequest(ctx context.Context, tmpRepo *mode\n \t\treturn nil, err\n \t}\n \n-\tchanges, _, err := client.MergeRequests.ListMergeRequestDiffs(_repo.ID, mergeID, &gitlab.ListMergeRequestDiffsOptions{}, gitlab.WithContext(ctx))\n-\tif err != nil {\n-\t\treturn nil, err\n+\tfiles := make([]string, 0, defaultPerPage*2)\n+\tdiffOpts := &gitlab.ListMergeRequestDiffsOptions{\n+\t\tPerPage: defaultPerPage,\n \t}\n-\n-\tfiles := make([]string, 0, len(changes)*2)\n-\tfor _, file := range changes {\n-\t\tfiles = append(files, file.NewPath, file.OldPath)\n+\tfor {\n+\t\tchanges, resp, err := client.MergeRequests.ListMergeRequestDiffs(_repo.ID, mergeID, diffOpts, gitlab.WithContext(ctx))\n+\t\tif err != nil {\n+\t\t\treturn nil, err\n+\t\t}\n+\t\tfor _, file := range changes {\n+\t\t\tfiles = append(files, file.NewPath, file.OldPath)\n+\t\t}\n+\t\tif resp == nil || resp.NextPage == 0 {\n+\t\t\tbreak\n+\t\t}\n+\t\tdiffOpts.Page = resp.NextPage\n \t}\n \tpipeline.ChangedFiles = utils.DeduplicateStrings(files)\n "
+  },
+  {
+   "filename": "server/forge/gitlab/gitlab_test.go",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 0,
+   "patch": "@@ -907,6 +907,34 @@ func TestHookLoadsMetadataFromForge(t *testing.T) {\n \t\tassert.Equal(t, \"v1.0\", pipeline.PullRequestMilestone)\n \t})\n \n+\tt.Run(\"merge request changed files span all diff pages\", func(t *testing.T) {\n+\t\tmux := http.NewServeMux()\n+\t\tmux.HandleFunc(\"/api/v4/projects/4\", func(w http.ResponseWriter, _ *http.Request) {\n+\t\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t\t_, _ = w.Write([]byte(`{\"id\":4}`))\n+\t\t})\n+\t\tmux.HandleFunc(\"/api/v4/projects/4/merge_requests/3/diffs\", func(w http.ResponseWriter, r *http.Request) {\n+\t\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t\tif r.URL.Query().Get(\"page\") == \"2\" {\n+\t\t\t\t_, _ = w.Write([]byte(`[{\"old_path\":\"second.go\",\"new_path\":\"second.go\"}]`))\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t\tw.Header().Set(\"X-Next-Page\", \"2\")\n+\t\t\t_, _ = w.Write([]byte(`[{\"old_path\":\"first.go\",\"new_path\":\"first.go\"}]`))\n+\t\t})\n+\t\tmux.HandleFunc(\"/api/v4/projects/4/milestones/6088906\", func(w http.ResponseWriter, _ *http.Request) {\n+\t\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t\t_, _ = w.Write([]byte(`{\"id\":6088906,\"title\":\"v1.0\"}`))\n+\t\t})\n+\t\tserver := httptest.NewServer(mux)\n+\t\tt.Cleanup(server.Close)\n+\t\tclient := load(server.URL + \"?client_id=test&client_secret=test\")\n+\n+\t\t_, pipeline, err := client.Hook(storeContext(t), hookRequest(t, fixtures.HookPullRequestMilestoned, fixtures.ServiceHookHeaders), \"\")\n+\t\trequire.NoError(t, err)\n+\t\tassert.ElementsMatch(t, []string{\"first.go\", \"second.go\"}, pipeline.ChangedFiles)\n+\t})\n+\n \tt.Run(\"tag without message loads the tagged commit\", func(t *testing.T) {\n \t\tvar payload map[string]any\n \t\trequire.NoError(t, json.Unmarshal(fixtures.HookTag, &payload))"
+  }
+ ],
+ "test_files": [
+  "server/forge/gitlab/gitlab_test.go"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "aandrew-me/tgpt",
+ "number": 543,
+ "url": "https://github.com/aandrew-me/tgpt/pull/543",
+ "title": "fix(aihorde): send temperature 0 instead of the default 0.7",
+ "merged_at": "2026-11-15T06:45:33Z",
+ "files": [
+  {
+   "filename": "src/providers/aihorde/aihorde.go",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 26,
+   "patch": "@@ -17,10 +17,12 @@ import (\n )\n \n type TextGenParams struct {\n-\tMaxLength  int     `json:\"max_length,omitempty\"`\n-\tTemperature float64 `json:\"temperature,omitempty\"`\n-\tTopP       float64 `json:\"top_p,omitempty\"`\n-\tRepPen     float64 `json:\"rep_pen,omitempty\"`\n+\tMaxLength int `json:\"max_length,omitempty\"`\n+\t// No omitempty: encoding/json drops a 0 float, so --temperature 0 would\n+\t// never be sent and the worker would apply its own default.\n+\tTemperature float64 `json:\"temperature\"`\n+\tTopP        float64 `json:\"top_p,omitempty\"`\n+\tRepPen      float64 `json:\"rep_pen,omitempty\"`\n }\n \n type TextSubmitRequest struct {\n@@ -43,6 +45,33 @@ type TextStatusResponse struct {\n \t} `json:\"generations\"`\n }\n \n+// generationParams turns --temperature / --top_p / --max_length into the\n+// AI Horde body. Temperature defaults to 0.7. Zero is a real setting\n+// (greedy sampling) and must be kept; values outside [0, 2] stay at the default.\n+func generationParams(params structs.Params) TextGenParams {\n+\tmaxLength := 200\n+\tif v, err := strconv.Atoi(params.Max_length); err == nil && v > 0 {\n+\t\tmaxLength = v\n+\t}\n+\n+\ttemperature := 0.7\n+\tif v, err := strconv.ParseFloat(params.Temperature, 64); err == nil && v >= 0 && v <= 2 {\n+\t\ttemperature = v\n+\t}\n+\n+\ttopP := 0.9\n+\tif v, err := strconv.ParseFloat(params.Top_p, 64); err == nil && v > 0 && v <= 1 {\n+\t\ttopP = v\n+\t}\n+\n+\treturn TextGenParams{\n+\t\tMaxLength:   maxLength,\n+\t\tTemperature: temperature,\n+\t\tTopP:        topP,\n+\t\tRepPen:      1.1,\n+\t}\n+}\n+\n func NewRequest(input string, params structs.Params) (*http.Response, error) {\n \tc, err := client.NewClient()\n \tif err != nil {\n@@ -86,31 +115,11 @@ func NewRequest(input string, params structs.Params) (*http.Response, error) {\n \t\tprompt = history + prompt\n \t}\n \n-\t// Parse user-configured generation params with safe defaults\n-\tmaxLength := 200\n-\tif v, err := strconv.Atoi(params.Max_length); err == nil && v > 0 {\n-\t\tmaxLength = v\n-\t}\n-\n-\ttemperature := 0.7\n-\tif v, err := strconv.ParseFloat(params.Temperature, 64); err == nil && v > 0 && v <= 2 {\n-\t\ttemperature = v\n-\t}\n-\n-\ttopP := 0.9\n-\tif v, err := strconv.ParseFloat(params.Top_p, 64); err == nil && v > 0 && v <= 1 {\n-\t\ttopP = v\n-\t}\n-\n+\tgen := generationParams(params)\n \tsubmitReq := TextSubmitRequest{\n \t\tPrompt: prompt,\n \t\tModels: []string{model},\n-\t\tParams: &TextGenParams{\n-\t\t\tMaxLength:   maxLength,\n-\t\t\tTemperature: temperature,\n-\t\t\tTopP:        topP,\n-\t\t\tRepPen:     1.1,\n-\t\t},\n+\t\tParams: &gen,\n \t}\n \n \tjsonReq, err := json.Marshal(submitReq)"
+  },
+  {
+   "filename": "src/providers/aihorde/aihorde_test.go",
+   "status": "added",
+   "additions": 41,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,41 @@\n+package aihorde\n+\n+import (\n+\t\"encoding/json\"\n+\t\"testing\"\n+\n+\t\"github.com/aandrew-me/tgpt/v2/src/structs\"\n+\t\"github.com/stretchr/testify/assert\"\n+)\n+\n+func marshalParams(t *testing.T, params structs.Params) map[string]any {\n+\tt.Helper()\n+\traw, err := json.Marshal(generationParams(params))\n+\tassert.NoError(t, err)\n+\tvar decoded map[string]any\n+\tassert.NoError(t, json.Unmarshal(raw, &decoded))\n+\treturn decoded\n+}\n+\n+func TestGenerationParamsSendsTemperatureZero(t *testing.T) {\n+\tdecoded := marshalParams(t, structs.Params{Temperature: \"0\"})\n+\ttemp, ok := decoded[\"temperature\"]\n+\tassert.True(t, ok, \"temperature was omitted: %v\", decoded)\n+\tassert.Equal(t, 0.0, temp)\n+}\n+\n+func TestGenerationParamsSendsSetTemperature(t *testing.T) {\n+\tdecoded := marshalParams(t, structs.Params{Temperature: \"0.2\"})\n+\tassert.InDelta(t, 0.2, decoded[\"temperature\"], 1e-9)\n+}\n+\n+func TestGenerationParamsKeepsDefaultTemperature(t *testing.T) {\n+\tdecoded := marshalParams(t, structs.Params{})\n+\tassert.InDelta(t, 0.7, decoded[\"temperature\"], 1e-9)\n+\n+\tdecoded = marshalParams(t, structs.Params{Temperature: \"warm\"})\n+\tassert.InDelta(t, 0.7, decoded[\"temperature\"], 1e-9)\n+\n+\tdecoded = marshalParams(t, structs.Params{Temperature: \"3\"})\n+\tassert.InDelta(t, 0.7, decoded[\"temperature\"], 1e-9)\n+}"
+  }
+ ],
+ "test_files": [
+  "src/providers/aihorde/aihorde_test.go"
+ ]
+}
