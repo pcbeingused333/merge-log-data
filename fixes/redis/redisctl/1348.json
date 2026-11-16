@@ -1,0 +1,48 @@
+{
+ "repo": "redis/redisctl",
+ "number": 1348,
+ "url": "https://github.com/redis/redisctl/pull/1348",
+ "title": "fix(mcp): reject count 0 in redis_xrange and redis_slowlog instead of reporting no results",
+ "merged_at": "2026-11-15T20:11:43Z",
+ "files": [
+  {
+   "filename": "crates/redisctl-mcp/src/tools/redis/mod.rs",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 1,
+   "patch": "@@ -264,6 +264,21 @@ pub(crate) fn require_positive_limit(limit: usize) -> Result<(), String> {\n     )\n }\n \n+/// Refuse a zero value for a named count parameter before it is sent to Redis.\n+///\n+/// Same idea as [`require_positive_limit`], for tools whose count parameter is not\n+/// called `limit` (`count`): 0 makes Redis return nothing, which would be reported\n+/// as \"no results\".\n+pub(crate) fn require_positive_param(name: &str, value: usize) -> Result<(), String> {\n+    if value > 0 {\n+        return Ok(());\n+    }\n+    Err(format!(\n+        \"{name} must be at least 1: a value of 0 returns nothing, which would be \\\n+         reported as no results. Use a positive {name}.\"\n+    ))\n+}\n+\n /// Build an MCP sub-router containing all Redis database tools\n pub fn router(state: Arc<AppState>) -> McpRouter {\n     McpRouter::new()\n@@ -280,7 +295,14 @@ pub fn router(state: Arc<AppState>) -> McpRouter {\n \n #[cfg(test)]\n mod limit_tests {\n-    use super::require_positive_limit;\n+    use super::{require_positive_limit, require_positive_param};\n+\n+    #[test]\n+    fn zero_named_param_is_rejected() {\n+        let msg = require_positive_param(\"count\", 0).unwrap_err();\n+        assert!(msg.contains(\"count must be at least 1\"), \"{msg}\");\n+        assert_eq!(require_positive_param(\"count\", 5), Ok(()));\n+    }\n \n     #[test]\n     fn zero_limit_is_rejected() {"
+  },
+  {
+   "filename": "crates/redisctl-mcp/src/tools/redis/server.rs",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -122,6 +122,9 @@ database_tool!(read_only, slowlog, \"redis_slowlog\",\n         #[serde(default = \"default_slowlog_count\", deserialize_with = \"serde_helpers::string_or_usize::deserialize\")]\n         pub count: usize,\n     } => |conn, input| {\n+        // SLOWLOG GET 0 returns nothing, which would read as \"no slow queries\".\n+        super::require_positive_param(\"count\", input.count).map_err(tower_mcp::Error::tool)?;\n+\n         // SLOWLOG GET returns nested arrays\n         let entries: Vec<Vec<redis::Value>> = redis::cmd(\"SLOWLOG\")\n             .arg(\"GET\")"
+  },
+  {
+   "filename": "crates/redisctl-mcp/src/tools/redis/structures.rs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -317,6 +317,8 @@ database_tool!(read_only, xrange, \"redis_xrange\",\n         cmd.arg(&input.key).arg(&input.start).arg(&input.end);\n \n         if let Some(count) = input.count {\n+            // XRANGE COUNT 0 returns nothing, reported as \"No stream entries returned\".\n+            super::require_positive_param(\"count\", count).map_err(tower_mcp::Error::tool)?;\n             cmd.arg(\"COUNT\").arg(count);\n         }\n "
+  },
+  {
+   "filename": "crates/redisctl-mcp/tests/empty_range_replies.rs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -128,7 +128,7 @@ async fn empty_stream_ranges_report_returned_results_without_guessing_key_state(\n             vec![],\n         ),\n         (json!({}), \"-\", \"+\", vec![]),\n-        (json!({\"count\": \"0\"}), \"-\", \"+\", vec![\"COUNT\", \"0\"]),\n+        (json!({\"count\": \"1\"}), \"-\", \"+\", vec![\"COUNT\", \"1\"]),\n     ] {\n         let mut input = json!({\"key\": \"synthetic\"});\n         input"
+  },
+  {
+   "filename": "crates/redisctl-mcp/tests/keys_limit_guard.rs",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -205,3 +205,32 @@ async fn keys_and_scan_dedupe_repeated_keys() {\n         );\n     }\n }\n+\n+#[tokio::test]\n+async fn xrange_and_slowlog_refuse_zero_count_without_querying() {\n+    for (make_tool, name, input) in [\n+        (\n+            redis::xrange as fn(_) -> Tool,\n+            \"redis_xrange\",\n+            json!({\"key\": \"s\", \"count\": 0}),\n+        ),\n+        (\n+            redis::xrange as fn(_) -> Tool,\n+            \"redis_xrange\",\n+            json!({\"key\": \"s\", \"count\": \"0\"}),\n+        ),\n+        (\n+            redis::slowlog as fn(_) -> Tool,\n+            \"redis_slowlog\",\n+            json!({\"count\": 0}),\n+        ),\n+    ] {\n+        let result = run(make_tool, input, None).await;\n+        assert!(result.is_error, \"{name}: expected tool error: {result:?}\");\n+        let message = text(&result);\n+        assert!(\n+            message.contains(\"count must be at least 1\"),\n+            \"{name}: {message}\"\n+        );\n+    }\n+}"
+  }
+ ],
+ "test_files": [
+  "crates/redisctl-mcp/tests/empty_range_replies.rs",
+  "crates/redisctl-mcp/tests/keys_limit_guard.rs"
+ ]
+}

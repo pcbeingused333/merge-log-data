@@ -1,0 +1,33 @@
+{
+ "repo": "redis/redisctl",
+ "number": 1349,
+ "url": "https://github.com/redis/redisctl/pull/1349",
+ "title": "fix(mcp): reject sample_size 0 in redis_hotkeys instead of reporting no keys",
+ "merged_at": "2026-11-15T20:11:43Z",
+ "files": [
+  {
+   "filename": "crates/redisctl-mcp/src/tools/redis/diagnostics.rs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -278,6 +278,7 @@ database_tool!(read_only, hotkeys, \"redis_hotkeys\",\n     } => |conn, input| {\n         let pattern = input.pattern.as_deref().unwrap_or(\"*\");\n         let sample_size = input.sample_size.unwrap_or(1000).min(MAX_SAMPLE_SIZE);\n+        super::require_positive_sample_size(sample_size).map_err(tower_mcp::Error::tool)?;\n \n         // SCAN to collect keys\n         let mut cursor: u64 = 0;"
+  },
+  {
+   "filename": "crates/redisctl-mcp/src/tools/redis/mod.rs",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -248,6 +248,21 @@ pub(crate) fn require_positive_ttl(seconds: i64, target: &str, remedy: &str) ->\n     ))\n }\n \n+/// Refuse a sample size of zero before any key is scanned.\n+///\n+/// A sample size of 0 truncates the scanned keys to nothing, so `redis_hotkeys`\n+/// would report \"No keys found\" for a pattern that does match.\n+pub(crate) fn require_positive_sample_size(sample_size: usize) -> Result<(), String> {\n+    if sample_size > 0 {\n+        return Ok(());\n+    }\n+    Err(\n+        \"sample_size must be at least 1: a sample size of 0 samples no keys, which \\\n+         would be reported as no matches. Use a positive sample_size.\"\n+            .to_string(),\n+    )\n+}\n+\n /// Refuse a result limit of zero before any key is scanned.\n ///\n /// A limit of 0 truncates every result to nothing, so `redis_keys` and `redis_scan`"
+  },
+  {
+   "filename": "crates/redisctl-mcp/tests/keys_limit_guard.rs",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 1,
+   "patch": "@@ -1,6 +1,7 @@\n #![cfg(feature = \"database\")]\n //! Synthetic RESP regressions: `limit: 0` on `redis_keys`/`redis_scan` must be\n-//! refused up front instead of scanning and reporting \"No keys found\".\n+//! refused up front instead of scanning and reporting \"No keys found\"; same for\n+//! `sample_size: 0` on `redis_hotkeys`.\n \n mod support;\n \n@@ -100,6 +101,27 @@ fn text(result: &tower_mcp::CallToolResult) -> &str {\n     result.content[0].as_text().expect(\"text content\")\n }\n \n+#[tokio::test]\n+async fn hotkeys_refuse_zero_sample_size_without_scanning() {\n+    for sample_size in [json!(0), json!(\"0\")] {\n+        let result = run(\n+            redis::hotkeys,\n+            json!({\"pattern\": \"*\", \"sample_size\": sample_size}),\n+            None,\n+        )\n+        .await;\n+        assert!(\n+            result.is_error,\n+            \"redis_hotkeys: expected tool error: {result:?}\"\n+        );\n+        let message = text(&result);\n+        assert!(\n+            message.contains(\"sample_size must be at least 1\"),\n+            \"redis_hotkeys: {message}\"\n+        );\n+    }\n+}\n+\n #[tokio::test]\n async fn keys_and_scan_refuse_zero_limit_without_scanning() {\n     for (make_tool, name) in ["
+  }
+ ],
+ "test_files": [
+  "crates/redisctl-mcp/tests/keys_limit_guard.rs"
+ ]
+}

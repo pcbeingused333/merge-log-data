@@ -1,0 +1,33 @@
+{
+ "repo": "LottieFiles/dotlottie-web",
+ "number": 1004,
+ "url": "https://github.com/LottieFiles/dotlottie-web/pull/1004",
+ "title": "fix(react): re-apply themeData after the animation reloads",
+ "merged_at": "2026-11-16T04:34:25Z",
+ "files": [
+  {
+   "filename": ".changeset/react-reapply-theme-data.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@lottiefiles/dotlottie-react': patch\n+---\n+\n+fix: re-apply `themeData` after the animation is reloaded (e.g. when `src` changes)"
+  },
+  {
+   "filename": "packages/react/src/base-dotlottie-react.tsx",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -109,10 +109,12 @@ export const BaseDotLottieReact = <T extends DotLottie | DotLottieWorker>({\n     stateMachineId,\n   };\n \n+  const themeDataRef = useRef(themeData);\n   const configRef = useRef<Omit<BaseDotLottieProps<T>, 'createDotLottie' | 'dotLottieRefCallback'> | undefined>(config);\n \n   dotLottieRefCallbackRef.current = dotLottieRefCallback;\n   configRef.current = config;\n+  themeDataRef.current = themeData;\n \n   // biome-ignore lint/correctness/useExhaustiveDependencies: DotLottie instance must only be created once per canvas mount\n   const setCanvasRef = useCallback((canvas: HTMLCanvasElement | null) => {\n@@ -131,6 +133,15 @@ export const BaseDotLottieReact = <T extends DotLottie | DotLottieWorker>({\n           ...configRef.current,\n           canvas,\n         });\n+        const instance = dotLottieRef.current;\n+\n+        // The core clears theme data on every load. Attach to each new instance,\n+        // including instances created after the canvas detaches and reattaches.\n+        instance.addEventListener('load', () => {\n+          if (themeDataRef.current && !configRef.current?.themeId) {\n+            instance.setThemeData(themeDataRef.current);\n+          }\n+        });\n       }\n       // else: React 19 StrictMode double attach without detach — reuse the live instance\n     } else if (dotLottieRef.current) {"
+  },
+  {
+   "filename": "packages/react/tests/dotlottie-react.spec.tsx",
+   "status": "modified",
+   "additions": 81,
+   "deletions": 0,
+   "patch": "@@ -597,6 +597,87 @@ describe.each([\n     expect(dotLottie?.segment).toEqual([0, dotLottie.totalFrames - 1]);\n   });\n \n+  test('re-applies themeData after src changes', async () => {\n+    const dotLottieRefCallback = vi.fn((instance: DotLottie | DotLottieWorker | null) => {\n+      if (instance) vi.spyOn(instance, 'setThemeData');\n+    });\n+    const themeData = JSON.stringify({ rules: [{ id: 'c0', type: 'Color', value: [1, 0, 1] }] });\n+\n+    const { rerender } = await render(\n+      <Component src={lottieSrc} autoplay themeData={themeData} dotLottieRefCallback={dotLottieRefCallback} />,\n+    );\n+\n+    await vi.waitFor(() => {\n+      expect(dotLottieRefCallback).toHaveBeenCalledTimes(1);\n+    });\n+\n+    const dotLottie = dotLottieRefCallback.mock.calls[0]?.[0];\n+    const onLoad = vi.fn();\n+\n+    dotLottie?.addEventListener('load', onLoad);\n+\n+    await vi.waitFor(() => {\n+      expect(dotLottie?.isLoaded).toBe(true);\n+      expect(onLoad).toHaveBeenCalledTimes(1);\n+    });\n+\n+    if (!dotLottie) {\n+      throw new Error('expected a player instance');\n+    }\n+\n+    const setThemeData = vi.spyOn(dotLottie, 'setThemeData');\n+\n+    await vi.waitFor(async () => {\n+      expect(await setThemeData.mock.results.at(-1)?.value).toBe(true);\n+    });\n+    setThemeData.mockClear();\n+\n+    rerender(\n+      <Component src={dotLottieSrc} autoplay themeData={themeData} dotLottieRefCallback={dotLottieRefCallback} />,\n+    );\n+\n+    await vi.waitFor(() => {\n+      expect(onLoad).toHaveBeenCalledTimes(2);\n+    });\n+\n+    await vi.waitFor(async () => {\n+      expect(setThemeData).toHaveBeenCalledWith(themeData);\n+      expect(await setThemeData.mock.results.at(-1)?.value).toBe(true);\n+    });\n+  });\n+\n+  test('preserves themeId when themeData is also provided on reload', async () => {\n+    const themedSrc = new URL('../../../fixtures/multi_themes.lottie', import.meta.url).href;\n+    const themeData = JSON.stringify({ rules: [{ id: 'c0', type: 'Color', value: [1, 0, 1] }] });\n+    const dotLottieRefCallback = vi.fn();\n+    const { rerender } = await render(\n+      <Component src={themedSrc} themeId=\"dark\" themeData={themeData} dotLottieRefCallback={dotLottieRefCallback} />,\n+    );\n+    const instance = dotLottieRefCallback.mock.calls[0]?.[0];\n+\n+    await vi.waitFor(() => {\n+      expect(instance?.isLoaded).toBe(true);\n+      expect(instance?.activeThemeId).toBe('dark');\n+    });\n+    const setThemeData = vi.spyOn(instance, 'setThemeData');\n+    const onLoad = vi.fn();\n+\n+    instance.addEventListener('load', onLoad);\n+    rerender(\n+      <Component\n+        src={`${themedSrc}?reload=1`}\n+        themeId=\"dark\"\n+        themeData={themeData}\n+        dotLottieRefCallback={dotLottieRefCallback}\n+      />,\n+    );\n+    await vi.waitFor(() => {\n+      expect(onLoad).toHaveBeenCalledTimes(1);\n+      expect(instance.activeThemeId).toBe('dark');\n+    });\n+    expect(setThemeData).not.toHaveBeenCalled();\n+  });\n+\n   test.todo('calls dotLottie.setTheme & dotLottie.resetTheme when themeId prop changes', async () => {\n     const onLoad = vi.fn();\n     const dotLottieRefCallback = vi.fn();"
+  }
+ ],
+ "test_files": [
+  "packages/react/tests/dotlottie-react.spec.tsx"
+ ]
+}

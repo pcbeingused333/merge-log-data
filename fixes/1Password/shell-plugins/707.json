@@ -1,0 +1,26 @@
+{
+ "repo": "1Password/shell-plugins",
+ "number": 707,
+ "url": "https://github.com/1Password/shell-plugins/pull/707",
+ "title": "fix(aws): only strip the value that follows --profile",
+ "merged_at": "2026-11-16T05:38:30Z",
+ "files": [
+  {
+   "filename": "plugins/aws/access_key_test.go",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -742,6 +742,16 @@ func TestStripAndReturnProfileFlag(t *testing.T) {\n \t\t\texpectedArgs:      []string{\"--\", \"wrapped command\", \"--profile\", \"dev\"},\n \t\t\texpectedFlagValue: \"\",\n \t\t},\n+\t\t{\n+\t\t\targs:              []string{\"iam\", \"get-user\", \"--profile\", \"alice\", \"--user-name\", \"alice\"},\n+\t\t\texpectedArgs:      []string{\"iam\", \"get-user\", \"--user-name\", \"alice\"},\n+\t\t\texpectedFlagValue: \"alice\",\n+\t\t},\n+\t\t{\n+\t\t\targs:              []string{\"iam\", \"get-user\", \"--profile=alice\", \"--user-name\", \"alice\"},\n+\t\t\texpectedArgs:      []string{\"iam\", \"get-user\", \"--user-name\", \"alice\"},\n+\t\t\texpectedFlagValue: \"alice\",\n+\t\t},\n \t} {\n \t\tt.Run(fmt.Sprintf(\"test case %d\", i), func(t *testing.T) {\n \t\t\tflag, args, err := stripAndReturnProfileFlag(scenario.args)"
+  },
+  {
+   "filename": "plugins/aws/cli_provisioner.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -29,7 +29,8 @@ func stripAndReturnProfileFlag(args []string) (string, []string, error) {\n \tvar profileValue string\n \tvar newArgs []string\n \tcommandOptionsEnded := false\n-\tfor i, arg := range args {\n+\tfor i := 0; i < len(args); i++ {\n+\t\targ := args[i]\n \t\t// if `--profile` is used after `--`, it should not be interpreted as a flag\n \t\tif arg == \"--\" {\n \t\t\tcommandOptionsEnded = true\n@@ -39,12 +40,14 @@ func stripAndReturnProfileFlag(args []string) (string, []string, error) {\n \t\t\t\treturn \"\", nil, fmt.Errorf(\"--profile flag was specified without a value\")\n \t\t\t}\n \t\t\tprofileValue = args[i+1]\n+\t\t\t// skip the value too, so later arguments equal to the profile name are kept\n+\t\t\ti++\n \t\t} else if !commandOptionsEnded && strings.HasPrefix(arg, \"--profile=\") {\n \t\t\tprofileValue = strings.TrimPrefix(arg, \"--profile=\")\n \t\t\tif profileValue == \"\" {\n \t\t\t\treturn \"\", nil, fmt.Errorf(\"--profile flag was specified without a value\")\n \t\t\t}\n-\t\t} else if commandOptionsEnded || arg != profileValue {\n+\t\t} else {\n \t\t\t// make sure only profile specification args are removed from the command line so that aws cli does not attempt to assume a role by itself.\n \t\t\tnewArgs = append(newArgs, arg)\n \t\t}"
+  }
+ ],
+ "test_files": [
+  "plugins/aws/access_key_test.go"
+ ]
+}

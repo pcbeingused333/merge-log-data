@@ -1,0 +1,62 @@
+{
+ "repo": "NVIDIA/NVSentinel",
+ "number": 2397,
+ "url": "https://github.com/NVIDIA/NVSentinel/pull/2397",
+ "title": "feat(janitor-provider): add configurable priority class for the generic reboot Job",
+ "merged_at": "2026-11-15T23:14:30Z",
+ "files": [
+  {
+   "filename": "distros/kubernetes/nvsentinel/charts/janitor-provider/templates/deployment.yaml",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -107,6 +107,10 @@ spec:\n             - name: GENERIC_REBOOT_IMAGE_PULL_SECRETS\n               value: {{ .Values.csp.generic.imagePullSecrets | quote }}\n             {{- end }}\n+            {{- if .Values.csp.generic.rebootJobPriorityClassName }}\n+            - name: GENERIC_REBOOT_JOB_PRIORITY_CLASS_NAME\n+              value: {{ .Values.csp.generic.rebootJobPriorityClassName | quote }}\n+            {{- end }}\n             {{- end }}\n             {{- if eq (lower (.Values.csp.provider | default \"kind\")) \"label\" }}\n             # Label provider environment variables (key=value specs)"
+  },
+  {
+   "filename": "distros/kubernetes/nvsentinel/charts/janitor-provider/values.yaml",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -135,6 +135,9 @@ csp:\n     imagePullSecrets: \"\"\n     # Write a reboot attribution message to the node's syslog before rebooting\n     writeSyslog: false\n+    # PriorityClass for the reboot Job's pod (optional), e.g. system-node-critical so the\n+    # kubelet admits the pod on a node under DiskPressure. Empty sets no priority class.\n+    rebootJobPriorityClassName: \"\"\n \n   # Label provider configuration (only used when provider=label)\n   # Requests reboot/terminate by labeling the Node. An external controller"
+  },
+  {
+   "filename": "distros/kubernetes/nvsentinel/tests/janitor_provider_generic_priority_class_test.yaml",
+   "status": "added",
+   "additions": 41,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,41 @@\n+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\");\n+# you may not use this file except in compliance with the License.\n+# You may obtain a copy of the License at\n+#\n+#     http://www.apache.org/licenses/LICENSE-2.0\n+#\n+# Unless required by applicable law or agreed to in writing, software\n+# distributed under the License is distributed on an \"AS IS\" BASIS,\n+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+# See the License for the specific language governing permissions and\n+# limitations under the License.\n+\n+suite: janitor-provider generic reboot job priority class\n+release:\n+  name: nvsentinel\n+  namespace: nvsentinel\n+templates:\n+  - charts/janitor-provider/templates/deployment.yaml\n+set:\n+  global.janitorProvider.enabled: true\n+  janitor-provider.csp.provider: generic\n+tests:\n+  - it: does not set GENERIC_REBOOT_JOB_PRIORITY_CLASS_NAME by default\n+    asserts:\n+      - notContains:\n+          path: spec.template.spec.containers[0].env\n+          content:\n+            name: GENERIC_REBOOT_JOB_PRIORITY_CLASS_NAME\n+          any: true\n+\n+  - it: passes rebootJobPriorityClassName to GENERIC_REBOOT_JOB_PRIORITY_CLASS_NAME\n+    set:\n+      janitor-provider.csp.generic.rebootJobPriorityClassName: system-node-critical\n+    asserts:\n+      - contains:\n+          path: spec.template.spec.containers[0].env\n+          content:\n+            name: GENERIC_REBOOT_JOB_PRIORITY_CLASS_NAME\n+            value: system-node-critical"
+  },
+  {
+   "filename": "distros/kubernetes/nvsentinel/values-full.yaml",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -1704,6 +1704,10 @@ janitor:\n       \n       # Write a reboot attribution message to the node's syslog before rebooting\n       writeSyslog: false\n+      \n+      # PriorityClass for the reboot Job's pod (optional), e.g. system-node-critical so the\n+      # kubelet admits the pod on a node under DiskPressure. Empty sets no priority class.\n+      rebootJobPriorityClassName: \"\"\n     \n     # AWS-specific configuration (only needed when provider=aws)\n     aws:"
+  },
+  {
+   "filename": "docs/configuration/janitor-provider.md",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -424,6 +424,7 @@ janitor-provider:\n       rebootJobTTLSeconds: 3600\n       imagePullSecrets: \"\"\n       writeSyslog: false\n+      rebootJobPriorityClassName: \"\"\n ```\n \n ### rebootImage\n@@ -446,6 +447,9 @@ Name of an image pull secret to attach to the reboot Job, if `rebootImage` is pu\n ### writeSyslog\n When `true`, the Job writes an attribution entry to the node's syslog via `logger` before executing the reboot command. Defaults to `false`.\n \n+### rebootJobPriorityClassName\n+Name of the PriorityClass set on the reboot Job's pod. Defaults to empty, which sets no priority class. The kubelet rejects a pod without a critical priority on a node that reports `DiskPressure`, so the reboot never runs and the attempt fails. Set this to `system-node-critical` or `system-cluster-critical` to let the kubelet admit the pod on such a node. Only these two built-in classes are critical: a PriorityClass that you create cannot have a value that high. The class must exist in the cluster, and some clusters limit which namespaces can use the `system-` classes with a ResourceQuota. If the class does not exist or the namespace cannot use it, the Job creates no pod and the reboot attempt ends when the reboot timeout expires.\n+\n ## Label provider\n \n Requests reboot and terminate by labeling the Node. An external controller running on the Kubernetes control plane can watch those labels and perform the required action. After reboot completion, that controller **MUST** remove the reboot label. The node is considered ready once the reboot label is removed and the node's boot ID has changed."
+  },
+  {
+   "filename": "janitor-provider/pkg/csp/generic/generic.go",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 9,
+   "patch": "@@ -71,6 +71,9 @@ type Config struct {\n \tRebootJobPullSecrets []string\n \t// WriteSyslog writes an attribution entry to host syslog before rebooting when true.\n \tWriteSyslog bool\n+\t// RebootJobPriorityClassName is the PriorityClass of the reboot Job's pod. Empty leaves\n+\t// the pod without a priority class.\n+\tRebootJobPriorityClassName string\n }\n \n // Client is the generic bare-metal implementation of the CSP Client interface.\n@@ -269,9 +272,10 @@ func (c *Client) buildRebootJob(nodeName, crName, preRebootBootID string) *batch\n \t\t\t\t\t},\n \t\t\t\t},\n \t\t\t\tSpec: corev1.PodSpec{\n-\t\t\t\t\tNodeName:         nodeName,\n-\t\t\t\t\tRestartPolicy:    corev1.RestartPolicyNever,\n-\t\t\t\t\tImagePullSecrets: buildImagePullSecrets(c.config.RebootJobPullSecrets),\n+\t\t\t\t\tNodeName:          nodeName,\n+\t\t\t\t\tRestartPolicy:     corev1.RestartPolicyNever,\n+\t\t\t\t\tPriorityClassName: c.config.RebootJobPriorityClassName,\n+\t\t\t\t\tImagePullSecrets:  buildImagePullSecrets(c.config.RebootJobPullSecrets),\n \t\t\t\t\tTolerations: []corev1.Toleration{\n \t\t\t\t\t\t{Operator: corev1.TolerationOpExists},\n \t\t\t\t\t},\n@@ -605,11 +609,12 @@ func loadConfigFromEnv() Config {\n \t}\n \n \treturn Config{\n-\t\tRebootImage:          image,\n-\t\tUseSysrqReboot:       useSysrqReboot,\n-\t\tRebootJobNamespace:   namespace,\n-\t\tRebootJobTTL:         ttl,\n-\t\tRebootJobPullSecrets: pullSecrets,\n-\t\tWriteSyslog:          writeSyslog,\n+\t\tRebootImage:                image,\n+\t\tUseSysrqReboot:             useSysrqReboot,\n+\t\tRebootJobNamespace:         namespace,\n+\t\tRebootJobTTL:               ttl,\n+\t\tRebootJobPullSecrets:       pullSecrets,\n+\t\tWriteSyslog:                writeSyslog,\n+\t\tRebootJobPriorityClassName: strings.TrimSpace(os.Getenv(\"GENERIC_REBOOT_JOB_PRIORITY_CLASS_NAME\")),\n \t}\n }"
+  },
+  {
+   "filename": "janitor-provider/pkg/csp/generic/generic_test.go",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -296,6 +296,25 @@ func TestBuildRebootJob_UsesSyslogWhenEnabled(t *testing.T) {\n \tassert.Equal(t, \"host-root\", job.Spec.Template.Spec.Volumes[0].Name)\n }\n \n+func TestBuildRebootJob_NoPriorityClassByDefault(t *testing.T) {\n+\tjob := newTestClient().buildRebootJob(\"worker-1\", \"\", \"boot-id-abc\")\n+\n+\tassert.Empty(t, job.Spec.Template.Spec.PriorityClassName)\n+}\n+\n+func TestBuildRebootJob_UsesConfiguredPriorityClass(t *testing.T) {\n+\tclient := NewClientWithK8s(fake.NewSimpleClientset(), Config{\n+\t\tRebootImage:                \"busybox:1.37\",\n+\t\tRebootJobNamespace:         \"test-ns\",\n+\t\tRebootJobTTL:               3600,\n+\t\tRebootJobPriorityClassName: \"system-node-critical\",\n+\t})\n+\n+\tjob := client.buildRebootJob(\"worker-1\", \"\", \"boot-id-abc\")\n+\n+\tassert.Equal(t, \"system-node-critical\", job.Spec.Template.Spec.PriorityClassName)\n+}\n+\n func TestSendRebootSignal_EmptyBootID(t *testing.T) {\n \tclient := newTestClient()\n \tctx := context.Background()\n@@ -761,6 +780,7 @@ func TestLoadConfigFromEnv(t *testing.T) {\n \t\tassert.Equal(t, \"\", config.RebootJobNamespace)\n \t\tassert.Equal(t, int32(defaultRebootJobTTLSeconds), config.RebootJobTTL)\n \t\tassert.False(t, config.WriteSyslog)\n+\t\tassert.Empty(t, config.RebootJobPriorityClassName)\n \t})\n \n \tt.Run(\"custom values\", func(t *testing.T) {\n@@ -770,6 +790,7 @@ func TestLoadConfigFromEnv(t *testing.T) {\n \t\tt.Setenv(\"GENERIC_REBOOT_JOB_TTL\", \"7200\")\n \t\tt.Setenv(\"GENERIC_REBOOT_IMAGE_PULL_SECRETS\", \"secret-a, secret-b\")\n \t\tt.Setenv(\"GENERIC_REBOOT_WRITE_SYSLOG\", \"true\")\n+\t\tt.Setenv(\"GENERIC_REBOOT_JOB_PRIORITY_CLASS_NAME\", \" system-node-critical \")\n \n \t\tconfig := loadConfigFromEnv()\n \t\tassert.Equal(t, \"custom-image:latest\", config.RebootImage)\n@@ -778,6 +799,7 @@ func TestLoadConfigFromEnv(t *testing.T) {\n \t\tassert.Equal(t, int32(7200), config.RebootJobTTL)\n \t\tassert.Equal(t, []string{\"secret-a\", \"secret-b\"}, config.RebootJobPullSecrets)\n \t\tassert.True(t, config.WriteSyslog)\n+\t\tassert.Equal(t, \"system-node-critical\", config.RebootJobPriorityClassName)\n \t})\n \n \tt.Run(\"invalid sysrq flag uses default\", func(t *testing.T) {"
+  }
+ ],
+ "test_files": [
+  "distros/kubernetes/nvsentinel/tests/janitor_provider_generic_priority_class_test.yaml",
+  "janitor-provider/pkg/csp/generic/generic_test.go"
+ ]
+}

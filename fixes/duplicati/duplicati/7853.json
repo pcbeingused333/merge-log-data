@@ -1,0 +1,26 @@
+{
+ "repo": "duplicati/duplicati",
+ "number": 7853,
+ "url": "https://github.com/duplicati/duplicati/pull/7853",
+ "title": "fix: respect uncompressed restore paths in restore tests",
+ "merged_at": "2026-11-15T19:23:02Z",
+ "files": [
+  {
+   "filename": "Duplicati/Library/Main/Operation/RestoreTestHandler.cs",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 3,
+   "patch": "@@ -213,7 +213,8 @@ public async Task RunAsync(IBackendManager backendManager, IFilter? filter)\n                 EnsureFreeSpace(scratchRoot, sampleBytes + m_options.VolumeSize);\n \n                 // A full test restores the version with the candidate filter, exactly as a normal restore\n-                // would, so the restore engine strips the same path prefix as it does for the candidates.\n+                // would, so the restore engine strips the same path prefix as it does for the candidates\n+                // (unless dont-compress-restore-paths is set, in which case the full source path is kept).\n                 // A sampled test restores just the sampled paths, which are bounded by the sample size.\n                 var restoreFolder = Path.Combine(scratchRoot, RESTORE_FOLDER_NAME);\n                 Directory.CreateDirectory(restoreFolder);\n@@ -222,11 +223,15 @@ public async Task RunAsync(IBackendManager backendManager, IFilter? filter)\n                 if (mode == RestoreTestMode.Full)\n                 {\n                     restoreFilter = candidateFilter;\n-                    prefix = await db.GetLargestPrefixAsync(useCandidates: true, token).ConfigureAwait(false);\n+                    prefix = m_options.DontCompressRestorePaths\n+                        ? string.Empty\n+                        : await db.GetLargestPrefixAsync(useCandidates: true, token).ConfigureAwait(false);\n                 }\n                 else\n                 {\n-                    prefix = await db.GetLargestPrefixAsync(useCandidates: false, token).ConfigureAwait(false);\n+                    prefix = m_options.DontCompressRestorePaths\n+                        ? string.Empty\n+                        : await db.GetLargestPrefixAsync(useCandidates: false, token).ConfigureAwait(false);\n                     var paths = new List<string>();\n                     await foreach (var file in db.GetSampleFilesAsync(filesetId, token).ConfigureAwait(false))\n                     {"
+  },
+  {
+   "filename": "Duplicati/UnitTest/RestoreTestHandlerTests.cs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -255,12 +255,13 @@ private static void CorruptFileMiddle(string path, int count)\n \n         [Test]\n         [Category(\"RestoreTest\")]\n-        public async Task AllModesPassOnHealthyBackupAsync([Values(\"RandomFiles\", \"RandomSize\", \"Full\", \"Rolling\")] string mode)\n+        public async Task AllModesPassOnHealthyBackupAsync([Values(\"RandomFiles\", \"RandomSize\", \"Full\", \"Rolling\")] string mode, [Values(false, true)] bool dontCompressRestorePaths)\n         {\n             var files = CreateSourceFiles(12);\n             await RunBackupAsync();\n \n             var options = RestoreTestOptions(mode);\n+            options[\"dont-compress-restore-paths\"] = dontCompressRestorePaths.ToString();\n             options[\"restore-test-recreate-database\"] = \"true\";\n             options[\"restore-test-sample-count\"] = \"5\";\n             options[\"restore-test-sample-percent\"] = \"30\";"
+  }
+ ],
+ "test_files": [
+  "Duplicati/UnitTest/RestoreTestHandlerTests.cs"
+ ]
+}
