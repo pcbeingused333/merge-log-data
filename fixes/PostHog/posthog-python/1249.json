@@ -1,0 +1,40 @@
+{
+ "repo": "PostHog/posthog-python",
+ "number": 1249,
+ "url": "https://github.com/PostHog/posthog-python/pull/1249",
+ "title": "fix(ai): capture initial request errors in Anthropic messages.stream()",
+ "merged_at": "2026-11-16T09:27:30Z",
+ "files": [
+  {
+   "filename": ".sampo/changesets/anthropic-stream-request-error.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+pypi/posthog: patch\n+---\n+\n+`posthog.ai.anthropic`: `messages.stream()` (sync and async) now captures an `$ai_generation` event with `$ai_is_error` when the initial request fails, for example with a 401 or a connection error. Before, only `messages.create(stream=True)` captured that failure, so errors raised on entering the `stream()` context manager were never reported."
+  },
+  {
+   "filename": "posthog/ai/anthropic/anthropic.py",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 1,
+   "patch": "@@ -140,7 +140,28 @@ def stream(\n \n         def tracked_request():\n             start_time = time.time()\n-            response = request()\n+            try:\n+                response = request()\n+            except Exception as exc:\n+                accumulator = _AnthropicStreamAccumulator()\n+                try:\n+                    self._capture_streaming_event(\n+                        posthog_distinct_id,\n+                        posthog_trace_id,\n+                        posthog_properties,\n+                        posthog_privacy_mode,\n+                        posthog_groups,\n+                        kwargs,\n+                        accumulator.usage_stats,\n+                        time.time() - start_time,\n+                        accumulator.content_blocks,\n+                        accumulator.accumulated_content,\n+                        error=exc,\n+                    )\n+                except Exception:\n+                    # Telemetry must never replace the provider's own error.\n+                    _log.warning(\"[PostHog] Failed to capture streaming connect error\")\n+                raise\n             return self._track_streaming_response(\n                 response,\n                 posthog_distinct_id,"
+  },
+  {
+   "filename": "posthog/ai/anthropic/anthropic_async.py",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 1,
+   "patch": "@@ -141,7 +141,28 @@ def stream(\n \n         async def tracked_request():\n             start_time = time.time()\n-            response = await request\n+            try:\n+                response = await request\n+            except Exception as exc:\n+                accumulator = _AnthropicStreamAccumulator()\n+                try:\n+                    await self._capture_streaming_event(\n+                        posthog_distinct_id,\n+                        posthog_trace_id,\n+                        posthog_properties,\n+                        posthog_privacy_mode,\n+                        posthog_groups,\n+                        kwargs,\n+                        accumulator.usage_stats,\n+                        time.time() - start_time,\n+                        accumulator.content_blocks,\n+                        accumulator.accumulated_content,\n+                        error=exc,\n+                    )\n+                except Exception:\n+                    # Telemetry must never replace the provider's own error.\n+                    _log.warning(\"[PostHog] Failed to capture streaming connect error\")\n+                raise\n             return self._track_streaming_response(\n                 response,\n                 posthog_distinct_id,"
+  },
+  {
+   "filename": "posthog/test/ai/anthropic/test_anthropic.py",
+   "status": "modified",
+   "additions": 41,
+   "deletions": 0,
+   "patch": "@@ -2274,6 +2274,26 @@ def test_messages_stream_preserves_native_manager_helpers_close_and_tracking(\n     assert \"posthog_distinct_id\" not in client.post.call_args.kwargs\n \n \n+def test_messages_stream_captures_initial_request_error(mock_client):\n+    client = Anthropic(api_key=\"test-key\", posthog_client=mock_client)\n+    client.post = Mock(side_effect=RuntimeError(\"401 unauthorized\"))\n+\n+    manager = client.messages.stream(\n+        model=\"claude-haiku-4-5\",\n+        messages=[{\"role\": \"user\", \"content\": \"Foo\"}],\n+        max_tokens=1,\n+        posthog_distinct_id=\"test-user\",\n+    )\n+    with pytest.raises(RuntimeError, match=\"401 unauthorized\"):\n+        with manager:\n+            pass\n+\n+    assert mock_client.capture.call_count == 1\n+    props = mock_client.capture.call_args.kwargs[\"properties\"]\n+    assert props[\"$ai_is_error\"] is True\n+    assert props[\"$ai_error\"] == \"401 unauthorized\"\n+\n+\n def test_messages_stream_tolerates_provider_manager_internals_changing(mock_client):\n     manager = object()\n     client = Anthropic(api_key=\"test-key\", posthog_client=mock_client)\n@@ -2316,6 +2336,27 @@ async def test_async_messages_stream_preserves_provider_contract_and_manager(\n     assert \"posthog_distinct_id\" not in client.post.call_args.kwargs\n \n \n+@pytest.mark.asyncio\n+async def test_async_messages_stream_captures_initial_request_error(mock_client):\n+    client = AsyncAnthropic(api_key=\"test-key\", posthog_client=mock_client)\n+    client.post = AsyncMock(side_effect=RuntimeError(\"401 unauthorized\"))\n+\n+    manager = client.messages.stream(\n+        model=\"claude-haiku-4-5\",\n+        messages=[{\"role\": \"user\", \"content\": \"Foo\"}],\n+        max_tokens=1,\n+        posthog_distinct_id=\"test-user\",\n+    )\n+    with pytest.raises(RuntimeError, match=\"401 unauthorized\"):\n+        async with manager:\n+            pass\n+\n+    assert mock_client.capture.call_count == 1\n+    props = mock_client.capture.call_args.kwargs[\"properties\"]\n+    assert props[\"$ai_is_error\"] is True\n+    assert props[\"$ai_error\"] == \"401 unauthorized\"\n+\n+\n def test_async_messages_stream_tolerates_provider_manager_internals_changing(\n     mock_client,\n ):"
+  }
+ ],
+ "test_files": [
+  "posthog/test/ai/anthropic/test_anthropic.py"
+ ]
+}

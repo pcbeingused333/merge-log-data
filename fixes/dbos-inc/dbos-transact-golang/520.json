@@ -1,0 +1,41 @@
+{
+ "repo": "dbos-inc/dbos-transact-golang",
+ "number": 520,
+ "url": "https://github.com/dbos-inc/dbos-transact-golang/pull/520",
+ "title": "fix: treat workflow ID and schedule name prefix filters as literal",
+ "merged_at": "2026-11-16T17:27:01Z",
+ "files": [
+  {
+   "filename": "dbos/client_test.go",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -1545,6 +1545,25 @@ func TestListWorkflows(t *testing.T) {\n \t\tdequeuedBefore, err := client.ListWorkflows(client, WithFilterWorkflowIDs(parentID), WithFilterDequeuedBefore(testStartTime))\n \t\trequire.NoError(t, err)\n \t\tassert.Len(t, dequeuedBefore, 0, \"parent not dequeued before test start\")\n+\n+\t\t// Test 18: Workflow ID prefixes are literal: \"_\" and \"%\" are not\n+\t\t// wildcards, and a backslash is not an escape character.\n+\t\tfor _, id := range []string{`customer_1-job`, `customerA1-job`, `customer%2-job`, `customerZZ2-job`, `back\\slash-job`, `backXslash-job`} {\n+\t\t\th, err := RunWorkflow(serverCtx, simpleWorkflow, testInput{Value: 1, ID: id}, WithWorkflowID(id))\n+\t\t\trequire.NoError(t, err, \"failed to run workflow %s\", id)\n+\t\t\t_, err = h.GetResult()\n+\t\t\trequire.NoError(t, err, \"workflow %s should succeed\", id)\n+\t\t}\n+\t\tfor prefix, want := range map[string]string{\n+\t\t\t`customer_1`: `customer_1-job`,\n+\t\t\t`customer%2`: `customer%2-job`,\n+\t\t\t`back\\slash`: `back\\slash-job`,\n+\t\t} {\n+\t\t\tliteral, err := client.ListWorkflows(client, WithFilterWorkflowIDPrefix(prefix))\n+\t\t\trequire.NoError(t, err, \"failed to list workflows by prefix %q\", prefix)\n+\t\t\trequire.Len(t, literal, 1, \"prefix %q\", prefix)\n+\t\t\tassert.Equal(t, want, literal[0].ID)\n+\t\t}\n \t})\n \t// Verify all queue entries are cleaned up\n \trequire.True(t, queueEntriesAreCleanedUp(serverCtx), \"expected queue entries to be cleaned up after list workflows tests\")"
+  },
+  {
+   "filename": "dbos/internal/sysdb/dialect.go",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 1,
+   "patch": "@@ -490,11 +490,27 @@ func dialectAnyClause(d Dialect, column string, placeholderIdx int) string {\n \treturn fmt.Sprintf(\"%s IN (SELECT value FROM json_each($%d))\", column, placeholderIdx)\n }\n \n+// escapeLikePattern escapes the LIKE wildcards (% and _) and the escape\n+// character (\\) so that s matches literally. Postgres uses backslash as the\n+// default LIKE escape character; SQLite needs an explicit ESCAPE '\\'.\n+func escapeLikePattern(s string) string {\n+\treturn strings.NewReplacer(`\\`, `\\\\`, `%`, `\\%`, `_`, `\\_`).Replace(s)\n+}\n+\n func dialectLikeAnyClause(d Dialect, column string, placeholderIdx int) string {\n \tif d.SupportsArrayParameters() {\n \t\treturn fmt.Sprintf(\"%s LIKE ANY($%d)\", column, placeholderIdx)\n \t}\n-\treturn fmt.Sprintf(\"EXISTS (SELECT 1 FROM json_each($%d) WHERE %s LIKE value)\", placeholderIdx, column)\n+\treturn fmt.Sprintf(\"EXISTS (SELECT 1 FROM json_each($%d) WHERE %s LIKE value%s)\", placeholderIdx, column, dialectLikeEscapeClause(d))\n+}\n+\n+// dialectLikeEscapeClause declares backslash as the LIKE escape character on\n+// SQLite, which has no default. Postgres already defaults to backslash.\n+func dialectLikeEscapeClause(d Dialect) string {\n+\tif d != nil && d.Name() == DialectSQLite {\n+\t\treturn ` ESCAPE '\\'`\n+\t}\n+\treturn \"\"\n }\n \n // dialectNoLimitClause returns the LIMIT clause that must precede an OFFSET when"
+  },
+  {
+   "filename": "dbos/internal/sysdb/system_database.go",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 3,
+   "patch": "@@ -6983,7 +6983,7 @@ func (s *SysDB) ListSchedules(ctx context.Context, input ListSchedulesDBInput) (\n \tif len(input.ScheduleNamePrefixes) > 0 {\n \t\tpatterns := make([]string, len(input.ScheduleNamePrefixes))\n \t\tfor i, p := range input.ScheduleNamePrefixes {\n-\t\t\tpatterns[i] = p + \"%\"\n+\t\t\tpatterns[i] = escapeLikePattern(p) + \"%\"\n \t\t}\n \t\tencoded, err := encodeArrayParam(s.dialect, patterns)\n \t\tif err != nil {\n@@ -7961,11 +7961,12 @@ func (qb *queryBuilder) addWhereLikeAny(column string, prefixes []string, suffix\n \tif len(prefixes) == 0 {\n \t\treturn\n \t}\n+\tescape := dialectLikeEscapeClause(qb.dialect)\n \tors := make([]string, len(prefixes))\n \tfor i, p := range prefixes {\n \t\tqb.argCounter++\n-\t\tors[i] = fmt.Sprintf(\"%s LIKE $%d\", column, qb.argCounter)\n-\t\tqb.args = append(qb.args, p+suffix)\n+\t\tors[i] = fmt.Sprintf(\"%s LIKE $%d%s\", column, qb.argCounter, escape)\n+\t\tqb.args = append(qb.args, escapeLikePattern(p)+suffix)\n \t}\n \tqb.whereClauses = append(qb.whereClauses, \"(\"+strings.Join(ors, \" OR \")+\")\")\n }"
+  },
+  {
+   "filename": "dbos/schedule_test.go",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -204,6 +204,22 @@ func TestScheduleCRUD(t *testing.T) {\n \t\tnone, err = ListSchedules(dbosCtx, WithScheduleNamePrefixes(\"does-not-exist\"))\n \t\trequire.NoError(t, err)\n \t\trequire.Empty(t, none)\n+\n+\t\t// Schedule name prefixes are literal: \"_\" and \"%\" are not wildcards\n+\t\tfor _, name := range []string{`sched_1-a`, `schedA1-a`, `sched%2-a`, `schedZZ2-a`} {\n+\t\t\trequire.NoError(t, CreateSchedule(dbosCtx, ScheduleSpec{\n+\t\t\t\tScheduleName: name,\n+\t\t\t\tSchedule:     \"0 0 * * * *\",\n+\t\t\t\tWorkflow:     testWorkflowForSchedule,\n+\t\t\t}))\n+\t\t\tt.Cleanup(func() { _ = DeleteSchedule(dbosCtx, name) })\n+\t\t}\n+\t\tfor prefix, want := range map[string]string{`sched_1`: `sched_1-a`, `sched%2`: `sched%2-a`} {\n+\t\t\tliteral, err := ListSchedules(dbosCtx, WithScheduleNamePrefixes(prefix))\n+\t\t\trequire.NoError(t, err)\n+\t\t\trequire.Len(t, literal, 1, \"prefix %q\", prefix)\n+\t\t\trequire.Equal(t, want, literal[0].ScheduleName)\n+\t\t}\n \t})\n \n \tt.Run(\"DuplicateName\", func(t *testing.T) {"
+  }
+ ],
+ "test_files": [
+  "dbos/client_test.go",
+  "dbos/schedule_test.go"
+ ]
+}

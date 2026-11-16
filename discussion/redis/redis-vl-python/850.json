@@ -3,7 +3,39 @@
  "number": 850,
  "url": "https://github.com/redis/redis-vl-python/pull/850",
  "state": "open",
- "reviews": [],
- "review_comments": [],
- "comments": []
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-16T17:14:50Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "collaborator",
+   "path": "redisvl/redis/connection.py",
+   "created_at": "2026-11-16T17:14:50Z",
+   "body": "FT.INFO reports `training_threshold` on every compressed SVS field, including the server default of 10240 when FT.CREATE never set one. I measured this on Redis 8.2, 8.4, 8.6, 8.8 and 8.10. So after this change, any schema that sets compression but leaves `training_threshold` unset no longer matches the index it creates. Migration validation is the first thing that breaks.\n\nTo reproduce, I migrated a 5-document HNSW index to `{algorithm: svs-vamana, compression: LVQ4x4}` with a target schema, on Redis 8.10:\n\n```\nPR:   status: failed  schema_match: False  errors: ['Live schema does not match merged_target_schema.']\nmain: status: succeeded  schema_match: True  errors: []\n```\n\nThe target has `training_threshold: None`, and the live index now loads 10240. `training_threshold` isn't in `EXCLUDED_VECTOR_ATTRS`, and it shouldn't be added there, because that would hide a real mismatch such as 2048 against 10240. The same comparison also makes `current_source_matches_snapshot` refuse any plan for a compressed SVS index that an older redisvl wrote.\n\nLeave the default unset, the same way `NO_COMPRESSION` is already left unset:\n\n```python\n        # FT.INFO reports the server default when none was set; keep it unset.\n        if \"training_threshold\" in vector_attrs:\n            try:\n                training_threshold = int(vector_attrs[\"training_threshold\"])\n            except (ValueError, TypeError):\n                training_threshold = None\n            if training_threshold not in (None, 10 * 1024):\n                normalized[\"training_threshold\"] = training_threshold\n```\n\nWith that change, the same migration succeeds (`schema_match: True`), an index created with 2048 still loads 2048, and an index rebuilt from a loaded default still gets 10240 from the server. The default is `10 * DEFAULT_BLOCK_SIZE` in the [vector index docs](https://redis.io/docs/latest/develop/ai/search-and-query/vectors/#create-a-vector-index)."
+  },
+  {
+   "role": "collaborator",
+   "path": "redisvl/redis/connection.py",
+   "created_at": "2026-11-16T17:14:50Z",
+   "body": "Once this value is loaded, a migration that removes compression drops the source index and then fails to recreate it. `merge_patch` updates the attrs in place, so the loaded `training_threshold` survives `compression: null`, and FT.CREATE rejects it. I ran it on Redis 8.10, with a compressed SVS index and the patch `update_fields: [{name: v, attrs: {compression: null}}]`:\n\n```\nPR:   result: failed  \"Failed to create index 'mig850b' on Redis: SEARCH_PARSE_ARGS TRAINING_THRESHOLD is irrelevant when compression was not requested\"\n      index exists: False  keys: 5\nmain: result: succeeded  index exists: True\n```\n\nLeaving the default unset (the suggestion above) fixes this for the default value. It still fails for an explicit value, such as an index created with 2048. `SVSVectorFieldAttributes` already rejects `reduce` without compression, so the same check for `training_threshold` in `redisvl/schema/fields.py`, just before the `reduce` validation, catches the problem at planning time, before anything is dropped:\n\n```python\n        if self.training_threshold is not None and self.compression is None:\n            raise ValueError(\"training_threshold requires compression to be set\")\n```\n\nWith both changes, the 2048 case fails in `create_plan` with that error and the source index is untouched. The SVS, schema, fields, validation and migration-planner unit tests have the same results with and without the check."
+  },
+  {
+   "role": "collaborator",
+   "path": "tests/unit/test_convert_index_info.py",
+   "created_at": "2026-11-16T17:14:50Z",
+   "body": "This repeats the 25-line FT.INFO literal from `test_convert_index_info_svs_no_compression` above it. It also uses a reply shape Redis doesn't send: a compressed SVS field comes back with `graph_max_degree` and `construction_window_size`, and with `compression` reported as `GlobalSQ8` (LVQ8 on Redis Open Source falls back to scalar quantisation). For example, on 8.10:\n\n```\n'graph_max_degree', 32, 'construction_window_size', 200, 'compression', 'GlobalSQ8', 'training_threshold', 2048\n```\n\nParametrising the existing SVS test over the tail of that list would cover this case with less code. The cases would be no compression, an explicit threshold (2048 loads as 2048) and the reported default (10240 loads as `None`). The raw-dict assertion can go, since the `IndexSchema.from_dict` assertion covers it.\n\nThe migration failures in the comments above also need a regression test each. That is a plan-time `ValueError` for a patch that clears compression on a schema with an explicit threshold, and a `schemas_equal(..., strip_excluded=True)` check between a compressed target with no threshold and a live schema loaded from a reply that reports 10240. `test_from_existing_lvq` in `tests/integration/test_svs_integration.py` could also assert the loaded value, which would pin the real server behaviour."
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-16T17:41:54Z",
+   "body": "Thanks for measuring this on real servers. Pushed 9828156 and 55f0bfc with all three points:\n- `parse_vector_attrs` now leaves `training_threshold` unset when FT.INFO reports the 10 * 1024 default (your snippet), so a target without it matches the live schema again.\n- `SVSVectorFieldAttributes` rejects `training_threshold` without `compression`, so an explicit 2048 plus `compression: null` is rejected when the patch is merged (`merge_patch`/`create_plan`) before anything is dropped.\n- Tests: the existing SVS conversion test is now parametrised over the FT.INFO tail (NO_COMPRESSION, GlobalSQ8 + 2048, GlobalSQ8 + 10240 -> unset) and shares one `svs_info(*tail)` helper with the `schemas_equal(strip_excluded=True)` regression (no more duplicated FT.INFO literals). Added a planner regression next to `test_merge_patch_preserves_svs_vamana_compression`: LVQ8 + `training_threshold=2048` with a patch setting `compression: null` raises `ValueError`. Plus the validation test and `test_from_existing_lvq` asserting the loaded value. The integration test was not run locally (no Redis 8 server available); the unit tests pass.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
 }

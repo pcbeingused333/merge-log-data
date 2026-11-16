@@ -1,0 +1,33 @@
+{
+ "repo": "redis/redis-vl-python",
+ "number": 849,
+ "url": "https://github.com/redis/redis-vl-python/pull/849",
+ "title": "fix(cache): release owned async clients on disconnect",
+ "merged_at": "2026-11-16T17:49:36Z",
+ "files": [
+  {
+   "filename": "redisvl/extensions/cache/base.py",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 9,
+   "patch": "@@ -5,7 +5,7 @@\n \"\"\"\n \n import asyncio\n-from typing import Any, TypedDict\n+from typing import Any, Optional, TypedDict\n \n from redis import Redis  # For backwards compatibility in type checking\n from redis.cluster import RedisCluster\n@@ -75,6 +75,7 @@ def __init__(\n \n         # Initialize Redis clients\n         self._async_redis_client = async_redis_client\n+        self._owns_async_redis_client = False\n         self._redis_client = redis_client\n         # Guards lazy async client creation, which suspends on an await and so\n         # cannot rely on a bare check-then-set. Rebuilt whenever the running\n@@ -188,6 +189,7 @@ async def _get_async_redis_client(self) -> AsyncRedisClient:\n                             redis_url=url, **kwargs\n                         )\n                     self._async_redis_client = client\n+                    self._owns_async_redis_client = True\n         return client\n \n     def _resolve_ttl(self, ttl: int | None = None) -> int | None:\n@@ -331,28 +333,33 @@ async def aclear(self) -> None:\n         if batch:\n             await client.delete(*batch)\n \n+    def _release_owned_async_client(self) -> Optional[Any]:\n+        \"\"\"Clear the async client if this cache created it; return it.\"\"\"\n+        if not self._owns_async_redis_client:\n+            return None\n+        client, self._async_redis_client = self._async_redis_client, None\n+        self._owns_async_redis_client = False\n+        return client\n+\n     def disconnect(self) -> None:\n         \"\"\"Disconnect from Redis.\"\"\"\n+        # A sync method cannot await aclose(); drop the loop-bound client.\n+        self._release_owned_async_client()\n         if self._owns_redis_client is False:\n             return\n \n         if self._redis_client:\n             self._redis_client.close()\n             self._redis_client = None\n-            # Async clients don't have a sync close method, so we just\n-            # zero them out to allow garbage collection.\n-            self._async_redis_client = None\n \n     async def adisconnect(self) -> None:\n         \"\"\"Async disconnect from Redis.\"\"\"\n+        client = self._release_owned_async_client()\n+        if client is not None:\n+            await client.aclose()\n         if self._owns_redis_client is False:\n             return\n \n         if self._redis_client:\n             self._redis_client.close()\n             self._redis_client = None\n-\n-        if hasattr(self, \"_async_redis_client\") and self._async_redis_client:\n-            # Use proper async close method\n-            await self._async_redis_client.aclose()\n-            self._async_redis_client = None"
+  },
+  {
+   "filename": "redisvl/extensions/cache/llm/semantic.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -986,6 +986,7 @@ def disconnect(self):\n         # Close the async search index connections\n         if hasattr(self, \"_aindex\") and self._aindex:\n             self._aindex.disconnect_sync()\n+            self._aindex = None\n \n         # Close the base Redis connections\n         super().disconnect()"
+  },
+  {
+   "filename": "tests/unit/test_connection_normalization.py",
+   "status": "modified",
+   "additions": 63,
+   "deletions": 0,
+   "patch": "@@ -7,11 +7,13 @@\n from redis.asyncio import Redis as AsyncRedis\n \n from redisvl.extensions.cache.embeddings import EmbeddingsCache\n+from redisvl.extensions.cache.llm import SemanticCache\n from redisvl.extensions.router.semantic import SemanticRouter\n from redisvl.index import AsyncSearchIndex, SearchIndex\n from redisvl.query.sql import SQLQuery\n from redisvl.schema import IndexSchema\n from redisvl.utils.utils import assert_no_warnings\n+from redisvl.utils.vectorize import CustomVectorizer\n \n \n def _schema_dict(name: str = \"idx\") -> dict:\n@@ -589,3 +591,64 @@ def test_wrong_flavour_guard_catches_specced_mocks():\n         SearchIndex(schema, redis_client=MagicMock(spec=AsyncRedis))\n \n     assert SearchIndex(schema, redis_client=MagicMock()) is not None\n+\n+\n+def _run_twice(cache, disconnect):\n+    \"\"\"Use the async client on two loops, disconnecting in between.\"\"\"\n+    created = []\n+\n+    def make(*args, **kwargs):\n+        created.append(AsyncMock())\n+        return created[-1]\n+\n+    async def amake(*args, **kwargs):\n+        return make()\n+\n+    async def use():\n+        client = await cache._get_async_redis_client()\n+        if isinstance(cache, SemanticCache):\n+            assert (await cache._get_async_index())._redis_client is client\n+        if disconnect == \"adisconnect\":\n+            await cache.adisconnect()\n+        else:\n+            cache.disconnect()\n+\n+    base = \"redisvl.extensions.cache.base.RedisConnectionFactory\"\n+    with (\n+        patch(f\"{base}.sync_to_async_redis\", side_effect=make),\n+        patch(f\"{base}._get_aredis_connection\", side_effect=amake),\n+    ):\n+        asyncio.run(use())\n+        asyncio.run(use())\n+    assert len(created) == 2\n+    return created\n+\n+\n+@pytest.mark.parametrize(\"disconnect\", [\"disconnect\", \"adisconnect\"])\n+def test_cache_releases_async_client_derived_from_sync_client(disconnect):\n+    provided = MagicMock(spec=Redis)\n+    first, _ = _run_twice(EmbeddingsCache(redis_client=provided), disconnect)\n+    assert first.aclose.await_count == (disconnect == \"adisconnect\")\n+    provided.close.assert_not_called()\n+\n+\n+def test_semantic_cache_disconnect_drops_its_async_index():\n+    cache = SemanticCache(\n+        name=\"reconnect\",\n+        vectorizer=CustomVectorizer(lambda text: [0.1, 0.2, 0.3]),\n+        redis_url=\"redis://localhost:6379\",\n+        create_index=False,\n+    )\n+    _run_twice(cache, \"disconnect\")\n+\n+\n+@pytest.mark.parametrize(\"disconnect_method\", [\"disconnect\", \"adisconnect\"])\n+def test_cache_disconnect_preserves_supplied_async_client(disconnect_method):\n+    provided = AsyncMock()\n+    cache = EmbeddingsCache(async_redis_client=provided)\n+    if disconnect_method == \"adisconnect\":\n+        asyncio.run(cache.adisconnect())\n+    else:\n+        cache.disconnect()\n+    assert cache._async_redis_client is provided\n+    provided.aclose.assert_not_awaited()"
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_connection_normalization.py"
+ ]
+}

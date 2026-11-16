@@ -3,7 +3,20 @@
  "number": 2761,
  "url": "https://github.com/gristlabs/grist-core/pull/2761",
  "state": "open",
- "reviews": [],
+ "reviews": [
+  {
+   "role": "none",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-16T12:58:20Z",
+   "body": "### Code Review: Multi-Axis Evaluation\n\nExcellent analysis and fix for this timezone off-by-one boundary bug, @pcbeingused333! The distinction between calendar day boundaries (stored as UTC midnight multiples) and discrete instants in column-local timezones is well articulated.\n\n---\n\n### 1. Correctness & Timezone Semantics\n* **Root Cause Handling**: For columns with timezones west of UTC (e.g. `America/New_York`, UTC-4/UTC-5), interpreting a calendar picker's midnight UTC timestamp as a raw unix epoch instant shifted the date backwards into the prior calendar day's evening (e.g. `2026-10-03 00:00:00 UTC` -> `2026-10-02 20:00:00 EDT`).\n* **Calendar Date Reconstruction**: Extracting `{ year: utc.year(), month: utc.month(), date: utc.date() }` and passing it to `moment.tz(..., timezone)` correctly pins the filter range to midnight of the *intended* calendar day within the target timezone, regardless of UTC offset sign.\n* **Instant Disambiguation**: Checking `val % SECONDS_PER_DAY === 0` cleanly separates calendar picker / relative date bounds from explicit user-typed timestamps (which are parsed directly in the column's timezone).\n\n---\n\n### 2. Edge Case Observations\n* **Daylight Saving Time (DST) Transitions**: On \"spring forward\" transition days where midnight may or may not exist (or clock jumps to 01:00/02:00), `moment.tz({ year, month, date }, timezone)` safely resolves to the first valid wall-clock moment of that day.\n* **Pre-1970 Timestamps**: In JavaScript, negative numbers where `val % 86400 === -0 === 0` will still satisfy the equality check for historical calendar dates.\n* **UTC Parity**: When `timezone === 'UTC'`, both branches are functionally identical, ensuring no regressions for standard UTC workflows.\n\n---\n\n### 3. Test Quality\n* The Chai tests in `test/common/ColumnFilterFunc.ts` provide clear verification across:\n  1. Date bounds west of UTC (`America/New_York`).\n  2. Relative bounds (`CURRENT_DATE` / \"Today\").\n  3. Preserving typed instants.\n\nLGTM!"
+  },
+  {
+   "role": "none",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-16T18:39:48Z",
+   "body": "### Code Review\n\nMapping midnight-UTC calendar selections to the start of the same calendar date in the column's timezone resolves the off-by-one day filtering bug for timezones west of UTC.\n\n#### Technical Analysis:\n1. **Root Cause Resolution**: When calendar pickers store dates as midnight UTC, converting them directly as instants shifts the timestamp into the prior day for negative UTC offsets (e.g. UTC-5). Checking `val % SECONDS_PER_DAY === 0` and reconstructing `moment.tz({ year, month, date }, timezone)` aligns the filter window with user intent.\n2. **Instant vs Calendar Boundary**: The distinction between calendar picks (multiples of 86,400s) and typed instants is well documented in the comment.\n3. **DST Safety**: During spring-forward DST transitions where midnight may not exist locally (e.g. clocks jump 23:59:59 -> 01:00:00), `moment.tz` automatically resolves to the start of the day (01:00:00), maintaining valid bounds.\n4. **Test Suite**: The test additions in `test/common/ColumnFilterFunc.ts` cover exact boundary points (`00:00:00`, `23:59:59`, midday) and relative date bounds."
+  }
+ ],
  "review_comments": [],
  "comments": []
 }

@@ -12,5 +12,11 @@
   }
  ],
  "review_comments": [],
- "comments": []
+ "comments": [
+  {
+   "role": "member",
+   "created_at": "2026-11-16T18:58:30Z",
+   "body": "## Windows compatibility review — `3f7056caf7`\n\nReviewed at head `3f7056caf71b422afa3b27ff7229cbf70e9975bb` (base `14c5b72bab`). Scope: the full base-to-head diff (`raven/agent/subagent/direct_chat.py`, `tests/test_subagent_handoff.py`), the `finish()` writer that decides which of `prompt.md` / `out.md` / `error.md` exist, and the `_render` path that names them.\n\n**No Windows compatibility issue found.**\n\nThe change replaces a fixed `{prompt.md,out.md}` string with a live `Path.is_file()` probe over the three record files. On Windows that is safe as written: `Path.is_file()` swallows `OSError` and returns `False`, so an inaccessible record directory, a deleted one, or a name whose case differs still degrades to the `(record unavailable)` branch rather than raising; and a directory named `out.md` is not counted as a file. The turn line still joins with `/` while the root line uses `os.sep`, which is the pre-existing shape of this block — Windows accepts both — and it is unchanged by this PR.\n\nVerification (native Windows host, Python 3.12.13, shared venv, detached worktree pinned to the head):\n\n- `python -S runner.py tests/test_subagent_handoff.py -q` → `3 failed, 23 passed`, failing `test_an_unlanded_turn_is_marked_and_lists_only_its_prompt`, `test_the_first_path_is_absolute_and_later_ones_are_abbreviated`, `test_a_creation_and_that_instances_turns_share_one_heading`.\n- The same command on a detached worktree at the PR base `14c5b72bab` → `3 failed, 20 passed`, **the same three test IDs**. These are this host's known baseline for this file (the `_meta()` fixture root is POSIX-absolute), not something this PR introduces.\n\nCoverage gaps: the three new tests pass here, but they build `tmp_path` directories, so the live-record path was not exercised through a real `finish()`; the `_META_ROOT` monkeypatch in the fixture now also stubs `Path.is_file`, which is test-local and does not touch production behaviour.\n\n<!-- raven-windows-review:pr=1315;head=3f7056caf71b422afa3b27ff7229cbf70e9975bb;reviewer=LivXue -->\n"
+  }
+ ]
 }

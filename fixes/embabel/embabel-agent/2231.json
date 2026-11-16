@@ -1,0 +1,79 @@
+{
+ "repo": "embabel/embabel-agent",
+ "number": 2231,
+ "url": "https://github.com/embabel/embabel-agent/pull/2231",
+ "title": "Fix(google-genai): pass presencePenalty and frequencyPenalty to GoogleGenAiChatOptions",
+ "merged_at": "2026-11-16T20:49:52Z",
+ "files": [
+  {
+   "filename": "embabel-agent-api/src/main/kotlin/com/embabel/agent/spi/common/LlmRetryDecision.kt",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 1,
+   "patch": "@@ -22,6 +22,7 @@ import com.embabel.agent.core.NonRetryable\n import com.embabel.agent.core.ReplanRequestedException\n import com.embabel.agent.core.Retryable\n import com.embabel.agent.spi.support.LlmDataBindingProperties\n+import com.embabel.agent.spi.support.springai.UnsupportedRequestParameterRetry\n import com.embabel.common.ai.model.TransportFailureDiagnostics\n import org.springframework.ai.retry.NonTransientAiException\n import org.springframework.ai.retry.TransientAiException\n@@ -88,10 +89,20 @@ internal object LlmRetryDecision {\n             is ClassCastException,\n                 -> false\n \n-            else -> true\n+            else -> !isRejectedRequestParameter(t)\n         }\n     }\n \n+    /**\n+     * A provider that rejects a request field answers the same way every time, so replaying the\n+     * unchanged request only burns the back off. `InstrumentedChatModel` strips the field and\n+     * retries once, and it can only do that after this template has let the failure through.\n+     * Native SDKs need this: Google GenAI reports `400 . Penalty is not enabled` as its own\n+     * `ClientException`, which Spring AI wraps in a plain `RuntimeException`.\n+     */\n+    private fun isRejectedRequestParameter(t: Throwable): Boolean =\n+        UnsupportedRequestParameterRetry.extractUnsupportedParameters(t).isNotEmpty()\n+\n     /** A [Retryable] or [NonRetryable] marker anywhere in the cause chain overrides every other rule. */\n     private fun marker(t: Throwable): Boolean? {\n         for (cause in TransportFailureDiagnostics.causes(t)) {"
+  },
+  {
+   "filename": "embabel-agent-api/src/main/kotlin/com/embabel/agent/spi/support/springai/InstrumentedChatModel.kt",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 7,
+   "patch": "@@ -85,7 +85,8 @@ internal class InstrumentedChatModel(\n      * from [Prompt.options], and retries once.\n      *\n      * Fail closed (rethrow [ex]) when:\n-     * - no structured `error.param` in the exception chain\n+     * - no structured `error.param` in the exception chain (exception: Gemini 400\n+     *   `Penalty is not enabled` → both penalties)\n      * - prompt has no options (nothing to strip → cannot recover)\n      * - [UnsupportedRequestParameterRetry.stripParameter] returns null because the field\n      *   name is **unknown** to our portable mutator map — we never invent options.\n@@ -97,13 +98,14 @@ internal class InstrumentedChatModel(\n      * extend YAML capabilities first.\n      */\n     private fun retryWithoutUnsupportedParameter(prompt: Prompt, ex: RuntimeException): ChatResponse {\n-        val parameter = UnsupportedRequestParameterRetry.extractUnsupportedParameter(ex)\n-            ?: throw ex\n+        val parameters = UnsupportedRequestParameterRetry.extractUnsupportedParameters(ex)\n+        if (parameters.isEmpty()) throw ex\n+        val parameter = parameters.joinToString(\", \")\n         val options = prompt.options ?: throw ex\n-        val strippedOptions = UnsupportedRequestParameterRetry.stripParameter(options, parameter)\n-        // null = unknown field name only (known-but-already-null still yields a copy)\n-        if (strippedOptions == null) {\n-            throw ex\n+        val strippedOptions = parameters.fold(options) { currentOptions, name ->\n+            // null = unknown field name only (known-but-already-null still yields a copy)\n+            UnsupportedRequestParameterRetry.stripParameter(currentOptions, name)\n+                ?: throw ex\n         }\n         logger.warn(\n             \"Model rejected unsupported request parameter '{}'; retrying once without it. Original error: {}\","
+  },
+  {
+   "filename": "embabel-agent-api/src/main/kotlin/com/embabel/agent/spi/support/springai/UnsupportedRequestParameterRetry.kt",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 3,
+   "patch": "@@ -38,6 +38,8 @@ import tools.jackson.databind.ObjectMapper\n  * `\"400 - { \\\"error\\\": { \\\"param\\\": \\\"temperature\\\", \\\"code\\\": \\\"unsupported_value\\\", ... } }\"`.\n  * We parse structured JSON `error.param` (and `error.code` when present) only.\n  * Prose-only bodies without `error.param` return null → caller rethrows (fail closed).\n+ * Exception: Gemini 400 `Penalty is not enabled` is matched in prose and maps to both\n+ * `presencePenalty` and `frequencyPenalty`.\n  *\n  * **Reliability:** not guaranteed for every provider. Non-OpenAI providers rarely share\n  * this JSON shape. On mismatch we return null and the caller rethrows.\n@@ -61,18 +63,33 @@ internal object UnsupportedRequestParameterRetry {\n      * Module-internal: used by [InstrumentedChatModel] (same package, different file).\n      * Not `private` — Kotlin `private` is file-scoped.\n      */\n-    internal fun extractUnsupportedParameter(throwable: Throwable): String? {\n+    internal fun extractUnsupportedParameter(throwable: Throwable): String? =\n+        extractUnsupportedParameters(throwable).firstOrNull()\n+\n+    /**\n+     * Like [extractUnsupportedParameter] but may return several fields when the provider\n+     * does not say which one it rejected. Gemini answers `400 Penalty is not enabled`\n+     * for either penalty, without naming it, so both are returned.\n+     * These are portable [ChatOptions] field names, not Google-specific wire names.\n+     */\n+    internal fun extractUnsupportedParameters(throwable: Throwable): List<String> {\n         var current: Throwable? = throwable\n         while (current != null) {\n             val message = current.message\n             if (message != null) {\n-                extractFromStructuredOpenAiBody(message)?.let { return it }\n+                extractFromStructuredOpenAiBody(message)?.let { return listOf(it) }\n+                if (GEMINI_PENALTY_REJECTED.containsMatchIn(message)) {\n+                    return listOf(\"presencePenalty\", \"frequencyPenalty\")\n+                }\n             }\n             current = current.cause\n         }\n-        return null\n+        return emptyList()\n     }\n \n+    /** Gemini API / Vertex AI 400 when `presence_penalty` or `frequency_penalty` is sent. */\n+    private val GEMINI_PENALTY_REJECTED = Regex(\"penalty is not enabled\", RegexOption.IGNORE_CASE)\n+\n     /**\n      * Parse Spring AI style `\"NNN - {json}\"` OpenAI error bodies and return\n      * `error.param` when it looks like an unsupported/invalid parameter error."
+  },
+  {
+   "filename": "embabel-agent-api/src/test/kotlin/com/embabel/agent/spi/common/LlmRetryDecisionConsistencyTest.kt",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 0,
+   "patch": "@@ -184,4 +184,25 @@ class LlmRetryDecisionConsistencyTest {\n         assertThat(LlmRetryDecision.isRateLimit(first)).isFalse()\n     }\n \n+    /**\n+     * Google GenAI reports a rejected penalty as its own exception, which Spring AI wraps in a\n+     * plain RuntimeException. Replaying it never succeeds: the field has to be stripped first.\n+     */\n+    @Test\n+    fun `a rejected request parameter is not retried`() {\n+        val e = RuntimeException(\n+            \"Failed to generate content\",\n+            RuntimeException(\"400 . Penalty is not enabled for models/gemini-2.5-flash\"),\n+        )\n+        assertThat(retried(e))\n+            .describedAs(\"the same request is rejected again, so it must reach the strip-and-retry\")\n+            .isFalse()\n+    }\n+\n+    @Test\n+    fun `an unclassified runtime failure is still retried`() {\n+        val e = RuntimeException(\"Failed to generate content\", RuntimeException(\"503 . The model is overloaded\"))\n+        assertThat(retried(e)).isTrue()\n+    }\n+\n }"
+  },
+  {
+   "filename": "embabel-agent-api/src/test/kotlin/com/embabel/agent/spi/support/springai/InstrumentedChatModelTest.kt",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -187,6 +187,28 @@ class InstrumentedChatModelTest {\n             assertThat(prompts[1].options).extracting(\"topP\").isEqualTo(0.9)\n         }\n \n+        @Test\n+        fun `retries once without both penalties after Gemini Penalty is not enabled rejection`() {\n+            val options = org.springframework.ai.model.tool.ToolCallingChatOptions.builder()\n+                .temperature(0.8)\n+                .presencePenalty(0.5)\n+                .frequencyPenalty(0.4)\n+                .build()\n+            val prompt = Prompt(listOf(UserMessage(\"hello\")), options)\n+            val expectedResponse: ChatResponse = mockk()\n+            val rejection = RuntimeException(\"call failed\", RuntimeException(\"400 . Penalty is not enabled for this model\"))\n+            every { delegate.call(any<Prompt>()) } throws rejection andThen expectedResponse\n+\n+            val result = instrumentedModel.call(prompt)\n+\n+            assertThat(result).isSameAs(expectedResponse)\n+            val prompts = mutableListOf<Prompt>()\n+            verify(exactly = 2) { delegate.call(capture(prompts)) }\n+            assertThat(prompts[1].options).extracting(\"presencePenalty\").isNull()\n+            assertThat(prompts[1].options).extracting(\"frequencyPenalty\").isNull()\n+            assertThat(prompts[1].options).extracting(\"temperature\").isEqualTo(0.8)\n+        }\n+\n         @Test\n         fun `does not retry prose-only temperature rejection without error param`() {\n             // Fail-closed *contract* test (not leftover unstructured matching):"
+  },
+  {
+   "filename": "embabel-agent-api/src/test/kotlin/com/embabel/agent/spi/support/springai/UnsupportedRequestParameterRetryTest.kt",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -58,6 +58,13 @@ class UnsupportedRequestParameterRetryTest {\n                 .isEqualTo(\"top_p\")\n         }\n \n+        @Test\n+        fun `maps Gemini Penalty is not enabled to both penalty fields`() {\n+            val error = RuntimeException(\"400 . Penalty is not enabled for models/gemini-2.5-flash\")\n+            assertThat(UnsupportedRequestParameterRetry.extractUnsupportedParameters(error))\n+                .containsExactly(\"presencePenalty\", \"frequencyPenalty\")\n+        }\n+\n         @Test\n         fun `returns null for unrelated errors`() {\n             val param = UnsupportedRequestParameterRetry.extractUnsupportedParameter("
+  },
+  {
+   "filename": "embabel-agent-autoconfigure/models/embabel-agent-google-genai-autoconfigure/src/main/kotlin/com/embabel/agent/config/models/googlegenai/GoogleGenAiModelsConfig.kt",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -367,6 +367,8 @@ object GoogleGenAiOptionsConverter : OptionsConverter {\n             .temperature(options.temperature)\n             .topP(options.topP)\n             .topK(options.topK)\n+            .presencePenalty(options.presencePenalty)\n+            .frequencyPenalty(options.frequencyPenalty)\n             .maxOutputTokens(options.maxTokens ?: DEFAULT_MAX_OUTPUT_TOKENS)\n             .applyThinking(options.thinking)\n             .build()"
+  },
+  {
+   "filename": "embabel-agent-autoconfigure/models/embabel-agent-google-genai-autoconfigure/src/test/kotlin/com/embabel/agent/config/models/googlegenai/GoogleGenAiOptionsConverterTest.kt",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -103,4 +103,16 @@ class GoogleGenAiOptionsConverterTest : OptionsConverterTestSupport(\n         val options = optionsConverter.convertOptions(LlmOptions().withTopK(50), \"test-model\")\n         assertEquals(50, options.topK)\n     }\n+\n+    @Test\n+    fun `should set presencePenalty`() {\n+        val options = optionsConverter.convertOptions(LlmOptions().withPresencePenalty(0.3), \"test-model\") as GoogleGenAiChatOptions\n+        assertEquals(0.3, options.presencePenalty)\n+    }\n+\n+    @Test\n+    fun `should set frequencyPenalty`() {\n+        val options = optionsConverter.convertOptions(LlmOptions().withFrequencyPenalty(0.4), \"test-model\") as GoogleGenAiChatOptions\n+        assertEquals(0.4, options.frequencyPenalty)\n+    }\n }"
+  },
+  {
+   "filename": "embabel-agent-autoconfigure/models/embabel-agent-google-genai-autoconfigure/src/test/kotlin/com/embabel/agent/config/models/googlegenai/GoogleGenAiRetryTest.kt",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -15,6 +15,7 @@\n  */\n package com.embabel.agent.config.models.googlegenai\n \n+import com.google.genai.errors.ClientException\n import org.junit.jupiter.api.Assertions.assertEquals\n import org.junit.jupiter.api.Test\n import org.junit.jupiter.api.assertThrows\n@@ -76,4 +77,20 @@ class GoogleGenAiRetryTest {\n             \"a 400 is deterministic, so it must fail on the first attempt\",\n         )\n     }\n+\n+    /**\n+     * Gemini rejects the penalties with a 400 that Spring AI wraps in a plain RuntimeException.\n+     * Replaying it would spend every attempt before `InstrumentedChatModel` can strip them.\n+     */\n+    @Test\n+    fun `a rejected penalty is not retried`() {\n+        val rejection = RuntimeException(\n+            \"Failed to generate content\",\n+            ClientException(400, \"\", \"Penalty is not enabled for models/gemini-2.5-flash\"),\n+        )\n+        assertEquals(\n+            1, attemptsBeforeGivingUp(rejection),\n+            \"the same request is rejected again, so it must fail on the first attempt\",\n+        )\n+    }\n }"
+  }
+ ],
+ "test_files": [
+  "embabel-agent-api/src/test/kotlin/com/embabel/agent/spi/common/LlmRetryDecisionConsistencyTest.kt",
+  "embabel-agent-api/src/test/kotlin/com/embabel/agent/spi/support/springai/InstrumentedChatModelTest.kt",
+  "embabel-agent-api/src/test/kotlin/com/embabel/agent/spi/support/springai/UnsupportedRequestParameterRetryTest.kt",
+  "embabel-agent-autoconfigure/models/embabel-agent-google-genai-autoconfigure/src/test/kotlin/com/embabel/agent/config/models/googlegenai/GoogleGenAiOptionsConverterTest.kt",
+  "embabel-agent-autoconfigure/models/embabel-agent-google-genai-autoconfigure/src/test/kotlin/com/embabel/agent/config/models/googlegenai/GoogleGenAiRetryTest.kt"
+ ]
+}

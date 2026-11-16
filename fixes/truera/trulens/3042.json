@@ -1,0 +1,26 @@
+{
+ "repo": "truera/trulens",
+ "number": 3042,
+ "url": "https://github.com/truera/trulens/pull/3042",
+ "title": "fix(google): track usage for every Gemini finish reason",
+ "merged_at": "2026-11-16T14:46:18Z",
+ "files": [
+  {
+   "filename": "src/providers/google/trulens/providers/google/endpoint.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 4,
+   "patch": "@@ -264,10 +264,9 @@ def handle_wrapped_call(\n             and \"usage_metadata\" in response_dict\n         ):\n             candidate = response_dict[\"candidates\"][0]\n-            if (\n-                \"finish_reason\" in candidate\n-                and candidate[\"finish_reason\"] == \"STOP\"\n-            ):\n+            # Any finish reason (STOP, MAX_TOKENS, SAFETY, ...) marks the final\n+            # response; a truncated or blocked response is billed as well.\n+            if candidate.get(\"finish_reason\"):\n                 self.global_callback.handle_generation(response=response_dict)\n \n                 if callback is not None:"
+  },
+  {
+   "filename": "tests/unit/providers/test_google_finish_reason.py",
+   "status": "added",
+   "additions": 69,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,69 @@\n+\"\"\"Regression tests: Gemini usage is tracked for every finish reason.\n+\n+`GoogleEndpoint.handle_wrapped_call` only passed a response to the callbacks\n+when the candidate's `finish_reason` was `STOP`. Responses cut off by\n+`MAX_TOKENS` or blocked by `SAFETY` still carry `usage_metadata` and are\n+billed, but their tokens and cost were dropped.\n+\"\"\"\n+\n+from __future__ import annotations\n+\n+import unittest\n+from unittest import mock\n+\n+try:\n+    from google.genai.types import GenerateContentResponse\n+    from trulens.core.schema import base as base_schema\n+    from trulens.providers.google import endpoint as google_endpoint\n+except Exception:  # pragma: no cover\n+    google_endpoint = None\n+\n+_MODEL = \"gemini-2.5-flash\"\n+\n+\n+def _response(finish_reason: str) -> \"GenerateContentResponse\":\n+    return GenerateContentResponse.model_validate({\n+        \"candidates\": [{\"finish_reason\": finish_reason}],\n+        \"usage_metadata\": {\n+            \"prompt_token_count\": 10,\n+            \"candidates_token_count\": 5,\n+            \"total_token_count\": 15,\n+        },\n+        \"model_version\": _MODEL,\n+    })\n+\n+\n+class TestGoogleFinishReason(unittest.TestCase):\n+    def setUp(self):\n+        if google_endpoint is None:\n+            self.skipTest(\"trulens-providers-google not available.\")\n+\n+    def _tokens_counted(self, finish_reason: str) -> int:\n+        callback = google_endpoint.GoogleCallback.model_construct(\n+            cost=base_schema.Cost()\n+        )\n+        endpoint = mock.Mock(\n+            global_callback=google_endpoint.GoogleCallback.model_construct(\n+                cost=base_schema.Cost()\n+            )\n+        )\n+        google_endpoint.GoogleEndpoint.handle_wrapped_call(\n+            endpoint,\n+            mock.Mock(),\n+            mock.Mock(),\n+            _response(finish_reason),\n+            callback,\n+        )\n+        self.assertEqual(\n+            callback.cost.n_tokens, endpoint.global_callback.cost.n_tokens\n+        )\n+        return callback.cost.n_tokens\n+\n+    def test_stop_is_counted(self):\n+        self.assertEqual(self._tokens_counted(\"STOP\"), 15)\n+\n+    def test_max_tokens_is_counted(self):\n+        self.assertEqual(self._tokens_counted(\"MAX_TOKENS\"), 15)\n+\n+    def test_safety_is_counted(self):\n+        self.assertEqual(self._tokens_counted(\"SAFETY\"), 15)"
+  }
+ ],
+ "test_files": [
+  "tests/unit/providers/test_google_finish_reason.py"
+ ]
+}

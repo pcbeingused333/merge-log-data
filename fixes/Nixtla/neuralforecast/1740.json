@@ -1,0 +1,26 @@
+{
+ "repo": "Nixtla/neuralforecast",
+ "number": 1740,
+ "url": "https://github.com/Nixtla/neuralforecast/pull/1740",
+ "title": "fix(distributed): don't require trainer_kwargs['accelerator'] in _fit_distributed",
+ "merged_at": "2026-11-16T21:51:43Z",
+ "files": [
+  {
+   "filename": "neuralforecast/common/_base_model.py",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 2,
+   "patch": "@@ -928,7 +928,13 @@ def train_fn(\n             num_tasks = distributed_config.num_nodes * distributed_config.devices\n             num_proc_per_task = 1  # number of GPUs per task\n         num_proc = num_tasks * num_proc_per_task\n-        use_gpu = _is_gpu_accelerator(self.trainer_kwargs[\"accelerator\"])\n+        accelerator = self.trainer_kwargs.get(\"accelerator\", \"auto\")\n+        use_gpu = _is_gpu_accelerator(accelerator)\n+        # resolve \"auto\" once on the driver so the workers use the same accelerator\n+        # (otherwise Lightning resolves it again on each worker, e.g. to MPS)\n+        trainer_kwargs = dict(self.trainer_kwargs)\n+        if accelerator == \"auto\":\n+            trainer_kwargs[\"accelerator\"] = \"gpu\" if use_gpu else \"cpu\"\n         distributor = TorchDistributor(\n             num_processes=num_proc,\n             local_mode=local_mode,\n@@ -940,7 +946,7 @@ def train_fn(\n                 model_cls=type(self),\n                 model_params=self.hparams,\n                 datamodule=datamodule,\n-                trainer_kwargs=self.trainer_kwargs,\n+                trainer_kwargs=trainer_kwargs,\n                 num_tasks=num_tasks,\n                 num_proc_per_task=num_proc_per_task,\n                 val_size=val_size,"
+  },
+  {
+   "filename": "tests/test_distributed.py",
+   "status": "modified",
+   "additions": 54,
+   "deletions": 0,
+   "patch": "@@ -3,8 +3,11 @@\n \n import fugue.api as fa\n import pandas as pd\n+import pytest\n+import torch\n \n from neuralforecast import NeuralForecast\n+from neuralforecast.common._base_model import DistributedConfig\n from neuralforecast.models import NHITS\n \n \n@@ -87,3 +90,54 @@ def test_local_rendezvous_addr_respects_user_value():\n         assert os.environ[\"PET_LOCAL_ADDR\"] == \"10.0.0.1\"\n     finally:\n         os.environ.pop(\"PET_LOCAL_ADDR\", None)\n+\n+\n+@pytest.mark.parametrize(\"cuda_available\", [False, True])\n+@pytest.mark.parametrize(\n+    \"accelerator, expected\",\n+    [\n+        (None, \"auto-resolved\"),  # __init__ sets \"gpu\" only when CUDA is available\n+        (\"auto\", \"auto-resolved\"),\n+        (\"cpu\", \"cpu\"),\n+        (\"gpu\", \"gpu\"),\n+        (\"cuda\", \"cuda\"),\n+    ],\n+)\n+def test_fit_distributed_pins_accelerator(\n+    monkeypatch, accelerator, expected, cuda_available\n+):\n+    pytest.importorskip(\"pyspark\")\n+    from pytorch_lightning.accelerators.cuda import CUDAAccelerator\n+\n+    monkeypatch.setattr(torch.cuda, \"is_available\", lambda: cuda_available)\n+    monkeypatch.setattr(\n+        CUDAAccelerator, \"is_available\", staticmethod(lambda: cuda_available)\n+    )\n+    captured = {}\n+\n+    class FakeTorchDistributor:\n+        def __init__(self, num_processes, local_mode, use_gpu):\n+            captured[\"use_gpu\"] = use_gpu\n+\n+        def run(self, *args, **kwargs):\n+            captured[\"trainer_kwargs\"] = kwargs[\"trainer_kwargs\"]\n+            return \"trained\"\n+\n+    monkeypatch.setattr(\n+        \"pyspark.ml.torch.distributor.TorchDistributor\", FakeTorchDistributor\n+    )\n+\n+    kwargs = {} if accelerator is None else {\"accelerator\": accelerator}\n+    model = NHITS(h=7, input_size=14, max_steps=1, **kwargs)\n+    config = DistributedConfig(partitions_path=\"unused\", num_nodes=2, devices=1)\n+\n+    result = model._fit_distributed(config, datamodule=None, val_size=0, test_size=0)\n+\n+    resolved = \"gpu\" if cuda_available else \"cpu\"\n+    if expected == \"auto-resolved\":\n+        expected = resolved\n+    use_gpu = expected in (\"gpu\", \"cuda\")\n+    assert result == \"trained\"\n+    assert captured[\"use_gpu\"] is use_gpu\n+    # the workers get the same accelerator the driver decided on\n+    assert captured[\"trainer_kwargs\"][\"accelerator\"] == expected"
+  }
+ ],
+ "test_files": [
+  "tests/test_distributed.py"
+ ]
+}

@@ -12,5 +12,11 @@
   }
  ],
  "review_comments": [],
- "comments": []
+ "comments": [
+  {
+   "role": "none",
+   "created_at": "2026-11-16T13:02:57Z",
+   "body": "Real-device data for this, in case it helps review. No server kill needed: an ordinary network drop reaches the same path.\n\n**Setup:** `livekit_client` 2.13.2, `flutter_webrtc` 1.6.3, local `livekit-server` in Docker. Full reconnect triggered by switching Wi-Fi off for 5 s and back on. Track state read with `ListParticipants` 12 s after the client was back in the room.\n\n**Xiaomi POCO F1, Android 10, 10 Wi-Fi drops per condition:**\n\n| Mic before the drop | `addTransceiver(): track is null` (unhandled) | Mic track after reconnect |\n|---|---|---|\n| live | 0/10 | live 10/10 |\n| muted (`setMicrophoneEnabled(false)`) | 1/10 | muted 5/10, **not published** 5/10 |\n\nMotorola g96, Android 15: the same unhandled exception on 2 of 5 Wi-Fi-off / airplane-mode reconnects (mic state not recorded).\n\nSame stack as the issue (`_publishAudioTrack.negotiate` → `rePublishAllTracks` → `EngineRestartedEvent` handler), and it matches the muted-mic condition described there.\n\nTwo notes:\n- Catching here fixes what hurts most in production: the error is unhandled (in our app, which reports unhandled errors through `PlatformDispatcher.onError`, it shows up as a **fatal** crash), and `RoomReconnectedEvent` never fires.\n- In 5 of 10 muted runs the mic track was not republished at all, **with no exception logged**, so that looks like a separate path from the one this PR catches. Unmuting afterwards published the mic normally.\n"
+  }
+ ]
 }

@@ -1,0 +1,26 @@
+{
+ "repo": "laminlabs/lamindb",
+ "number": 4087,
+ "url": "https://github.com/laminlabs/lamindb/pull/4087",
+ "title": ":bug: Preserve SQLite text feature values with JSON aggregation",
+ "merged_at": "2026-11-16T08:58:31Z",
+ "files": [
+  {
+   "filename": "lamindb/models/_feature_manager.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 24,
+   "patch": "@@ -10,7 +10,7 @@\n \n from django.contrib.postgres.aggregates import ArrayAgg\n from django.db import connections, transaction\n-from django.db.models import Aggregate, Subquery\n+from django.db.models import Aggregate, JSONField, Subquery\n from django.db.models.expressions import OrderBy, RawSQL\n from django.db.utils import IntegrityError\n from lamindb_setup import logger\n@@ -302,16 +302,17 @@ def format_dtype_for_display(dtype_str: str) -> str:\n \n \n # Custom aggregation for SQLite\n-class GroupConcat(Aggregate):\n-    function = \"GROUP_CONCAT\"\n-    template = '%(function)s(%(expressions)s, \", \")'\n+class JsonGroupArray(Aggregate):\n+    function = \"JSON_GROUP_ARRAY\"\n+    template = \"%(function)s(JSON(%(expressions)s))\"\n+    output_field = JSONField()\n \n \n def custom_aggregate(field, using: str):\n     if connections[using].vendor == \"postgresql\":\n         return ArrayAgg(field)\n     else:\n-        return GroupConcat(field)\n+        return JsonGroupArray(field)\n \n \n def get_categoricals_postgres(\n@@ -508,21 +509,12 @@ def get_non_categoricals(\n                     f\"    record.features.set_values({{{feature_name!r}: <value>}})\"\n                 )\n \n-            if (\n-                not isinstance(self, Record)\n-                and connections[self._state.db].vendor == \"sqlite\"\n-            ):\n-                # undo GROUP_CONCAT (Artifact/Run only; Record stores one JSON value)\n-                if isinstance(values, str):\n-                    values = {value.strip('\"') for value in values.split(\", \")}\n-\n-            # PostgreSQL ArrayAgg wraps Artifact and Run JSON values in a list.\n+            # Aggregation wraps Artifact and Run JSON values in a list.\n             # Scalars are converted to sets below; dict and list features must be\n             # unwrapped here instead. Records store one JSON value directly, so a\n             # one-element list such as [3] is the annotation, not an aggregate wrapper.\n             if (\n                 not isinstance(self, Record)\n-                and connections[self._state.db].vendor == \"postgresql\"\n                 and isinstance(values, list)\n                 and len(values) == 1\n                 and (feature_dtype == \"dict\" or feature_dtype.startswith(\"list\"))\n@@ -551,15 +543,6 @@ def get_non_categoricals(\n                 values = {\n                     pd.to_datetime(value, format=\"ISO8601\").date() for value in values\n                 }\n-            if connections[self._state.db].vendor == \"sqlite\":\n-                # undo GROUP_CONCAT\n-                if feature_dtype == \"int\":\n-                    values = {int(value) for value in values}\n-                if feature_dtype == \"float\":\n-                    values = {float(value) for value in values}\n-                if feature_dtype == \"num\":\n-                    values = {float(value) for value in values}\n-\n             non_categoricals[(feature_name, feature_dtype)] = values\n \n     return non_categoricals"
+  },
+  {
+   "filename": "tests/pydata/test_feature_text_values.py",
+   "status": "added",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,24 @@\n+import lamindb as ln\n+import pytest\n+\n+\n+@pytest.mark.parametrize(\"host_type\", [\"artifact\", \"run\"])\n+@pytest.mark.parametrize(\n+    \"value\", [\"first part, second part\", 'a \"quoted\", value\\nnext line', \"\"]\n+)\n+def test_text_feature_roundtrip(host_type, value):\n+    feature = ln.Feature(name=\"text_roundtrip_description\", dtype=str).save()\n+    transform = None\n+    if host_type == \"artifact\":\n+        host = ln.Artifact(\".gitignore\", key=\"text_roundtrip\").save()\n+    else:\n+        transform = ln.Transform(key=\"text_roundtrip\").save()\n+        host = ln.Run(transform).save()\n+    try:\n+        host.features.add_values({feature.name: value})\n+        assert host.features.get_values() == {feature.name: value}\n+    finally:\n+        host.delete(permanent=True)\n+        if transform is not None:\n+            transform.delete(permanent=True)\n+        feature.delete(permanent=True)"
+  }
+ ],
+ "test_files": [
+  "tests/pydata/test_feature_text_values.py"
+ ]
+}

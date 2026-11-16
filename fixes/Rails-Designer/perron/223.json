@@ -1,0 +1,26 @@
+{
+ "repo": "Rails-Designer/perron",
+ "number": 223,
+ "url": "https://github.com/Rails-Designer/perron/pull/223",
+ "title": "fix(adjacency): order by the position method when adjacent_by has no within",
+ "merged_at": "2026-11-16T10:47:34Z",
+ "files": [
+  {
+   "filename": "lib/perron/resource/adjacency.rb",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 3,
+   "patch": "@@ -7,13 +7,13 @@ module Adjacency\n \n       class_methods do\n         def adjacent_by(position_method, within: {})\n-          return unless within.present?\n-\n-          grouping_method = within.is_a?(Hash) ? within.keys.first : within\n+          grouping_method = within.is_a?(Hash) ? within.keys.first : within.presence\n           grouping_order = within.is_a?(Hash) ? within.values.first : nil\n \n           define_method(:next) do\n             resources = self.class.all.sort_by do |resource|\n+              next resource.public_send(position_method) unless grouping_method\n+\n               group_value = resource.public_send(grouping_method)\n \n               group_order = if grouping_order\n@@ -32,6 +32,8 @@ def adjacent_by(position_method, within: {})\n \n           define_method(:previous) do\n             resources = self.class.all.sort_by do |resource|\n+              next resource.public_send(position_method) unless grouping_method\n+\n               group_value = resource.public_send(grouping_method)\n \n               group_order = if grouping_order"
+  },
+  {
+   "filename": "test/perron/resource/adjacency_test.rb",
+   "status": "modified",
+   "additions": 33,
+   "deletions": 5,
+   "patch": "@@ -55,11 +55,11 @@ class Perron::Resource::AdjacencyTest < ActiveSupport::TestCase\n     assert_equal advanced.id, changelog.previous.id\n   end\n \n-  test \"flat: next returns the following resource\" do\n+  test \"flat: next returns the following resource by position\" do\n     installation = Content::Doc.find!(\"installation\")\n-    quickstart = Content::Doc.find!(\"quickstart\")\n+    configuration = Content::Doc.find!(\"configuration\")\n \n-    assert_equal quickstart.id, installation.next.id\n+    assert_equal configuration.id, installation.next.id\n   end\n \n   test \"flat: next returns nil for the last resource\" do\n@@ -68,11 +68,12 @@ class Perron::Resource::AdjacencyTest < ActiveSupport::TestCase\n     assert_nil quickstart.next\n   end\n \n-  test \"flat: previous returns previous in natural order\" do\n+  test \"flat: previous returns the preceding resource by position\" do\n     installation = Content::Doc.find!(\"installation\")\n     configuration = Content::Doc.find!(\"configuration\")\n \n-    assert_equal configuration.id, installation.previous.id\n+    assert_equal installation.id, configuration.previous.id\n+    assert_nil installation.previous\n   end\n \n   test \"alphabetical: groups by section and orders sections alphabetically\" do\n@@ -114,4 +115,31 @@ def self.all\n     assert_nil ungrouped.next\n     assert_equal second.id, ungrouped.previous.id\n   end\n+\n+  test \"without within: orders by the position method instead of the collection order\" do\n+    resource_class = Class.new do\n+      include Perron::Resource::Adjacency\n+\n+      attr_reader :id, :position\n+\n+      def initialize(id, position)\n+        @id = id\n+        @position = position\n+      end\n+\n+      def self.all\n+        @all ||= [new(\"third\", 3), new(\"first\", 1), new(\"second\", 2)]\n+      end\n+\n+      adjacent_by :position\n+    end\n+\n+    third, first, second = resource_class.all\n+\n+    assert_equal second.id, first.next.id\n+    assert_equal third.id, second.next.id\n+    assert_nil third.next\n+    assert_equal first.id, second.previous.id\n+    assert_nil first.previous\n+  end\n end"
+  }
+ ],
+ "test_files": [
+  "test/perron/resource/adjacency_test.rb"
+ ]
+}

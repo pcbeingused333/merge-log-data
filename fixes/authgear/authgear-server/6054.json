@@ -1,0 +1,26 @@
+{
+ "repo": "authgear/authgear-server",
+ "number": 6054,
+ "url": "https://github.com/authgear/authgear-server/pull/6054",
+ "title": "fix(portal): honor public origin in Admin API proxy",
+ "merged_at": "2026-11-16T10:22:48Z",
+ "files": [
+  {
+   "filename": "pkg/portal/service/admin_api.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -99,7 +99,7 @@ func (s *AdminAPIService) Director(ctx context.Context, appID string, p string,\n \t}\n \tendpoint.Path = p\n \n-\thost, err := s.DefaultDomains.GetLatestAppHost(appID)\n+\tpublicOrigin, err := url.Parse(cfg.AppConfig.HTTP.PublicOrigin)\n \tif err != nil {\n \t\treturn\n \t}\n@@ -109,7 +109,7 @@ func (s *AdminAPIService) Director(ctx context.Context, appID string, p string,\n \t\trawQuery := r.URL.RawQuery\n \t\tr.URL = endpoint\n \t\tr.URL.RawQuery = rawQuery\n-\t\tr.Host = host\n+\t\tr.Host = publicOrigin.Host\n \t\tr.Header.Set(\"X-Forwarded-Host\", r.Host)\n \t\tr.Header.Set(\"X-Authgear-Portal-Is-Proxied\", \"true\")\n "
+  },
+  {
+   "filename": "pkg/portal/service/admin_api_test.go",
+   "status": "added",
+   "additions": 59,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,59 @@\n+package service\n+\n+import (\n+\t\"context\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"testing\"\n+\n+\t. \"github.com/smartystreets/goconvey/convey\"\n+\n+\t\"github.com/authgear/authgear-server/pkg/lib/config\"\n+\t\"github.com/authgear/authgear-server/pkg/lib/config/configsource\"\n+\tportalconfig \"github.com/authgear/authgear-server/pkg/portal/config\"\n+)\n+\n+type fakeAdminAPIConfigResolver struct{ origin string }\n+\n+func (f *fakeAdminAPIConfigResolver) ResolveContext(ctx context.Context, appID string, fn func(context.Context, *config.AppContext) error) error {\n+\treturn fn(ctx, &config.AppContext{Config: &config.Config{\n+\t\tAppConfig:    &config.AppConfig{HTTP: &config.HTTPConfig{PublicOrigin: f.origin}},\n+\t\tSecretConfig: &config.SecretConfig{Secrets: []config.SecretItem{{Key: config.AdminAPIAuthKeyKey, Data: &config.AdminAPIAuthKey{}}}},\n+\t}})\n+}\n+\n+type fakeAdminAPIDefaultDomains struct{}\n+\n+func (*fakeAdminAPIDefaultDomains) GetLatestAppHost(string) (string, error) {\n+\treturn \"original.example.com\", nil\n+}\n+\n+type fakeAdminAPIAuthzAdder struct{}\n+\n+func (*fakeAdminAPIAuthzAdder) AddAuthz(config.AdminAPIAuth, config.AppID, *config.AdminAPIAuthKey, any, http.Header) error {\n+\treturn nil\n+}\n+\n+func TestAdminAPIDirectorPublicOrigin(t *testing.T) {\n+\tConvey(\"Director uses the configured public origin while preserving internal routing\", t, func() {\n+\t\tfor _, host := range []string{\"original.example.com\", \"custom.example.com\", \"custom.example.com:8443\"} {\n+\t\t\tsvc := &AdminAPIService{\n+\t\t\t\tAdminAPIConfig: &portalconfig.AdminAPIConfig{Type: portalconfig.AdminAPITypeStatic, Endpoint: \"http://admin.internal:3002\"},\n+\t\t\t\tConfigSource:   &configsource.ConfigSource{ContextResolver: &fakeAdminAPIConfigResolver{origin: \"https://\" + host}},\n+\t\t\t\tDefaultDomains: &fakeAdminAPIDefaultDomains{},\n+\t\t\t\tAuthzAdder:     &fakeAdminAPIAuthzAdder{},\n+\t\t\t}\n+\t\t\tdirector, err := svc.Director(context.Background(), \"app\", \"/graphql\", \"actor\", UsageProxy)\n+\t\t\tSo(err, ShouldBeNil)\n+\t\t\treq := httptest.NewRequest(\"POST\", \"http://portal.example.com/proxy?query=%7Busers%7D&x=1\", nil)\n+\t\t\tdirector(req)\n+\t\t\tSo(req.Host, ShouldEqual, host)\n+\t\t\tSo(req.Header.Get(\"X-Forwarded-Host\"), ShouldEqual, host)\n+\t\t\tSo(req.URL.Scheme, ShouldEqual, \"http\")\n+\t\t\tSo(req.URL.Host, ShouldEqual, \"admin.internal:3002\")\n+\t\t\tSo(req.URL.Path, ShouldEqual, \"/graphql\")\n+\t\t\tSo(req.URL.RawQuery, ShouldEqual, \"query=%7Busers%7D&x=1\")\n+\t\t\tSo(req.Header.Get(\"X-Authgear-Portal-Is-Proxied\"), ShouldEqual, \"true\")\n+\t\t}\n+\t})\n+}"
+  }
+ ],
+ "test_files": [
+  "pkg/portal/service/admin_api_test.go"
+ ]
+}

@@ -1,0 +1,17 @@
+{
+ "repo": "agavra/tuicr",
+ "number": 853,
+ "url": "https://github.com/agavra/tuicr/pull/853",
+ "title": "fix(editor): ignore shift-tab before forwarding to edtui",
+ "merged_at": "2026-11-16T07:38:45Z",
+ "files": [
+  {
+   "filename": "src/comment_vim.rs",
+   "status": "modified",
+   "additions": 50,
+   "deletions": 2,
+   "patch": "@@ -5,9 +5,30 @@\n //! conversions bridge tuicr's UTF-8 byte offset and edtui's `Index2` (row +\n //! char-col), both UTF-8 aware.\n \n-use crossterm::event::{Event, KeyEvent};\n+use crossterm::event::{Event, KeyCode, KeyEvent};\n use edtui::{EditorEventHandler, EditorMode, EditorState, Index2, Lines};\n \n+/// Key codes edtui can convert; anything else makes it panic.\n+fn edtui_handles(code: KeyCode) -> bool {\n+    matches!(\n+        code,\n+        KeyCode::Char(_)\n+            | KeyCode::Enter\n+            | KeyCode::Esc\n+            | KeyCode::Backspace\n+            | KeyCode::Delete\n+            | KeyCode::Tab\n+            | KeyCode::Left\n+            | KeyCode::Right\n+            | KeyCode::Up\n+            | KeyCode::Down\n+            | KeyCode::Home\n+            | KeyCode::End\n+            | KeyCode::PageUp\n+            | KeyCode::PageDown\n+    )\n+}\n+\n /// Active modal editor for the comment box. Present only while in comment mode\n /// with `comment_vim` enabled.\n pub struct CommentVimEditor {\n@@ -48,7 +69,12 @@ impl CommentVimEditor {\n     /// Feed a key event to the editor and return the resulting\n     /// `(text, byte_cursor)` for the caller to sync into the canonical buffer.\n     pub fn feed_key(&mut self, key: KeyEvent) -> (String, usize) {\n-        self.events.on_key_event(key, &mut self.state);\n+        // edtui panics on keys it cannot map (BackTab, F-keys, Insert, ...), so\n+        // only forward the ones it understands. Normal-mode comment type\n+        // cycling is handled by the caller.\n+        if edtui_handles(key.code) {\n+            self.events.on_key_event(key, &mut self.state);\n+        }\n         self.text_and_cursor()\n     }\n \n@@ -131,6 +157,28 @@ mod tests {\n         assert_eq!(editor.label(), \"INSERT\");\n     }\n \n+    #[test]\n+    fn insert_mode_backtab_is_ignored() {\n+        let mut editor = CommentVimEditor::from_buffer(\"hello\", 5);\n+        let result = editor.feed_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));\n+        assert_eq!(result, (\"hello\".to_string(), 5));\n+        assert_eq!(editor.label(), \"INSERT\");\n+        assert_eq!(editor.feed_key(key('!')), (\"hello!\".to_string(), 6));\n+    }\n+\n+    #[test]\n+    fn unmapped_keys_are_ignored_in_both_modes() {\n+        let mut editor = CommentVimEditor::from_buffer(\"hello\", 5);\n+        for code in [KeyCode::F(1), KeyCode::Insert] {\n+            let r = editor.feed_key(KeyEvent::new(code, KeyModifiers::NONE));\n+            assert_eq!(r, (\"hello\".to_string(), 5));\n+        }\n+        editor.feed_key(special(KeyCode::Esc));\n+        assert_eq!(editor.label(), \"NORMAL\");\n+        let r = editor.feed_key(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE));\n+        assert_eq!(r.0, \"hello\");\n+    }\n+\n     #[test]\n     fn esc_switches_to_normal_mode() {\n         let mut editor = CommentVimEditor::from_buffer(\"hello\", 5);"
+  }
+ ],
+ "test_files": []
+}

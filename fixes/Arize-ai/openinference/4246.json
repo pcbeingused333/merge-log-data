@@ -1,0 +1,26 @@
+{
+ "repo": "Arize-ai/openinference",
+ "number": 4246,
+ "url": "https://github.com/Arize-ai/openinference/pull/4246",
+ "title": "fix(vertexai): import and proxy without wrapt's C extension",
+ "merged_at": "2026-11-16T20:30:16Z",
+ "files": [
+  {
+   "filename": "python/instrumentation/openinference-instrumentation-vertexai/src/openinference/instrumentation/vertexai/_proxy.py",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 1,
+   "patch": "@@ -1,5 +1,6 @@\n import inspect\n import logging\n+from abc import ABCMeta\n from random import getrandbits\n from typing import (\n     Any,\n@@ -61,7 +62,13 @@ def _proxy(\n     return obj\n \n \n-class _Proxy(wrapt.ObjectProxy):  # type: ignore[misc,name-defined,type-arg,unused-ignore]\n+class _ProxyMeta(ABCMeta, type(wrapt.ObjectProxy)):  # type: ignore[misc]\n+    # Without wrapt's C extension, `wrapt.ObjectProxy` has its own metaclass, which conflicts\n+    # with the `ABCMeta` of the `collections.abc` bases below unless they share a subclass.\n+    pass\n+\n+\n+class _Proxy(wrapt.ObjectProxy, metaclass=_ProxyMeta):  # type: ignore[misc,name-defined,type-arg,unused-ignore]\n     def __init__(\n         self,\n         wrapped: _WrappedT,"
+  },
+  {
+   "filename": "python/instrumentation/openinference-instrumentation-vertexai/tests/test_proxy_without_wrapt_extension.py",
+   "status": "added",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,30 @@\n+import os\n+import subprocess\n+import sys\n+from pathlib import Path\n+\n+_PACKAGE_DIR = Path(__file__).parent.parent\n+\n+_SCRIPT = \"\"\"\n+import sys\n+\n+import pytest\n+import wrapt\n+\n+# The metaclass conflict needs ObjectProxy to carry its own metaclass, as pure-Python wrapt does.\n+assert type(wrapt.ObjectProxy) is not type, \"wrapt's C extension is still in use\"\n+sys.exit(pytest.main(\n+    [\"-q\", \"-p\", \"no:cacheprovider\", \"tests/test_gapic_client.py::test_instrumentor\"],\n+))\n+\"\"\"\n+\n+\n+def test_instrumentor_without_wrapt_c_extension() -> None:\n+    result = subprocess.run(\n+        [sys.executable, \"-c\", _SCRIPT],\n+        cwd=_PACKAGE_DIR,\n+        env={**os.environ, \"WRAPT_DISABLE_EXTENSIONS\": \"true\"},\n+        capture_output=True,\n+        text=True,\n+    )\n+    assert result.returncode == 0, result.stdout + result.stderr"
+  }
+ ],
+ "test_files": [
+  "python/instrumentation/openinference-instrumentation-vertexai/tests/test_proxy_without_wrapt_extension.py"
+ ]
+}

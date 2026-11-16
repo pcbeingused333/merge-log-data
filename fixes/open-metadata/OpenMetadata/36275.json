@@ -1,0 +1,26 @@
+{
+ "repo": "open-metadata/OpenMetadata",
+ "number": 36275,
+ "url": "https://github.com/open-metadata/OpenMetadata/pull/36275",
+ "title": "Fixes #36120: Match Vertica view names case-insensitively in the view definition lookup",
+ "merged_at": "2026-11-16T07:31:58Z",
+ "files": [
+  {
+   "filename": "ingestion/src/metadata/ingestion/source/database/vertica/queries.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -128,7 +128,7 @@\n     \"\"\"\n       SELECT VIEW_DEFINITION\n       FROM V_CATALOG.VIEWS\n-      WHERE table_name='{view_name}'\n+      WHERE lower(table_name) = '{view_name}'\n       AND {schema_condition}\n     \"\"\"\n )"
+  },
+  {
+   "filename": "ingestion/tests/unit/topology/database/test_vertica_dialect.py",
+   "status": "modified",
+   "additions": 40,
+   "deletions": 0,
+   "patch": "@@ -49,6 +49,7 @@\n from metadata.ingestion.source.database.common_db_source import CommonDbSourceService\n from metadata.ingestion.source.database.vertica.metadata import (\n     get_columns,\n+    get_view_definition,\n     supports_column_comments,\n )\n \n@@ -251,6 +252,45 @@ def test_the_fallback_template_is_the_one_executed(self):\n         assert \"child_object\" not in columns_statement\n \n \n+class TestVerticaGetViewDefinition:\n+    \"\"\"``v_catalog.views.table_name`` keeps the case the view was created with,\n+    and ``=`` compares it case-sensitively. The name is lowercased before it is\n+    bound, so the lookup has to lowercase the column too or a view such as\n+    ``MyView`` comes back empty and Process View Lineage skips it.\n+    \"\"\"\n+\n+    @pytest.fixture(name=\"views_connection\")\n+    def views_connection_fixture(self):\n+        engine = create_engine(\"sqlite://\", poolclass=StaticPool)\n+        with engine.connect() as connection:\n+            connection.execute(text(\"ATTACH DATABASE ':memory:' AS v_catalog\"))\n+            connection.execute(\n+                text(\"CREATE TABLE v_catalog.views (table_schema TEXT, table_name TEXT, view_definition TEXT)\")\n+            )\n+            connection.execute(\n+                text(\n+                    \"INSERT INTO v_catalog.views VALUES \"\n+                    \"('public', 'MyView', 'SELECT * FROM public.source_table'), \"\n+                    \"('public', 'plain_view', 'SELECT 1')\"\n+                )\n+            )\n+            yield connection\n+\n+    @pytest.mark.parametrize(\"view_name\", [\"MyView\", \"myview\", \"MYVIEW\"])\n+    def test_mixed_case_view_definition_is_found(self, views_connection, view_name):\n+        definition = get_view_definition(VerticaDialect(), views_connection, view_name, schema=\"PUBLIC\")\n+\n+        assert definition == f\"CREATE VIEW {view_name} AS SELECT * FROM public.source_table\"\n+\n+    def test_lowercase_view_definition_is_still_found(self, views_connection):\n+        definition = get_view_definition(VerticaDialect(), views_connection, \"plain_view\", schema=\"public\")\n+\n+        assert definition == \"CREATE VIEW plain_view AS SELECT 1\"\n+\n+    def test_unknown_view_has_no_definition(self, views_connection):\n+        assert get_view_definition(VerticaDialect(), views_connection, \"missing\", schema=\"public\") is None\n+\n+\n class TestVerticaBatchedReflectionDelegates:\n     \"\"\"Resolving away from Postgres is not enough. The batched API has to route\n     back onto the Vertica implementation rather than issue its own catalog query."
+  }
+ ],
+ "test_files": [
+  "ingestion/tests/unit/topology/database/test_vertica_dialect.py"
+ ]
+}

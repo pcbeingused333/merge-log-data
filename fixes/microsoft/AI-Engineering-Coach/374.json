@@ -1,0 +1,33 @@
+{
+ "repo": "microsoft/AI-Engineering-Coach",
+ "number": 374,
+ "url": "https://github.com/microsoft/AI-Engineering-Coach/pull/374",
+ "title": "fix: recognize Copilot CLI and App MCP tool calls",
+ "merged_at": "2026-11-16T17:28:11Z",
+ "files": [
+  {
+   "filename": "src/core/cache.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -130,7 +130,7 @@ export interface CacheData {\n const cacheFilePath = (): string => path.join(getCacheDir(), 'parsed.json');\n const cacheMetaPath = (): string => path.join(getCacheDir(), 'meta.json');\n \n-const CACHE_VERSION = 30;\n+const CACHE_VERSION = 31;\n \n /** Refuse to JSON.parse cache files beyond these sizes: a corrupted (or\n  *  tampered) cache must degrade to a full re-parse, not OOM the host. */"
+  },
+  {
+   "filename": "src/core/parser-vscode-cli.test.ts",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 1,
+   "patch": "@@ -15,7 +15,7 @@ import { parseCLIEventsFile, parseCLIEventsFileAsync } from './parser-vscode-cli\n import { getParseWarningCounts, resetParseWarnings, setCuriosityDetector } from './parser-shared';\n import { detectCuriosity } from './curiosity';\n import { CuriosityAnalyzer } from './analyzer-curiosity';\n-import { runDetectors } from './detector-registry';\n+import { runDetectors, runEmitters } from './detector-registry';\n \n const tempDirs: string[] = [];\n \n@@ -52,6 +52,35 @@ afterEach(() => {\n });\n \n describe('parseCLIEventsFileAsync', () => {\n+  it.each([false, true])('recognizes MCP server metadata (Copilot App: %s)', async (remoteSteerable) => {\n+    const file = writeEvents([\n+      { type: 'session.start', data: { sessionId: 'mcp-session', ...(remoteSteerable ? { remoteSteerable: true } : {}) } },\n+      ...Array.from({ length: 30 }, (_, index) => [\n+        { type: 'user.message', timestamp: new Date(Date.UTC(2026, 9, 1, 12, index)).toISOString(), data: { content: 'Find the issue' } },\n+        { type: 'assistant.message', data: { toolRequests: [{ toolName: 'github-search_code', arguments: {} }] } },\n+        { type: 'tool.execution_start', data: { toolName: 'github-search_code', mcpServerName: 'github' } },\n+        { type: 'tool.execution_start', data: { toolName: 'view' } },\n+        { type: 'tool.execution_start', data: { toolName: 'grep', mcpServerName: '' } },\n+      ]).flat(),\n+    ]);\n+    for (const parsed of [parseCLIEventsFile(file, 'ws', 'Workspace'), await parseCLIEventsFileAsync(file, 'ws', 'Workspace')]) {\n+      expect(parsed?.requests).toHaveLength(30);\n+      expect(parsed?.harness).toBe(remoteSteerable ? 'GitHub Copilot App' : 'GitHub Copilot CLI');\n+      expect(parsed?.requests[0].toolsUsed).toEqual(['mcp_github_github-search_code', 'view', 'grep']);\n+      const mcpName = parsed?.requests[0].toolsUsed[0] ?? '';\n+      expect(mcpName.slice(4).split('_')[0]).toBe('github');\n+      const sessions = parsed ? [parsed] : [];\n+      const emission = runEmitters(parsed?.requests ?? [], sessions, false).get('context-engineering-gaps');\n+      const withoutMcp = sessions.map(session => ({\n+        ...session, requests: session.requests.map(request => ({ ...request, toolsUsed: ['search', 'view', 'grep'] })),\n+      }));\n+      const missing = runEmitters(withoutMcp.flatMap(session => session.requests), withoutMcp, false).get('context-engineering-gaps');\n+      expect(emission).toBeDefined();\n+      expect(missing).toBeDefined();\n+      expect(emission?.count).toBe((missing?.count ?? 0) - 1);\n+    }\n+  });\n+\n   it('classifies PowerShell-only commands and parallel calls through both parser paths', async () => {\n     setCuriosityDetector(detectCuriosity);\n     const file = writeEvents(["
+  },
+  {
+   "filename": "src/core/parser-vscode-cli.ts",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 1,
+   "patch": "@@ -438,7 +438,15 @@ function handleToolExecutionStart(ev: CLIEvent, state: CLIParseState): void {\n   const ts = ev.timestamp ? new Date(ev.timestamp).getTime() : null;\n \n   if (ts && turn.firstToolTs === null) turn.firstToolTs = ts;\n-  addRecordedTools(turn, toolName, data.arguments);\n+  // CLI/App logs identify MCP calls by server metadata rather than a name prefix.\n+  // Use the MCP naming convention consumed by rules and feature analysis.\n+  const mcpServerName = str(data.mcpServerName);\n+  const recordedName = mcpServerName && toolName && !toolName.startsWith('mcp_')\n+    ? `mcp_${mcpServerName}_${toolName}`\n+    : toolName;\n+  // The assistant request may have recorded the raw name before server metadata arrived.\n+  if (recordedName !== toolName) turn.toolNames.delete(toolName);\n+  addRecordedTools(turn, recordedName, data.arguments);\n   const pending: PendingToolEdit = {\n     editLocs: new Map(),\n     editedFiles: new Set(recordedToolFiles(toolName, rawArgs).edited),"
+  }
+ ],
+ "test_files": [
+  "src/core/parser-vscode-cli.test.ts"
+ ]
+}

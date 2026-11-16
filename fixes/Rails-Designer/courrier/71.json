@@ -1,0 +1,26 @@
+{
+ "repo": "Rails-Designer/courrier",
+ "number": 71,
+ "url": "https://github.com/Rails-Designer/courrier/pull/71",
+ "title": "fix(cloudflare): split address lists and send display names as objects",
+ "merged_at": "2026-11-16T10:14:33Z",
+ "files": [
+  {
+   "filename": "lib/courrier/email/providers/cloudflare.rb",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 5,
+   "patch": "@@ -8,11 +8,11 @@ def self.config_options = %w[account_id]\n \n         def body\n           {\n-            \"from\" => @options.from,\n-            \"to\" => @options.to,\n-            \"reply_to\" => @options.reply_to,\n-            \"cc\" => @options.cc,\n-            \"bcc\" => @options.bcc,\n+            \"from\" => recipients(@options.from)&.first,\n+            \"to\" => recipients(@options.to),\n+            \"reply_to\" => recipients(@options.reply_to)&.first,\n+            \"cc\" => bare_addresses(@options.cc),\n+            \"bcc\" => bare_addresses(@options.bcc),\n             \"subject\" => @options.subject,\n             \"text\" => @options.text,\n             \"html\" => @options.html\n@@ -21,6 +21,13 @@ def body\n \n         private\n \n+        # The API documents cc/bcc as plain address strings (named objects only for from/to)\n+        def bare_addresses(value) = recipients(value)&.map { |recipient| recipient[\"address\"] }\n+\n+        def recipients(value)\n+          address_list(value, as: :plain)&.map { |address| email_and_name(address, email_key: \"address\") }\n+        end\n+\n         def endpoint_url\n           account_id = @provider_options.account_id\n           raise Courrier::ArgumentError, \"Cloudflare requires an `account_id`\" unless account_id"
+  },
+  {
+   "filename": "test/courrier/email/providers/cloudflare_test.rb",
+   "status": "added",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,49 @@\n+require \"test_helper\"\n+\n+module Courrier::Email::Providers\n+  class CloudflareTest < Minitest::Test\n+    def setup\n+      email = TestEmail.new(\n+        from: \"Rails Designer <devs@railsdesigner.com>\",\n+        to: \"first@example.com, Second Person <second@example.com>\",\n+        reply_to: \"support@railsdesigner.com\",\n+        cc: \"Copy Person <copy@example.com>\",\n+        bcc: \"archive@example.com\"\n+      )\n+\n+      @provider = Cloudflare.new(api_key: \"test_key\", options: email.options, provider_options: Struct.new(:account_id).new(\"acct\"))\n+    end\n+\n+    def test_formats_transactional_email\n+      assert_equal(\n+        {\n+          \"from\" => {\"address\" => \"devs@railsdesigner.com\", \"name\" => \"Rails Designer\"},\n+          \"to\" => [{\"address\" => \"first@example.com\"}, {\"address\" => \"second@example.com\", \"name\" => \"Second Person\"}],\n+          \"reply_to\" => {\"address\" => \"support@railsdesigner.com\"},\n+          \"cc\" => [\"copy@example.com\"],\n+          \"bcc\" => [\"archive@example.com\"],\n+          \"subject\" => \"Test Subject\",\n+          \"text\" => \"Test Body\",\n+          \"html\" => \"<p>Test HTML Body</p>\"\n+        },\n+        @provider.body\n+      )\n+    end\n+\n+    def test_sends_a_display_name_on_reply_to\n+      email = TestEmail.new(\n+        from: \"devs@railsdesigner.com\",\n+        to: \"first@example.com\",\n+        reply_to: \"Support <support@railsdesigner.com>\"\n+      )\n+\n+      body = Cloudflare.new(api_key: \"test_key\", options: email.options, provider_options: Struct.new(:account_id).new(\"acct\")).body\n+\n+      assert_equal({\"address\" => \"support@railsdesigner.com\", \"name\" => \"Support\"}, body[\"reply_to\"])\n+    end\n+\n+    def test_authenticates_with_api_key\n+      assert_equal({\"Authorization\" => \"Bearer test_key\"}, @provider.send(:default_headers))\n+    end\n+  end\n+end"
+  }
+ ],
+ "test_files": [
+  "test/courrier/email/providers/cloudflare_test.rb"
+ ]
+}

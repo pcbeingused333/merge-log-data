@@ -3,8 +3,28 @@
  "number": 132,
  "url": "https://github.com/growthbook/growthbook-c-sharp/pull/132",
  "state": "open",
- "reviews": [],
- "review_comments": [],
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-16T13:41:07Z",
+   "body": "Thanks for the fix — this is correct per the WHATWG spec, and a nice side effect is that `id:`/`retry:` fields in a block that starts with a comment are no longer lost either. I confirmed both `CommentBeforeData` tests fail against the old parser and the full suite passes with the change (1452 passed).\n\nSmall note for the description: the official `growthbook-proxy` sends its heartbeat as `data: \\n\\n`, not as a `:` comment, so in practice this shows up when an intermediary (nginx, a load balancer, a CDN) injects keep-alive comments. Still a real bug, just worth saying where it comes from.\n\nTwo related things in the same parser, outside this diff. Happy to handle them in a follow-up if you'd rather keep this PR focused:\n\n1. **Field names are trimmed** (`ParseLine`, line 103). The new comment detection relies on `ParseLine` returning an empty key, but the key is `.Trim()`-ed, so ` : x` is treated as a comment and `data : x` is accepted as `data`. Per the spec, only a line whose first character is `:` is a comment, and field names match exactly (a spec-compliant EventSource, like the one the TS SDK uses, ignores `data : x`).\n2. **Mixed line endings never split events** (`ExtractEventsFromBuffer`, line 123). Only uniform `\\r\\n\\r\\n` / `\\n\\n` / `\\r\\r` count as event boundaries, so `data: A\\n\\r\\ndata: B\\n\\r\\n` merges into one event with `Data = \"A\\nB\"`, which fails JSON parsing and drops both updates. Same class of \"update silently lost\" bug as this PR, which is why I mention it."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "collaborator",
+   "path": "GrowthBook/Api/SSE/SSEEventParser.cs",
+   "created_at": "2026-11-16T13:37:41Z",
+   "body": "`eventData.Count == 0` filters blocks with no fields at all, but a block with only unknown fields (e.g. `: keepalive\\nx-trace: 123\\n\\n`) used to be dropped (it started with `:`) and now becomes an `SSEEvent` with Id/Event/Data all null, which `SSEClient` forwards to the `*` listener. Would it make sense to return null unless at least one of `data`/`id`/`event`/`retry` was seen?"
+  },
+  {
+   "role": "collaborator",
+   "path": "GrowthBook.Tests/ApiTests/SSEEventParserTests.cs",
+   "created_at": "2026-11-16T13:38:59Z",
+   "body": "Could you add a couple more cases?\n- a comment between two `data:` lines → `Data` is `\"a\\nb\"`\n- `\": hb\\nretry: 5000\\ndata: {}\\n\\n\"` → `RetryTime == 5000`\n\nThat locks in the `id`/`retry` side effect so a later refactor can't silently regress it."
+  }
+ ],
  "comments": [
   {
    "role": "bot",

@@ -1,0 +1,26 @@
+{
+ "repo": "PaddleHQ/paddle-python-sdk",
+ "number": 179,
+ "url": "https://github.com/PaddleHQ/paddle-python-sdk/pull/179",
+ "title": "fix: Convert timezone-aware datetimes to UTC instead of dropping the offset",
+ "merged_at": "2026-11-16T10:43:39Z",
+ "files": [
+  {
+   "filename": "paddle_billing/Entities/DateTime.py",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 2,
+   "patch": "@@ -10,7 +10,11 @@ def __init__(self, datetime_str: str = \"now\"):\n         if datetime_str == \"now\":\n             self._datetime = datetime.now(timezone.utc)\n         else:\n-            self._datetime = datetime.fromisoformat(datetime_str).replace(tzinfo=timezone.utc)\n+            parsed = datetime.fromisoformat(datetime_str)\n+            # Naive values are assumed to be UTC; aware values are converted so the offset is not discarded\n+            self._datetime = (\n+                parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)\n+            )\n \n     @property\n     def as_datetime(self):\n@@ -28,7 +32,12 @@ def from_datetime(cls, date: datetime | str):\n         if isinstance(date, str) and date == \"0001-01-01T00:00:00Z\":\n             return None\n \n-        date_str = date if isinstance(date, str) else date.strftime(cls.PADDLE_RFC3339)\n+        if isinstance(date, str):\n+            date_str = date\n+        else:\n+            if date.tzinfo is not None:\n+                date = date.astimezone(timezone.utc)\n+            date_str = date.strftime(cls.PADDLE_RFC3339)\n         try:\n             return cls(date_str)\n         except Exception:"
+  },
+  {
+   "filename": "tests/Unit/Entities/test_DateTime.py",
+   "status": "added",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,35 @@\n+from datetime import datetime, timedelta, timezone\n+\n+from paddle_billing.Entities.DateTime import DateTime\n+\n+\n+def test_utc_z_string_round_trip():\n+    assert DateTime(\"2024-01-01T12:00:00+00:00\").format() == \"2024-01-01T12:00:00.000000Z\"\n+\n+\n+def test_string_with_positive_offset_is_converted_to_utc():\n+    value = DateTime.from_datetime(\"2024-01-01T12:00:00+02:00\")\n+    assert value.as_datetime == datetime(2024, 1, 1, 10, 0, tzinfo=timezone.utc)\n+    assert value.format() == \"2024-01-01T10:00:00.000000Z\"\n+\n+\n+def test_string_with_negative_offset_is_converted_to_utc():\n+    value = DateTime(\"2024-01-01T12:00:00-05:00\")\n+    assert value.as_datetime == datetime(2024, 1, 1, 17, 0, tzinfo=timezone.utc)\n+    assert value.format() == \"2024-01-01T17:00:00.000000Z\"\n+\n+\n+def test_aware_datetime_with_offset_is_converted_to_utc():\n+    local = datetime(2024, 1, 1, 12, 0, tzinfo=timezone(timedelta(hours=2)))\n+    value = DateTime.from_datetime(local)\n+    assert value.as_datetime == datetime(2024, 1, 1, 10, 0, tzinfo=timezone.utc)\n+    assert str(value) == \"2024-01-01T10:00:00.000000Z\"\n+\n+\n+def test_aware_datetime_with_negative_offset_is_converted_to_utc():\n+    local = datetime(2024, 1, 1, 12, 0, tzinfo=timezone(timedelta(hours=-5, minutes=-30)))\n+    assert DateTime.from_datetime(local).to_json() == \"2024-01-01T17:30:00.000000Z\"\n+\n+\n+def test_naive_datetime_is_treated_as_utc():\n+    assert DateTime.from_datetime(datetime(2024, 1, 1, 12, 0)).to_json() == \"2024-01-01T12:00:00.000000Z\""
+  }
+ ],
+ "test_files": [
+  "tests/Unit/Entities/test_DateTime.py"
+ ]
+}

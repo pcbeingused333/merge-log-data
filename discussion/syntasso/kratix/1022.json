@@ -3,7 +3,55 @@
  "number": 1022,
  "url": "https://github.com/syntasso/kratix/pull/1022",
  "state": "open",
- "reviews": [],
- "review_comments": [],
- "comments": []
+ "reviews": [
+  {
+   "role": "member",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-16T14:36:26Z",
+   "body": "Please see my comments and thanks again for contributing!"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "member",
+   "path": "internal/controller/scheduler.go",
+   "created_at": "2026-11-16T14:23:05Z",
+   "body": "We can read straight into `workPlacement` instead of creating a new variable `latest`:\n\n```suggestion\n        if getErr := s.Client.Get(ctx, client.ObjectKeyFromObject(workPlacement), workPlacement); getErr != nil {\n            return getErr\n        }\n        if misplaced {\n            s.labelWorkplacementAsMisplaced(workPlacement)\n        }\n        return updateErr\n```"
+  },
+  {
+   "role": "member",
+   "path": "internal/controller/scheduler.go",
+   "created_at": "2026-11-16T14:25:02Z",
+   "body": "Same events would be published multiple times on retry which is not ideal."
+  },
+  {
+   "role": "member",
+   "path": "internal/controller/scheduler_test.go",
+   "created_at": "2026-11-16T14:30:32Z",
+   "body": "The WorkPlacement controller doesn't write this annotation. I think a `kratix.io/` key and a `workplacement-controller` value make it look like a real behaviour which is a little misleading. Could we use a name that is obviously test-only?"
+  },
+  {
+   "role": "member",
+   "path": "internal/controller/scheduler_test.go",
+   "created_at": "2026-11-16T14:32:54Z",
+   "body": "Took a moment to understand the purpose of this setup, so adding a bit of details:\n```suggestion\n\t\t\t\t\t\t\t// Simulate another controller updating WorkPlacement between\n\t\t\t\t\t\t\t// the scheduler's read and write and return a Conflict error.\n```"
+  }
+ ],
+ "comments": [
+  {
+   "role": "member",
+   "created_at": "2026-11-16T13:12:14Z",
+   "body": "@pcbeingused333 thanks for your contribution! I think there are couple more places in the scheduler that are updating the workplacement status and could benefit from a retry on conflict, for example: https://github.com/syntasso/kratix/blob/b4f7bfe25a9b30f5d13579591c14ca3089783e2b/internal/controller/scheduler.go#L489 and https://github.com/syntasso/kratix/blob/b4f7bfe25a9b30f5d13579591c14ca3089783e2b/internal/controller/scheduler.go#L519\r\n\r\nCould you please address them in this PR as well? Thanks!"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-16T13:33:02Z",
+   "body": "Thanks @ChunyiLyu, good catch. Both `Status().Update` calls you pointed at (misplaced and scheduled branches in `updateWorkPlacementStatus`) now go through `retry.RetryOnConflict`: the function re-reads the WorkPlacement on each attempt and recomputes the conditions before writing. I added a spec that injects a 409 on the status update and checks the reconcile succeeds and the conditions are written; it fails without the change.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-16T15:20:33Z",
+   "body": "Thanks @ChunyiLyu, all four addressed: the spec update now reads straight into `workPlacement`; the misplaced Warning event is published once after the retry loop instead of per attempt; the test annotation is now `test-only/simulated-concurrent-write` with value `simulated`; and the comment in the interceptor is replaced with your wording.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
 }

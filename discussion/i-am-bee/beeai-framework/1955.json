@@ -3,7 +3,33 @@
  "number": 1955,
  "url": "https://github.com/i-am-bee/beeai-framework/pull/1955",
  "state": "open",
- "reviews": [],
- "review_comments": [],
- "comments": []
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-16T09:47:02Z",
+   "body": "Appreciate you bringing `stopReason` over from #1920. Non-streamed Bedrock calls now report `stop`/`length` on this branch, but a streamed Bedrock response still ends with `finishReason` undefined: `@langchain/aws` passes the `messageStop` event into `response_metadata` unchanged, so the key sits one level down.\n\n```\n{\"messageStop\":{\"stopReason\":\"end_turn\"}}\n{\"metadata\":{\"usage\":{\"inputTokens\":10,\"outputTokens\":16,\"totalTokens\":26},\"metrics\":{\"latencyMs\":361}},\"model_provider\":\"bedrock-converse\"}\n```\n\nPython's langchain-aws flattens that event, which is why the flat lookup was enough in #1920. The two inline suggestions read the nested key and add a test row for it. Live `ChatBedrockConverse` through `LangChainChatModel.create()`, Haiku 4.5 in us-east-1:\n\n| request | main | this PR | with suggestion |\n|---|---|---|---|\n| invoke | `stop` | `stop` | `stop` |\n| invoke, `maxTokens: 8` | `stop` | `length` | `length` |\n| stream | `stop` | `undefined` | `stop` |\n| stream, `maxTokens: 8` | `stop` | `undefined` | `length` |\n\nThe stream rows also need your `merge` change. The usage chunk arrives after `messageStop`, and with the suggestion on top of main's `merge` both stream rows go back to `undefined`.\n\nI ran this on main ba1a76e and beacf49 with `@langchain/aws` 1.4.3, the newest release that accepts the repo's `@langchain/core` 1.1.49, and the last two columns come out the same with 1.5.2 on core 1.4.1. Your test against main's source is 12 failed / 3 passed, and 15 passed here. With the extra row it's 1 failed on this branch and 16 passed with the suggestion. ESLint, Prettier and `tsc --noEmit` are clean with it applied.\n"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "typescript/src/adapters/langchain/backend/chat.ts",
+   "created_at": "2026-11-16T09:47:03Z",
+   "body": "`@langchain/aws` keeps the Converse stream event as is, so on the `messageStop` chunk the reason is at `response_metadata.messageStop.stopReason` (raw chunk in the summary). One more link in the chain picks it up:\n\n```suggestion\n    metadata?.stopReason ??\n    // @langchain/aws streams the Converse event as is: { messageStop: { stopReason } }\n    (metadata?.messageStop as { stopReason?: unknown } | undefined)?.stopReason ??\n```\n"
+  },
+  {
+   "role": "contributor",
+   "path": "typescript/tests/adapters/langchain/chat.test.ts",
+   "created_at": "2026-11-16T09:47:03Z",
+   "body": "Row for the streamed shape. It fails on this branch (`expected undefined to be 'length'`) and passes with the suggestion above.\n\n```suggestion\n    [{ stopReason: \"tool_use\" }, \"tool-calls\"],\n    [{ messageStop: { stopReason: \"max_tokens\" } }, \"length\"],\n```\n"
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-16T10:03:00Z",
+   "body": "\nApplied both suggestions: the adapter now reads `messageStop.stopReason`, and the test table includes the streamed `max_tokens` shape. The new case fails before the fix and all 16 cases pass with it. Prettier, ESLint and `tsc --noEmit` also pass.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
 }

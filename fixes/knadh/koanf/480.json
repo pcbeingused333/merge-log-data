@@ -1,0 +1,26 @@
+{
+ "repo": "knadh/koanf",
+ "number": 480,
+ "url": "https://github.com/knadh/koanf/pull/480",
+ "title": "fix(parameterstore): keep parameters after an omitted callback key",
+ "merged_at": "2026-11-16T10:33:43Z",
+ "files": [
+  {
+   "filename": "providers/parameterstore/parameterstore.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -103,7 +103,7 @@ func (ps *ParameterStore[T]) Read() (map[string]any, error) {\n \t\t\t\tname, value := ps.config.Callback(*p.Name, *p.Value)\n \t\t\t\t// If the callback blanked the key, it should be omitted.\n \t\t\t\tif name == \"\" {\n-\t\t\t\t\tbreak\n+\t\t\t\t\tcontinue\n \t\t\t\t}\n \t\t\t\tmp[name] = value\n \t\t\t} else {\n@@ -124,7 +124,7 @@ func (ps *ParameterStore[T]) Read() (map[string]any, error) {\n \t\t\t\t\tname, value := ps.config.Callback(*p.Name, *p.Value)\n \t\t\t\t\t// If the callback blanked the key, it should be omitted.\n \t\t\t\t\tif name == \"\" {\n-\t\t\t\t\t\tbreak\n+\t\t\t\t\t\tcontinue\n \t\t\t\t\t}\n \t\t\t\t\tmp[name] = value\n \t\t\t\t} else {"
+  },
+  {
+   "filename": "providers/parameterstore/parameterstore_test.go",
+   "status": "modified",
+   "additions": 42,
+   "deletions": 0,
+   "patch": "@@ -198,6 +198,48 @@ func TestParameterStore(t *testing.T) {\n \t\t\t\t},\n \t\t\t},\n \t\t},\n+\t\t// An empty callback key omits only that parameter. Later parameters in the\n+\t\t// same GetParameters response, and later parameters on the same\n+\t\t// GetParametersByPath page, must still be loaded.\n+\t\t\"get parameters but an earlier one is ignored\": {\n+\t\t\tprovider: ProviderWithClient(Config[ssm.GetParametersInput]{\n+\t\t\t\tDelim: \".\",\n+\t\t\t\tInput: ssm.GetParametersInput{Names: []string{\"parent1\", \"parent2.child1\"}},\n+\t\t\t\tCallback: func(key, value string) (string, any) {\n+\t\t\t\t\tkey = strings.TrimPrefix(key, \"prefix.\")\n+\t\t\t\t\tif key == \"parent1\" {\n+\t\t\t\t\t\treturn \"\", nil\n+\t\t\t\t\t}\n+\t\t\t\t\treturn key, value\n+\t\t\t\t},\n+\t\t\t}, client),\n+\t\t\twant: map[string]any{\n+\t\t\t\t\"parent2\": map[string]any{\n+\t\t\t\t\t\"child1\": \"bob\",\n+\t\t\t\t},\n+\t\t\t},\n+\t\t},\n+\t\t\"get parameters by path but an earlier one is ignored\": {\n+\t\t\tprovider: ProviderWithClient(Config[ssm.GetParametersByPathInput]{\n+\t\t\t\tDelim: \".\",\n+\t\t\t\tInput: ssm.GetParametersByPathInput{Path: aws.String(\"/\")},\n+\t\t\t\tCallback: func(key, value string) (string, any) {\n+\t\t\t\t\tkey = strings.TrimPrefix(key, \"prefix.\")\n+\t\t\t\t\tif key == \"parent1\" {\n+\t\t\t\t\t\treturn \"\", nil\n+\t\t\t\t\t}\n+\t\t\t\t\treturn key, value\n+\t\t\t\t},\n+\t\t\t}, client),\n+\t\t\twant: map[string]any{\n+\t\t\t\t\"parent2\": map[string]any{\n+\t\t\t\t\t\"child1\": \"bob\",\n+\t\t\t\t\t\"child2\": map[string]any{\n+\t\t\t\t\t\t\"grandchild1\": \"carol\",\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t},\n+\t\t},\n \t}\n \tfor name, test := range tests {\n \t\ttest := test"
+  }
+ ],
+ "test_files": [
+  "providers/parameterstore/parameterstore_test.go"
+ ]
+}

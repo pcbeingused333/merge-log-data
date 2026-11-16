@@ -1,0 +1,47 @@
+{
+ "repo": "PostHog/posthog-python",
+ "number": 1258,
+ "url": "https://github.com/PostHog/posthog-python/pull/1258",
+ "title": "fix(gemini): honor GEMINI_API_KEY environment variable",
+ "merged_at": "2026-11-16T09:23:43Z",
+ "files": [
+  {
+   "filename": ".sampo/changesets/gemini-api-key-environment.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+pypi/posthog: patch\n+---\n+\n+Honor `GEMINI_API_KEY` when initializing the synchronous and asynchronous Gemini clients, after `GOOGLE_API_KEY` and before the legacy `API_KEY` fallback."
+  },
+  {
+   "filename": "posthog/ai/gemini/_shared.py",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 2,
+   "patch": "@@ -70,10 +70,14 @@ def _build_gemini_client_args(\n \n     resolved_api_key = api_key\n     if resolved_api_key is None:\n-        resolved_api_key = os.environ.get(\"GOOGLE_API_KEY\") or os.environ.get(\"API_KEY\")\n+        resolved_api_key = (\n+            os.environ.get(\"GOOGLE_API_KEY\")\n+            or os.environ.get(\"GEMINI_API_KEY\")\n+            or os.environ.get(\"API_KEY\")\n+        )\n     if resolved_api_key is None:\n         raise ValueError(\n-            \"API key must be provided either as parameter or via GOOGLE_API_KEY/API_KEY environment variable\"\n+            \"API key must be provided either as parameter or via GOOGLE_API_KEY/GEMINI_API_KEY/API_KEY environment variable\"\n         )\n \n     client_args[\"api_key\"] = resolved_api_key"
+  },
+  {
+   "filename": "posthog/ai/gemini/gemini.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -81,7 +81,7 @@ def __init__(\n     ):\n         \"\"\"\n         Args:\n-            api_key: Google AI API key. If not provided, will use GOOGLE_API_KEY or API_KEY environment variable (not required for Vertex AI)\n+            api_key: Google AI API key. If not provided, will use GOOGLE_API_KEY, GEMINI_API_KEY, or API_KEY environment variables in that order (not required for Vertex AI)\n             vertexai: Whether to use Vertex AI authentication\n             credentials: Vertex AI credentials object\n             project: GCP project ID for Vertex AI\n@@ -160,7 +160,7 @@ def __init__(\n     ):\n         \"\"\"\n         Args:\n-            api_key: Google AI API key. If not provided, will use GOOGLE_API_KEY or API_KEY environment variable (not required for Vertex AI)\n+            api_key: Google AI API key. If not provided, will use GOOGLE_API_KEY, GEMINI_API_KEY, or API_KEY environment variables in that order (not required for Vertex AI)\n             vertexai: Whether to use Vertex AI authentication\n             credentials: Vertex AI credentials object\n             project: GCP project ID for Vertex AI"
+  },
+  {
+   "filename": "posthog/ai/gemini/gemini_async.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -76,7 +76,7 @@ def __init__(\n     ):\n         \"\"\"\n         Args:\n-            api_key: Google AI API key. If not provided, will use GOOGLE_API_KEY or API_KEY environment variable (not required for Vertex AI)\n+            api_key: Google AI API key. If not provided, will use GOOGLE_API_KEY, GEMINI_API_KEY, or API_KEY environment variables in that order (not required for Vertex AI)\n             vertexai: Whether to use Vertex AI authentication\n             credentials: Vertex AI credentials object\n             project: GCP project ID for Vertex AI\n@@ -144,7 +144,7 @@ def __init__(\n     ):\n         \"\"\"\n         Args:\n-            api_key: Google AI API key. If not provided, will use GOOGLE_API_KEY or API_KEY environment variable (not required for Vertex AI)\n+            api_key: Google AI API key. If not provided, will use GOOGLE_API_KEY, GEMINI_API_KEY, or API_KEY environment variables in that order (not required for Vertex AI)\n             vertexai: Whether to use Vertex AI authentication\n             credentials: Vertex AI credentials object\n             project: GCP project ID for Vertex AI"
+  },
+  {
+   "filename": "posthog/test/ai/gemini/test_gemini_parity.py",
+   "status": "modified",
+   "additions": 45,
+   "deletions": 5,
+   "patch": "@@ -11,16 +11,56 @@\n \n \n @pytest.mark.parametrize(\"client_class\", [Client, AsyncClient])\n-def test_sync_and_async_clients_share_api_key_environment_precedence(\n+def test_clients_initialize_with_gemini_api_key_without_network(\n     client_class, monkeypatch\n ):\n-    monkeypatch.setenv(\"GOOGLE_API_KEY\", \"google-key\")\n-    monkeypatch.setenv(\"API_KEY\", \"legacy-key\")\n+    for name in (\"GOOGLE_API_KEY\", \"API_KEY\", \"GOOGLE_GENAI_USE_VERTEXAI\"):\n+        monkeypatch.delenv(name, raising=False)\n+    monkeypatch.setenv(\"GEMINI_API_KEY\", \"test-gemini-key\")\n+\n+    client = client_class(posthog_client=MagicMock())\n+    try:\n+        assert client.models is not None\n+        assert isinstance(client._provider_client, google_genai.Client)\n+    finally:\n+        client._provider_client.close()\n+\n+\n+@pytest.mark.parametrize(\"client_class\", [Client, AsyncClient])\n+@pytest.mark.parametrize(\n+    \"environment, explicit_key, expected_key\",\n+    [\n+        ({\"GEMINI_API_KEY\": \"gemini-key\"}, None, \"gemini-key\"),\n+        ({\"API_KEY\": \"legacy-key\"}, None, \"legacy-key\"),\n+        (\n+            {\"GEMINI_API_KEY\": \"gemini-key\", \"API_KEY\": \"legacy-key\"},\n+            None,\n+            \"gemini-key\",\n+        ),\n+        (\n+            {\n+                \"GOOGLE_API_KEY\": \"google-key\",\n+                \"GEMINI_API_KEY\": \"gemini-key\",\n+                \"API_KEY\": \"legacy-key\",\n+            },\n+            None,\n+            \"google-key\",\n+        ),\n+        ({\"GEMINI_API_KEY\": \"gemini-key\"}, \"explicit-key\", \"explicit-key\"),\n+    ],\n+)\n+def test_sync_and_async_clients_share_api_key_environment_precedence(\n+    client_class, monkeypatch, environment, explicit_key, expected_key\n+):\n+    for name in (\"GOOGLE_API_KEY\", \"GEMINI_API_KEY\", \"API_KEY\"):\n+        monkeypatch.delenv(name, raising=False)\n+    for name, value in environment.items():\n+        monkeypatch.setenv(name, value)\n \n     with patch.object(google_genai, \"Client\") as provider_client:\n-        client_class(posthog_client=MagicMock())\n+        client_class(api_key=explicit_key, posthog_client=MagicMock())\n \n-    provider_client.assert_called_once_with(api_key=\"google-key\")\n+    provider_client.assert_called_once_with(api_key=expected_key)\n \n \n @pytest.mark.parametrize(\"client_class\", [Client, AsyncClient])"
+  }
+ ],
+ "test_files": [
+  "posthog/test/ai/gemini/test_gemini_parity.py"
+ ]
+}

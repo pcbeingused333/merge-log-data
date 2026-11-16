@@ -1,0 +1,26 @@
+{
+ "repo": "schollz/croc",
+ "number": 1444,
+ "url": "https://github.com/schollz/croc/pull/1444",
+ "title": "fix: preserve received empty file permissions",
+ "merged_at": "2026-11-16T21:37:22Z",
+ "files": [
+  {
+   "filename": "src/croc/croc.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -3460,6 +3460,9 @@ func (c *Client) createEmptyFileAndFinish(fileInfo FileInfo, i int) (err error)\n \t\t\terr = errCreate\n \t\t\treturn\n \t\t}\n+\t\tif errChmod := emptyFile.Chmod(fileInfo.Mode.Perm()); errChmod != nil {\n+\t\t\tlog.Error(errChmod)\n+\t\t}\n \t\temptyFile.Close()\n \t}\n \t// setup the progressbar"
+  },
+  {
+   "filename": "src/croc/empty_file_test.go",
+   "status": "added",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,33 @@\n+package croc\n+\n+import (\n+\t\"fmt\"\n+\t\"os\"\n+\t\"runtime\"\n+\t\"testing\"\n+)\n+\n+func TestCreateEmptyFilePreservesPermissions(t *testing.T) {\n+\tif runtime.GOOS == \"windows\" {\n+\t\tt.Skip(\"Unix permission bits are not supported on Windows\")\n+\t}\n+\tfor _, mode := range []os.FileMode{0o600, 0o750, 0o640} {\n+\t\tt.Run(fmt.Sprintf(\"%04o\", mode), func(t *testing.T) {\n+\t\t\tc := bundleTestClient(t)\n+\t\t\tt.Chdir(t.TempDir())\n+\t\t\tc.Options.IsSender = false\n+\t\t\tfileInfo := FileInfo{Name: \"empty\", FolderRemote: \".\", Size: 0, Mode: mode}\n+\t\t\tc.FilesToTransfer = []FileInfo{fileInfo}\n+\t\t\tif err := c.createEmptyFileAndFinish(fileInfo, 0); err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\t\t\tstat, err := os.Stat(fileInfo.Name)\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\t\t\tif got := stat.Mode().Perm(); got != mode {\n+\t\t\t\tt.Fatalf(\"received empty file permissions = %#o, want %#o\", got, mode)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "src/croc/empty_file_test.go"
+ ]
+}

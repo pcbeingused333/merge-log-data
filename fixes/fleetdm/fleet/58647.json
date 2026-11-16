@@ -1,0 +1,33 @@
+{
+ "repo": "fleetdm/fleet",
+ "number": 58647,
+ "url": "https://github.com/fleetdm/fleet/pull/58647",
+ "title": "fix(gitops): serialize applies in the GitLab CI template",
+ "merged_at": "2026-11-16T20:01:43Z",
+ "files": [
+  {
+   "filename": "changes/58633-gitlab-template-resource-group",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+- Fixed the GitOps GitLab CI template so overlapping applies (push and scheduled pipelines) run one at a time via a `resource_group`, matching the GitHub workflow's `concurrency` group."
+  },
+  {
+   "filename": "cmd/fleetctl/fleetctl/new_test.go",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -195,6 +195,23 @@ func TestNewCIFleetURLNormalization(t *testing.T) {\n \t}\n }\n \n+// The generated GitLab job applies on pushes and on schedules; without a\n+// resource_group two overlapping applies can finish out of order and roll the\n+// fleet back to the older config. The GitHub workflow has a concurrency group.\n+func TestNewGitLabJobSerialized(t *testing.T) {\n+\toutDir := filepath.Join(t.TempDir(), \"out\")\n+\t_, err := runNewCommand(t, \"--org-name\", \"Test\", \"--dir\", outDir)\n+\trequire.NoError(t, err)\n+\n+\tgitlab, err := os.ReadFile(filepath.Join(outDir, \".gitlab-ci.yml\"))\n+\trequire.NoError(t, err)\n+\tvar jobs map[string]struct {\n+\t\tResourceGroup string `json:\"resource_group\"`\n+\t}\n+\trequire.NoError(t, yaml.Unmarshal(gitlab, &jobs))\n+\tassert.NotEmpty(t, jobs[\"fleet-gitops\"].ResourceGroup)\n+}\n+\n func TestNewDirFlag(t *testing.T) {\n \tdir := t.TempDir()\n \toutDir := filepath.Join(dir, \"custom-dir\")"
+  },
+  {
+   "filename": "cmd/fleetctl/fleetctl/templates/new/.gitlab-ci.template.yml",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -1,5 +1,7 @@\n fleet-gitops:\n   image: debian:bookworm-slim\n+  # Prevent concurrent applies: a slower, older run could otherwise finish last and roll back newer changes.\n+  resource_group: fleet-gitops\n   variables:\n     FLEET_DRY_RUN_ONLY: true\n   rules:"
+  }
+ ],
+ "test_files": [
+  "cmd/fleetctl/fleetctl/new_test.go"
+ ]
+}

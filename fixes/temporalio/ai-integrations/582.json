@@ -1,0 +1,26 @@
+{
+ "repo": "temporalio/ai-integrations",
+ "number": 582,
+ "url": "https://github.com/temporalio/ai-integrations/pull/582",
+ "title": "fix(google_genai): cancelling one MCP caller no longer cancels the others",
+ "merged_at": "2026-11-16T18:57:08Z",
+ "files": [
+  {
+   "filename": "python/google_genai/src/temporalio/google_genai/_mcp.py",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 2,
+   "patch": "@@ -193,8 +193,12 @@ async def aclose(self) -> None:\n             pass\n \n     async def session(self) -> ClientSession:\n-        \"\"\"Return the live session, or raise the connect failure.\"\"\"\n-        return await self._ready\n+        \"\"\"Return the live session, or raise the connect failure.\n+\n+        The wait is shielded. Cancelling this caller must not cancel the shared\n+        connect future, or any other caller waiting on the same connection.\n+        \"\"\"\n+        return await asyncio.shield(self._ready)\n \n \n async def get_connection("
+  },
+  {
+   "filename": "python/google_genai/tests/test_gemini_mcp.py",
+   "status": "modified",
+   "additions": 59,
+   "deletions": 0,
+   "patch": "@@ -706,3 +706,62 @@ def report(_: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:\n     finally:\n         loop.set_exception_handler(previous_handler)\n     assert reported == []\n+\n+\n+async def test_cancelling_one_mcp_caller_leaves_the_other_waiting() -> None:\n+    \"\"\"Cancelling one waiter must not cancel the shared MCP connect.\"\"\"\n+    from temporalio.google_genai import _mcp\n+\n+    session = object()\n+    connected = asyncio.Event()\n+    release = asyncio.Event()\n+\n+    def factory() -> Any:\n+        @asynccontextmanager\n+        async def connect() -> AsyncGenerator[Any, None]:\n+            connected.set()\n+            await release.wait()\n+            yield session\n+\n+        return connect()\n+\n+    server = f\"cancel-one-{uuid4()}\"\n+    first = asyncio.create_task(\n+        _mcp.get_connection(server, factory, timedelta(minutes=5))\n+    )\n+    second: asyncio.Task[tuple[Any, Any]] | None = None\n+    try:\n+        await connected.wait()\n+        second = asyncio.create_task(\n+            _mcp.get_connection(server, factory, timedelta(minutes=5))\n+        )\n+        record = _mcp._CONNECTIONS[server]\n+        for _ in range(50):\n+            if record._inflight >= 2 and not record._ready.done():\n+                break\n+            await asyncio.sleep(0)\n+        else:\n+            raise AssertionError(\"second caller did not wait on the shared connect\")\n+\n+        first.cancel()\n+        with pytest.raises(asyncio.CancelledError):\n+            await first\n+        # The connect, and the caller nobody cancelled, keep going.\n+        assert not record._ready.cancelled()\n+        assert not record._owner.done()\n+        assert not second.done()\n+\n+        release.set()\n+        got, held = await second\n+        assert got is session\n+        held.release()\n+    finally:\n+        release.set()\n+        pending = [\n+            task for task in (first, second) if task is not None and not task.done()\n+        ]\n+        for task in pending:\n+            task.cancel()\n+        if pending:\n+            await asyncio.gather(*pending, return_exceptions=True)\n+        await _mcp._evict_connection(server)"
+  }
+ ],
+ "test_files": [
+  "python/google_genai/tests/test_gemini_mcp.py"
+ ]
+}

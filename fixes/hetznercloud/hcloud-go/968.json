@@ -1,0 +1,26 @@
+{
+ "repo": "hetznercloud/hcloud-go",
+ "number": 968,
+ "url": "https://github.com/hetznercloud/hcloud-go/pull/968",
+ "title": "fix: preserve caller action slice when waiting",
+ "merged_at": "2026-11-16T11:53:56Z",
+ "files": [
+  {
+   "filename": "hcloud/action_waiter.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -21,8 +21,8 @@ var _ ActionWaiter = (*ActionClient)(nil)\n //\n // The handleUpdate callback is called every time an action is updated.\n func (c *ActionClient) WaitForFunc(ctx context.Context, handleUpdate func(update *Action) error, actions ...*Action) error {\n-\t// Filter out nil actions\n-\tactions = slices.DeleteFunc(actions, func(a *Action) bool { return a == nil })\n+\t// Filter out nil actions without modifying the caller's slice.\n+\tactions = slices.DeleteFunc(slices.Clone(actions), func(a *Action) bool { return a == nil })\n \n \trunning := make(map[int64]struct{}, len(actions))\n \tfor _, action := range actions {"
+  },
+  {
+   "filename": "hcloud/action_waiter_test.go",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -210,3 +210,15 @@ func TestWaitForFunc(t *testing.T) {\n \t\t},\n \t)\n }\n+\n+func TestActionWaiterPreservesCallerActions(t *testing.T) {\n+\tctx, _, client := makeTestUtils(t)\n+\n+\tfinished := &Action{ID: 42, Status: ActionStatusSuccess}\n+\tactions := []*Action{nil, finished, nil}\n+\n+\tassert.NoError(t, client.Action.WaitFor(ctx, actions...))\n+\tassert.Nil(t, actions[0])\n+\tassert.Same(t, finished, actions[1])\n+\tassert.Nil(t, actions[2])\n+}"
+  }
+ ],
+ "test_files": [
+  "hcloud/action_waiter_test.go"
+ ]
+}

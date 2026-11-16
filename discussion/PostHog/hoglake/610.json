@@ -3,7 +3,20 @@
  "number": 610,
  "url": "https://github.com/PostHog/hoglake/pull/610",
  "state": "open",
- "reviews": [],
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-16T21:19:18Z",
+   "body": "Thanks. Deferring the `hoglake_stats_hydrated_total` counters until the sweep commits is right, and the deferred constraint trigger is a good way to reproduce the rollback. One thing to change, plus a few smaller ones.\n\n**1. Don't defer the log line that explains a rollback.**\n- `markFailed`'s `log.error(e) { \"could not mark file ${file.dataFileId} failed\" }` now goes through `signals.afterCommit`.\n- #488's own trigger is exactly this path. The flip fails, then `markFailed`'s UPDATE fails in a transaction Postgres has already aborted, so the COMMIT becomes a ROLLBACK.\n- With this change, that error is discarded together with the rollback, so the operator sees only the sweep-level failure and not its cause.\n- Log it immediately, or attach it to the exception `runOnce` rethrows. A test along the lines of the trigger test, where `markFailed`'s update fails, would pin this down.\n\n**2. Keep the transient-error counter and warning immediate.**\n- `hoglake_hydrator_transient_errors_total` and its warning describe an object-store event (a throttle or 5xx), not database state. Every attempt really happened, so counting the retry again is correct.\n- Deferred, a throttle storm during a sweep that rolls back never shows up in the counter or the logs.\n- Only the outcome signals that describe committed state (`provided`/`quarantined`/`failed`, and the per-file outcome WARNs) need to wait for the commit.\n\n**3. Emit after the ledger, or isolate each action.**\n- `signals.emit()` runs before the `recordSweepById` loop. If any deferred action throws, the ledger rows for work that did commit are skipped.\n- Emit after recording, or wrap each action in its own try/catch.\n\n**Minor**\n- Structural `hydration failed` stack traces are now lost when a sweep rolls back. That's acceptable, because a deterministic failure is logged again on the retry, but please say so in the `CommittedSignals` KDoc.\n- Deferred lines now all appear at the end of the sweep, up to 1000 files later, so their timestamps no longer say when the file was processed. Including the sweep's start time or the file's position in the line would help.\n- Nothing tests the transient path or the `could not mark failed` path across a rollback.\n- Only the targeted tests ran. Please run the full `:test` before merge.\n"
+  }
+ ],
  "review_comments": [],
- "comments": []
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-16T21:50:18Z",
+   "body": "\nThanks, all taken in 8855ca4:\n\n1. `markFailed`'s \"could not mark file … failed\" error is logged immediately again. New test: the UPDATE is rejected by a trigger, the sweep fails, and the error is still in the log.\n2. The transient-error counter and its warning are immediate again (they describe the object-store event, not committed state). New test: a throttled fetch in a sweep that rolls back is still counted and logged, while `hoglake_stats_hydrated_total` stays at zero.\n3. `signals.emit()` now runs after the `recordSweepById` loop, and `emit()` catches per action, so one throwing action cannot skip the rest.\n\nMinor: `CommittedSignals` KDoc now states that structural `hydration failed` traces are lost on a rolled-back sweep (logged again on the retry) and that deferred lines are emitted at the end of the sweep; the structural-failure and registration-mismatch lines now carry the sweep start time.\n\nRan the whole `com.posthog.hoglake.hydrator.*` package plus `MaintenanceLedgerIntegrationTest` and `ktlintCheck`; the full `:test` suite was not run.\n\n(Disclosure: this change was prepared with an AI assistant.)\n"
+  }
+ ]
 }

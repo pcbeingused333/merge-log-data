@@ -1,0 +1,26 @@
+{
+ "repo": "looplj/axonhub",
+ "number": 3032,
+ "url": "https://github.com/looplj/axonhub/pull/3032",
+ "title": "fix(llm/responses): report abnormal terminal status over tool_calls in non-stream responses",
+ "merged_at": "2026-11-16T12:16:00Z",
+ "files": [
+  {
+   "filename": "llm/transformer/openai/responses/outbound.go",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 3,
+   "patch": "@@ -455,9 +455,11 @@ func (t *OutboundTransformer) transformStandardResponse(\n \t\tMessage: &msg,\n \t}\n \n-\tif len(msg.ToolCalls) > 0 {\n-\t\tchoice.FinishReason = lo.ToPtr(\"tool_calls\")\n-\t} else if resp.Status != nil {\n+\t// Abnormal terminal statuses take priority over tool calls: a truncated,\n+\t// failed or cancelled response may carry partial tool calls, and reporting\n+\t// \"tool_calls\" would make clients execute incomplete arguments. This\n+\t// matches the streaming path.\n+\tif resp.Status != nil {\n \t\tswitch *resp.Status {\n \t\tcase \"completed\":\n \t\t\tchoice.FinishReason = lo.ToPtr(\"stop\")\n@@ -476,6 +478,10 @@ func (t *OutboundTransformer) transformStandardResponse(\n \t\t}\n \t}\n \n+\tif len(msg.ToolCalls) > 0 && (choice.FinishReason == nil || *choice.FinishReason == \"stop\") {\n+\t\tchoice.FinishReason = lo.ToPtr(\"tool_calls\")\n+\t}\n+\n \tllmResp.Choices = append(llmResp.Choices, choice)\n \n \t// If no choices were created, create a default empty choice"
+  },
+  {
+   "filename": "llm/transformer/openai/responses/outbound_test.go",
+   "status": "modified",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -109,6 +109,39 @@ func TestOutboundTransformer_TransformResponse_IncompleteFinishReason(t *testing\n \t}\n }\n \n+func TestOutboundTransformer_TransformResponse_AbnormalStatusWithToolCall(t *testing.T) {\n+\tconst toolItem = `{\"type\":\"function_call\",\"id\":\"fc_1\",\"call_id\":\"call_1\",\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\"}`\n+\n+\ttests := []struct {\n+\t\tname     string\n+\t\tstatus   string\n+\t\tdetails  string\n+\t\texpected string\n+\t}{\n+\t\t{name: \"incomplete\", status: \"incomplete\", details: `,\"incomplete_details\":{\"reason\":\"max_output_tokens\"}`, expected: \"length\"},\n+\t\t{name: \"content_filter\", status: \"incomplete\", details: `,\"incomplete_details\":{\"reason\":\"content_filter\"}`, expected: \"content_filter\"},\n+\t\t{name: \"failed\", status: \"failed\", expected: \"error\"},\n+\t\t{name: \"canceled\", status: \"canceled\", expected: \"cancelled\"},\n+\t\t{name: \"completed\", status: \"completed\", expected: \"tool_calls\"},\n+\t}\n+\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\ttransformer, err := NewOutboundTransformer(\"https://api.openai.com\", \"test-api-key\")\n+\t\t\trequire.NoError(t, err)\n+\n+\t\t\tresult, err := transformer.TransformResponse(context.Background(), &httpclient.Response{\n+\t\t\t\tStatusCode: http.StatusOK,\n+\t\t\t\tBody:       []byte(`{\"id\":\"resp_x\",\"object\":\"response\",\"created_at\":1700000000,\"status\":\"` + tt.status + `\",\"model\":\"gpt-5\",\"output\":[` + toolItem + `]` + tt.details + `}`),\n+\t\t\t})\n+\t\t\trequire.NoError(t, err)\n+\t\t\trequire.Len(t, result.Choices, 1)\n+\t\t\trequire.NotNil(t, result.Choices[0].FinishReason)\n+\t\t\trequire.Equal(t, tt.expected, *result.Choices[0].FinishReason)\n+\t\t})\n+\t}\n+}\n+\n func TestOutboundTransformer_buildFullRequestURL(t *testing.T) {\n \ttests := []struct {\n \t\tname     string"
+  }
+ ],
+ "test_files": [
+  "llm/transformer/openai/responses/outbound_test.go"
+ ]
+}

@@ -2,8 +2,40 @@
  "repo": "redis/redis-vl-python",
  "number": 849,
  "url": "https://github.com/redis/redis-vl-python/pull/849",
- "state": "open",
- "reviews": [],
- "review_comments": [],
- "comments": []
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-16T16:51:48Z",
+   "body": ""
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-16T17:49:25Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "collaborator",
+   "path": "tests/unit/test_connection_normalization.py",
+   "created_at": "2026-11-16T16:51:47Z",
+   "body": "This test covers more than it needs to. Of its 8 cases, 3 repeat a path another case already takes:\n- `SemanticCache` built from a sync client, with `adisconnect()`, runs the same base-class code as the `EmbeddingsCache` case.\n- The two URL-built `adisconnect()` cases already pass on `main`, and `test_base_cache_async_client_reconnects_on_a_second_event_loop` covers that path.\n\nThe scaffolding is also heavy. It bypasses `SemanticCache.__init__` with `__new__`, sets `_index` and `_aindex` by hand, and stands in a `SimpleNamespace` for `AsyncSearchIndex`. A new attribute that `disconnect()` or `_get_async_index()` reads would break it. A real `SemanticCache(..., create_index=False)` with a `CustomVectorizer` works without any of that, as `tests/unit/test_extension_create_index_flag.py:48` does.\n\nCould it shrink to the two tests #842's Acceptance asks for, sharing one helper? For example:\n\n```python\ndef _run_twice(cache, disconnect):\n    \"\"\"Use the async client on two loops, disconnecting in between.\"\"\"\n    created = []\n\n    def make(*args, **kwargs):\n        created.append(AsyncMock())\n        return created[-1]\n\n    async def amake(*args, **kwargs):\n        return make()\n\n    async def use():\n        client = await cache._get_async_redis_client()\n        if isinstance(cache, SemanticCache):\n            assert (await cache._get_async_index())._redis_client is client\n        if disconnect == \"adisconnect\":\n            await cache.adisconnect()\n        else:\n            cache.disconnect()\n\n    base = \"redisvl.extensions.cache.base.RedisConnectionFactory\"\n    with (\n        patch(f\"{base}.sync_to_async_redis\", side_effect=make),\n        patch(f\"{base}._get_aredis_connection\", side_effect=amake),\n    ):\n        asyncio.run(use())\n        asyncio.run(use())\n    assert len(created) == 2\n    return created\n\n\n@pytest.mark.parametrize(\"disconnect\", [\"disconnect\", \"adisconnect\"])\ndef test_cache_releases_async_client_derived_from_sync_client(disconnect):\n    provided = MagicMock(spec=Redis)\n    first, _ = _run_twice(EmbeddingsCache(redis_client=provided), disconnect)\n    assert first.aclose.await_count == (disconnect == \"adisconnect\")\n    provided.close.assert_not_called()\n\n\ndef test_semantic_cache_disconnect_drops_its_async_index():\n    cache = SemanticCache(\n        name=\"reconnect\",\n        vectorizer=CustomVectorizer(lambda text: [0.1, 0.2, 0.3]),\n        redis_url=\"redis://localhost:6379\",\n        create_index=False,\n    )\n    _run_twice(cache, \"disconnect\")\n```\n\nAlongside the unchanged `test_cache_disconnect_preserves_supplied_async_client`, these 5 cases pass on this branch, and 3 of them fail on `main`. Each of these mutations still fails at least one of them:\n- dropping `_aindex = None`;\n- setting the ownership flag on only one creation path;\n- skipping `aclose()` in `adisconnect()`."
+  },
+  {
+   "role": "collaborator",
+   "path": "redisvl/extensions/cache/base.py",
+   "created_at": "2026-11-16T16:51:48Z",
+   "body": "`disconnect()` and `adisconnect()` both repeat this \"if owned, clear the client and reset the flag\" block. A small helper that clears both and returns the client would keep the two in step:\n\n```python\ndef _release_owned_async_client(self):\n    if not self._owns_async_redis_client:\n        return None\n    client, self._async_redis_client = self._async_redis_client, None\n    self._owns_async_redis_client = False\n    return client\n```\n\n`disconnect()` then calls it and discards the result. `adisconnect()` awaits `aclose()` on what it returns, if anything."
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-16T17:17:46Z",
+   "body": "Thanks, applied both suggestions: `_release_owned_async_client()` is now shared by `disconnect()` and `adisconnect()`, and the reconnect test is cut to a shared `_run_twice` helper with the three tests you proposed (a real `SemanticCache(..., create_index=False)` instead of the `__new__` scaffolding). The 5 cases pass on the branch, and 3 of them fail on `main`.\n\nThis reply and the changes were prepared with an AI assistant (Claude Code) and submitted by the account owner.\n"
+  }
+ ]
 }
