@@ -1,0 +1,33 @@
+{
+ "repo": "PostHog/posthog-dotnet",
+ "number": 390,
+ "url": "https://github.com/PostHog/posthog-dotnet/pull/390",
+ "title": "fix(ai): mark OpenAI Chat Completions streams ending in an error chunk as errors",
+ "merged_at": "2026-11-17T15:52:48Z",
+ "files": [
+  {
+   "filename": ".changeset/openai-chat-stream-error.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+\"PostHog.AI\": patch\n+---\n+\n+OpenAI Chat Completions streams that end in an `{\"error\": ...}` chunk now set `$ai_is_error` and `$ai_error`."
+  },
+  {
+   "filename": "src/PostHog.AI/PostHogOpenAIHandler.cs",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -817,6 +817,15 @@ private void ProcessLine(ReadOnlySpan<char> line)\n                             _streamError = JsonNode.Parse(root.GetRawText());\n                         }\n                     }\n+                    else if (\n+                        root.TryGetProperty(\"error\", out var chatError)\n+                        && chatError.ValueKind == JsonValueKind.Object\n+                    )\n+                    {\n+                        // Chat Completions streams signal a mid-stream failure as an untyped\n+                        // `{\"error\": {...}}` chunk (HTTP status is already 200)\n+                        _streamError = JsonNode.Parse(chatError.GetRawText());\n+                    }\n \n                     if (\n                         root.TryGetProperty(\"type\", out var typeElement)"
+  },
+  {
+   "filename": "tests/PostHog.AI.Tests/PostHogOpenAIHandlerTests.cs",
+   "status": "modified",
+   "additions": 50,
+   "deletions": 0,
+   "patch": "@@ -308,6 +308,56 @@ public async Task SendAsyncMarksResponsesStreamEndingInFailureAsError(string ter\n             );\n     }\n \n+    [Fact]\n+    public async Task SendAsyncMarksChatCompletionsStreamErrorChunkAsError()\n+    {\n+        var requestBody = new\n+        {\n+            model = \"gpt-4\",\n+            messages = new[] { new { role = \"user\", content = \"Say hi\" } },\n+            stream = true,\n+        };\n+        var sse = \"data: {\\\"choices\\\": [{\\\"index\\\": 0, \\\"delta\\\": {\\\"content\\\": \\\"Hel\\\"}}]}\\n\\n\"\n+            + \"data: {\\\"error\\\":{\\\"message\\\":\\\"The server had an error\\\",\\\"type\\\":\\\"server_error\\\",\\\"code\\\":null}}\\n\\n\";\n+        var streamContent = new StreamContent(new MemoryStream(new UTF8Encoding(false).GetBytes(sse)));\n+        streamContent.Headers.ContentType = new MediaTypeHeaderValue(\"text/event-stream\");\n+        _innerHandler.Response = new HttpResponseMessage(HttpStatusCode.OK) { Content = streamContent };\n+\n+        using var requestContent = new StringContent(\n+            JsonSerializer.Serialize(requestBody),\n+            Encoding.UTF8,\n+            \"application/json\"\n+        );\n+\n+        HttpResponseMessage? response = null;\n+        try\n+        {\n+            response = await _client.PostAsync(new Uri(\"/v1/chat/completions\", UriKind.Relative), requestContent);\n+            var resultStream = await response.Content.ReadAsStreamAsync();\n+            using var reader = new StreamReader(resultStream);\n+            await reader.ReadToEndAsync();\n+        }\n+        finally\n+        {\n+            response?.Dispose();\n+        }\n+\n+        _postHogClient\n+            .Received(1)\n+            .Capture(\n+                Arg.Any<string>(),\n+                PostHogAIFieldNames.Generation,\n+                Arg.Is<Dictionary<string, object>>(props =>\n+                    props.ContainsKey(PostHogAIFieldNames.IsError)\n+                    && (bool)props[PostHogAIFieldNames.IsError]\n+                    && props[PostHogAIFieldNames.Error].ToString()!.Contains(\"The server had an error\", StringComparison.Ordinal)\n+                ),\n+                null,\n+                false,\n+                Arg.Any<DateTimeOffset?>()\n+            );\n+    }\n+\n     [Fact]\n     public async Task SendAsyncDecodesMultibyteCharactersSplitAcrossStreamReads()\n     {"
+  }
+ ],
+ "test_files": [
+  "tests/PostHog.AI.Tests/PostHogOpenAIHandlerTests.cs"
+ ]
+}

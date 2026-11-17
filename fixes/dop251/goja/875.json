@@ -1,0 +1,26 @@
+{
+ "repo": "dop251/goja",
+ "number": 875,
+ "url": "https://github.com/dop251/goja/pull/875",
+ "title": "fix(ftoa): don't let rounding carry overwrite the sign in toPrecision/toExponential",
+ "merged_at": "2026-11-17T12:24:31Z",
+ "files": [
+  {
+   "filename": "ftoa/ftostr_test.go",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -42,6 +42,13 @@ func TestDtostr(t *testing.T) {\n \ttestFToStr(math.Float64frombits(0x000FFFFFFFFFFFFF), ModeStandard, 0, \"2.225073858507201e-308\", t)  // largest denormal\n \ttestFToStr(4294967272.0, ModePrecision, 14, \"4294967272.0000\", t)\n \ttestFToStr(0.7016570306969449, ModeStandard, 0, \"0.7016570306969449\", t)\n+\t// rounding carry must not corrupt the sign prefix of negative numbers\n+\ttestFToStr(-9.5e-8, ModeExponential, 1, \"-1e-7\", t)\n+\ttestFToStr(-9.5e-8, ModePrecision, 1, \"-1e-7\", t)\n+\ttestFToStr(-9.999e-9, ModeExponential, 3, \"-1.00e-8\", t)\n+\ttestFToStr(-99.99, ModePrecision, 3, \"-100\", t)\n+\ttestFToStr(-999.9, ModeExponential, 2, \"-1.0e+3\", t)\n+\ttestFToStr(9.5e-8, ModeExponential, 1, \"1e-7\", t)\n }\n \n func BenchmarkDtostrSmall(b *testing.B) {"
+  },
+  {
+   "filename": "ftoa/internal/fast/dtoa.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 2,
+   "patch": "@@ -466,6 +466,7 @@ func digitGenCounted(w diyfp, requested_digits int, buffer []byte) (kappa int, b\n \tdivisor, divisor_exponent := biggestPowerTen(integrals, diyFpKSignificandSize-(-one.e))\n \tkappa = divisor_exponent + 1\n \tbuf = buffer\n+\tstartPos := len(buffer)\n \t// Loop invariant: buffer = w / 10^kappa  (integer division)\n \t// The invariant holds for the first iteration: kappa has been initialized\n \t// with the divisor exponent + 1. And the divisor is the biggest power of ten\n@@ -486,7 +487,7 @@ func digitGenCounted(w diyfp, requested_digits int, buffer []byte) (kappa int, b\n \n \tif requested_digits == 0 {\n \t\trest := uint64(integrals)<<-one.e + fractionals\n-\t\tres = roundWeedCounted(buf, rest, uint64(divisor)<<-one.e, w_error, &kappa)\n+\t\tres = roundWeedCounted(buf[startPos:], rest, uint64(divisor)<<-one.e, w_error, &kappa)\n \t\treturn\n \t}\n \n@@ -512,7 +513,7 @@ func digitGenCounted(w diyfp, requested_digits int, buffer []byte) (kappa int, b\n \tif requested_digits != 0 {\n \t\tres = false\n \t} else {\n-\t\tres = roundWeedCounted(buf, fractionals, one.f, w_error, &kappa)\n+\t\tres = roundWeedCounted(buf[startPos:], fractionals, one.f, w_error, &kappa)\n \t}\n \treturn\n }"
+  }
+ ],
+ "test_files": [
+  "ftoa/ftostr_test.go"
+ ]
+}

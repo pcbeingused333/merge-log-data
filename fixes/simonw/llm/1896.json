@@ -1,0 +1,33 @@
+{
+ "repo": "simonw/llm",
+ "number": 1896,
+ "url": "https://github.com/simonw/llm/pull/1896",
+ "title": "fix: support async OpenAI response debug logging",
+ "merged_at": "2026-11-17T18:51:27Z",
+ "files": [
+  {
+   "filename": "llm/default_plugins/openai_models.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -1612,7 +1612,7 @@ def get_client(self, key, *, async_=False):\n         if self.headers:\n             kwargs[\"default_headers\"] = self.headers\n         if os.environ.get(\"LLM_OPENAI_SHOW_RESPONSES\"):\n-            kwargs[\"http_client\"] = logging_client()\n+            kwargs[\"http_client\"] = logging_client(async_=async_)\n         import openai  # deferred: importing openai adds ~100ms to CLI startup\n \n         if async_:"
+  },
+  {
+   "filename": "llm/utils.py",
+   "status": "modified",
+   "additions": 39,
+   "deletions": 1,
+   "patch": "@@ -100,6 +100,11 @@ def iter_bytes(self, *args, **kwargs):\n             click.echo(chunk.decode(), err=True)\n             yield chunk\n \n+    async def aiter_bytes(self, *args, **kwargs):\n+        async for chunk in super().aiter_bytes(*args, **kwargs):\n+            click.echo(chunk.decode(), err=True)\n+            yield chunk\n+\n \n class _LogTransport(httpx2.BaseTransport):\n     def __init__(self, transport: httpx2.BaseTransport):\n@@ -115,6 +120,23 @@ def handle_request(self, request: httpx2.Request) -> httpx2.Response:\n         )\n \n \n+class _AsyncLogTransport(httpx2.AsyncBaseTransport):\n+    def __init__(self, transport: httpx2.AsyncBaseTransport):\n+        self.transport = transport\n+\n+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:\n+        response = await self.transport.handle_async_request(request)\n+        return _LogResponse(\n+            status_code=response.status_code,\n+            headers=response.headers,\n+            stream=response.stream,\n+            extensions=response.extensions,\n+        )\n+\n+    async def aclose(self):\n+        await self.transport.aclose()\n+\n+\n def _no_accept_encoding(request: httpx2.Request):\n     request.headers.pop(\"accept-encoding\", None)\n \n@@ -146,7 +168,23 @@ def _log_response(response: httpx2.Response):\n     click.echo(\"  Body:\", err=True)\n \n \n-def logging_client() -> httpx2.Client:\n+async def _async_no_accept_encoding(request: httpx2.Request):\n+    _no_accept_encoding(request)\n+\n+\n+async def _async_log_response(response: httpx2.Response):\n+    _log_response(response)\n+\n+\n+def logging_client(*, async_=False) -> httpx2.Client | httpx2.AsyncClient:\n+    if async_:\n+        return httpx2.AsyncClient(\n+            transport=_AsyncLogTransport(httpx2.AsyncHTTPTransport()),\n+            event_hooks={\n+                \"request\": [_async_no_accept_encoding],\n+                \"response\": [_async_log_response],\n+            },\n+        )\n     return httpx2.Client(\n         transport=_LogTransport(httpx2.HTTPTransport()),\n         event_hooks={\"request\": [_no_accept_encoding], \"response\": [_log_response]},"
+  },
+  {
+   "filename": "tests/test_openai_logging.py",
+   "status": "added",
+   "additions": 68,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,68 @@\n+import asyncio\n+\n+import httpx2\n+import pytest\n+\n+from llm.default_plugins.openai_models import AsyncChat, Chat\n+\n+\n+@pytest.mark.parametrize(\"async_\", [False, True])\n+@pytest.mark.parametrize(\"stream\", [False, True])\n+def test_debug_logging(monkeypatch, capsys, async_, stream):\n+    monkeypatch.setenv(\"LLM_OPENAI_SHOW_RESPONSES\", \"1\")\n+    requests = []\n+\n+    def respond(request):\n+        requests.append(request)\n+        return httpx2.Response(\n+            200,\n+            headers={\"set-cookie\": \"session=response-secret\"},\n+            content=b'{\"result\":\"logged response\"}',\n+        )\n+\n+    transport = httpx2.MockTransport(respond)\n+    monkeypatch.setattr(httpx2, \"HTTPTransport\", lambda: transport)\n+    monkeypatch.setattr(httpx2, \"AsyncHTTPTransport\", lambda: transport)\n+    model = AsyncChat(\"gpt-4o-mini\") if async_ else Chat(\"gpt-4o-mini\")\n+    client = model.get_client(\"key-secret\", async_=async_)\n+    kwargs = {\n+        \"json\": {\"prompt\": \"logged request\"},\n+        \"headers\": {\n+            \"cookie\": \"session=request-secret\",\n+            \"authorization\": \"Bearer key-secret\",\n+        },\n+    }\n+\n+    async def run_async():\n+        async with (\n+            client,\n+            client._client.stream(\n+                \"POST\", \"https://example.com/test\", **kwargs\n+            ) as response,\n+        ):\n+            if stream:\n+                return b\"\".join([chunk async for chunk in response.aiter_bytes()])\n+            return await response.aread()\n+\n+    if async_:\n+        body = asyncio.run(run_async())\n+    else:\n+        with (\n+            client,\n+            client._client.stream(\n+                \"POST\", \"https://example.com/test\", **kwargs\n+            ) as response,\n+        ):\n+            body = b\"\".join(response.iter_bytes()) if stream else response.read()\n+\n+    assert body == b'{\"result\":\"logged response\"}'\n+    assert \"accept-encoding\" not in requests[0].headers\n+    output = capsys.readouterr().err\n+    assert \"Request: POST https://example.com/test\" in output\n+    assert \"Response: status_code=200\" in output\n+    assert \"logged request\" in output\n+    assert \"logged response\" in output\n+    assert \"session=...\" in output\n+    assert \"request-secret\" not in output\n+    assert \"response-secret\" not in output\n+    assert \"key-secret\" not in output"
+  }
+ ],
+ "test_files": [
+  "tests/test_openai_logging.py"
+ ]
+}

@@ -1,0 +1,40 @@
+{
+ "repo": "resend/resend-rust",
+ "number": 135,
+ "url": "https://github.com/resend/resend-rust/pull/135",
+ "title": "fix(rate_limit): resolve retry macros paths through $crate",
+ "merged_at": "2026-11-17T16:25:43Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -10,9 +10,10 @@ and this project adheres to\n \n ### Fixed\n \n+- `retry!` and `retry_opts!` now resolve `RetryOptions` and `send_with_retry_opts` through `$crate`, so they compile in\n+  crates that have not imported them\n - `ReceivingSvc::forward` without `passthrough` no longer drops the HTML body when both `text` and `html` are set\n \n-\n ## [0.36.1] - 2026-11-13\n \n ### Fixed"
+  },
+  {
+   "filename": "src/lib.rs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -1,4 +1,5 @@\n #![forbid(unsafe_code)]\n+#![doc(test(attr(deny(unused_imports))))]\n #![doc = include_str!(\"../README.md\")]\n //! ### Rate Limits\n //!"
+  },
+  {
+   "filename": "src/rate_limit.rs",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 8,
+   "patch": "@@ -39,8 +39,7 @@ impl Default for RetryOptions {\n ///\n /// ```rust\n /// use resend_rs::{\n-///  rate_limit::{send_with_retry, send_with_retry_opts, RetryOptions},\n-///  types::CreateEmailBaseOptions,\n+///  rate_limit::{send_with_retry_opts, RetryOptions},\n ///  Resend, Result, list_opts::ListOptions\n ///};\n ///\n@@ -60,7 +59,7 @@ impl Default for RetryOptions {\n ///\n /// ```rust\n /// use resend_rs::{\n-///  rate_limit::{send_with_retry, send_with_retry_opts, RetryOptions},\n+///  rate_limit::{send_with_retry_opts, RetryOptions},\n ///  types::CreateEmailBaseOptions,\n ///};\n ///use resend_rs::{Resend, Result};\n@@ -155,7 +154,6 @@ pub async fn send_with_retry<A: Future<Output = Result<B>> + Send, B: Send>(\n ///\n /// ```rust\n /// use resend_rs::{\n-///   rate_limit::{send_with_retry_opts, RetryOptions},\n ///   retry,\n ///   Resend, Result, list_opts::ListOptions\n /// };\n@@ -173,8 +171,8 @@ pub async fn send_with_retry<A: Future<Output = Result<B>> + Send, B: Send>(\n #[macro_export]\n macro_rules! retry {\n     ( $f:expr ) => {{\n-        let retry_opts = RetryOptions::default();\n-        send_with_retry_opts(|| $f, &retry_opts).await\n+        let retry_opts = $crate::rate_limit::RetryOptions::default();\n+        $crate::rate_limit::send_with_retry_opts(|| $f, &retry_opts).await\n     }};\n }\n \n@@ -184,7 +182,7 @@ macro_rules! retry {\n ///\n /// ```rust\n /// use resend_rs::{\n-///   rate_limit::{send_with_retry_opts, RetryOptions},\n+///   rate_limit::{RetryOptions},\n ///   retry_opts,\n ///   Resend, Result, list_opts::ListOptions\n /// };\n@@ -202,7 +200,7 @@ macro_rules! retry {\n /// ```\n #[macro_export]\n macro_rules! retry_opts {\n-    ( $f:expr, $opts:expr ) => {{ send_with_retry_opts(|| $f, &$opts).await }};\n+    ( $f:expr, $opts:expr ) => {{ $crate::rate_limit::send_with_retry_opts(|| $f, &$opts).await }};\n }\n \n #[cfg(test)]"
+  },
+  {
+   "filename": "tests/retry_macros.rs",
+   "status": "added",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,22 @@\n+//! The exported macros must compile in a crate that has not imported\n+//! `RetryOptions` or `send_with_retry_opts` into scope.\n+\n+#![allow(dead_code)]\n+\n+#[cfg(not(feature = \"blocking\"))]\n+async fn uses_retry() -> resend_rs::Result<()> {\n+    resend_rs::retry!(async { Ok(()) })\n+}\n+\n+#[cfg(not(feature = \"blocking\"))]\n+async fn uses_retry_opts() -> resend_rs::Result<()> {\n+    let opts = resend_rs::rate_limit::RetryOptions::default();\n+    resend_rs::retry_opts!(async { Ok(()) }, opts)\n+}\n+\n+#[cfg(not(feature = \"blocking\"))]\n+#[tokio::test]\n+async fn macros_resolve_without_imports() {\n+    uses_retry().await.expect(\"Retry succeeded\");\n+    uses_retry_opts().await.expect(\"Retry succeeded\");\n+}"
+  }
+ ],
+ "test_files": [
+  "tests/retry_macros.rs"
+ ]
+}

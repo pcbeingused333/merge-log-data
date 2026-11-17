@@ -1,0 +1,26 @@
+{
+ "repo": "dynamiq-ai/dynamiq",
+ "number": 1105,
+ "url": "https://github.com/dynamiq-ai/dynamiq/pull/1105",
+ "title": "fix(memory): treat list filters as membership in DynamoDB server-side filter",
+ "merged_at": "2026-11-17T14:30:37Z",
+ "files": [
+  {
+   "filename": "dynamiq/memory/backends/dynamo_db.py",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 1,
+   "patch": "@@ -14,6 +14,9 @@\n from dynamiq.prompts import Message, MessageRole\n from dynamiq.utils.logger import logger\n \n+# DynamoDB accepts at most 100 values in the right-hand side of an IN comparison.\n+_MAX_IN_VALUES = 100\n+\n \n class BillingMode(str, Enum):\n     PAY_PER_REQUEST = \"PAY_PER_REQUEST\"\n@@ -366,7 +369,18 @@ def _build_filter_expression_attr(self, filters: dict | None) -> Attr | None:\n         fe: Attr | None = None\n         for key, value in filters.items():\n             try:\n-                current_cond = Attr(f\"{self.metadata_attribute_name}.{key}\").eq(value)\n+                if isinstance(value, list) and not value:\n+                    # DynamoDB rejects an empty IN list; the client-side filter drops every message for it.\n+                    continue\n+                attr = Attr(f\"{self.metadata_attribute_name}.{key}\")\n+                if isinstance(value, list):\n+                    # A list means \"any of these\", matching the client-side filter and InMemory.\n+                    # DynamoDB caps IN at 100 values, so longer lists become OR'd IN groups.\n+                    current_cond = attr.is_in(value[:_MAX_IN_VALUES])\n+                    for start in range(_MAX_IN_VALUES, len(value), _MAX_IN_VALUES):\n+                        current_cond = current_cond | attr.is_in(value[start : start + _MAX_IN_VALUES])\n+                else:\n+                    current_cond = attr.eq(value)\n             except Exception as e:\n                 logger.error(f\"Could not build Attr condition for filter key '{key}': {e}. Skipping this filter.\")\n                 continue"
+  },
+  {
+   "filename": "tests/unit/memory/test_dynamodb_list_filters.py",
+   "status": "added",
+   "additions": 48,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,48 @@\n+\"\"\"DynamoDB server-side filters must treat list values as membership.\n+\n+`_apply_filters_client_side_messages` (and InMemory) interpret a list filter value as\n+\"metadata value is one of these\". The server-side FilterExpression used `eq(list)`,\n+which compares the stored attribute to the whole list and so matched nothing.\n+\"\"\"\n+\n+import re\n+from types import SimpleNamespace\n+\n+from boto3.dynamodb.conditions import ConditionExpressionBuilder\n+\n+from dynamiq.memory.backends.dynamo_db import DynamoDB\n+\n+\n+def _build(filters):\n+    # The method only reads `metadata_attribute_name`, so no AWS client is needed.\n+    return DynamoDB._build_filter_expression_attr(SimpleNamespace(metadata_attribute_name=\"metadata\"), filters)\n+\n+\n+def test_list_filter_uses_membership():\n+    expr = _build({\"kind\": [\"human\", \"assistant\"]})\n+    assert expr.get_expression()[\"operator\"] == \"IN\"\n+\n+\n+def test_scalar_filter_still_uses_equality():\n+    expr = _build({\"kind\": \"human\"})\n+    assert expr.get_expression()[\"operator\"] == \"=\"\n+\n+\n+def test_empty_list_filter_is_left_to_the_client_side_filter():\n+    # boto3 would build \"IN ()\", which DynamoDB rejects as a syntax error.\n+    expr = _build({\"kind\": [], \"user_id\": \"u1\"})\n+    assert expr.get_expression()[\"operator\"] == \"=\"\n+\n+    backend = SimpleNamespace(metadata_attribute_name=\"metadata\")\n+    message = SimpleNamespace(metadata={\"kind\": \"human\"})\n+    assert DynamoDB._apply_filters_client_side_messages(backend, [message], {\"kind\": []}) == []\n+\n+\n+def test_long_list_filter_is_split_into_in_groups_of_at_most_100():\n+    values = [f\"s{i}\" for i in range(250)]\n+    built = ConditionExpressionBuilder().build_expression(_build({\"session_id\": values}))\n+\n+    groups = [group.split(\", \") for group in re.findall(r\"IN \\(([^)]*)\\)\", built.condition_expression)]\n+    assert [len(group) for group in groups] == [100, 100, 50]\n+    assert \" OR \" in built.condition_expression\n+    assert [built.attribute_value_placeholders[p] for group in groups for p in group] == values"
+  }
+ ],
+ "test_files": [
+  "tests/unit/memory/test_dynamodb_list_filters.py"
+ ]
+}

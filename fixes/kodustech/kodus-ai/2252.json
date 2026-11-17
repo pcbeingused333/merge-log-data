@@ -1,0 +1,26 @@
+{
+ "repo": "kodustech/kodus-ai",
+ "number": 2252,
+ "url": "https://github.com/kodustech/kodus-ai/pull/2252",
+ "title": "fix(code-review): mark a chunked review incomplete when a batch throws",
+ "merged_at": "2026-11-17T18:27:36Z",
+ "files": [
+  {
+   "filename": "libs/code-review/infrastructure/agents/collaborators/batch-runner.spec.ts",
+   "status": "modified",
+   "additions": 45,
+   "deletions": 2,
+   "patch": "@@ -36,7 +36,7 @@ function batchResult(over: Partial<ReviewAgentOutput> = {}): ReviewAgentOutput {\n     };\n }\n \n-function run(results: ReviewAgentOutput[]) {\n+function run(results: Array<ReviewAgentOutput | Error>) {\n     const queue = [...results];\n     return runChunkedReview(makeInput(), {\n         identity: {\n@@ -49,7 +49,13 @@ function run(results: ReviewAgentOutput[]) {\n         startTime: Date.now(),\n         // Small enough that each file lands in its own batch.\n         diffBudget: 3_000,\n-        runBatch: async () => queue.shift() ?? batchResult(),\n+        runBatch: async () => {\n+            const next = queue.shift() ?? batchResult();\n+            if (next instanceof Error) {\n+                throw next;\n+            }\n+            return next;\n+        },\n         logger: { log: jest.fn(), error: jest.fn() },\n     });\n }\n@@ -104,4 +110,41 @@ describe('runChunkedReview — #2171', () => {\n             (out.discardedByVerifyError ?? []).map((s) => s.relevantFile),\n         ).toEqual(['src/a.ts', 'src/b.ts']);\n     });\n+\n+    it('is incomplete when one batch threw and another finished', async () => {\n+        const out = await run([\n+            batchResult(),\n+            new Error('provider rate limit'),\n+        ]);\n+\n+        expect(out.hitHardLimit).toBe(true);\n+        expect(out.finishReason).toBe('no-result');\n+    });\n+\n+    it('keeps the findings of the batches that finished', async () => {\n+        const out = await run([\n+            batchResult({ suggestions: [{ relevantFile: 'src/a.ts' }] }),\n+            new Error('timeout'),\n+        ]);\n+\n+        expect(out.suggestions.map((s) => s.relevantFile)).toEqual([\n+            'src/a.ts',\n+        ]);\n+        expect(out.hitHardLimit).toBe(true);\n+    });\n+\n+    it('still throws when every batch failed and nothing was found', async () => {\n+        await expect(\n+            run([new Error('first'), new Error('second')]),\n+        ).rejects.toThrow('first');\n+    });\n+\n+    it('does not override a batch that was already cut short', async () => {\n+        const out = await run([\n+            batchResult({ hitHardLimit: true, finishReason: 'truncated' }),\n+            new Error('timeout'),\n+        ]);\n+\n+        expect(out.finishReason).toBe('truncated');\n+    });\n });"
+  },
+  {
+   "filename": "libs/code-review/infrastructure/agents/collaborators/batch-runner.ts",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -220,6 +220,13 @@ export async function runChunkedReview(\n             throw batchErrors[0];\n         }\n \n+        // A batch that threw never reviewed its files, so the aggregate is as\n+        // incomplete as one whose batch hit a limit. Its findings-less result\n+        // must not read as a clean review (#2204).\n+        if (batchErrors.length > 0 && !cutShort) {\n+            cutShort = 'no-result';\n+        }\n+\n         const durationMs = Date.now() - startTime;\n \n         logger.log({"
+  }
+ ],
+ "test_files": [
+  "libs/code-review/infrastructure/agents/collaborators/batch-runner.spec.ts"
+ ]
+}

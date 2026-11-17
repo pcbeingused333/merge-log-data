@@ -1,0 +1,26 @@
+{
+ "repo": "Nixtla/neuralforecast",
+ "number": 1770,
+ "url": "https://github.com/Nixtla/neuralforecast/pull/1770",
+ "title": "fix(core): encode pandas Categorical columns in cat_exog_list",
+ "merged_at": "2026-11-17T20:42:47Z",
+ "files": [
+  {
+   "filename": "neuralforecast/core.py",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 1,
+   "patch": "@@ -652,7 +652,14 @@ def _encode_categoricals(self, df: DFType) -> DFType:\n             )\n         df = ufp.copy_if_pandas(df, deep=False)\n         for col in cols:\n-            df[col] = df[col].map(self.categorical_vocab_[col]).fillna(0).astype(np.int64)\n+            # map from object: a category dtype can't take the fill value 0\n+            df[col] = (\n+                df[col]\n+                .astype(object)\n+                .map(self.categorical_vocab_[col])\n+                .fillna(0)\n+                .astype(np.int64)\n+            )\n         return df\n \n     def _scalers_fit_transform(self, dataset: TimeSeriesDataset) -> None:"
+  },
+  {
+   "filename": "tests/test_categorical.py",
+   "status": "modified",
+   "additions": 37,
+   "deletions": 0,
+   "patch": "@@ -920,3 +920,40 @@ def test_predict_insample_with_polars_categorical_ids(n_series):\n         insample.with_columns(pl.col(\"unique_id\").cast(pl.String)), expected\n     )\n     assert insample[\"unique_id\"].dtype == pl.Categorical\n+\n+\n+@pytest.mark.parametrize(\n+    \"stream\", [\"hist\", \"futr\", \"stat\"], ids=[\"historical\", \"future\", \"static\"]\n+)\n+def test_pandas_categorical_predictions_match_object(stream):\n+    col = \"dow\" if stream == \"futr\" else \"city\"\n+    categories = DOWS if stream == \"futr\" else CITIES\n+    df = _panel(cols=() if stream == \"stat\" else (col,))\n+    static_df = (\n+        pd.DataFrame({\"unique_id\": [f\"s{u}\" for u in range(4)], col: CITIES})\n+        if stream == \"stat\"\n+        else None\n+    )\n+    futr_df = _futr_df() if stream == \"futr\" else None\n+    predictions = []\n+    for categorical in (False, True):\n+        train = df.copy()\n+        static = static_df.copy() if static_df is not None else None\n+        future = futr_df.copy() if futr_df is not None else None\n+        if categorical:\n+            target = static if stream == \"stat\" else train\n+            target[col] = pd.Categorical(target[col], categories=categories)\n+            if future is not None:\n+                future[col] = pd.Categorical(\n+                    future[col], categories=list(reversed(categories))\n+                )\n+        model = _model(\n+            MLP,\n+            **{f\"{stream}_exog_list\": [col]},\n+            cat_exog_list=[col],\n+            categorical_cardinalities={col: len(categories)},\n+        )\n+        nf = NeuralForecast(models=[model], freq=1)\n+        nf.fit(train, static_df=static)\n+        predictions.append(nf.predict(futr_df=future))\n+    pd.testing.assert_frame_equal(predictions[0], predictions[1], check_exact=True)"
+  }
+ ],
+ "test_files": [
+  "tests/test_categorical.py"
+ ]
+}

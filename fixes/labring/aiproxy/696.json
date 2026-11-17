@@ -1,0 +1,26 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 696,
+ "url": "https://github.com/labring/aiproxy/pull/696",
+ "title": "fix(baidu): avoid duplicating chat messages when extracting system prompt",
+ "merged_at": "2026-11-17T14:27:45Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/baidu/main.go",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -71,7 +71,10 @@ func ConvertRequest(meta *meta.Meta, req *http.Request) (adaptor.ConvertResult,\n \t\tif message.Role == \"system\" {\n \t\t\tbaiduRequest.System = message.StringContent()\n \n-\t\t\trequest.Messages = append(request.Messages[:i], request.Messages[i+1:]...)\n+\t\t\tbaiduRequest.Messages = make([]relaymodel.Message, 0, len(request.Messages)-1)\n+\t\t\tbaiduRequest.Messages = append(baiduRequest.Messages, request.Messages[:i]...)\n+\t\t\tbaiduRequest.Messages = append(baiduRequest.Messages, request.Messages[i+1:]...)\n+\n \t\t\tbreak\n \t\t}\n \t}"
+  },
+  {
+   "filename": "core/relay/adaptor/baidu/request_test.go",
+   "status": "added",
+   "additions": 64,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,64 @@\n+//nolint:testpackage\n+package baidu\n+\n+import (\n+\t\"encoding/json\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"reflect\"\n+\t\"strings\"\n+\t\"testing\"\n+\n+\t\"github.com/labring/aiproxy/core/relay/meta\"\n+\trelaymodel \"github.com/labring/aiproxy/core/relay/model\"\n+)\n+\n+func TestConvertRequestSystemMessage(t *testing.T) {\n+\tuser := relaymodel.Message{Role: \"user\", Content: \"hello\"}\n+\tassistant := relaymodel.Message{Role: \"assistant\", Content: \"hi\"}\n+\tsystem := relaymodel.Message{Role: \"system\", Content: \"be helpful\"}\n+\n+\tfor _, tc := range []struct {\n+\t\tname     string\n+\t\tmessages []relaymodel.Message\n+\t\tsystem   string\n+\t\twant     []relaymodel.Message\n+\t}{\n+\t\t{\"leading system\", []relaymodel.Message{system, user}, \"be helpful\", []relaymodel.Message{user}},\n+\t\t{\"middle system\", []relaymodel.Message{user, system, assistant}, \"be helpful\", []relaymodel.Message{user, assistant}},\n+\t\t{\"trailing system\", []relaymodel.Message{user, system}, \"be helpful\", []relaymodel.Message{user}},\n+\t\t{\"no system\", []relaymodel.Message{user, assistant}, \"\", []relaymodel.Message{user, assistant}},\n+\t} {\n+\t\tt.Run(tc.name, func(t *testing.T) {\n+\t\t\tbody, err := json.Marshal(relaymodel.GeneralOpenAIRequest{Messages: tc.messages})\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\n+\t\t\treq := httptest.NewRequestWithContext(\n+\t\t\t\tt.Context(),\n+\t\t\t\thttp.MethodPost,\n+\t\t\t\t\"/\",\n+\t\t\t\tstrings.NewReader(string(body)),\n+\t\t\t)\n+\n+\t\t\tresult, err := ConvertRequest(&meta.Meta{ActualModel: \"ernie\"}, req)\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\n+\t\t\tvar got ChatRequest\n+\t\t\tif err := json.NewDecoder(result.Body).Decode(&got); err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\n+\t\t\tif got.System != tc.system {\n+\t\t\t\tt.Errorf(\"system = %q, want %q\", got.System, tc.system)\n+\t\t\t}\n+\n+\t\t\tif !reflect.DeepEqual(got.Messages, tc.want) {\n+\t\t\t\tt.Errorf(\"messages = %#v, want %#v\", got.Messages, tc.want)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/baidu/request_test.go"
+ ]
+}

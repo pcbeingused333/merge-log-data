@@ -1,0 +1,34 @@
+{
+ "repo": "dynamiq-ai/dynamiq",
+ "number": 1108,
+ "url": "https://github.com/dynamiq-ai/dynamiq/pull/1108",
+ "title": "fix: preserve filenames in HTTP file uploads",
+ "merged_at": "2026-11-17T14:50:35Z",
+ "files": [
+  {
+   "filename": "dynamiq/nodes/tools/http_api_call.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -11,6 +11,7 @@\n from dynamiq.nodes.agents.exceptions import ActionParsingException, ToolExecutionException\n from dynamiq.nodes.agents.utils import FileMappedInput\n from dynamiq.nodes.node import ConnectionNode, ensure_config\n+from dynamiq.nodes.tools.utils import sanitize_filename\n from dynamiq.runnables import RunnableConfig\n from dynamiq.storages.file.base import FileInfo\n from dynamiq.types.cancellation import check_cancellation\n@@ -187,7 +188,10 @@ def _build_request_kwargs(self, input_data: HttpApiCallInputSchema) -> dict[str,\n         \"\"\"\n         data = self.connection.data | self.data | input_data.data\n         payload_type = input_data.payload_type or self.payload_type\n-        files = {param: file_io.getvalue() for param, file_io in input_data.files.items()}\n+        files = {\n+            param: (sanitize_filename(getattr(file_io, \"name\", None), default=param), file_io.getvalue())\n+            for param, file_io in input_data.files.items()\n+        }\n         url = input_data.url or self.url or self.connection.url\n         if not url:\n             raise ValueError(\"No url provided.\")"
+  },
+  {
+   "filename": "tests/integration/nodes/tools/test_http_api_call.py",
+   "status": "modified",
+   "additions": 26,
+   "deletions": 0,
+   "patch": "@@ -1,3 +1,4 @@\n+import io\n import json\n \n import pytest\n@@ -9,6 +10,31 @@\n from dynamiq.runnables import RunnableResult, RunnableStatus\n \n \n+@pytest.mark.parametrize(\n+    (\"name\", \"filename\"),\n+    [\n+        (\"report.pdf\", \"report.pdf\"),\n+        (..., \"document\"),\n+        (None, \"document\"),\n+        (\"\", \"document\"),\n+        (\"/tmp/outputs/report.pdf\", \"report.pdf\"),\n+    ],\n+)\n+def test_http_upload_preserves_filename(requests_mock, name, filename):\n+    file = io.BytesIO(b\"uploaded content\")\n+    if name is not ...:\n+        file.name = name\n+    url = \"https://api.example.com/upload\"\n+    upload = requests_mock.post(url, text=\"ok\")\n+    tool = HttpApiCall(connection=connections.Http(url=url, method=connections.HTTPMethod.POST))\n+\n+    tool.execute(HttpApiCallInputSchema(files={\"document\": file}))\n+\n+    body = upload.last_request.body\n+    assert f'name=\"document\"; filename=\"{filename}\"'.encode() in body\n+    assert b\"uploaded content\" in body\n+\n+\n @pytest.mark.parametrize(\n     (\"response_type\", \"result\"),\n     ["
+  },
+  {
+   "filename": "tests/unit/nodes/tools/test_http_api_call_async.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -215,7 +215,7 @@ async def test_http_api_call_json_payload_dropped_when_files_present():\n     call_kwargs = mock_client.request.await_args.kwargs\n     assert \"json\" not in call_kwargs\n     assert \"files\" in call_kwargs\n-    assert call_kwargs[\"files\"][\"upload\"] == b\"hello\"\n+    assert call_kwargs[\"files\"][\"upload\"] == (\"upload\", b\"hello\")\n \n \n @pytest.mark.asyncio\n@@ -239,7 +239,7 @@ async def test_http_api_call_raw_data_kept_alongside_files():\n \n     call_kwargs = mock_client.request.await_args.kwargs\n     assert call_kwargs[\"data\"] == {\"field1\": \"value1\"}\n-    assert call_kwargs[\"files\"][\"upload\"] == b\"hello\"\n+    assert call_kwargs[\"files\"][\"upload\"] == (\"upload\", b\"hello\")\n \n \n @pytest.mark.asyncio"
+  }
+ ],
+ "test_files": [
+  "tests/integration/nodes/tools/test_http_api_call.py",
+  "tests/unit/nodes/tools/test_http_api_call_async.py"
+ ]
+}

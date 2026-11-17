@@ -1,0 +1,33 @@
+{
+ "repo": "temporalio/sdk-typescript",
+ "number": 2694,
+ "url": "https://github.com/temporalio/sdk-typescript/pull/2694",
+ "title": "fix(worker): apply maxConcurrent*TaskPolls options",
+ "merged_at": "2026-11-17T15:34:30Z",
+ "files": [
+  {
+   "filename": "changelog/fixed/counting-cuckoo-pollers.md",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+Apply `maxConcurrentWorkflowTaskPolls`, `maxConcurrentActivityTaskPolls` and `maxConcurrentNexusTaskPolls`: each was accepted but ignored, so the worker polled with `min(10, maxConcurrent*Executions)` pollers whatever value was set."
+  },
+  {
+   "filename": "packages/test/src/test-worker-options.ts",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 1,
+   "patch": "@@ -1,5 +1,5 @@\n import test from 'ava';\n-import { Runtime } from '@temporalio/worker';\n+import { Runtime, type WorkerOptions } from '@temporalio/worker';\n import { compileWorkerOptions, toNativeWorkerOptions } from '@temporalio/worker/internal';\n import { defaultOptions } from './mock-native-worker';\n \n@@ -42,3 +42,31 @@ for (const value of [-1, 1.5, Number.NaN]) {\n     );\n   });\n }\n+\n+for (const [pollsOption, behaviorOption] of [\n+  ['maxConcurrentWorkflowTaskPolls', 'workflowTaskPollerBehavior'],\n+  ['maxConcurrentActivityTaskPolls', 'activityTaskPollerBehavior'],\n+  ['maxConcurrentNexusTaskPolls', 'nexusTaskPollerBehavior'],\n+] as const) {\n+  const toNative = (options: Partial<WorkerOptions>) => {\n+    const runtime = Runtime.instance();\n+    const compiled = compileWorkerOptions({ ...defaultOptions, ...options }, runtime.logger, runtime.metricMeter);\n+    return toNativeWorkerOptions({ ...compiled, buildId: 'test-build-id' })[behaviorOption];\n+  };\n+\n+  test(`${pollsOption} sets the simple maximum of ${behaviorOption}`, (t) => {\n+    t.deepEqual(toNative({ [pollsOption]: 2 }), { type: 'simple-maximum', maximum: 2 });\n+    t.deepEqual(toNative({ [pollsOption]: 20 }), { type: 'simple-maximum', maximum: 20 });\n+  });\n+\n+  test(`${pollsOption} is the default maximum of a simple-maximum ${behaviorOption}`, (t) => {\n+    t.deepEqual(toNative({ [pollsOption]: 2, [behaviorOption]: { type: 'simple-maximum' } }), {\n+      type: 'simple-maximum',\n+      maximum: 2,\n+    });\n+    t.deepEqual(toNative({ [pollsOption]: 2, [behaviorOption]: { type: 'simple-maximum', maximum: 3 } }), {\n+      type: 'simple-maximum',\n+      maximum: 3,\n+    });\n+  });\n+}"
+  },
+  {
+   "filename": "packages/worker/src/worker-options.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -1079,15 +1079,15 @@ function addDefaultWorkerOptions(\n \n   const wftPollerBehavior =\n     workflowTaskPollerBehavior !== undefined || options.maxConcurrentWorkflowTaskPolls !== undefined\n-      ? createPollerBehavior(maxWFTPolls, workflowTaskPollerBehavior)\n+      ? createPollerBehavior(options.maxConcurrentWorkflowTaskPolls ?? maxWFTPolls, workflowTaskPollerBehavior)\n       : undefined;\n   const atPollerBehavior =\n     activityTaskPollerBehavior !== undefined || options.maxConcurrentActivityTaskPolls !== undefined\n-      ? createPollerBehavior(maxATPolls, activityTaskPollerBehavior)\n+      ? createPollerBehavior(options.maxConcurrentActivityTaskPolls ?? maxATPolls, activityTaskPollerBehavior)\n       : undefined;\n   const nexusPollerBehavior =\n     nexusTaskPollerBehavior !== undefined || options.maxConcurrentNexusTaskPolls !== undefined\n-      ? createPollerBehavior(maxNexusTaskPolls, nexusTaskPollerBehavior)\n+      ? createPollerBehavior(options.maxConcurrentNexusTaskPolls ?? maxNexusTaskPolls, nexusTaskPollerBehavior)\n       : undefined;\n \n   return {"
+  }
+ ],
+ "test_files": [
+  "packages/test/src/test-worker-options.ts"
+ ]
+}

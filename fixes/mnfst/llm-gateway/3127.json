@@ -1,0 +1,33 @@
+{
+ "repo": "mnfst/llm-gateway",
+ "number": 3127,
+ "url": "https://github.com/mnfst/llm-gateway/pull/3127",
+ "title": "fix(backend): keep Anthropic tool_use input an object",
+ "merged_at": "2026-11-17T08:01:11Z",
+ "files": [
+  {
+   "filename": ".changeset/anthropic-empty-tool-input.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'manifest': patch\n+---\n+\n+Replayed Anthropic tool calls whose arguments are JSON null or another non-object now send `tool_use.input` as `{}`. A missing payload was already empty; `\"null\"` and `\"[]\"` were forwarded and rejected."
+  },
+  {
+   "filename": "packages/backend/src/routing/proxy/__tests__/anthropic-adapter.spec.ts",
+   "status": "modified",
+   "additions": 32,
+   "deletions": 0,
+   "patch": "@@ -870,6 +870,38 @@ describe('Anthropic Adapter', () => {\n       expect(toolBlock.input).toEqual({});\n     });\n \n+    it.each([\n+      ['null', 'null'],\n+      ['an array', '[]'],\n+    ])('treats %s JSON arguments as an empty tool_use input', (_label, args) => {\n+      const body = {\n+        messages: [\n+          {\n+            role: 'assistant',\n+            content: null,\n+            tool_calls: [\n+              {\n+                id: 'call_1',\n+                type: 'function',\n+                function: { name: 'noop', arguments: args },\n+              },\n+            ],\n+          },\n+        ],\n+      };\n+      const result = toAnthropicRequest(body, 'claude-sonnet-4-20250514');\n+      const messages = result.messages as Array<{ content: Array<Record<string, unknown>> }>;\n+      const toolBlock = messages[0].content.find((b) => b.type === 'tool_use');\n+      // Anthropic rejects tool_use.input unless it is an object. JSON.parse\n+      // accepts \"null\" and \"[]\", so those strings must not be forwarded as-is.\n+      expect(toolBlock).toEqual({\n+        type: 'tool_use',\n+        id: 'call_1',\n+        name: 'noop',\n+        input: {},\n+      });\n+    });\n+\n     it('skips user messages with no usable content blocks', () => {\n       const body = {\n         messages: ["
+  },
+  {
+   "filename": "packages/backend/src/routing/proxy/anthropic-adapter.ts",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 7,
+   "patch": "@@ -48,16 +48,21 @@ const SUBSCRIPTION_IDENTITY_BLOCK: ContentBlock = {\n   text: \"You are a Claude agent, built on Anthropic's Claude Agent SDK.\",\n };\n \n-function safeParseArgs(args: string | undefined): unknown {\n+function isObjectRecord(value: unknown): value is Record<string, unknown> {\n+  return !!value && typeof value === 'object' && !Array.isArray(value);\n+}\n+\n+function safeParseArgs(args: string | undefined): Record<string, unknown> {\n   try {\n-    return JSON.parse(args || '{}');\n+    // JSON.parse('null') and JSON.parse('[]') succeed, but Anthropic\n+    // tool_use.input must be an object. A no-arg tool echoed as the string\n+    // \"null\" would otherwise be forwarded as input: null and rejected.\n+    const parsed: unknown = JSON.parse(args || '{}');\n+    if (isObjectRecord(parsed)) return parsed;\n   } catch {\n-    return {};\n+    // Malformed arguments are an empty object, same as a missing payload.\n   }\n-}\n-\n-function isObjectRecord(value: unknown): value is Record<string, unknown> {\n-  return !!value && typeof value === 'object' && !Array.isArray(value);\n+  return {};\n }\n \n /**"
+  }
+ ],
+ "test_files": [
+  "packages/backend/src/routing/proxy/__tests__/anthropic-adapter.spec.ts"
+ ]
+}

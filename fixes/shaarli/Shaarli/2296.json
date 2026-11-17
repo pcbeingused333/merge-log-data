@@ -1,0 +1,41 @@
+{
+ "repo": "shaarli/Shaarli",
+ "number": 2296,
+ "url": "https://github.com/shaarli/Shaarli/pull/2296",
+ "title": "fix(tags): keep numeric tags in the tag list and make searching for tag 0 filter",
+ "merged_at": "2026-11-17T17:10:25Z",
+ "files": [
+  {
+   "filename": "application/bookmark/BookmarkFileService.php",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 5,
+   "patch": "@@ -350,14 +350,16 @@ public function bookmarksCountPerTag(array $filteringTags = [], ?string $visibil\n          * Formerly used arsort(), which doesn't define the sort behaviour for equal values.\n          * Also, this function doesn't produce the same result between PHP 5.6 and 7.\n          *\n-         * So we now use array_multisort() to sort tags by DESC occurrences,\n-         * then ASC alphabetically for equal values.\n+         * So we now sort tags by DESC occurrences, then ASC alphabetically for equal values.\n+         * array_multisort() can't be used here: it re-indexes numeric keys, which would replace\n+         * numeric tags (e.g. `2023`) with 0, 1, 2...\n          *\n          * @see https://github.com/shaarli/Shaarli/issues/1142\n          */\n-        $keys = array_keys($tags);\n-        $tmpTags = array_combine($keys, $keys);\n-        array_multisort($tags, SORT_DESC, $tmpTags, SORT_ASC, $tags);\n+        $counts = $tags;\n+        uksort($tags, function ($a, $b) use ($counts) {\n+            return $counts[$b] <=> $counts[$a] ?: $a <=> $b;\n+        });\n \n         return $tags;\n     }"
+  },
+  {
+   "filename": "application/bookmark/BookmarkFilter.php",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 3,
+   "patch": "@@ -98,7 +98,8 @@ public function filter(\n             case self::$FILTER_HASH:\n                 return $this->filterSmallHash($request);\n             case self::$FILTER_TAG | self::$FILTER_TEXT: // == \"vuotext\"\n-                $noRequest = empty($request) || (empty($request[0]) && empty($request[1]));\n+                $hasTags = !empty($request[0]) || ($request[0] ?? null) === '0';\n+                $noRequest = empty($request) || (!$hasTags && empty($request[1]));\n                 if ($noRequest) {\n                     if ($untaggedonly) {\n                         return $this->filterUntagged($visibility);\n@@ -110,7 +111,7 @@ public function filter(\n                 } else {\n                     $filtered = $this->bookmarks;\n                 }\n-                if (!empty($request[0])) {\n+                if ($hasTags) {\n                     $filtered = (new BookmarkFilter($filtered, $this->conf, $this->pluginManager))\n                         ->filterTags($request[0], $casesensitive, $visibility)\n                     ;\n@@ -481,7 +482,7 @@ public static function tagsStrToArray(string $tags, bool $casesensitive): array\n     protected function tag2regex(string $tag): string\n     {\n         $tagsSeparator = $this->conf->get('general.tags_separator', ' ');\n-        if (!$tag || $tag === \"-\" || $tag === \"*\" || $tag[0] === \"~\") {\n+        if ($tag === '' || $tag === \"-\" || $tag === \"*\" || $tag[0] === \"~\") {\n             // nothing to search, return empty regex\n             return '';\n         }"
+  },
+  {
+   "filename": "tests/bookmark/BookmarkFileServiceTest.php",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -320,6 +320,25 @@ public function testAddWithId()\n         $this->privateLinkDB->add($bookmark);\n     }\n \n+    /**\n+     * Test numeric tags keep their name in the tags count, instead of being replaced by 0, 1, 2...\n+     */\n+    public function testNumericTagsKeepTheirNameInCount()\n+    {\n+        foreach ([['2023', 'web'], ['2012', 'web'], ['2023']] as $i => $tags) {\n+            $bookmark = new Bookmark();\n+            $bookmark->setUrl('https://domain.tld/numeric' . $i);\n+            $bookmark->setTitle('Numeric tags ' . $i);\n+            $bookmark->setTags($tags);\n+            $this->privateLinkDB->add($bookmark);\n+        }\n+\n+        $tags = $this->privateLinkDB->bookmarksCountPerTag();\n+\n+        $this->assertSame(2, $tags['2023']);\n+        $this->assertSame(1, $tags['2012']);\n+    }\n+\n     /**\n      * Test set() method for a bookmark fully built\n      */"
+  },
+  {
+   "filename": "tests/bookmark/BookmarkFilterTest.php",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -190,6 +190,25 @@ public function testFilterUnknownTag()\n         );\n     }\n \n+    /**\n+     * Searching for the tag \"0\" must not be mistaken for an empty search\n+     */\n+    public function testFilterTagZeroIsNotAnEmptySearch()\n+    {\n+        $this->assertEquals(\n+            0,\n+            count(self::$linkFilter->filter(BookmarkFilter::$FILTER_TAG, '0', false))\n+        );\n+        $this->assertEquals(\n+            0,\n+            count(self::$linkFilter->filter(\n+                BookmarkFilter::$FILTER_TAG | BookmarkFilter::$FILTER_TEXT,\n+                ['0', ''],\n+                false\n+            ))\n+        );\n+    }\n+\n     /**\n      * Retrieve a link entry with its hash\n      */"
+  }
+ ],
+ "test_files": [
+  "tests/bookmark/BookmarkFileServiceTest.php",
+  "tests/bookmark/BookmarkFilterTest.php"
+ ]
+}

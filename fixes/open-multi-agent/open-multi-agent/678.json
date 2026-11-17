@@ -1,0 +1,26 @@
+{
+ "repo": "open-multi-agent/open-multi-agent",
+ "number": 678,
+ "url": "https://github.com/open-multi-agent/open-multi-agent/pull/678",
+ "title": "fix(core): map Anthropic refusal stop_reason to content_filter",
+ "merged_at": "2026-11-17T08:56:02Z",
+ "files": [
+  {
+   "filename": "packages/core/src/llm/anthropic.ts",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 2,
+   "patch": "@@ -384,6 +384,17 @@ function toAnthropicThinkingParam(\n   }\n }\n \n+/**\n+ * Map an Anthropic `stop_reason` to the framework vocabulary. `refusal` means\n+ * the model declined for safety reasons, so it maps to `content_filter`,\n+ * matching the OpenAI-family, Gemini, and Bedrock adapters. Other reasons\n+ * pass through unchanged.\n+ */\n+function mapAnthropicStopReason(reason: string | null | undefined): string {\n+  if (reason === 'refusal') return 'content_filter'\n+  return reason ?? 'end_turn'\n+}\n+\n // ---------------------------------------------------------------------------\n // Adapter implementation\n // ---------------------------------------------------------------------------\n@@ -459,7 +470,7 @@ export class AnthropicAdapter implements LLMAdapter {\n       id: response.id,\n       content,\n       model: response.model,\n-      stop_reason: response.stop_reason ?? 'end_turn',\n+      stop_reason: mapAnthropicStopReason(response.stop_reason),\n       usage: {\n         input_tokens: response.usage.input_tokens,\n         output_tokens: response.usage.output_tokens,\n@@ -606,7 +617,7 @@ export class AnthropicAdapter implements LLMAdapter {\n         id: finalMessage.id,\n         content,\n         model: finalMessage.model,\n-        stop_reason: finalMessage.stop_reason ?? 'end_turn',\n+        stop_reason: mapAnthropicStopReason(finalMessage.stop_reason),\n         usage: {\n           input_tokens: finalMessage.usage.input_tokens,\n           output_tokens: finalMessage.usage.output_tokens,"
+  },
+  {
+   "filename": "packages/core/tests/anthropic-adapter.test.ts",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -387,6 +387,14 @@ describe('AnthropicAdapter', () => {\n       expect(result.stop_reason).toBe('end_turn')\n     })\n \n+    it('maps refusal stop_reason to content_filter', async () => {\n+      mockCreate.mockResolvedValue(makeAnthropicResponse({ stop_reason: 'refusal' }))\n+\n+      const result = await adapter.chat([textMsg('user', 'Hi')], chatOpts())\n+\n+      expect(result.stop_reason).toBe('content_filter')\n+    })\n+\n     it('propagates SDK errors', async () => {\n       mockCreate.mockRejectedValue(new Error('Rate limited'))\n \n@@ -535,6 +543,17 @@ describe('AnthropicAdapter', () => {\n       expect(response.usage).toEqual({ input_tokens: 10, output_tokens: 5 })\n     })\n \n+    it('maps refusal stop_reason to content_filter on done', async () => {\n+      mockStream.mockReturnValue(\n+        makeStreamMock([], makeAnthropicResponse({ stop_reason: 'refusal' })),\n+      )\n+\n+      const events = await collectEvents(adapter.stream([textMsg('user', 'Hi')], chatOpts()))\n+      const done = events.find((e) => e.type === 'done')\n+\n+      expect((done!.data as LLMResponse).stop_reason).toBe('content_filter')\n+    })\n+\n     it('yields error event when stream throws', async () => {\n       const streamObj = {\n         [Symbol.asyncIterator]: async function* () {"
+  }
+ ],
+ "test_files": [
+  "packages/core/tests/anthropic-adapter.test.ts"
+ ]
+}

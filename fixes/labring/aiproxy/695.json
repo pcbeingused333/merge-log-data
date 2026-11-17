@@ -1,0 +1,49 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 695,
+ "url": "https://github.com/labring/aiproxy/pull/695",
+ "title": "fix(claude): report upstream content blocks as refusals",
+ "merged_at": "2026-11-17T14:33:24Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/gemini/claude.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -475,6 +475,8 @@ func geminiFinishReason2Claude(reason string) string {\n \tswitch reason {\n \tcase relaymodel.GeminiFinishReasonStop:\n \t\treturn relaymodel.ClaudeStopReasonEndTurn\n+\tcase relaymodel.GeminiFinishReasonSafety, relaymodel.GeminiFinishReasonRecitation:\n+\t\treturn relaymodel.ClaudeStopReasonRefusal\n \tcase relaymodel.GeminiFinishReasonMaxTokens:\n \t\treturn relaymodel.ClaudeStopReasonMaxTokens\n \tcase relaymodel.GeminiFinishReasonToolCalls, relaymodel.GeminiFinishReasonFunctionCall:"
+  },
+  {
+   "filename": "core/relay/adaptor/gemini/claude_stop_reason_test.go",
+   "status": "added",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,20 @@\n+//nolint:testpackage\n+package gemini\n+\n+import \"testing\"\n+\n+func TestBlockedFinishReasonToClaude(t *testing.T) {\n+\tfor _, tt := range []struct{ input, want string }{\n+\t\t{\"SAFETY\", \"refusal\"},\n+\t\t{\"RECITATION\", \"refusal\"},\n+\t\t{\"STOP\", \"end_turn\"},\n+\t\t{\"MAX_TOKENS\", \"max_tokens\"},\n+\t\t{\"TOOL_CALLS\", \"tool_use\"},\n+\t} {\n+\t\tt.Run(tt.input, func(t *testing.T) {\n+\t\t\tif got := geminiFinishReason2Claude(tt.input); got != tt.want {\n+\t\t\t\tt.Errorf(\"stop reason = %q, want %q\", got, tt.want)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  },
+  {
+   "filename": "core/relay/adaptor/gemini/finish_reason_test.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -21,8 +21,8 @@ func TestFinishReasonConversions(t *testing.T) {\n \t}{\n \t\t{\"STOP\", \"stop\", \"end_turn\", false},\n \t\t{\"MAX_TOKENS\", \"length\", \"max_tokens\", false},\n-\t\t{\"SAFETY\", \"content_filter\", \"end_turn\", false},\n-\t\t{\"RECITATION\", \"content_filter\", \"end_turn\", false},\n+\t\t{\"SAFETY\", \"content_filter\", \"refusal\", false},\n+\t\t{\"RECITATION\", \"content_filter\", \"refusal\", false},\n \t\t{\"OTHER\", \"stop\", \"end_turn\", false},\n \t\t{\"TOOL_CALLS\", \"tool_calls\", \"tool_use\", false},\n \t\t{\"FUNCTION_CALL\", \"tool_calls\", \"tool_use\", false},\n@@ -61,7 +61,7 @@ func TestFinishReasonConversions(t *testing.T) {\n \n func TestClaudeStreamFinishReason(t *testing.T) {\n \tfor _, tt := range []struct{ name, chunks, want string }{\n-\t\t{\"safety\", `data: {\"candidates\":[{\"finishReason\":\"SAFETY\"}]}` + \"\\n\\n\", \"end_turn\"},\n+\t\t{\"safety\", `data: {\"candidates\":[{\"finishReason\":\"SAFETY\"}]}` + \"\\n\\n\", \"refusal\"},\n \t\t{\"tool in earlier chunk\", `data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"weather\",\"args\":{}}}]}}]}` + \"\\n\\ndata: \" + `{\"candidates\":[{\"finishReason\":\"STOP\"}]}` + \"\\n\\n\", \"tool_use\"},\n \t} {\n \t\tt.Run(tt.name, func(t *testing.T) {"
+  },
+  {
+   "filename": "core/relay/adaptor/openai/claude.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -723,7 +723,7 @@ func convertFinishReasonToClaude(finishReason string) *string {\n \t\tv := relaymodel.ClaudeStopReasonToolUse\n \t\treturn &v\n \tcase relaymodel.FinishReasonContentFilter:\n-\t\tv := relaymodel.ClaudeStopReasonStopSequence\n+\t\tv := relaymodel.ClaudeStopReasonRefusal\n \t\treturn &v\n \tcase \"\":\n \t\tv := relaymodel.ClaudeStopReasonEndTurn"
+  },
+  {
+   "filename": "core/relay/adaptor/openai/claude_stop_reason_test.go",
+   "status": "added",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,19 @@\n+//nolint:testpackage\n+package openai\n+\n+import \"testing\"\n+\n+func TestBlockedFinishReasonToClaude(t *testing.T) {\n+\tfor _, tt := range []struct{ input, want string }{\n+\t\t{\"content_filter\", \"refusal\"},\n+\t\t{\"stop\", \"end_turn\"},\n+\t\t{\"length\", \"max_tokens\"},\n+\t\t{\"tool_calls\", \"tool_use\"},\n+\t} {\n+\t\tt.Run(tt.input, func(t *testing.T) {\n+\t\t\tif got := *convertFinishReasonToClaude(tt.input); got != tt.want {\n+\t\t\t\tt.Errorf(\"stop reason = %q, want %q\", got, tt.want)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/gemini/claude_stop_reason_test.go",
+  "core/relay/adaptor/gemini/finish_reason_test.go",
+  "core/relay/adaptor/openai/claude_stop_reason_test.go"
+ ]
+}

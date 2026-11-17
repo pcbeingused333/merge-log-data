@@ -1,0 +1,26 @@
+{
+ "repo": "Kong/unirest-java",
+ "number": 600,
+ "url": "https://github.com/Kong/unirest-java/pull/600",
+ "title": "fix: close the HTTP body when the SSE event stream is closed",
+ "merged_at": "2026-11-17T13:39:35Z",
+ "files": [
+  {
+   "filename": "unirest/src/main/java/kong/unirest/core/java/SseResponseHandler.java",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -115,7 +115,7 @@ private ParsedLine parse(String line) {\n \n     public Stream<Event> map(Stream<String> stream) {\n         var it = stream.iterator();\n-        return StreamSupport.stream(new Spliterators.AbstractSpliterator<>(Long.MAX_VALUE, 0) {\n+        return StreamSupport.stream(new Spliterators.AbstractSpliterator<Event>(Long.MAX_VALUE, 0) {\n             @Override\n             public boolean tryAdvance(java.util.function.Consumer<? super Event> action) {\n                 var emitted = new boolean[1];\n@@ -127,7 +127,7 @@ public boolean tryAdvance(java.util.function.Consumer<? super Event> action) {\n                 }\n                 return emitted[0];\n             }\n-        }, false);\n+        }, false).onClose(stream::close);\n     }\n \n     private class ParsedLine {"
+  },
+  {
+   "filename": "unirest/src/test/java/kong/unirest/core/java/SseResponseHandlerTest.java",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -50,6 +50,18 @@ void setUp() {\n         handler = new SseResponseHandler(null, listener);\n     }\n \n+    @Test\n+    void closingTheEventStreamClosesTheUnderlyingStream() {\n+        var closed = new boolean[1];\n+        var lines = Stream.of(\"data: one\", \"\", \"data: two\", \"\").onClose(() -> closed[0] = true);\n+\n+        try (var events = handler.map(lines)) {\n+            events.findFirst();\n+        }\n+\n+        assertThat(closed[0]).isTrue();\n+    }\n+\n     @Test\n     void sendComment() {\n         handle(\": Hello World\");"
+  }
+ ],
+ "test_files": [
+  "unirest/src/test/java/kong/unirest/core/java/SseResponseHandlerTest.java"
+ ]
+}

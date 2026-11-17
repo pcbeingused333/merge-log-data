@@ -1,0 +1,33 @@
+{
+ "repo": "getsentry/sentry-laravel",
+ "number": 1240,
+ "url": "https://github.com/getsentry/sentry-laravel/pull/1240",
+ "title": "fix: don't register the QueryExecuted listener when SQL breadcrumbs/tracing are disabled",
+ "merged_at": "2026-11-17T14:58:45Z",
+ "files": [
+  {
+   "filename": "src/Sentry/Laravel/EventHandler.php",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -137,6 +137,11 @@ public function __construct(Container $container, array $config)\n     public function subscribe(Dispatcher $dispatcher): void\n     {\n         foreach (static::$eventHandlerMap as $eventName => $handler) {\n+            // Some database drivers only do extra work when there is a listener for this event\n+            if ($eventName === DatabaseEvents\\QueryExecuted::class && !$this->recordSqlQueries) {\n+                continue;\n+            }\n+\n             $dispatcher->listen($eventName, [$this, $handler]);\n         }\n     }"
+  },
+  {
+   "filename": "src/Sentry/Laravel/Tracing/EventHandler.php",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -120,6 +120,11 @@ public function __construct(array $config)\n     public function subscribe(Dispatcher $dispatcher): void\n     {\n         foreach (static::$eventHandlerMap as $eventName => $handler) {\n+            // Some database drivers only do extra work when there is a listener for this event\n+            if ($eventName === DatabaseEvents\\QueryExecuted::class && !$this->traceSqlQueries) {\n+                continue;\n+            }\n+\n             $dispatcher->listen($eventName, [$this, $handler]);\n         }\n     }"
+  },
+  {
+   "filename": "test/Sentry/EventHandler/DatabaseEventsTest.php",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -29,6 +29,36 @@ public function testSqlQueriesAreRecordedWhenEnabled(): void\n         $this->assertEquals($query, $lastBreadcrumb->getMessage());\n     }\n \n+    public function testQueryExecutedListenerIsNotRegisteredWhenBreadcrumbsAndTracingAreDisabled(): void\n+    {\n+        $this->resetApplicationWithConfig([\n+            'sentry.breadcrumbs.sql_queries' => false,\n+            'sentry.tracing.sql_queries' => false,\n+        ]);\n+\n+        $this->assertFalse($this->app['events']->hasListeners(QueryExecuted::class));\n+    }\n+\n+    public function testQueryExecutedListenerIsRegisteredWhenOnlyBreadcrumbsAreEnabled(): void\n+    {\n+        $this->resetApplicationWithConfig([\n+            'sentry.breadcrumbs.sql_queries' => true,\n+            'sentry.tracing.sql_queries' => false,\n+        ]);\n+\n+        $this->assertTrue($this->app['events']->hasListeners(QueryExecuted::class));\n+    }\n+\n+    public function testQueryExecutedListenerIsRegisteredWhenOnlyTracingIsEnabled(): void\n+    {\n+        $this->resetApplicationWithConfig([\n+            'sentry.breadcrumbs.sql_queries' => false,\n+            'sentry.tracing.sql_queries' => true,\n+        ]);\n+\n+        $this->assertTrue($this->app['events']->hasListeners(QueryExecuted::class));\n+    }\n+\n     public function testSqlBindingsAreRecordedWhenEnabled(): void\n     {\n         $this->resetApplicationWithConfig(["
+  }
+ ],
+ "test_files": [
+  "test/Sentry/EventHandler/DatabaseEventsTest.php"
+ ]
+}

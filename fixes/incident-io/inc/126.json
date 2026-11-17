@@ -1,0 +1,26 @@
+{
+ "repo": "incident-io/inc",
+ "number": 126,
+ "url": "https://github.com/incident-io/inc/pull/126",
+ "title": "fix: apply output filters to post-mortem content",
+ "merged_at": "2026-11-17T11:19:00Z",
+ "files": [
+  {
+   "filename": "cmd/postmortems.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -117,9 +117,9 @@ func runPostmortemsContent(cmd *cobra.Command, args []string) error {\n \t\treturn nil\n \t}\n \n-\tformat, _, _ := getOutputFlags(cmd)\n+\tformat, jqExpr, fields := getOutputFlags(cmd)\n \tif format == \"json\" {\n-\t\treturn output.Print(os.Stdout, \"json\", \"\", \"\", resp.Body)\n+\t\treturn output.Print(os.Stdout, \"json\", jqExpr, fields, resp.Body)\n \t}\n \n \t// For table/default output, just print the markdown directly"
+  },
+  {
+   "filename": "cmd/postmortems_cmd_test.go",
+   "status": "added",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,45 @@\n+package cmd\n+\n+import (\n+\t\"strings\"\n+\t\"testing\"\n+)\n+\n+func TestPostmortemsContent_OutputFlags(t *testing.T) {\n+\tfor _, tt := range []struct {\n+\t\tname      string\n+\t\tflags     []string\n+\t\twant      string\n+\t\twantError bool\n+\t}{\n+\t\t{name: \"jq implies JSON\", flags: []string{\"--jq\", \".markdown\"}, want: `\"# Outage report\"`},\n+\t\t{name: \"fields\", flags: []string{\"--output\", \"json\", \"--fields\", \"markdown\"}, want: `{\"markdown\":\"# Outage report\"}`},\n+\t\t{name: \"invalid jq\", flags: []string{\"--jq\", \"invalid(\"}, wantError: true},\n+\t\t{name: \"markdown\", flags: []string{\"--output\", \"table\"}, want: \"# Outage report\"},\n+\t\t{name: \"quiet\", flags: []string{\"--jq\", \".markdown\", \"--quiet\"}, want: \"\"},\n+\t} {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tsrv := newStubServer(t)\n+\t\t\tsrv.respond(\"GET /v1/postmortem_documents/doc-id/content\", `{\"markdown\":\"# Outage report\",\"extra\":\"unselected\"}`)\n+\t\t\targs := append([]string{\"post-mortems\", \"content\", \"doc-id\"}, tt.flags...)\n+\t\t\tres := runCommand(t, srv.args(args...)...)\n+\t\t\tif tt.wantError {\n+\t\t\t\tif res.exit == 0 {\n+\t\t\t\t\tt.Fatalf(\"expected invalid jq to fail, stdout: %s\", res.stdout)\n+\t\t\t\t}\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t\tif res.exit != 0 {\n+\t\t\t\tt.Fatalf(\"exit = %d, stderr: %s\", res.exit, res.stderr)\n+\t\t\t}\n+\t\t\tif tt.name == \"fields\" {\n+\t\t\t\tgot := mustJSON(t, res.stdout).(map[string]any)\n+\t\t\t\tif len(got) != 1 || got[\"markdown\"] != \"# Outage report\" {\n+\t\t\t\t\tt.Fatalf(\"unexpected fields: %v\", got)\n+\t\t\t\t}\n+\t\t\t} else if strings.TrimSpace(res.stdout) != tt.want {\n+\t\t\t\tt.Fatalf(\"stdout = %q, want %q\", res.stdout, tt.want)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "cmd/postmortems_cmd_test.go"
+ ]
+}

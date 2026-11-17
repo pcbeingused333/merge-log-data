@@ -1,0 +1,33 @@
+{
+ "repo": "scylladb/java-driver",
+ "number": 1411,
+ "url": "https://github.com/scylladb/java-driver/pull/1411",
+ "title": "fix: ignore out-of-range Scylla shard parameters",
+ "merged_at": "2026-11-17T20:22:22Z",
+ "files": [
+  {
+   "filename": "changelog/README.md",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -24,6 +24,9 @@ under the License.\n   3.x versions get published.\n -->\n \n+### 3.13.0.1\n+- [bug] #1192: Ignore out-of-range SCYLLA_NR_SHARDS and SCYLLA_SHARD instead of failing pool init\n+\n ### 3.13.0\n - [bug] CASSJAVA-85: decode custom payload and warnings in correct order\n - [improvement] CASSJAVA-128: Update Netty to 4.1.138 and migrate to Java8"
+  },
+  {
+   "filename": "driver-core/src/main/java/com/datastax/driver/core/ShardingInfo.java",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -17,9 +17,13 @@\n \n import java.util.List;\n import java.util.Map;\n+import org.slf4j.Logger;\n+import org.slf4j.LoggerFactory;\n \n /** Keeps the information the driver maintains on data layout of a given node. */\n public class ShardingInfo {\n+  private static final Logger logger = LoggerFactory.getLogger(ShardingInfo.class);\n+\n   private static final String SCYLLA_SHARD_PARAM_KEY = \"SCYLLA_SHARD\";\n   private static final String SCYLLA_NR_SHARDS_PARAM_KEY = \"SCYLLA_NR_SHARDS\";\n   private static final String SCYLLA_PARTITIONER = \"SCYLLA_PARTITIONER\";\n@@ -97,6 +101,15 @@ public static ConnectionShardingInfo parseShardingInfo(Map<String, List<String>>\n         || !shardingAlgorithm.equals(\"biased-token-round-robin\")) {\n       return null;\n     }\n+    // A correct server never sends these. Accepting them makes pool init divide by zero,\n+    // allocate a negative array, or index past the per-shard arrays. Drop shard awareness.\n+    if (shardsCount < 1 || shardId < 0 || shardId >= shardsCount) {\n+      logger.warn(\n+          \"Ignoring out-of-range shard parameters: SCYLLA_SHARD={} SCYLLA_NR_SHARDS={}\",\n+          shardId,\n+          shardsCount);\n+      return null;\n+    }\n     if (shardAwarePort == null) {\n       shardAwarePort = 0;\n     }"
+  },
+  {
+   "filename": "driver-core/src/test/java/com/datastax/driver/core/ShardingInfoTest.java",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 4,
+   "patch": "@@ -217,14 +217,29 @@ public void should_return_null_for_unsupported_sharding_algorithm() {\n   }\n \n   @Test(groups = \"unit\")\n-  public void should_accept_out_of_range_shard_values() {\n-    // Pins current behaviour (#1192): shard count and shard id are not range-checked\n+  public void should_return_null_for_out_of_range_shard_values() {\n     Map<String, List<String>> params = validParams();\n     params.put(\"SCYLLA_NR_SHARDS\", Collections.singletonList(\"0\"));\n-    assertThat(ShardingInfo.parseShardingInfo(params).shardingInfo.getShardsCount()).isEqualTo(0);\n+    assertThat(ShardingInfo.parseShardingInfo(params)).isNull();\n+\n+    params = validParams();\n+    params.put(\"SCYLLA_NR_SHARDS\", Collections.singletonList(\"-1\"));\n+    assertThat(ShardingInfo.parseShardingInfo(params)).isNull();\n \n     params = validParams();\n     params.put(\"SCYLLA_SHARD\", Collections.singletonList(\"12\"));\n-    assertThat(ShardingInfo.parseShardingInfo(params).shardId).isEqualTo(12);\n+    assertThat(ShardingInfo.parseShardingInfo(params)).isNull();\n+\n+    params = validParams();\n+    params.put(\"SCYLLA_SHARD\", Collections.singletonList(\"-1\"));\n+    assertThat(ShardingInfo.parseShardingInfo(params)).isNull();\n+\n+    params = validParams();\n+    params.put(\"SCYLLA_SHARD\", Collections.singletonList(\"0\"));\n+    assertThat(ShardingInfo.parseShardingInfo(params).shardId).isEqualTo(0);\n+\n+    params = validParams();\n+    params.put(\"SCYLLA_SHARD\", Collections.singletonList(\"11\"));\n+    assertThat(ShardingInfo.parseShardingInfo(params).shardId).isEqualTo(11);\n   }\n }"
+  }
+ ],
+ "test_files": [
+  "driver-core/src/test/java/com/datastax/driver/core/ShardingInfoTest.java"
+ ]
+}

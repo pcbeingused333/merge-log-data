@@ -1,0 +1,26 @@
+{
+ "repo": "henrygd/beszel",
+ "number": 2847,
+ "url": "https://github.com/henrygd/beszel/pull/2847",
+ "title": "fix(agent): read ZFS kstats from /proc/lpl on QNAP QuTS hero",
+ "merged_at": "2026-11-17T19:29:38Z",
+ "files": [
+  {
+   "filename": "agent/zfs/zfs_linux.go",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 3,
+   "patch": "@@ -15,16 +15,30 @@ import (\n \n var (\n \tprocZfsPath = \"/proc/spl/kstat/zfs\"\n-\tdevZfsPath  = \"/dev/zfs\"\n+\t// lplZfsPath is where QNAP QuTS hero exposes the same kstats.\n+\tlplZfsPath = \"/proc/lpl/kstat/zfs\"\n+\tdevZfsPath = \"/dev/zfs\"\n )\n \n+// kstatRoot returns the ZFS kstat directory, preferring the standard OpenZFS\n+// location and falling back to the QNAP QuTS hero one.\n+func kstatRoot() string {\n+\tif _, err := os.Stat(procZfsPath); err == nil {\n+\t\treturn procZfsPath\n+\t}\n+\tif _, err := os.Stat(lplZfsPath); err == nil {\n+\t\treturn lplZfsPath\n+\t}\n+\treturn procZfsPath\n+}\n+\n // errNoPoolIOStats marks an \"iostats\" file that predates OpenZFS 2.3 and\n // reports no pool read/write counters (TRIM statistics only), so callers may\n // fall back to older counter sources.\n var errNoPoolIOStats = errors.New(\"no pool I/O counters\")\n \n func ARCSize() (uint64, error) {\n-\tfile, err := os.Open(filepath.Join(procZfsPath, \"arcstats\"))\n+\tfile, err := os.Open(filepath.Join(kstatRoot(), \"arcstats\"))\n \tif err != nil {\n \t\treturn 0, err\n \t}\n@@ -65,9 +79,10 @@ func checkZfsDevice() error {\n // procfs. These kstats are the same interfaces used by node_exporter's Linux\n // ZFS collector and avoid keeping a `zpool iostat` subprocess alive.\n func PoolKernelStats() ([]PoolKernelStat, error) {\n+\troot := kstatRoot()\n \tpoolDirs := make(map[string]struct{})\n \tfor _, filename := range []string{\"state\", \"io\", \"iostats\", \"objset-*\"} {\n-\t\tpaths, err := filepath.Glob(filepath.Join(procZfsPath, \"*\", filename))\n+\t\tpaths, err := filepath.Glob(filepath.Join(root, \"*\", filename))\n \t\tif err != nil {\n \t\t\treturn nil, err\n \t\t}"
+  },
+  {
+   "filename": "agent/zfs/zfs_linux_test.go",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -315,3 +315,21 @@ func TestPoolStatsKeepsRawCapacityWithoutRootDataset(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestARCSizeFallsBackToLpl(t *testing.T) {\n+\troot := t.TempDir()\n+\toldProc, oldLpl := procZfsPath, lplZfsPath\n+\tprocZfsPath = filepath.Join(root, \"spl-missing\")\n+\tlplZfsPath = filepath.Join(root, \"lpl\")\n+\tt.Cleanup(func() { procZfsPath, lplZfsPath = oldProc, oldLpl })\n+\n+\trequire.NoError(t, os.MkdirAll(lplZfsPath, 0o755))\n+\trequire.NoError(t, os.WriteFile(filepath.Join(lplZfsPath, \"arcstats\"), []byte(\n+\t\t\"c_max                           4    47686539045\\n\"+\n+\t\t\t\"size                            4    35401502949\\n\",\n+\t), 0o644))\n+\n+\tsize, err := ARCSize()\n+\trequire.NoError(t, err)\n+\tassert.Equal(t, uint64(35401502949), size)\n+}"
+  }
+ ],
+ "test_files": [
+  "agent/zfs/zfs_linux_test.go"
+ ]
+}

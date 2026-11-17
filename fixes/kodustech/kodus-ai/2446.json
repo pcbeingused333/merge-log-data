@@ -1,0 +1,26 @@
+{
+ "repo": "kodustech/kodus-ai",
+ "number": 2446,
+ "url": "https://github.com/kodustech/kodus-ai/pull/2446",
+ "title": "fix(code-review): use configured dashboard URL in Kody config link",
+ "merged_at": "2026-11-17T14:12:25Z",
+ "files": [
+  {
+   "filename": "libs/code-review/infrastructure/adapters/services/commentManager.service.spec.ts",
+   "status": "modified",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -921,6 +921,51 @@ describe('CommentManagerService — pure helpers', () => {\n         });\n     });\n \n+    describe('generateConfigReviewMarkdown — configuration link', () => {\n+        const KEY = 'API_USER_INVITE_BASE_URL';\n+        let saved: string | undefined;\n+        beforeEach(() => {\n+            saved = process.env[KEY];\n+        });\n+        afterEach(() => {\n+            if (saved === undefined) delete process.env[KEY];\n+            else process.env[KEY] = saved;\n+        });\n+\n+        const render = () =>\n+            (\n+                new CommentManagerService(\n+                    {} as any,\n+                    { processTemplate: async () => '' } as any,\n+                    {} as any,\n+                    {} as any,\n+                    {} as any,\n+                    {} as any,\n+                ) as any\n+            ).generateConfigReviewMarkdown(\n+                { organizationId: 'org' } as any,\n+                1,\n+                { languageResultPrompt: LanguageValue.ENGLISH } as any,\n+            );\n+\n+        it('falls back to the public dashboard when no env is set', async () => {\n+            delete process.env[KEY];\n+            const out = await render();\n+            expect(out).toContain(\n+                '(https://app.kodus.io/settings/code-review/global/general)',\n+            );\n+        });\n+\n+        it('points at the self-hosted dashboard and strips trailing slashes', async () => {\n+            process.env[KEY] = 'https://kodus.example.com//';\n+            const out = await render();\n+            expect(out).toContain(\n+                '(https://kodus.example.com/settings/code-review/global/general)',\n+            );\n+            expect(out).not.toContain('app.kodus.io');\n+        });\n+    });\n+\n     describe('resolveSkippedRulesNotice (KRC-16)', () => {\n         const skipWarning = (titles: string[]) => ({\n             kind: 'RULE_CONTEXT_UNAVAILABLE' as const,"
+  },
+  {
+   "filename": "libs/code-review/infrastructure/adapters/services/commentManager.service.ts",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -2337,6 +2337,11 @@ ${summaryContent}\n                 context,\n             );\n \n+            // Self-hosted installs serve the dashboard from their own domain.\n+            const dashboardBase = (\n+                process.env.API_USER_INVITE_BASE_URL || 'https://app.kodus.io'\n+            ).replace(/\\/+$/, '');\n+\n             return `\n <details>\n <summary>${translation.title}</summary>\n@@ -2357,7 +2362,7 @@ ${summaryContent}\n \n ${reviewOptions}\n \n-**[${translation.configurationLink}](https://app.kodus.io/settings/code-review/global/general)**\n+**[${translation.configurationLink}](${dashboardBase}/settings/code-review/global/general)**\n \n </details>\n </details>"
+  }
+ ],
+ "test_files": [
+  "libs/code-review/infrastructure/adapters/services/commentManager.service.spec.ts"
+ ]
+}

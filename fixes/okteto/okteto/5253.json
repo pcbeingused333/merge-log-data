@@ -1,0 +1,34 @@
+{
+ "repo": "okteto/okteto",
+ "number": 5253,
+ "url": "https://github.com/okteto/okteto/pull/5253",
+ "title": "fix: preserve escaped environment variables in compose stacks",
+ "merged_at": "2026-11-17T13:33:43Z",
+ "files": [
+  {
+   "filename": "pkg/model/stack_expander_test.go",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -17,6 +17,7 @@ import (\n \t\"testing\"\n \n \t\"github.com/stretchr/testify/assert\"\n+\t\"github.com/stretchr/testify/require\"\n )\n \n func Test_ExpandStackEnvs(t *testing.T) {\n@@ -168,3 +169,29 @@ volumes:\n \t\t})\n \t}\n }\n+\n+func TestStackEscapedEnvironment(t *testing.T) {\n+\tt.Setenv(\"ESCAPED_TARGET\", \"host-value\")\n+\tt.Setenv(\"EXPANSION_SOURCE\", \"${ESCAPED_TARGET}\")\n+\tt.Setenv(\"UNSET_TARGET\", \"\")\n+\tfor name, environment := range map[string]string{\n+\t\t\"map\":  \"      LITERAL: $${ESCAPED_TARGET}\\n      INDIRECT: ${EXPANSION_SOURCE}\\n      NORMAL: ${ESCAPED_TARGET}\\n      UNSET: $${UNSET_TARGET}\\n      MULTILINE: |\\n        prefix\\n        $${ESCAPED_TARGET}\\n\",\n+\t\t\"list\": \"      - LITERAL=$${ESCAPED_TARGET}\\n      - INDIRECT=${EXPANSION_SOURCE}\\n      - NORMAL=${ESCAPED_TARGET}\\n      - UNSET=$${UNSET_TARGET}\\n      - |\\n        MULTILINE=prefix\\n        $${ESCAPED_TARGET}\\n\",\n+\t} {\n+\t\tfor mode, compose := range map[string]bool{\"compose\": true, \"stack\": false} {\n+\t\t\tt.Run(name+\"/\"+mode, func(t *testing.T) {\n+\t\t\t\ts, err := ReadStack([]byte(\"services:\\n  app:\\n    image: nginx\\n    environment:\\n\"+environment), compose)\n+\t\t\t\trequire.NoError(t, err)\n+\t\t\t\tvalues := map[string]string{}\n+\t\t\t\tfor _, variable := range s.Services[\"app\"].Environment {\n+\t\t\t\t\tvalues[variable.Name] = variable.Value\n+\t\t\t\t}\n+\t\t\t\tassert.Equal(t, \"${ESCAPED_TARGET}\", values[\"LITERAL\"])\n+\t\t\t\tassert.Equal(t, \"${ESCAPED_TARGET}\", values[\"INDIRECT\"])\n+\t\t\t\tassert.Equal(t, \"host-value\", values[\"NORMAL\"])\n+\t\t\t\tassert.Equal(t, \"${UNSET_TARGET}\", values[\"UNSET\"])\n+\t\t\t\tassert.Equal(t, \"prefix\\n${ESCAPED_TARGET}\\n\", values[\"MULTILINE\"])\n+\t\t\t})\n+\t\t}\n+\t}\n+}"
+  },
+  {
+   "filename": "pkg/model/stack_serializer.go",
+   "status": "modified",
+   "additions": 31,
+   "deletions": 1,
+   "patch": "@@ -20,6 +20,7 @@ import (\n \t\"path\"\n \t\"path/filepath\"\n \t\"regexp\"\n+\t\"sort\"\n \t\"strconv\"\n \t\"strings\"\n \t\"time\"\n@@ -162,7 +163,7 @@ type ServiceRaw struct {\n \tEnvFilesSneakCase        env.Files              `yaml:\"env_file,omitempty\"`\n \tArgs                     ArgsStack              `yaml:\"args,omitempty\"`\n \tEntrypoint               CommandStack           `yaml:\"entrypoint,omitempty\"`\n-\tEnvironment              env.Environment        `yaml:\"environment,omitempty\"`\n+\tEnvironment              stackEnvironment       `yaml:\"environment,omitempty\"`\n \tExpose                   []PortRaw              `yaml:\"expose,omitempty\"`\n \tPorts                    []PortRaw              `yaml:\"ports,omitempty\"`\n \tCapDrop                  []apiv1.Capability     `yaml:\"capDrop,omitempty\"`\n@@ -171,6 +172,35 @@ type ServiceRaw struct {\n \tPublic                   bool                   `yaml:\"public,omitempty\"`\n }\n \n+// stackEnvironment decodes values already expanded by ExpandStackEnvs.\n+// The shared env.Environment decoder also expands values, which would consume\n+// escaped dollars and interpolate variable contents a second time.\n+type stackEnvironment []env.Var\n+\n+func (e *stackEnvironment) UnmarshalYAML(unmarshal func(interface{}) error) error {\n+\tvalues := make(map[string]string)\n+\tvar list []string\n+\tif err := unmarshal(&list); err == nil {\n+\t\tfor _, entry := range list {\n+\t\t\tparts := strings.SplitN(entry, \"=\", 2)\n+\t\t\tvalue := os.Getenv(parts[0])\n+\t\t\tif len(parts) == 2 {\n+\t\t\t\tvalue = parts[1]\n+\t\t\t}\n+\t\t\tvalues[parts[0]] = value\n+\t\t}\n+\t} else if err := unmarshal(&values); err != nil {\n+\t\treturn err\n+\t}\n+\tresult := make(stackEnvironment, 0, len(values))\n+\tfor name, value := range values {\n+\t\tresult = append(result, env.Var{Name: name, Value: value})\n+\t}\n+\tsort.SliceStable(result, func(i, j int) bool { return result[i].Name < result[j].Name })\n+\t*e = result\n+\treturn nil\n+}\n+\n // serviceAccountExtension is the compose service extension that sets the pod ServiceAccount\n const serviceAccountExtension = \"x-okteto-service-account\"\n "
+  },
+  {
+   "filename": "pkg/model/stack_serializer_test.go",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 5,
+   "patch": "@@ -2048,10 +2048,21 @@ func Test_validateEnvFiles(t *testing.T) {\n \n func Test_Environment(t *testing.T) {\n \ttests := []struct {\n-\t\tname        string\n-\t\tmanifest    []byte\n-\t\tenvironment env.Environment\n+\t\tname          string\n+\t\tmanifest      []byte\n+\t\tenvironment   env.Environment\n+\t\texpectedError bool\n \t}{\n+\t\t{\n+\t\t\tname:          \"invalid scalar environment\",\n+\t\t\tmanifest:      []byte(\"services:\\n  app:\\n    image: okteto/vote:1\\n    environment: FOO=bar\"),\n+\t\t\texpectedError: true,\n+\t\t},\n+\t\t{\n+\t\t\tname:        \"duplicate list entry\",\n+\t\t\tmanifest:    []byte(\"services:\\n  app:\\n    image: okteto/vote:1\\n    environment:\\n      - A=1\\n      - A=2\"),\n+\t\t\tenvironment: env.Environment{env.Var{Name: \"A\", Value: \"2\"}},\n+\t\t},\n \t\t{\n \t\t\tname:        \"envs\",\n \t\t\tmanifest:    []byte(\"services:\\n  app:\\n    environment:\\n        env: production\\n    image: okteto/vote:1\"),\n@@ -2084,9 +2095,11 @@ func Test_Environment(t *testing.T) {\n \t\t\tt.Setenv(\"OKTETO_ENVTEST\", \"myvalue\")\n \n \t\t\ts, err := ReadStack(tt.manifest, false)\n-\t\t\tif err != nil {\n-\t\t\t\tt.Fatal(err)\n+\t\t\tif tt.expectedError {\n+\t\t\t\trequire.Error(t, err)\n+\t\t\t\treturn\n \t\t\t}\n+\t\t\trequire.NoError(t, err)\n \t\t\tassert.Equal(t, tt.environment, s.Services[\"app\"].Environment)\n \t\t\tif len(s.Services[\"app\"].Environment) != len(tt.environment) {\n \t\t\t\tt.Fatalf(\"Bad unmarshal of envs\")"
+  }
+ ],
+ "test_files": [
+  "pkg/model/stack_expander_test.go",
+  "pkg/model/stack_serializer_test.go"
+ ]
+}

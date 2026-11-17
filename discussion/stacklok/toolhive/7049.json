@@ -3,8 +3,70 @@
  "number": 7049,
  "url": "https://github.com/stacklok/toolhive/pull/7049",
  "state": "open",
- "reviews": [],
- "review_comments": [],
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-17T19:31:28Z",
+   "body": "<!-- dev:pr-review commit=2200b49c775744dfe5c328289587ae1efba6aaf5 -->\n## Review\n\nThe PR is a small bug fix in `pkg/container/docker/client.go` (about 110 added lines across two files). `DeployWorkload` now registers a deferred cleanup once the internal network exists, so a network-isolated workload that fails before its MCP container is created no longer leaks the `toolhive-<name>-internal` network and the dns/egress sidecars (\\#7045). It takes the issue's first acceptable fix (clean up on failed setup) and leaves \\#7043 and `RemoveWorkload` alone. For a fresh deploy the approach is sound: gating on `mcpCreated` keeps post-MCP failures on the existing `thv rm` path, and detaching the cleanup context from cancellation is the right call.\n\nThe main trade-off is that the gate asks whether *this call* created the MCP container, not whether *this call* created the network and sidecars. `createNetwork`, `createDnsContainer` and `createContainer` all reuse existing resources, and `thv restart` reaches `DeployWorkload` with the stopped MCP container still in place. A transient failure before `createMcpContainer` on a restart therefore removes the network and sidecars an existing workload depends on. The tests also only check the defer wiring through a fake; the real `cleanupFailedIsolation` and the `WithoutCancel` behavior are not covered.\n\nNo documentation update is needed. The user-visible effect is that failed setups stop leaking Docker resources.\n\n### Findings\n\n| # | Severity | Finding | Location | Raised by |\n|---|---|---|---|---|\n| 1 | MEDIUM | Failure cleanup removes the reused network and sidecars of a restarted workload | `pkg/container/docker/client.go:271` | correctness, scope discipline, tests |\n| 2 | MEDIUM | Real `cleanupFailedIsolation` is never exercised by a test | `pkg/container/docker/client_deploy_test.go:116` | tests, readability |\n| 3 | MEDIUM | No test pins the `context.WithoutCancel` behavior | `pkg/container/docker/client_deploy_test.go:116` | tests |\n| 4 | MEDIUM | Table omits the port-binding failure and never asserts the error outcome | `pkg/container/docker/client_deploy_test.go:616` | tests |\n| 5 | MEDIUM | PR title and commit subjects use a Conventional Commits prefix | PR title and commits | readability |\n| 6 | LOW | Cleanup context has no timeout | `pkg/container/docker/client.go:276` | correctness |\n| 7 | LOW | A failed sidecar removal stops the remaining removals and the network delete | `pkg/container/docker/client.go:1400` | correctness |\n| 8 | LOW | Made-up label map in `cleanupFailedIsolation` is not explained | `pkg/container/docker/client.go:1398` | readability |\n| 9 | LOW | Ingress test does not exercise `SetupIngress`; three tests overlap | `pkg/container/docker/client_deploy_test.go:641` | tests, readability |\n| 10 | LOW | Dead `callOrder` append and unasserted cleanup ordering | `pkg/container/docker/client_deploy_test.go:117` | tests, readability |\n\n### Additional findings\n\n- **[MEDIUM] PR title and commit subjects use a Conventional Commits prefix**: the title and both commit subjects start with `fix(docker):`. `CLAUDE.md` says \"Do NOT use Conventional Commits\" and `.claude/rules/pr-creation.md` says \"PR titles must NOT use conventional commit prefixes\". The commit subjects also exceed the 50-character limit (the second wraps mid-word into its body). Because commits are squashed with the PR title, the title is what lands in history. Suggested title: `Clean up isolation resources when workload setup fails`. *Raised by: readability.*\n\n### How to test\n\n1. `task test` (or the `pkg/container/docker` package tests): the new `TestDeployWorkload_*` cases should pass.\n2. Mutation checks, which currently do **not** fail any test: delete the `lb.AddNetworkIsolationLabel(labels, true)` line in `cleanupFailedIsolation`, or replace `context.WithoutCancel(ctx)` with `ctx` at the defer. Both leave the suite green.\n3. Manual, fresh deploy: run a network-isolated workload with a step that fails after DNS startup (for example the bridge with no IPv6 gateway from \\#7045). Afterwards `docker network ls | grep toolhive-<name>-internal` and `docker ps -a | grep <name>-dns` should show nothing.\n4. Manual, restart: run an isolated workload, `thv stop` it, induce a failure before MCP creation (for example a bad port binding), then `thv restart`. Check whether the network and sidecars were removed and whether the next `thv restart` starts the stopped MCP container.\n\n---\n*Reviewed by dev:review-pr (finders: correctness, readability, tests, scope discipline). Generated with Claude Code.*"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "collaborator",
+   "path": "pkg/container/docker/client.go",
+   "created_at": "2026-11-17T19:31:29Z",
+   "body": "**[MEDIUM] Failure cleanup removes the reused network and sidecars of a restarted workload**\n\n`mcpCreated` only says whether *this call* created the MCP container. `thv restart` stops the workload (`StopWorkload` leaves the MCP container and network in place) and then reaches `DeployWorkload`, where `createNetwork`, `createDnsContainer` and `createContainer` reuse what already exists. If a step before `createMcpContainer` fails (gateway discovery, egress setup, port bindings), this defer removes the network and the dns/egress/ingress containers of a workload whose MCP container is still there, so the comment above (\"`thv rm` cannot find them\") is not true on that path. Before this change the network survived and a retry could succeed. I could not confirm from the code whether Docker then refuses to start the old container against the recreated network, but `createAndStartContainer` already handles a start that fails because \"its network vanished\", so the failure mode is known.\n\n**Recommendation**: only clean up what this call created. For example, check `findExistingContainer(ctx, name)` before `createNetwork` and skip the defer (or at least the network removal) when the MCP container already exists. If removing them is the intended trade-off, say so in a comment here. Either way, add a test with a pre-existing MCP container and a pre-MCP failure.\n\n*Raised by: correctness, scope discipline, tests. Verified: confirmed.*"
+  },
+  {
+   "role": "collaborator",
+   "path": "pkg/container/docker/client.go",
+   "created_at": "2026-11-17T19:31:29Z",
+   "body": "**[LOW] Cleanup context has no timeout**\n\n`context.WithoutCancel(ctx)` correctly lets cleanup run after a cancelled request, but it also drops any deadline. `cleanupFailedIsolation` makes several Docker API calls (list and remove for three containers, then list and remove for the network). With a wedged daemon the `DeployWorkload` error return blocks, and a user who already cancelled cannot interrupt it.\n\n**Recommendation**: bound the detached context, for example `cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)` with `defer cancel()` around the call.\n\n*Raised by: correctness. Verified: confirmed.*"
+  },
+  {
+   "role": "collaborator",
+   "path": "pkg/container/docker/client.go",
+   "created_at": "2026-11-17T19:31:29Z",
+   "body": "**[LOW] A failed sidecar removal stops the remaining removals and the network delete**\n\n`removeProxyContainers` returns on the first non-NotFound `ContainerRemove` error. If the egress removal fails, ingress and dns are skipped, and `deleteNetwork` then fails because dns is still attached. The new caller only logs a WARN, so the leak this PR targets can persist. A forced removal rarely fails, so this is unlikely, but a best-effort cleanup should keep going.\n\n**Recommendation**: have the cleanup path try every sidecar and always attempt `deleteNetwork`, either by collecting errors with `errors.Join` in `removeProxyContainers` or by removing the `-egress`, `-ingress` and `-dns` containers directly in `cleanupFailedIsolation`.\n\n*Raised by: correctness. Verified: confirmed.*"
+  },
+  {
+   "role": "collaborator",
+   "path": "pkg/container/docker/client.go",
+   "created_at": "2026-11-17T19:31:29Z",
+   "body": "**[LOW] The made-up label map is not explained**\n\n`cleanupFailedIsolation` builds an empty map and sets the isolation label only so `removeProxyContainers` gets past its `HasNetworkIsolation` early return. Nothing says so, and a reader has to open `removeProxyContainers` to find out. That function's doc comment (\"removes the MCP server container and any proxy containers\") also does not describe what it does.\n\n**Recommendation**: add a short why-comment here (no MCP container exists to read the label from), or move the suffix loop into a helper that both callers share so no fake labels are needed.\n\n*Raised by: readability. Verified: confirmed.*"
+  },
+  {
+   "role": "collaborator",
+   "path": "pkg/container/docker/client_deploy_test.go",
+   "created_at": "2026-11-17T19:31:29Z",
+   "body": "**[MEDIUM] The real `cleanupFailedIsolation` is never exercised**\n\nThis fake replaces `Client.cleanupFailedIsolation`, so the real method has no test: the isolation label, the `-dns`/`-egress`/`-ingress` names, the `deleteNetwork` call, and the behavior after a failed removal. Deleting the `AddNetworkIsolationLabel` call would turn `removeProxyContainers` into a no-op and bring back \\#7045 while every new test stays green. A `fakeDockerAPI` is not enough, because `removeProxyContainers` removes through the concrete `c.client.ContainerRemove` and `deleteNetwork` uses `c.client.NetworkList`/`NetworkRemove`.\n\n**Recommendation**: add a table-driven test on the real method using an httptest-backed moby client, as `hostdiscovery_test.go` does. Assert that the three sidecars and the network are removed, that a failed sidecar removal still attempts the network delete, and that an absent network is not an error.\n\n*Raised by: tests, readability. Verified: confirmed.*"
+  },
+  {
+   "role": "collaborator",
+   "path": "pkg/container/docker/client_deploy_test.go",
+   "created_at": "2026-11-17T19:31:29Z",
+   "body": "**[MEDIUM] No test pins the `context.WithoutCancel` behavior**\n\nThe fake ignores its context and every new test passes the live `t.Context()`. The PR description lists `WithoutCancel` as a feature, but replacing `context.WithoutCancel(ctx)` with `ctx` at the defer leaves the suite green.\n\n**Recommendation**: record `ctx.Err()` at call time in the fake, then add a case that passes an already-cancelled context with a failing step and asserts the recorded error is nil and cleanup ran once.\n\n*Raised by: tests. Verified: confirmed.*"
+  },
+  {
+   "role": "collaborator",
+   "path": "pkg/container/docker/client_deploy_test.go",
+   "created_at": "2026-11-17T19:31:29Z",
+   "body": "**[MEDIUM] The table omits the port-binding failure and never asserts the error outcome**\n\n\\#7045 names port-binding generation as a failure point, and `generatePortBindings` runs after the cleanup defer is registered, but no case covers it (an unparsable `HostPort` in `opts.PortBindings` triggers it). The `wantCleanup: false` rows also never check `err`: \"success keeps resources\" has no `require.NoError` and \"internal network creation fails\" has no `require.Error`, so either could pass for the wrong reason (`.claude/rules/testing.md`).\n\n**Recommendation**: add a `wantErr` column and assert `require.Error` or `require.NoError` in every case (with `ErrorIs` on a sentinel, since the code wraps with `%w`), and add a port-binding case with a per-case `opts` field.\n\n*Raised by: tests. Verified: confirmed.*"
+  },
+  {
+   "role": "collaborator",
+   "path": "pkg/container/docker/client_deploy_test.go",
+   "created_at": "2026-11-17T19:31:29Z",
+   "body": "**[LOW] The ingress test does not exercise `SetupIngress`, and three tests overlap**\n\nDespite its name, this test only injects `errMcpIP`. The `SetupIngress` error return, the last failure point after `mcpCreated = true`, is untested because `fakeNetworkProxy` has one `err` field shared with `SetupEgress`. The loop over a one-entry map adds scaffolding for no benefit, and `TestDeployWorkload_NoIsolationFailure_DoesNotCleanUp` repeats the same setup. The first test's name (`CleansUpNetworkAndDNS`) also covers cases that assert no cleanup. `.claude/rules/testing.md` asks for table-driven tests, consolidation, and names that match what is asserted.\n\n**Recommendation**: add an `errIngress` field to `fakeNetworkProxy`, fold the three tests into one table with transport, isolate and opts columns, and name it for the behavior (cleanup only before the MCP container exists).\n\n*Raised by: tests, readability. Verified: confirmed.*"
+  },
+  {
+   "role": "collaborator",
+   "path": "pkg/container/docker/client_deploy_test.go",
+   "created_at": "2026-11-17T19:31:29Z",
+   "body": "**[LOW] The `callOrder` append is dead and cleanup ordering is not asserted**\n\nNone of the new tests builds a `fakeDeployOps` with `callOrder`, so this append never runs, and nothing shows cleanup happens after the failing step. The `\"workload/network\"` joined string in `cleanupCalls` is also an ad hoc encoding.\n\n**Recommendation**: wire a shared `callOrder` in the table and assert that cleanup follows the failing step (and is absent on success), or drop the `callOrder` lines. Storing a small struct instead of a joined string would be clearer.\n\n*Raised by: tests, readability. Verified: confirmed.*"
+  }
+ ],
  "comments": [
   {
    "role": "bot",

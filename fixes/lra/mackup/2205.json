@@ -1,0 +1,26 @@
+{
+ "repo": "lra/mackup",
+ "number": 2205,
+ "url": "https://github.com/lra/mackup/pull/2205",
+ "title": "fix(restore): don't crash on a broken symlink in the home folder",
+ "merged_at": "2026-11-17T15:16:46Z",
+ "files": [
+  {
+   "filename": "src/mackup/application.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -293,6 +293,7 @@ def link(self) -> None:\n             pointing_to_mackup: bool = (\n                 os.path.islink(home_filepath)\n                 and os.path.exists(mackup_filepath)\n+                and os.path.exists(home_filepath)\n                 and os.path.samefile(mackup_filepath, home_filepath)\n             )\n             supported: bool = utils.can_file_be_synced_on_current_platform(filename)\n@@ -310,7 +311,7 @@ def link(self) -> None:\n                     continue\n \n                 # Check if there is already a file in the home folder\n-                if os.path.exists(home_filepath):\n+                if os.path.lexists(home_filepath):\n                     # Name it right\n                     if os.path.isfile(home_filepath):\n                         file_type = \"file\""
+  },
+  {
+   "filename": "tests/test_application.py",
+   "status": "modified",
+   "additions": 42,
+   "deletions": 0,
+   "patch": "@@ -651,6 +651,48 @@ def test_copy_files_to_mackup_folder_backs_up_symlink_to_different_location(self\n             output = captured_output.getvalue()\n             assert \"Backing up\" in output\n \n+    def _make_broken_home_link(self):\n+        \"\"\"Create a valid mackup backup and a home symlink whose target is gone.\"\"\"\n+        test_file = \".testfile\"\n+        mackup_filepath = os.path.join(self.mock_mackup.mackup_folder, test_file)\n+        home_filepath = os.path.join(self.temp_home, test_file)\n+        with open(mackup_filepath, \"w\") as f:\n+            f.write(\"mackup content\")\n+        os.symlink(os.path.join(self.temp_home, \".missing\"), home_filepath)\n+        self.app_profile.files = {test_file}\n+        return mackup_filepath, home_filepath\n+\n+    def test_link_dry_run_with_broken_home_symlink(self):\n+        \"\"\"link --dry-run must not crash when the home path is a broken symlink.\"\"\"\n+        _, home_filepath = self._make_broken_home_link()\n+        self.app_profile.dry_run = True\n+\n+        with patch(\"mackup.application.utils.link\") as mock_link:\n+            self.app_profile.link()\n+\n+        mock_link.assert_not_called()\n+        assert os.path.islink(home_filepath)\n+\n+    def test_link_replaces_broken_home_symlink_when_confirmed(self):\n+        \"\"\"link replaces a broken home symlink with a link to the backup.\"\"\"\n+        mackup_filepath, home_filepath = self._make_broken_home_link()\n+\n+        with patch(\"mackup.application.utils.confirm\", return_value=True) as confirm:\n+            self.app_profile.link()\n+\n+        confirm.assert_called_once()\n+        assert os.path.samefile(mackup_filepath, home_filepath)\n+\n+    def test_link_keeps_broken_home_symlink_when_declined(self):\n+        \"\"\"link leaves a broken home symlink alone if the user declines.\"\"\"\n+        _, home_filepath = self._make_broken_home_link()\n+\n+        with patch(\"mackup.application.utils.confirm\", return_value=False):\n+            self.app_profile.link()\n+\n+        assert os.path.islink(home_filepath)\n+        assert not os.path.exists(home_filepath)\n+\n \n if __name__ == \"__main__\":\n     unittest.main()"
+  }
+ ],
+ "test_files": [
+  "tests/test_application.py"
+ ]
+}

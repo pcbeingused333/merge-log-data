@@ -1,0 +1,26 @@
+{
+ "repo": "qzind/tray",
+ "number": 1573,
+ "url": "https://github.com/qzind/tray/pull/1573",
+ "title": "Fix NPE on cold start by synchronizing CachedObject.get()",
+ "merged_at": "2026-11-17T17:05:59Z",
+ "files": [
+  {
+   "filename": "src/qz/common/CachedObject.java",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -74,7 +74,7 @@ public T get() {\n      * @param forceRefresh If true, the cached object will be refreshed before being returned regardless of its lifespan\n      * @return The cached object\n      */\n-    public T get(boolean forceRefresh) {\n+    public synchronized T get(boolean forceRefresh) {\n         long now = TimeUnit.NANOSECONDS.toMillis(System.nanoTime());\n         // check lifespan\n         if (forceRefresh || (timestamp + lifespan <= now)) {"
+  },
+  {
+   "filename": "test/qz/common/CachedObjectTests.java",
+   "status": "added",
+   "additions": 43,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,43 @@\n+package qz.common;\n+\n+import org.testng.Assert;\n+import org.testng.annotations.Test;\n+\n+import java.util.concurrent.CountDownLatch;\n+import java.util.concurrent.atomic.AtomicInteger;\n+import java.util.concurrent.atomic.AtomicReference;\n+\n+public class CachedObjectTests {\n+    @Test\n+    public void testConcurrentColdStartNeverReturnsNull() throws Exception {\n+        final CountDownLatch supplierEntered = new CountDownLatch(1);\n+        final CountDownLatch release = new CountDownLatch(1);\n+        final AtomicInteger calls = new AtomicInteger(0);\n+        CachedObject<String> cache = new CachedObject<>(() -> {\n+            calls.incrementAndGet();\n+            supplierEntered.countDown();\n+            try {\n+                release.await();\n+            } catch(InterruptedException ignore) {}\n+            return \"value\";\n+        }, 60000);\n+\n+        final AtomicReference<String> first = new AtomicReference<>();\n+        Thread t = new Thread(() -> first.set(cache.get()));\n+        t.start();\n+        supplierEntered.await();\n+\n+        // Second caller arrives while the first is still inside the supplier\n+        final AtomicReference<String> second = new AtomicReference<>();\n+        Thread t2 = new Thread(() -> second.set(cache.get()));\n+        t2.start();\n+        t2.join(300);\n+        release.countDown();\n+        t.join();\n+        t2.join();\n+\n+        Assert.assertEquals(first.get(), \"value\");\n+        Assert.assertEquals(second.get(), \"value\");\n+        Assert.assertEquals(calls.get(), 1);\n+    }\n+}"
+  }
+ ],
+ "test_files": [
+  "test/qz/common/CachedObjectTests.java"
+ ]
+}

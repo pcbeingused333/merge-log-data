@@ -1,0 +1,26 @@
+{
+ "repo": "StarTrail-org/LEANN",
+ "number": 454,
+ "url": "https://github.com/StarTrail-org/LEANN/pull/454",
+ "title": "fix(chat): default the Anthropic factory model to claude-haiku-4-5",
+ "merged_at": "2026-11-17T08:18:58Z",
+ "files": [
+  {
+   "filename": "packages/leann-core/src/leann/chat.py",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 5,
+   "patch": "@@ -1303,11 +1303,16 @@ def get_llm(llm_config: Optional[dict[str, Any]] = None) -> LLMInterface:\n     elif llm_type == \"gemini\":\n         return GeminiChat(model=model or \"gemini-2.5-flash\", api_key=llm_config.get(\"api_key\"))\n     elif llm_type == \"anthropic\":\n-        return AnthropicChat(\n-            model=model or \"claude-3-5-sonnet-20241022\",\n-            api_key=llm_config.get(\"api_key\"),\n-            base_url=llm_config.get(\"base_url\"),\n-        )\n+        # The default model is AnthropicChat's signature default and nothing else.\n+        # Naming it here as well is what let the two drift apart: the factory went on\n+        # building a model Anthropic had retired long after the class had moved off it.\n+        anthropic_kwargs: dict[str, Any] = {\n+            \"api_key\": llm_config.get(\"api_key\"),\n+            \"base_url\": llm_config.get(\"base_url\"),\n+        }\n+        if model:\n+            anthropic_kwargs[\"model\"] = model\n+        return AnthropicChat(**anthropic_kwargs)\n     elif llm_type == \"minimax\":\n         return MiniMaxChat(\n             model=model or \"MiniMax-M2.5\","
+  },
+  {
+   "filename": "tests/test_anthropic_default_model.py",
+   "status": "added",
+   "additions": 46,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,46 @@\n+\"\"\"\n+Tests for the default model of the Anthropic provider.\n+\n+These tests build the LLM through ``get_llm`` without triggering LEANN's compiled\n+backend imports, and without any network access.\n+\"\"\"\n+\n+import os\n+import sys\n+from unittest.mock import patch\n+\n+import pytest\n+\n+_LEANN_SRC = os.path.join(os.path.dirname(__file__), \"..\", \"packages\", \"leann-core\", \"src\")\n+if _LEANN_SRC not in sys.path:\n+    sys.path.insert(0, os.path.abspath(_LEANN_SRC))\n+\n+if \"leann\" not in sys.modules:\n+    import types\n+\n+    _stub = types.ModuleType(\"leann\")\n+    _stub.__path__ = [os.path.join(os.path.abspath(_LEANN_SRC), \"leann\")]\n+    sys.modules[\"leann\"] = _stub\n+\n+pytest.importorskip(\"anthropic\")\n+\n+\n+class TestAnthropicDefaultModel:\n+    @patch(\"anthropic.Anthropic\")\n+    def test_factory_default_matches_the_chat_class_default(self, mock_anthropic_cls):\n+        from leann.chat import AnthropicChat, get_llm\n+\n+        llm = get_llm({\"type\": \"anthropic\", \"api_key\": \"test-key\"})\n+\n+        assert isinstance(llm, AnthropicChat)\n+        assert llm.model == AnthropicChat(api_key=\"test-key\").model\n+        assert \"claude-3\" not in llm.model\n+\n+    @patch(\"anthropic.Anthropic\")\n+    def test_factory_keeps_an_explicit_model(self, mock_anthropic_cls):\n+        from leann.chat import AnthropicChat, get_llm\n+\n+        llm = get_llm({\"type\": \"anthropic\", \"model\": \"claude-sonnet-5-5\", \"api_key\": \"test-key\"})\n+\n+        assert isinstance(llm, AnthropicChat)\n+        assert llm.model == \"claude-sonnet-5-5\""
+  }
+ ],
+ "test_files": [
+  "tests/test_anthropic_default_model.py"
+ ]
+}

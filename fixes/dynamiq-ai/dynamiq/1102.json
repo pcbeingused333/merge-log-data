@@ -1,0 +1,33 @@
+{
+ "repo": "dynamiq-ai/dynamiq",
+ "number": 1102,
+ "url": "https://github.com/dynamiq-ai/dynamiq/pull/1102",
+ "title": "fix(memory): honour get_all limit in Qdrant and Pinecone backends",
+ "merged_at": "2026-11-17T14:35:34Z",
+ "files": [
+  {
+   "filename": "dynamiq/memory/backends/pinecone.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -134,12 +134,15 @@ def add(self, message: Message) -> None:\n         except Exception as e:\n             raise PineconeError(f\"Error adding message to Pinecone: {e}\") from e\n \n-    def get_all(self, limit: int = 10000) -> list[Message]:\n+    def get_all(self, limit: int | None = None) -> list[Message]:\n         \"\"\"Retrieves all messages from Pinecone.\"\"\"\n         try:\n             documents = self.vector_store.list_documents(include_embeddings=False)\n             messages = [self._document_to_message(doc) for doc in documents]\n-            return sorted(messages, key=lambda msg: msg.metadata.get(\"timestamp\", 0))\n+            messages = sorted(messages, key=lambda msg: msg.metadata.get(\"timestamp\", 0))\n+            if limit is not None and 0 < limit < len(messages):\n+                return messages[-limit:]\n+            return messages\n         except Exception as e:\n             raise PineconeError(f\"Error retrieving messages from Pinecone: {e}\") from e\n "
+  },
+  {
+   "filename": "dynamiq/memory/backends/qdrant.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -136,7 +136,10 @@ def get_all(self, limit: int | None = None) -> list[Message]:\n         try:\n             documents = self.vector_store.list_documents(include_embeddings=False)\n             messages = [self._document_to_message(doc) for doc in documents]\n-            return sorted(messages, key=lambda msg: msg.metadata.get(\"timestamp\", 0))\n+            messages = sorted(messages, key=lambda msg: msg.metadata.get(\"timestamp\", 0))\n+            if limit is not None and 0 < limit < len(messages):\n+                return messages[-limit:]\n+            return messages\n         except Exception as e:\n             raise QdrantError(f\"Failed to retrieve messages from Qdrant: {e}\") from e\n "
+  },
+  {
+   "filename": "tests/unit/memory/test_backend_retrieval_contract.py",
+   "status": "modified",
+   "additions": 50,
+   "deletions": 0,
+   "patch": "@@ -177,6 +177,56 @@ def test_postgres_backends_of_one_process_create_their_table_once(mocker):\n     assert \"pg_advisory_xact_lock\" in executed.call_args_list[0].args[0]\n \n \n+@pytest.fixture(params=[\"qdrant\", \"pinecone\"])\n+def vector_backend(request, mocker):\n+    \"\"\"A vector-store memory backend whose store returns documents newest-last-shuffled.\n+\n+    The stores need a live server, so the vector store is a stub; list_documents\n+    returns the ten messages out of order, the way a vector DB gives no ordering.\n+    \"\"\"\n+    from dynamiq.memory.backends.pinecone import Pinecone\n+    from dynamiq.memory.backends.qdrant import Qdrant\n+    from dynamiq.types import Document\n+\n+    cls = Qdrant if request.param == \"qdrant\" else Pinecone\n+    store = mocker.MagicMock()\n+    documents = [\n+        Document(id=str(i), content=f\"msg-{i}\", metadata={\"role\": \"user\", \"timestamp\": float(i)})\n+        for i in (4, 9, 0, 7, 2, 8, 1, 6, 3, 5)\n+    ]\n+    store.list_documents.return_value = documents\n+    return cls.model_construct(vector_store=store, embedder=mocker.MagicMock(), connection=mocker.MagicMock())\n+\n+\n+def test_vector_backend_get_all_with_limit_returns_the_most_recent(vector_backend):\n+    result = vector_backend.get_all(limit=LIMIT)\n+\n+    assert [m.content for m in result] == [\"msg-7\", \"msg-8\", \"msg-9\"]\n+\n+\n+def test_vector_backend_get_all_without_limit_returns_everything_oldest_first(vector_backend):\n+    assert [m.content for m in vector_backend.get_all()] == [f\"msg-{i}\" for i in range(TOTAL)]\n+\n+\n+@pytest.mark.parametrize(\"limit\", [0, -1])\n+def test_vector_backend_get_all_with_non_positive_limit_returns_everything(vector_backend, limit):\n+    \"\"\"Like SQLite, PostgreSQL and Weaviate, a limit <= 0 means no limit, not a slice.\"\"\"\n+    assert [m.content for m in vector_backend.get_all(limit=limit)] == [f\"msg-{i}\" for i in range(TOTAL)]\n+\n+\n+def test_pinecone_get_all_without_limit_is_not_capped(mocker):\n+    \"\"\"A bare get_all() must return every message, not a hidden default of 10000.\"\"\"\n+    from dynamiq.memory.backends.pinecone import Pinecone\n+\n+    store = mocker.MagicMock()\n+    store.list_documents.return_value = [\n+        Document(id=str(i), content=f\"msg-{i}\", metadata={\"role\": \"user\", \"timestamp\": float(i)}) for i in range(10_001)\n+    ]\n+    backend = Pinecone.model_construct(vector_store=store, embedder=mocker.MagicMock(), connection=mocker.MagicMock())\n+\n+    assert len(backend.get_all()) == 10_001\n+\n+\n def test_weaviate_filter_only_search_with_limit_returns_the_most_recent(mocker):\n     \"\"\"filter_documents returns an unordered set; the limit must keep the newest, oldest first.\"\"\"\n     from dynamiq.memory.backends.weaviate import Weaviate"
+  }
+ ],
+ "test_files": [
+  "tests/unit/memory/test_backend_retrieval_contract.py"
+ ]
+}

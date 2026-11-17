@@ -1,0 +1,70 @@
+{
+ "repo": "svix/svix-webhooks",
+ "number": 2813,
+ "url": "https://github.com/svix/svix-webhooks/pull/2813",
+ "title": "fix: retry HTTP 423 Locked in the Go, C#, and Rust clients",
+ "merged_at": "2026-11-17T12:24:30Z",
+ "files": [
+  {
+   "filename": "ChangeLog.md",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -6,6 +6,9 @@ The Svix Server changelog has moved to [server/ChangeLog.md](./server/ChangeLog.\n The Svix Bridge changelog has moved to [bridge/ChangeLog.md](./bridge/ChangeLog.md).\n \n ## Unreleased\n+* Libs/C#: Improve retry logic (retry on HTTP 423)\n+* Libs/Go: Improve retry logic (retry on HTTP 423)\n+* Libs/Rust: Improve retry logic (retry on HTTP 423)\n * Libs/Ruby, Libs/PHP: Webhook verification now lowercases the header names\n   before looking them up, so header sets like `Svix-Id` (as returned by PHP's\n   `getallheaders()` and by Rack) verify instead of failing with"
+  },
+  {
+   "filename": "csharp/Svix.Tests/RetryScheduleTests.cs",
+   "status": "modified",
+   "additions": 44,
+   "deletions": 0,
+   "patch": "@@ -88,6 +88,50 @@ public void ClientErrorsAreNotRetried(int statusCode)\n             Assert.Single(stub.LogEntries);\n         }\n \n+        [Fact]\n+        public void Http423LockedIsRetriedAndLaterSuccessIsReturned()\n+        {\n+            var lockedClient = new SvixClient(\n+                \"\",\n+                new SvixOptions(baseUrl, retryScheduleMilliseconds: new List<int> { 1 })\n+            );\n+            stub.Given(Request.Create().WithPath(\"/api/v1/app\"))\n+                .InScenario(\"http-423\")\n+                .WillSetStateTo(\"unlocked\")\n+                .RespondWith(Response.Create().WithStatusCode(423).WithBody(\"{}\"));\n+            stub.Given(Request.Create().WithPath(\"/api/v1/app\"))\n+                .InScenario(\"http-423\")\n+                .WhenStateIs(\"unlocked\")\n+                .RespondWith(\n+                    Response\n+                        .Create()\n+                        .WithStatusCode(200)\n+                        .WithBody(\"\"\"{\"data\":[],\"iterator\":null,\"prevIterator\":null,\"done\":true}\"\"\")\n+                );\n+\n+            var result = lockedClient.Application.List();\n+\n+            Assert.Empty(result.Data);\n+            Assert.True(result.Done);\n+            Assert.Equal(2, stub.LogEntries.Count);\n+            Assert.Throws<KeyNotFoundException>(() =>\n+                stub.LogEntries[0].RequestMessage.Headers[\"svix-retry-count\"]\n+            );\n+            Assert.Equal(\"1\", stub.LogEntries[1].RequestMessage.Headers[\"svix-retry-count\"]);\n+        }\n+\n+        [Fact]\n+        public void Http409ConflictIsNotRetried()\n+        {\n+            stub.Given(Request.Create().WithPath(\"/api/v1/app\"))\n+                .RespondWith(Response.Create().WithStatusCode(409).WithBody(\"{}\"));\n+\n+            var error = Assert.Throws<ApiException>(() => client.Application.List());\n+\n+            Assert.Equal(409, error.ErrorCode);\n+            Assert.Single(stub.LogEntries);\n+        }\n+\n         [Fact]\n         public async Task CancellationDuringRetryDelayAbortsTheCall()\n         {"
+  },
+  {
+   "filename": "csharp/Svix/SvixHttpClient.cs",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -99,7 +99,11 @@ public async Task<ApiResponse<T>> SendRequestAsync<T>(\n                 try\n                 {\n                     var response = await _httpClient.SendAsync(request, cancellationToken);\n-                    if ((int)response.StatusCode < 500)\n+                    // 423 Locked is retried, alongside 5xx.\n+                    if (\n+                        (int)response.StatusCode < 500\n+                        && response.StatusCode != HttpStatusCode.Locked\n+                    )\n                     {\n                         return await FilterResponseForErrors<T>(response, cancellationToken);\n                     }"
+  },
+  {
+   "filename": "go/internal/svix_http_client.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -165,7 +165,8 @@ func executeRequestWithRetries(client *SvixHttpClient, request *http.Request) (*\n \n \tresp, err := client.HTTPClient.Do(request)\n \tfor try := 0; try < len(client.RetrySchedule); try++ {\n-\t\tif err == nil && resp.StatusCode < 500 {\n+\t\t// 423 Locked is retried, alongside 5xx.\n+\t\tif err == nil && resp.StatusCode < 500 && resp.StatusCode != http.StatusLocked {\n \t\t\tbreak\n \t\t}\n \t\t// don't retry if the caller cancelled the request or its deadline passed"
+  },
+  {
+   "filename": "go/svix_http_client_test.go",
+   "status": "modified",
+   "additions": 65,
+   "deletions": 0,
+   "patch": "@@ -8,6 +8,7 @@ import (\n \t\"sort\"\n \t\"strings\"\n \t\"testing\"\n+\t\"time\"\n \n \t\"github.com/jarcoal/httpmock\"\n \tsvix \"github.com/svix/svix-webhooks/v2/go\"\n@@ -162,6 +163,70 @@ func TestRetryCountHeadersIsSetCorrectly(t *testing.T) {\n \t}\n }\n \n+func TestRetriesHttp423ThenSucceeds(t *testing.T) {\n+\tserverURL, err := url.Parse(\"http://testapi.test\")\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tschedule := []time.Duration{time.Millisecond}\n+\tsvx, err := svix.New(\"randomToken\", &svix.SvixOptions{\n+\t\tServerUrl:     serverURL,\n+\t\tHTTPClient:    http.DefaultClient,\n+\t\tRetrySchedule: &schedule,\n+\t})\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\n+\thttpmock.Activate()\n+\tdefer httpmock.DeactivateAndReset()\n+\n+\tcalls := 0\n+\tretryCounts := []string{}\n+\thttpmock.RegisterResponder(\"GET\", \"http://testapi.test/api/v1/app\",\n+\t\tfunc(r *http.Request) (*http.Response, error) {\n+\t\t\tcalls++\n+\t\t\tretryCounts = append(retryCounts, r.Header.Get(\"svix-retry-count\"))\n+\t\t\tif calls == 1 {\n+\t\t\t\treturn httpmock.NewStringResponse(http.StatusLocked, `{\"code\":\"LOCKED\",\"detail\":\"locked\"}`), nil\n+\t\t\t}\n+\t\t\treturn httpmock.NewStringResponse(http.StatusOK, appListOut), nil\n+\t\t},\n+\t)\n+\n+\tres, err := svx.Application().List(context.Background(), nil)\n+\tif err != nil {\n+\t\tt.Fatalf(\"expected success after HTTP 423, got %v\", err)\n+\t}\n+\tif res.Iterator == nil || *res.Iterator != \"iterator\" {\n+\t\tt.Fatalf(\"unexpected list iterator: %v\", res.Iterator)\n+\t}\n+\tif calls != 2 {\n+\t\tt.Fatalf(\"expected 2 requests, got %d\", calls)\n+\t}\n+\tif !reflect.DeepEqual(retryCounts, []string{\"\", \"1\"}) {\n+\t\tt.Fatalf(\"svix-retry-count headers: got %v\", retryCounts)\n+\t}\n+}\n+\n+func TestDoesNotRetryHttp409(t *testing.T) {\n+\tsvx := newMockClient()\n+\thttpmock.Activate()\n+\tdefer httpmock.DeactivateAndReset()\n+\n+\thttpmock.RegisterResponder(\"GET\", \"http://testapi.test/api/v1/app\",\n+\t\tfunc(r *http.Request) (*http.Response, error) {\n+\t\t\treturn httpmock.NewStringResponse(http.StatusConflict, `{\"code\":\"CONFLICT\"}`), nil\n+\t\t},\n+\t)\n+\n+\t_, err := svx.Application().List(context.Background(), nil)\n+\tassertExpectedError(t, err, \"status code 409\")\n+\tif httpmock.GetTotalCallCount() != 1 {\n+\t\tt.Errorf(\"expected a single request for HTTP 409, got %v\", httpmock.GetTotalCallCount())\n+\t}\n+}\n+\n func TestOptionsSerialization(t *testing.T) {\n \tsvx := newMockClient()\n \thttpmock.Activate()"
+  },
+  {
+   "filename": "rust/src/api/client.rs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -27,8 +27,8 @@ pub struct SvixOptions {\n \n     /// Number of retries\n     ///\n-    /// The number of times the client will retry if a server-side error\n-    /// or timeout is received.\n+    /// The number of times the client will retry if a server-side error,\n+    /// HTTP 423 (Locked), or a timeout is received.\n     ///\n     /// Default: 2\n     pub num_retries: Option<u32>,"
+  },
+  {
+   "filename": "rust/src/request.rs",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -178,7 +178,12 @@ impl Request {\n             match res {\n                 Ok(result) => return Ok(result),\n                 e @ Err(Error::Validation(_)) => return e,\n-                Err(Error::Http(err)) if err.status.as_u16() < 500 => return Err(Error::Http(err)),\n+                // 423 Locked is retried, alongside 5xx.\n+                Err(Error::Http(err))\n+                    if err.status.as_u16() < 500 && err.status.as_u16() != 423 =>\n+                {\n+                    return Err(Error::Http(err));\n+                }\n                 e @ Err(_) => {\n                     if next_backoff.is_none() {\n                         return e;"
+  },
+  {
+   "filename": "rust/tests/it/wiremock_tests.rs",
+   "status": "modified",
+   "additions": 70,
+   "deletions": 0,
+   "patch": "@@ -7,6 +7,7 @@ use std::{\n use serde_json::json;\n use svix::{\n     api::{MessageListOptions, Svix, SvixOptions},\n+    error::Error,\n     models::{ApplicationIn, MessageIn},\n };\n \n@@ -291,3 +292,72 @@ async fn test_connection_error_is_retried() {\n     let retried_request = server.join().unwrap().to_lowercase();\n     assert!(retried_request.contains(\"svix-retry-count: 1\\r\\n\"));\n }\n+\n+#[tokio::test]\n+async fn test_http_423_locked_is_retried() {\n+    let mock_server = MockServer::start().await;\n+\n+    Mock::given(method(\"GET\"))\n+        .and(path(\"/api/v1/app/app1\"))\n+        .respond_with(ResponseTemplate::new(423).set_body_string(\n+            r#\"{\"code\":\"LOCKED\",\"detail\":\"Another request is currently in your castle\"}\"#,\n+        ))\n+        .up_to_n_times(1)\n+        .with_priority(1)\n+        .mount(&mock_server)\n+        .await;\n+    Mock::given(method(\"GET\"))\n+        .and(path(\"/api/v1/app/app1\"))\n+        .respond_with(ResponseTemplate::new(200).set_body_string(APPLICATION_OUT))\n+        .mount(&mock_server)\n+        .await;\n+\n+    let svx = Svix::new(\n+        \"token\".to_owned(),\n+        Some(SvixOptions {\n+            server_url: Some(mock_server.uri()),\n+            retry_schedule: Some(vec![Duration::from_millis(10)]),\n+            ..Default::default()\n+        }),\n+    );\n+    let app = svx.application().get(\"app1\".to_owned()).await.unwrap();\n+    assert_eq!(app.id, \"app_1srOrx2ZWZBpBUvZwXKQmoEYga2\");\n+\n+    let requests = mock_server.received_requests().await.unwrap();\n+    assert_eq!(2, requests.len());\n+    assert!(requests[0].headers.get(\"svix-retry-count\").is_none());\n+    assert_eq!(\"1\", requests[1].headers[\"svix-retry-count\"]);\n+}\n+\n+#[tokio::test]\n+async fn test_http_409_conflict_is_not_retried() {\n+    let mock_server = MockServer::start().await;\n+\n+    Mock::given(method(\"GET\"))\n+        .and(path(\"/api/v1/app/app1\"))\n+        .respond_with(ResponseTemplate::new(409).set_body_string(\n+            r#\"{\"code\":\"CONFLICT\",\"detail\":\"Sorry, someone else already ate this cake\"}\"#,\n+        ))\n+        .expect(1)\n+        .mount(&mock_server)\n+        .await;\n+\n+    let svx = Svix::new(\n+        \"token\".to_owned(),\n+        Some(SvixOptions {\n+            server_url: Some(mock_server.uri()),\n+            retry_schedule: Some(vec![Duration::from_millis(10)]),\n+            ..Default::default()\n+        }),\n+    );\n+    let err = svx\n+        .application()\n+        .get(\"app1\".to_owned())\n+        .await\n+        .expect_err(\"409 must fail the call\");\n+    match err {\n+        Error::Http(http_err) => assert_eq!(http_err.status.as_u16(), 409),\n+        other => panic!(\"expected HTTP 409, got {other:?}\"),\n+    }\n+    mock_server.verify().await;\n+}"
+  }
+ ],
+ "test_files": [
+  "csharp/Svix.Tests/RetryScheduleTests.cs",
+  "go/svix_http_client_test.go",
+  "rust/tests/it/wiremock_tests.rs"
+ ]
+}

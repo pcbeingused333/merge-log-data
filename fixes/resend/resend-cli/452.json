@@ -1,0 +1,40 @@
+{
+ "repo": "resend/resend-cli",
+ "number": 452,
+ "url": "https://github.com/resend/resend-cli/pull/452",
+ "title": "fix: send an empty topic description on update",
+ "merged_at": "2026-11-17T15:24:07Z",
+ "files": [
+  {
+   "filename": "package.json",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -1,6 +1,6 @@\n {\n   \"name\": \"resend-cli\",\n-  \"version\": \"2.28.1\",\n+  \"version\": \"2.28.2\",\n   \"description\": \"The official CLI for Resend\",\n   \"license\": \"MIT\",\n   \"repository\": {"
+  },
+  {
+   "filename": "skills/resend-cli/references/topics.md",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -33,9 +33,9 @@ Lists all topics. No pagination flags.\n | Flag | Type | Description |\n |------|------|-------------|\n | `--name <name>` | string | New name |\n-| `--description <desc>` | string | New description |\n+| `--description <desc>` | string | New description. Pass `\"\"` to clear it |\n \n-At least one of `--name` or `--description` is required — otherwise the CLI errors with `no_changes`.\n+At least one of `--name` or `--description` is required — otherwise the CLI errors with `no_changes`. An empty `--description` is sent as-is and clears the description shown to contacts.\n \n `default_subscription` cannot be changed after creation.\n "
+  },
+  {
+   "filename": "src/commands/topics/update.ts",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 2,
+   "patch": "@@ -15,6 +15,7 @@ export const updateTopicCommand = new Command('update')\n     'after',\n     buildHelpText({\n       context: `At least one of --name or --description must be provided to update the topic.\n+Pass --description \"\" to clear the description shown to contacts.\n \n Note: --default-subscription cannot be changed after creation.\n To change the default subscription, delete the topic and recreate it.`,\n@@ -30,7 +31,9 @@ To change the default subscription, delete the topic and recreate it.`,\n     const globalOpts = cmd.optsWithGlobals() as GlobalOpts;\n     const id = await pickId(idArg, topicPickerConfig, globalOpts);\n \n-    if (!opts.name && !opts.description) {\n+    // --description \"\" clears the text shown to contacts, so a defined\n+    // description is a change even when it is empty.\n+    if (!opts.name && opts.description === undefined) {\n       outputError(\n         {\n           message:\n@@ -48,7 +51,9 @@ To change the default subscription, delete the topic and recreate it.`,\n           resend.topics.update({\n             id,\n             ...(opts.name && { name: opts.name }),\n-            ...(opts.description && { description: opts.description }),\n+            ...(opts.description !== undefined && {\n+              description: opts.description,\n+            }),\n           }),\n         errorCode: 'update_error',\n         successMsg: `Topic updated: ${id}`,"
+  },
+  {
+   "filename": "tests/commands/topics/update.test.ts",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -64,6 +64,7 @@ describe('topics update command', () => {\n     const payload = mockUpdate.mock.calls[0][0] as Record<string, unknown>;\n     expect(payload.id).toBe('top_abc123');\n     expect(payload.name).toBe('Security Alerts');\n+    expect(payload.description).toBeUndefined();\n   });\n \n   it('calls SDK with id and description when --description is provided', async () => {\n@@ -80,6 +81,35 @@ describe('topics update command', () => {\n     expect(payload.name).toBeUndefined();\n   });\n \n+  it('clears the description with an empty --description', async () => {\n+    spies = setupOutputSpies();\n+\n+    await updateTopicCommand.parseAsync(['top_abc123', '--description', ''], {\n+      from: 'user',\n+    });\n+\n+    expect(mockUpdate).toHaveBeenCalledTimes(1);\n+    const payload = mockUpdate.mock.calls[0][0] as Record<string, unknown>;\n+    expect(payload).toStrictEqual({ id: 'top_abc123', description: '' });\n+  });\n+\n+  it('sends an empty description together with a new name', async () => {\n+    spies = setupOutputSpies();\n+\n+    await updateTopicCommand.parseAsync(\n+      ['top_abc123', '--name', 'Newsletter', '--description', ''],\n+      { from: 'user' },\n+    );\n+\n+    expect(mockUpdate).toHaveBeenCalledTimes(1);\n+    const payload = mockUpdate.mock.calls[0][0] as Record<string, unknown>;\n+    expect(payload).toStrictEqual({\n+      id: 'top_abc123',\n+      name: 'Newsletter',\n+      description: '',\n+    });\n+  });\n+\n   it('outputs JSON with id when non-interactive', async () => {\n     spies = setupOutputSpies();\n "
+  }
+ ],
+ "test_files": [
+  "tests/commands/topics/update.test.ts"
+ ]
+}

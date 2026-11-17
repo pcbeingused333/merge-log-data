@@ -1,0 +1,41 @@
+{
+ "repo": "kodustech/kodus-ai",
+ "number": 2373,
+ "url": "https://github.com/kodustech/kodus-ai/pull/2373",
+ "title": "fix(llm): read hyphenated Anthropic versions as a dotted version in model labels",
+ "merged_at": "2026-11-17T14:10:19Z",
+ "files": [
+  {
+   "filename": "apps/web/src/features/ee/byok/_data/model-label.parity.spec.ts",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -33,6 +33,12 @@ const IDS: string[] = Array.from(\n                 'accounts/fireworks/models/deepseek-v4-flash-0731',\n                 'glm-5.3',\n                 'claude-opus-5',\n+                'claude-sonnet-4-6',\n+                'claude-opus-4-7',\n+                'claude-3-5-sonnet',\n+                'gpt-4o-2024-08-06',\n+                'o3-mini-2025-01-31',\n+                'gpt-4o-mini-2024-07-18',\n                 'MiniMax-M2',\n                 '',\n             ]),"
+  },
+  {
+   "filename": "apps/web/src/features/ee/byok/_data/model-label.ts",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 1,
+   "patch": "@@ -8,6 +8,7 @@\n  *\n  *   formatModelLabel('kimi-k2.6')                   → 'Kimi K2.6'\n  *   formatModelLabel('deepseek/deepseek-v4-pro')    → 'Deepseek V4 Pro'\n+ *   formatModelLabel('claude-sonnet-4-6')           → 'Claude Sonnet 4.6'\n  *   formatModelLabel('gpt-5.4')                      → 'GPT 5.4'\n  *   formatModelLabel('accounts/fireworks/models/glm-5p3-flash') → 'GLM 5.3 Flash'\n  *   formatModelLabel('.../deepseek-v4-flash-0731')  → 'Deepseek V4 Flash'\n@@ -24,11 +25,36 @@ export function formatModelLabel(id: string): string {\n     // last segment; the path prefix is routing, not identity.\n     const last = id.slice(id.lastIndexOf(\"/\") + 1);\n     const tokens = last.split(\"-\").filter(Boolean);\n+    // A trailing -YYYY-MM-DD snapshot date (`gpt-4o-2024-08-06`) is a pin too;\n+    // drop it before the version join so month and day don't fuse into \"08.06\".\n+    if (\n+        tokens.length > 3 &&\n+        /^(19|20)\\d{2}$/.test(tokens[tokens.length - 3]) &&\n+        /^(0[1-9]|1[0-2])$/.test(tokens[tokens.length - 2]) &&\n+        /^(0[1-9]|[12]\\d|3[01])$/.test(tokens[tokens.length - 1])\n+    ) {\n+        tokens.splice(-3);\n+    }\n     // A trailing MMDD snapshot date is a pin, not a name (`-0731`, `-0813`).\n     if (tokens.length > 1 && /^(0[1-9]|1[0-2])(0[1-9]|[12]\\d|3[01])$/.test(tokens[tokens.length - 1])) {\n         tokens.pop();\n     }\n-    return tokens\n+    // Anthropic spells a version with hyphens (`claude-sonnet-4-6`): two bare\n+    // numbers side by side are one dotted version, \"4.6\", not two words.\n+    const words = tokens.reduce<string[]>((acc, tok) => {\n+        const prev = acc[acc.length - 1];\n+        if (\n+            prev !== undefined &&\n+            /^\\d{1,2}$/.test(prev) &&\n+            /^\\d{1,2}$/.test(tok)\n+        ) {\n+            acc[acc.length - 1] = `${prev}.${tok}`;\n+        } else {\n+            acc.push(tok);\n+        }\n+        return acc;\n+    }, []);\n+    return words\n         .map((tok) => tok.replace(/^([kv]?\\d+)p(\\d+)$/i, \"$1.$2\"))\n         .map((tok) =>\n             ACRONYMS.has(tok.toLowerCase())"
+  },
+  {
+   "filename": "libs/llm/providers/kernel/model-label.spec.ts",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -14,6 +14,18 @@ describe('formatModelLabel', () => {\n         // Fireworks spells a version with p, after a k or a v too.\n         ['glm-5p3-flash', 'GLM 5.3 Flash'],\n         ['deepseek-v4p1-flash', 'Deepseek V4.1 Flash'],\n+        // Anthropic spells a version with hyphens: the two numbers are one version.\n+        ['claude-sonnet-4-6', 'Claude Sonnet 4.6'],\n+        ['claude-opus-4-7', 'Claude Opus 4.7'],\n+        ['claude-3-5-sonnet', 'Claude 3.5 Sonnet'],\n+        ['claude-sonnet-4-5-20250929', 'Claude Sonnet 4.5 20250929'],\n+        ['claude-opus-4-0613', 'Claude Opus 4'], // a trailing MMDD pin is still dropped\n+        ['claude-opus-5', 'Claude Opus 5'],\n+        // A -YYYY-MM-DD snapshot date is a pin: month and day must not fuse into a version.\n+        ['gpt-4o-2024-08-06', 'GPT 4o'],\n+        ['o3-mini-2025-01-31', 'O3 Mini'],\n+        ['gpt-4o-mini-2024-07-18', 'GPT 4o Mini'],\n+        ['gpt-4.1-2025-04-14', 'GPT 4.1'],\n     ])('%s → %s', (id, expected) => {\n         expect(formatModelLabel(id)).toBe(expected);\n     });"
+  },
+  {
+   "filename": "libs/llm/providers/kernel/model-label.ts",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 1,
+   "patch": "@@ -15,6 +15,7 @@\n  *   formatModelLabel('kimi-k2.6')                    → 'Kimi K2.6'\n  *   formatModelLabel('kimi-k2.7-code')               → 'Kimi K2.7 Code'\n  *   formatModelLabel('gemini-2.5-pro')               → 'Gemini 2.5 Pro'\n+ *   formatModelLabel('claude-sonnet-4-6')            → 'Claude Sonnet 4.6'\n  *   formatModelLabel('glm-5.2')                       → 'GLM 5.2'\n  *   formatModelLabel('accounts/fireworks/models/x')  → 'X'\n  *   formatModelLabel('accounts/fireworks/models/glm-5p3-flash') → 'GLM 5.3 Flash'\n@@ -44,14 +45,39 @@ export function formatModelLabel(id: string): string {\n     // model in the last segment; the path prefix is routing, not identity.\n     const last = id.slice(id.lastIndexOf('/') + 1);\n     const tokens = last.split('-').filter(Boolean);\n+    // A trailing -YYYY-MM-DD snapshot date (`gpt-4o-2024-08-06`) is a pin too;\n+    // drop it before the version join so month and day don't fuse into \"08.06\".\n+    if (\n+        tokens.length > 3 &&\n+        /^(19|20)\\d{2}$/.test(tokens[tokens.length - 3]) &&\n+        /^(0[1-9]|1[0-2])$/.test(tokens[tokens.length - 2]) &&\n+        /^(0[1-9]|[12]\\d|3[01])$/.test(tokens[tokens.length - 1])\n+    ) {\n+        tokens.splice(-3);\n+    }\n     // A trailing MMDD snapshot date is a pin, not a name (`-0731`, `-0813`).\n     if (\n         tokens.length > 1 &&\n         /^(0[1-9]|1[0-2])(0[1-9]|[12]\\d|3[01])$/.test(tokens[tokens.length - 1])\n     ) {\n         tokens.pop();\n     }\n-    return tokens\n+    // Anthropic spells a version with hyphens (`claude-sonnet-4-6`): two bare\n+    // numbers side by side are one dotted version, \"4.6\", not two words.\n+    const words = tokens.reduce<string[]>((acc, tok) => {\n+        const prev = acc[acc.length - 1];\n+        if (\n+            prev !== undefined &&\n+            /^\\d{1,2}$/.test(prev) &&\n+            /^\\d{1,2}$/.test(tok)\n+        ) {\n+            acc[acc.length - 1] = `${prev}.${tok}`;\n+        } else {\n+            acc.push(tok);\n+        }\n+        return acc;\n+    }, []);\n+    return words\n         .map((tok) => tok.replace(/^([kv]?\\d+)p(\\d+)$/i, '$1.$2'))\n         .map((tok) => {\n             if (ACRONYMS.has(tok.toLowerCase())) return tok.toUpperCase();"
+  }
+ ],
+ "test_files": [
+  "apps/web/src/features/ee/byok/_data/model-label.parity.spec.ts",
+  "libs/llm/providers/kernel/model-label.spec.ts"
+ ]
+}

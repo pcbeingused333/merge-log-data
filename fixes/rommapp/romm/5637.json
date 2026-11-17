@@ -1,0 +1,34 @@
+{
+ "repo": "rommapp/romm",
+ "number": 5637,
+ "url": "https://github.com/rommapp/romm/pull/5637",
+ "title": "fix(sync): map melonDS DS aliases to the RetroArch folder",
+ "merged_at": "2026-11-17T17:10:20Z",
+ "files": [
+  {
+   "filename": "backend/handler/sync/retroarch/emulator_names.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -69,6 +69,8 @@\n     \"ppsspp\": \"PPSSPP\",\n     \"desmume\": \"DeSmuME\",\n     \"melonds\": \"melonDS\",\n+    \"melondsds\": \"melonDS DS\",\n+    \"melonds_ds\": \"melonDS DS\",\n     \"citra\": \"Citra\",\n }\n \n@@ -151,6 +153,9 @@ def retroarch_aliases(romm_emulator: str | None) -> tuple[str | None, ...]:\n     \"mednafen_pce_fast\": frozenset({UPS.TG16, UPS.TURBOGRAFX_CD}),\n     \"scummvm\": frozenset({UPS.SCUMMVM}),\n     \"ppsspp\": frozenset({UPS.PSP_MINIS}),\n+    \"melondsds\": frozenset(\n+        {\"nds\", \"nintendo-ds-lite\", \"nintendo-dsi\", \"nintendo-dsi-xl\"}\n+    ),\n     \"citra\": frozenset({UPS.N3DS, UPS.NEW_NINTENDON3DS}),\n }\n "
+  },
+  {
+   "filename": "backend/tests/endpoints/test_streaming.py",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 4,
+   "patch": "@@ -5692,7 +5692,9 @@ def test_hydrate_pushes_a_newer_cloud_synced_state_of_the_booted_core(\n     [\n         # Cloud Sync files RetroArch's \"mGBA\" folder under the web player's id.\n         (\"mgba\", \"mGBA\", \"mgba\"),\n-        (\"melondsds\", \"melonDS DS\", \"melonDS DS\"),\n+        (\"melondsds\", \"melonDS DS\", \"melondsds\"),\n+        # A folder Cloud Sync doesn't know is filed under its own name.\n+        (\"mednafen_lynx\", \"Beetle Lynx\", \"Beetle Lynx\"),\n         # A broker too old to name the folder leaves the core id.\n         (\"melondsds\", None, \"melondsds\"),\n         (\"melondsds\", \"\", \"melondsds\"),\n@@ -5715,13 +5717,17 @@ def test_other_emulators_file_under_the_emulator():\n \n @pytest.mark.parametrize(\n     (\"core\", \"library_name\", \"folder\"),\n-    [(\"mgba\", None, \"mgba\"), (\"melondsds\", \"melonDS DS\", \"melonDS DS\")],\n+    [\n+        (\"mgba\", None, \"mgba\"),\n+        (\"melondsds\", \"melonDS DS\", \"melondsds\"),\n+        (\"mednafen_lynx\", \"Beetle Lynx\", \"Beetle Lynx\"),\n+    ],\n )\n def test_a_streamed_state_is_filed_where_cloud_sync_files_its_core(\n     rom: Rom, admin_user: User, core, library_name, folder\n ):\n     \"\"\"Clients file states under the core's folder, named after RetroArch's\n-    library name, which for melonDS DS is not its core id.\"\"\"\n+    library name, which for an unmapped core is not its core id.\"\"\"\n \n     async def scanned(**kwargs: Any) -> State:\n         return _state_for(rom, admin_user, kwargs[\"file_name\"], kwargs[\"emulator\"])\n@@ -6579,7 +6585,8 @@ def _stored_saves(rom: Rom, user: User) -> list[Save]:\n @pytest.mark.parametrize(\n     (\"core\", \"library_name\", \"folder\", \"recorded\"),\n     [\n-        (\"melondsds\", \"melonDS DS\", \"melonDS DS\", \"melonDS DS\"),\n+        (\"melondsds\", \"melonDS DS\", \"melondsds\", \"melonDS DS\"),\n+        (\"mednafen_lynx\", \"Beetle Lynx\", \"Beetle Lynx\", \"Beetle Lynx\"),\n         (\"mgba\", \"mGBA\", \"mgba\", \"mGBA\"),\n         (\"melondsds\", None, \"melondsds\", None),\n         (\"melondsds\", \"bad/name\", \"melondsds\", \"bad/name\"),"
+  },
+  {
+   "filename": "backend/tests/endpoints/test_sync_retroarch.py",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -171,6 +171,7 @@ class TestRetroArchSyncEmulatorNames:\n         (\"retroarch_dir_name\", \"romm_emulator\"),\n         [\n             (\"Snes9x\", \"snes9x\"),\n+            (\"melonDS DS\", \"melondsds\"),\n             (\"Genesis Plus GX\", \"genesis_plus_gx\"),\n             (\"PCSX-ReARMed\", \"pcsx_rearmed\"),\n             # The web player stores the Beetle cores under their mednafen ids.\n@@ -205,6 +206,8 @@ def test_dir_name_round_trips(self, retroarch_dir_name):\n         (\"romm_emulator\", \"retroarch_dir_name\"),\n         [\n             (\"snes9x\", \"Snes9x\"),\n+            (\"melondsds\", \"melonDS DS\"),\n+            (\"melonds_ds\", \"melonDS DS\"),\n             (\"genesis_plus_gx\", \"Genesis Plus GX\"),\n             (\"pcsx_rearmed\", \"PCSX-ReARMed\"),\n             # A core outside the table round-trips unchanged rather than\n@@ -226,6 +229,10 @@ def test_aliases_cover_every_emulator_sharing_a_folder(self, emulator):\n             \"mednafen_psx_hw\",\n         )\n \n+    @pytest.mark.parametrize(\"emulator\", [\"melondsds\", \"melonds_ds\", \"melonDS DS\"])\n+    def test_melonds_ds_aliases(self, emulator):\n+        assert retroarch_aliases(emulator) == (\"melonDS DS\", \"melonds_ds\", \"melondsds\")\n+\n     def test_a_core_outside_the_table_is_its_only_alias(self):\n         assert retroarch_aliases(\"retroarduous\") == (\"retroarduous\",)\n \n@@ -241,6 +248,10 @@ def test_every_core_folder_lists_its_platforms(self):\n             (\"DOSBox-pure\", {\"dos\"}),\n             (\"stella2014\", {\"atari2600\", \"atari-2600-plus\"}),\n             (\"melonDS\", {\"nds\", \"nintendo-ds-lite\", \"nintendo-dsi\", \"nintendo-dsi-xl\"}),\n+            (\n+                \"melonDS DS\",\n+                {\"nds\", \"nintendo-ds-lite\", \"nintendo-dsi\", \"nintendo-dsi-xl\"},\n+            ),\n             (\"retroarduous\", set()),\n             (None, set()),\n         ],"
+  }
+ ],
+ "test_files": [
+  "backend/tests/endpoints/test_streaming.py",
+  "backend/tests/endpoints/test_sync_retroarch.py"
+ ]
+}

@@ -2,13 +2,25 @@
  "repo": "EverMind-AI/Raven",
  "number": 1315,
  "url": "https://github.com/EverMind-AI/Raven/pull/1315",
- "state": "open",
+ "state": "merged",
  "reviews": [
   {
    "role": "member",
    "state": "COMMENTED",
    "submitted_at": "2026-11-14T20:50:41Z",
    "body": "No blockers; this can merge as far as I am concerned.\n\nThe handoff now derives its record-file list from the files actually present, while preserving the existing completed-turn and running-turn output. I checked the record writer, manager and turn-path callers, the originating history, backward compatibility of the rendered paths, and that the tests add failed, cancelled, and missing-record coverage without weakening the completed-turn assertions.\n\nRepository coverage: I checked AGENTS.md/CLAUDE.md and CONTEXT-MAP.md/CONTEXT.md constraints, the full diff, callers, history, compatibility, test integrity, and the relevant runtime architecture boundary. No dependency or repository-asset changes are present.\n\nVerification: `uv run pytest tests/test_subagent_handoff.py tests/test_subagent_direct_chat.py tests/test_subagent_manager.py -x` passed (386 tests); `git diff --check github/main...HEAD` and `uv run python scripts/check_source_language.py github/main...HEAD` passed. The initial test setup lacked the optional `raven_everos` workspace package; after syncing `everos-memory` through `uv`, the unmodified test command passed.\n\n<!-- mrbot:s/3f7056caf71b -->"
+  },
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-17T09:18:01Z",
+   "body": "No blockers; this can merge as far as I am concerned.\n\nThe new revision updates the canonical Handoff Block definition to match the implemented record-file behavior. It introduces no runtime change and accurately names `prompt.md`, `out.md`, and `error.md`, including the running and unavailable cases.\n\nFor this revision I reviewed the delta and the full base-to-head diff, checked AGENTS.md/CLAUDE.md and CONTEXT-MAP.md/CONTEXT.md terminology, and rechecked the affected writer, callers, history, backward compatibility, test integrity, and runtime architecture boundary. The Windows compatibility comment raises no finding and requires no response.\n\nVerification: `uv run pytest tests/test_subagent_handoff.py tests/test_subagent_direct_chat.py tests/test_subagent_manager.py -x` passed (386 tests); `git diff --check github/main...HEAD` and `uv run python scripts/check_source_language.py github/main...HEAD` passed.\n\n<!-- mrbot:s/00eb23eb6e98 -->"
+  },
+  {
+   "role": "member",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-17T09:25:41Z",
+   "body": ""
   }
  ],
  "review_comments": [],
@@ -17,6 +29,11 @@
    "role": "member",
    "created_at": "2026-11-16T18:58:30Z",
    "body": "## Windows compatibility review — `3f7056caf7`\n\nReviewed at head `3f7056caf71b422afa3b27ff7229cbf70e9975bb` (base `14c5b72bab`). Scope: the full base-to-head diff (`raven/agent/subagent/direct_chat.py`, `tests/test_subagent_handoff.py`), the `finish()` writer that decides which of `prompt.md` / `out.md` / `error.md` exist, and the `_render` path that names them.\n\n**No Windows compatibility issue found.**\n\nThe change replaces a fixed `{prompt.md,out.md}` string with a live `Path.is_file()` probe over the three record files. On Windows that is safe as written: `Path.is_file()` swallows `OSError` and returns `False`, so an inaccessible record directory, a deleted one, or a name whose case differs still degrades to the `(record unavailable)` branch rather than raising; and a directory named `out.md` is not counted as a file. The turn line still joins with `/` while the root line uses `os.sep`, which is the pre-existing shape of this block — Windows accepts both — and it is unchanged by this PR.\n\nVerification (native Windows host, Python 3.12.13, shared venv, detached worktree pinned to the head):\n\n- `python -S runner.py tests/test_subagent_handoff.py -q` → `3 failed, 23 passed`, failing `test_an_unlanded_turn_is_marked_and_lists_only_its_prompt`, `test_the_first_path_is_absolute_and_later_ones_are_abbreviated`, `test_a_creation_and_that_instances_turns_share_one_heading`.\n- The same command on a detached worktree at the PR base `14c5b72bab` → `3 failed, 20 passed`, **the same three test IDs**. These are this host's known baseline for this file (the `_meta()` fixture root is POSIX-absolute), not something this PR introduces.\n\nCoverage gaps: the three new tests pass here, but they build `tmp_path` directories, so the live-record path was not exercised through a real `finish()`; the `_META_ROOT` monkeypatch in the fixture now also stubs `Path.is_file`, which is test-local and does not touch production behaviour.\n\n<!-- raven-windows-review:pr=1315;head=3f7056caf71b422afa3b27ff7229cbf70e9975bb;reviewer=LivXue -->\n"
+  },
+  {
+   "role": "member",
+   "created_at": "2026-11-17T09:25:22Z",
+   "body": "No blockers in the reviewed scope.\n\nScope: I reviewed only the `raven/agent/**` portion of this PR -- 1 of 3 changed files at this head. The other two (a test file and a `CONTEXT.md` doc update) were read as context but are not covered by this verdict.\n\nThe change replaces the fixed `{prompt.md,out.md}` list in `DirectChatHandoff._render` with a presence probe over `prompt.md`, `out.md` and `error.md`, so an ended turn names the files `finish` actually wrote: a failed turn names `{prompt.md,error.md}`, and an ended directory holding none of the three is marked unavailable. The write order supports the read: `finish` writes the outcome files before it stamps `ended_at_ms`.\n\nConfirmed findings: none.\n\nVerification:\n\n- At head `3f7056caf71b`: `pytest tests/test_subagent_handoff.py -q --override-ini=addopts=` -> 26 passed; `tests/test_subagent_handoff.py` plus `tests/test_subagent_direct_chat.py` -> 109 passed; `ruff check` and `ruff format --check` clean.\n- Same tree with only `raven/agent/subagent/direct_chat.py` reverted to the base: the three new tests fail, printing `{prompt.md,out.md}` for an ended directory with no record files.\n- `scripts/check_large_files.py`, `scripts/check_source_language.py` and `scripts/check_commit_messages.py` over the branch range at this head: clean.\n\nChecked and deliberately not reported:\n\n- The cancelled-turn shape cannot reach the block today: `SubagentManager.chat` re-raises `CancelledError` before the handoff records it; the new test covers the renderer shape only.\n- `instance_records._exchange`, `task_rows.py` and `rpc/methods/subagent.py` read the same record files but stat or read each one, so no second surface names a missing file.\n- The module docstring in `direct_chat.py` and the historical spec still enumerate a shorter file set; both predate this change.\n\nCommit `00eb23eb6e98` updates the Handoff Block entry in `CONTEXT.md`, which still described the fixed pair.\n\n<!-- agentreview:s/00eb23eb6e98 -->\n"
   }
  ]
 }

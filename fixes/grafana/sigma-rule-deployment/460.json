@@ -1,0 +1,33 @@
+{
+ "repo": "grafana/sigma-rule-deployment",
+ "number": 460,
+ "url": "https://github.com/grafana/sigma-rule-deployment/pull/460",
+ "title": "fix(deploy): escape rule group names in the provisioning URL",
+ "merged_at": "2026-11-17T12:29:56Z",
+ "files": [
+  {
+   "filename": "docs/configure/configuration-reference.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -63,7 +63,7 @@ These settings control the alert rules the integrate stage builds, and how it te\n | `query_model`          | string  | None       | Custom query model, as a `fmt.Sprintf` format string. Overrides the built-in model. Refer to [Use a custom query model](data-sources.md#use-a-custom-query-model).                                 |\n | `folder_id`            | string  | None       | UID of the Grafana folder the alert rules go in. Every configuration must resolve a value, here or in `defaults`.                                                                                  |\n | `org_id`               | integer | None       | ID of the Grafana organization. Every configuration must resolve a value, here or in `defaults`.                                                                                                   |\n-| `rule_group`           | string  | `Default`  | Name of the alert rule group in Grafana.                                                                                                                                                            |\n+| `rule_group`           | string  | `Default`  | Name of the alert rule group in Grafana. Spaces and characters such as `?`, `#`, and `%` are escaped in the provisioning URL. A `/` is escaped as `%2F`; Grafana may not accept it in the name. |\n | `time_window`          | duration | `5m`       | How far back each query looks, and how often the rule group is evaluated. |\n | `lookback`             | duration | `0s`      | Shifts the query time range back by this amount, to allow for ingestion delay. For example, a `5m` window with a `1m` lookback queries from 6 minutes ago to 1 minute ago.                         |\n | `test_queries`         | boolean | `false`    | Run each query against the data source and report the results on the pull request.                                                                                                                  |"
+  },
+  {
+   "filename": "internal/deploy/deployer.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -6,6 +6,7 @@ import (\n \t\"fmt\"\n \t\"log\"\n \t\"net/http\"\n+\t\"net/url\"\n \t\"os\"\n \t\"path/filepath\"\n \t\"regexp\"\n@@ -893,7 +894,10 @@ func (d *Deployer) updateAlert(ctx context.Context, content string, createIfNotF\n \n func (d *Deployer) updateAlertGroupInterval(ctx context.Context, folderUID string, group string, interval int64) error {\n \tlog.Printf(\"Checking alert group interval for %s/%s to %d\", folderUID, group, interval)\n-\tpath := fmt.Sprintf(\"api/v1/provisioning/folder/%s/rule-groups/%s\", folderUID, group)\n+\t// Both values are one path segment. A raw \"?\", \"#\", \"%\" or \"/\" in a rule\n+\t// group name is parsed as part of the URL, so the request fails or hits\n+\t// a different group.\n+\tpath := fmt.Sprintf(\"api/v1/provisioning/folder/%s/rule-groups/%s\", url.PathEscape(folderUID), url.PathEscape(group))\n \n \t// Get the current alert group content\n \tres, err := d.client.Get(ctx, path)"
+  },
+  {
+   "filename": "internal/deploy/deployer_test.go",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -753,6 +753,10 @@ func TestUpdateAlertGroupInterval(t *testing.T) {\n \t\texpectPutRequest   bool\n \t\tresponseBody       string\n \t\texpectedRequestURL string\n+\t\t// expectedEscapedURL is the on-the-wire path. Empty skips the check.\n+\t\t// r.URL.Path is decoded, so it cannot show that \"/\" in a name stayed\n+\t\t// inside the rule-groups segment.\n+\t\texpectedEscapedURL string\n \t}{\n \t\t{\n \t\t\tname:               \"successful interval update\",\n@@ -819,6 +823,20 @@ func TestUpdateAlertGroupInterval(t *testing.T) {\n \t\t\tresponseBody:       `{\"folderUID\":\"folder-with_special.chars\",\"interval\":600,\"rules\":[],\"title\":\"group-with_special.chars\"}`,\n \t\t\texpectedRequestURL: \"/api/v1/provisioning/folder/folder-with_special.chars/rule-groups/group-with_special.chars\",\n \t\t},\n+\t\t{\n+\t\t\tname:               \"rule group name with reserved URL characters\",\n+\t\t\tfolderUID:          \"folder123\",\n+\t\t\tgroup:              \"a b?c#d%/e\",\n+\t\t\tinterval:           600,\n+\t\t\tcurrentInterval:    300,\n+\t\t\tgetStatusCode:      http.StatusOK,\n+\t\t\tputStatusCode:      http.StatusOK,\n+\t\t\texpectError:        false,\n+\t\t\texpectPutRequest:   true,\n+\t\t\tresponseBody:       `{\"folderUID\":\"folder123\",\"interval\":300,\"rules\":[],\"title\":\"a b?c#d%/e\"}`,\n+\t\t\texpectedRequestURL: \"/api/v1/provisioning/folder/folder123/rule-groups/a b?c#d%/e\",\n+\t\t\texpectedEscapedURL: \"/api/v1/provisioning/folder/folder123/rule-groups/a%20b%3Fc%23d%25%2Fe\",\n+\t\t},\n \t}\n \n \tfor _, tc := range testCases {\n@@ -829,6 +847,10 @@ func TestUpdateAlertGroupInterval(t *testing.T) {\n \t\t\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n \t\t\t\t// Check the URL is what we expect\n \t\t\t\tassert.Equal(t, tc.expectedRequestURL, r.URL.Path)\n+\t\t\t\tif tc.expectedEscapedURL != \"\" {\n+\t\t\t\t\tassert.Equal(t, tc.expectedEscapedURL, r.URL.EscapedPath())\n+\t\t\t\t\tassert.Empty(t, r.URL.RawQuery)\n+\t\t\t\t}\n \n \t\t\t\t// Validate authorization header\n \t\t\t\tassert.Equal(t, authToken, r.Header.Get(\"Authorization\"))"
+  }
+ ],
+ "test_files": [
+  "internal/deploy/deployer_test.go"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "henrygd/beszel",
+ "number": 2844,
+ "url": "https://github.com/henrygd/beszel/pull/2844",
+ "title": "fix(agent): read swap from SwapMemory on non-Linux agents",
+ "merged_at": "2026-11-17T19:12:39Z",
+ "files": [
+  {
+   "filename": "agent/memory.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -20,9 +20,9 @@ var memorySwapMemory = mem.SwapMemory\n var memoryGOOS = runtime.GOOS\n \n // hostSwap returns total and free swap bytes. gopsutil's VirtualMemory only\n-// fills swap fields on Linux, so on macOS they come from SwapMemory.\n+// fills swap fields on Linux, so on every other OS they come from SwapMemory.\n func hostSwap(v *mem.VirtualMemoryStat) (total, free uint64) {\n-\tif v.SwapTotal == 0 && memoryGOOS == \"darwin\" {\n+\tif v.SwapTotal == 0 && memoryGOOS != \"linux\" {\n \t\tif s, err := memorySwapMemory(); err == nil {\n \t\t\treturn s.Total, s.Free\n \t\t}\n@@ -35,7 +35,7 @@ func (a *Agent) updateMemoryStats(stats *system.Stats) {\n \tvar hostTotal uint64\n \tif err == nil {\n \t\thostTotal = v.Total\n-\t\t// Swap retains its existing /proc/meminfo source in both memory paths (SwapMemory on macOS).\n+\t\t// Swap retains its existing /proc/meminfo source in both memory paths (SwapMemory on non-Linux).\n \t\tswapTotal, swapFree := hostSwap(v)\n \t\tstats.SwapBytes = [2]uint64{swapTotal, saturatingSub(swapTotal, swapFree)}\n \t\t// TODO: stop populating deprecated GB fields once hubs < 0.21.1 are no longer supported"
+  },
+  {
+   "filename": "agent/memory_swap_test.go",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 9,
+   "patch": "@@ -19,16 +19,18 @@ func TestUpdateMemoryStatsDarwinSwap(t *testing.T) {\n \t\treturn &mem.SwapMemoryStat{Total: 4 * gib, Free: gib}, nil\n \t}\n \n-\tmemoryGOOS = \"darwin\"\n-\tvar stats system.Stats\n-\t(&Agent{}).updateMemoryStats(&stats)\n-\tassert.Equal(t, [2]uint64{4 * gib, 3 * gib}, stats.SwapBytes)\n-\tassert.Equal(t, float64(4), stats.Swap)\n-\tassert.Equal(t, float64(3), stats.SwapUsed)\n+\tfor _, goos := range []string{\"darwin\", \"freebsd\", \"openbsd\", \"windows\"} {\n+\t\tmemoryGOOS = goos\n+\t\tvar stats system.Stats\n+\t\t(&Agent{}).updateMemoryStats(&stats)\n+\t\tassert.Equal(t, [2]uint64{4 * gib, 3 * gib}, stats.SwapBytes, goos)\n+\t\tassert.Equal(t, float64(4), stats.Swap, goos)\n+\t\tassert.Equal(t, float64(3), stats.SwapUsed, goos)\n+\t}\n \n-\t// Other platforms keep the VirtualMemory values.\n-\tmemoryGOOS = \"freebsd\"\n-\tstats = system.Stats{}\n+\t// Linux keeps the VirtualMemory values.\n+\tmemoryGOOS = \"linux\"\n+\tstats := system.Stats{}\n \t(&Agent{}).updateMemoryStats(&stats)\n \tassert.Zero(t, stats.SwapBytes)\n }"
+  }
+ ],
+ "test_files": [
+  "agent/memory_swap_test.go"
+ ]
+}

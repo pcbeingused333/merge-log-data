@@ -9,6 +9,12 @@
    "state": "CHANGES_REQUESTED",
    "submitted_at": "2026-11-16T17:14:50Z",
    "body": ""
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-17T09:11:43Z",
+   "body": "The PR description still describes the first commit. Please update it before merge:\n\n- **Changes and Release Notes:** add the new validation. An SVS-VAMANA schema that sets `training_threshold` without `compression` now raises `ValueError` when it's built. Before, it failed later, at FT.CREATE. Also note that a reported threshold of 10240, the server default, now loads as unset.\n- **Reviewer Brief:** the record still names `3c0381b`, and \"Beyond CI\" still gives the figures from the single original test."
   }
  ],
  "review_comments": [
@@ -29,6 +35,12 @@
    "path": "tests/unit/test_convert_index_info.py",
    "created_at": "2026-11-16T17:14:50Z",
    "body": "This repeats the 25-line FT.INFO literal from `test_convert_index_info_svs_no_compression` above it. It also uses a reply shape Redis doesn't send: a compressed SVS field comes back with `graph_max_degree` and `construction_window_size`, and with `compression` reported as `GlobalSQ8` (LVQ8 on Redis Open Source falls back to scalar quantisation). For example, on 8.10:\n\n```\n'graph_max_degree', 32, 'construction_window_size', 200, 'compression', 'GlobalSQ8', 'training_threshold', 2048\n```\n\nParametrising the existing SVS test over the tail of that list would cover this case with less code. The cases would be no compression, an explicit threshold (2048 loads as 2048) and the reported default (10240 loads as `None`). The raw-dict assertion can go, since the `IndexSchema.from_dict` assertion covers it.\n\nThe migration failures in the comments above also need a regression test each. That is a plan-time `ValueError` for a patch that clears compression on a schema with an explicit threshold, and a `schemas_equal(..., strip_excluded=True)` check between a compressed target with no threshold and a live schema loaded from a reply that reports 10240. `test_from_existing_lvq` in `tests/integration/test_svs_integration.py` could also assert the loaded value, which would pin the real server behaviour."
+  },
+  {
+   "role": "collaborator",
+   "path": "tests/unit/test_convert_index_info.py",
+   "created_at": "2026-11-17T09:11:43Z",
+   "body": "Since this now covers compressed fields, its name no longer fits, and the `if tail[1] == \"NO_COMPRESSION\"` branch means the cases assert different things. Parametrising the expected compression as well gives every case the same two assertions:\n\n```python\n@pytest.mark.parametrize(\n    \"tail, compression, threshold\",\n    [\n        ([\"compression\", \"NO_COMPRESSION\"], None, None),\n        ([\"compression\", \"GlobalSQ8\", \"training_threshold\", 2048], \"LVQ4x4\", 2048),\n        ([\"compression\", \"GlobalSQ8\", \"training_threshold\", 10240], \"LVQ4x4\", None),\n    ],\n)\ndef test_convert_index_info_svs_compression(tail, compression, threshold):\n    \"\"\"Redis 8.2+ reply shapes; the reported default threshold (10240) loads as unset.\"\"\"\n    result = convert_index_info_to_schema(svs_info(*tail))\n    attrs = IndexSchema.from_dict(result).fields[\"emb\"].attrs\n    assert attrs.compression == compression\n    assert attrs.training_threshold == threshold\n```\n\nThe raw-dict check for `NO_COMPRESSION` can go. If the string leaked through, `IndexSchema.from_dict` would reject it as an invalid enum value."
   }
  ],
  "comments": [
@@ -36,6 +48,11 @@
    "role": "author",
    "created_at": "2026-11-16T17:41:54Z",
    "body": "Thanks for measuring this on real servers. Pushed 9828156 and 55f0bfc with all three points:\n- `parse_vector_attrs` now leaves `training_threshold` unset when FT.INFO reports the 10 * 1024 default (your snippet), so a target without it matches the live schema again.\n- `SVSVectorFieldAttributes` rejects `training_threshold` without `compression`, so an explicit 2048 plus `compression: null` is rejected when the patch is merged (`merge_patch`/`create_plan`) before anything is dropped.\n- Tests: the existing SVS conversion test is now parametrised over the FT.INFO tail (NO_COMPRESSION, GlobalSQ8 + 2048, GlobalSQ8 + 10240 -> unset) and shares one `svs_info(*tail)` helper with the `schemas_equal(strip_excluded=True)` regression (no more duplicated FT.INFO literals). Added a planner regression next to `test_merge_patch_preserves_svs_vamana_compression`: LVQ8 + `training_threshold=2048` with a patch setting `compression: null` raises `ValueError`. Plus the validation test and `test_from_existing_lvq` asserting the loaded value. The integration test was not run locally (no Redis 8 server available); the unit tests pass.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-17T17:13:52Z",
+   "body": "Thanks for approving this! Whenever you have a moment, it should be ready to merge (CI is green). Happy to rebase or adjust anything if needed."
   }
  ]
 }

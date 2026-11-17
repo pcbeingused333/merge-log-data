@@ -1,0 +1,26 @@
+{
+ "repo": "dataease/SQLBot",
+ "number": 1471,
+ "url": "https://github.com/dataease/SQLBot/pull/1471",
+ "title": "fix(datasource): convert CSV datetime columns after parsing",
+ "merged_at": "2026-11-17T11:33:24Z",
+ "files": [
+  {
+   "filename": "backend/apps/datasource/utils/excel.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -52,7 +52,14 @@ def read_import_dataframe(save_path: str, sheet_name: str, field_mapping: dict):\n         for column, field_type in field_mapping.items()\n     }\n     if save_path.endswith('.csv'):\n+        # The CSV parser cannot read datetime64 dtypes directly.\n+        datetime_columns = [column for column, field_type in field_mapping.items() if field_type == 'datetime']\n+        for column in datetime_columns:\n+            dtype_dict[column] = 'string'\n         df = pd.read_csv(save_path, engine='c', dtype=dtype_dict)\n+        for column in datetime_columns:\n+            if column in df.columns:\n+                df[column] = df[column].astype(USER_TYPE_TO_PANDAS['datetime'])\n     else:\n         df = pd.read_excel(save_path, sheet_name=sheet_name, engine='calamine', dtype=dtype_dict)\n     for column, field_type in field_mapping.items():"
+  },
+  {
+   "filename": "backend/tests/test_csv_datetime_import.py",
+   "status": "added",
+   "additions": 53,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,53 @@\n+\"\"\"Regression tests for explicitly selected CSV datetime columns.\"\"\"\n+\n+import sys\n+import tempfile\n+import unittest\n+from pathlib import Path\n+\n+import pandas as pd\n+\n+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))\n+from apps.datasource.utils.excel import read_import_dataframe\n+\n+\n+class CsvDatetimeImportTests(unittest.TestCase):\n+    def read_csv(self, contents, mapping):\n+        with tempfile.TemporaryDirectory() as directory:\n+            path = Path(directory) / \"import.csv\"\n+            path.write_text(contents, encoding=\"utf-8\")\n+            return read_import_dataframe(str(path), \"Sheet1\", mapping)\n+\n+    def test_dates_and_empty_cells(self):\n+        result = self.read_csv(\n+            \"created,amount,label\\n2026-11-16,1.5,first\\n,2.5,second\\n\",\n+            {\"created\": \"datetime\", \"amount\": \"int\", \"label\": \"string\"},\n+        )\n+        self.assertEqual(str(result[\"created\"].dtype), \"datetime64[ns]\")\n+        self.assertEqual(result[\"created\"][0], pd.Timestamp(\"2026-11-16\"))\n+        self.assertTrue(pd.isna(result[\"created\"][1]))\n+        self.assertEqual(result[\"amount\"].tolist(), [2, 3])\n+        self.assertEqual(result[\"label\"].tolist(), [\"first\", \"second\"])\n+\n+    def test_time_components_are_preserved(self):\n+        result = self.read_csv(\n+            \"created\\n2026-11-16 12:34:56\\n\", {\"created\": \"datetime\"}\n+        )\n+        self.assertEqual(result[\"created\"][0], pd.Timestamp(\"2026-11-16 12:34:56\"))\n+\n+    def test_invalid_dates_are_rejected(self):\n+        with self.assertRaises(ValueError):\n+            self.read_csv(\"created\\nnot-a-date\\n\", {\"created\": \"datetime\"})\n+\n+    def test_date_strings_remain_strings_when_selected(self):\n+        result = self.read_csv(\"created\\n2026-11-16\\n\", {\"created\": \"string\"})\n+        self.assertEqual(result[\"created\"][0], \"2026-11-16\")\n+\n+    def test_empty_csv_with_headers(self):\n+        result = self.read_csv(\"created\\n\", {\"created\": \"datetime\"})\n+        self.assertTrue(result.empty)\n+        self.assertEqual(str(result[\"created\"].dtype), \"datetime64[ns]\")\n+\n+\n+if __name__ == \"__main__\":\n+    unittest.main()"
+  }
+ ],
+ "test_files": [
+  "backend/tests/test_csv_datetime_import.py"
+ ]
+}

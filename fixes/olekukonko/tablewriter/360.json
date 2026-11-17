@@ -1,0 +1,26 @@
+{
+ "repo": "olekukonko/tablewriter",
+ "number": 360,
+ "url": "https://github.com/olekukonko/tablewriter/pull/360",
+ "title": "fix: preserve columns for nil embedded struct pointers",
+ "merged_at": "2026-11-17T10:07:19Z",
+ "files": [
+  {
+   "filename": "struct.go",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 1,
+   "patch": "@@ -51,6 +51,12 @@ func (t *Table) extractFieldsAndValuesFromStruct(sample interface{}) ([]string,\n // first field, used to keep embedded structs' per-column config (alignment,\n // width, padding) addressed correctly within the parent's column layout.\n func (t *Table) extractFieldsAndValuesFromStructWithOffset(sample interface{}, colOffset int) ([]string, []string) {\n+\treturn t.extractStructFields(sample, colOffset, make(map[reflect.Type]bool))\n+}\n+\n+// nilTypes prevents recursive embedded pointer types from expanding forever\n+// when their missing values are replaced with zero structs for the schema.\n+func (t *Table) extractStructFields(sample interface{}, colOffset int, nilTypes map[reflect.Type]bool) ([]string, []string) {\n \tv := reflect.ValueOf(sample)\n \tif v.Kind() == reflect.Ptr {\n \t\tif v.IsNil() {\n@@ -114,7 +120,22 @@ func (t *Table) extractFieldsAndValuesFromStructWithOffset(sample interface{}, c\n \n \t\t// Handle embedded structs recursively, tracking absolute column offset.\n \t\tif field.Anonymous {\n-\t\t\th, val := t.extractFieldsAndValuesFromStructWithOffset(fieldValue.Interface(), colOffset+len(headers))\n+\t\t\tembedded := fieldValue.Interface()\n+\t\t\tnilEmbedded := fieldValue.Kind() == reflect.Ptr && fieldValue.IsNil() && fieldValue.Type().Elem().Kind() == reflect.Struct\n+\t\t\tif nilEmbedded {\n+\t\t\t\tif nilTypes[fieldValue.Type()] {\n+\t\t\t\t\tcontinue\n+\t\t\t\t}\n+\t\t\t\tnilTypes[fieldValue.Type()] = true\n+\t\t\t\tembedded = reflect.Zero(fieldValue.Type().Elem()).Interface()\n+\t\t\t}\n+\t\t\th, val := t.extractStructFields(embedded, colOffset+len(headers), nilTypes)\n+\t\t\tif nilEmbedded {\n+\t\t\t\tdelete(nilTypes, fieldValue.Type())\n+\t\t\t\tfor j := range val {\n+\t\t\t\t\tval[j] = \"\"\n+\t\t\t\t}\n+\t\t\t}\n \t\t\tif h != nil {\n \t\t\t\theaders = append(headers, h...)\n \t\t\t\tvalues = append(values, val...)"
+  },
+  {
+   "filename": "struct_nil_test.go",
+   "status": "added",
+   "additions": 66,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,66 @@\n+package tablewriter\n+\n+import (\n+\t\"github.com/olekukonko/tablewriter/tw\"\n+\t\"reflect\"\n+\t\"testing\"\n+)\n+\n+func TestBulkNilEmbeddedPointer(t *testing.T) {\n+\ttype Location struct {\n+\t\tZip    int\n+\t\tHidden string `tw:\"-\"`\n+\t}\n+\ttype Details struct {\n+\t\tCity string `tw:\"name=Town\"`\n+\t\t*Location\n+\t}\n+\ttype Row struct {\n+\t\tName string\n+\t\t*Details\n+\t\tStatus string `tw:\"align=right\"`\n+\t}\n+\talice := Row{\"Alice\", &Details{\"Paris\", &Location{75000, \"hidden\"}}, \"active\"}\n+\tbob := Row{Name: \"Bob\", Status: \"inactive\"}\n+\tfor _, rows := range [][]Row{{alice, bob}, {bob, alice}} {\n+\t\ttbl := NewTable(nil)\n+\t\ttbl.Configure(func(cfg *Config) { cfg.Behavior.Structs.AutoHeader = tw.On })\n+\t\tif err := tbl.Bulk(rows); err != nil {\n+\t\t\tt.Fatal(err)\n+\t\t}\n+\t\tfor i, row := range rows {\n+\t\t\twant := []string{\"Bob\", \"\", \"\", \"inactive\"}\n+\t\t\tif row.Name == \"Alice\" {\n+\t\t\t\twant = []string{\"Alice\", \"Paris\", \"75000\", \"active\"}\n+\t\t\t}\n+\t\t\tif !reflect.DeepEqual(tbl.rows[i], want) {\n+\t\t\t\tt.Errorf(\"row %d = %q, want %q\", i, tbl.rows[i], want)\n+\t\t\t}\n+\t\t}\n+\t\theaders := tbl.extractHeadersFromStruct(bob)\n+\t\tif want := []string{\"NAME\", \"Town\", \"ZIP\", \"STATUS\"}; !reflect.DeepEqual(headers, want) {\n+\t\t\tt.Errorf(\"headers = %q, want %q\", headers, want)\n+\t\t}\n+\t\tif got := tbl.config.Row.Alignment.PerColumn; len(got) != 4 || got[3] != tw.AlignRight {\n+\t\t\tt.Errorf(\"alignment = %v\", got)\n+\t\t}\n+\t}\n+}\n+\n+func TestNilRecursiveEmbeddedPointer(t *testing.T) {\n+\ttype Node struct {\n+\t\t*Node\n+\t\tValue int\n+\t}\n+\ttbl := NewTable(nil)\n+\theaders, values := tbl.extractFieldsAndValuesFromStruct(struct {\n+\t\t*Node\n+\t\tStatus string\n+\t}{Status: \"ok\"})\n+\tif want := []string{\"VALUE\", \"STATUS\"}; !reflect.DeepEqual(headers, want) {\n+\t\tt.Fatalf(\"headers = %q, want %q\", headers, want)\n+\t}\n+\tif want := []string{\"\", \"ok\"}; !reflect.DeepEqual(values, want) {\n+\t\tt.Fatalf(\"values = %q, want %q\", values, want)\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "struct_nil_test.go"
+ ]
+}

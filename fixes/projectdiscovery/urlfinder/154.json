@@ -1,0 +1,26 @@
+{
+ "repo": "projectdiscovery/urlfinder",
+ "number": 154,
+ "url": "https://github.com/projectdiscovery/urlfinder/pull/154",
+ "title": "fix(agent): apply global rate limit without source overrides",
+ "merged_at": "2026-11-17T10:21:53Z",
+ "files": [
+  {
+   "filename": "pkg/agent/agent.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 3,
+   "patch": "@@ -154,9 +154,11 @@ func (a *Agent) buildMultiRateLimiter(ctx context.Context, globalRateLimit int,\n \tvar multiRateLimiter *ratelimit.MultiLimiter\n \tvar err error\n \tfor _, source := range a.sources {\n-\t\tvar rl uint\n-\t\tif sourceRateLimit, ok := rateLimit.Custom.Get((source.Name())); ok {\n-\t\t\trl = sourceRateLimitOrDefault(uint(globalRateLimit), sourceRateLimit)\n+\t\trl := uint(globalRateLimit)\n+\t\tif rateLimit != nil {\n+\t\t\tif sourceRateLimit, ok := rateLimit.Custom.Get(source.Name()); ok {\n+\t\t\t\trl = sourceRateLimitOrDefault(rl, sourceRateLimit)\n+\t\t\t}\n \t\t}\n \n \t\tif rl > 0 {"
+  },
+  {
+   "filename": "pkg/agent/agent_test.go",
+   "status": "added",
+   "additions": 54,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,54 @@\n+package agent\n+\n+import (\n+\t\"context\"\n+\t\"math\"\n+\t\"testing\"\n+\n+\t\"github.com/projectdiscovery/urlfinder/pkg/source\"\n+)\n+\n+func TestBuildMultiRateLimiter(t *testing.T) {\n+\tfor _, tc := range []struct {\n+\t\tname   string\n+\t\tglobal int\n+\t\tcustom *CustomRateLimit\n+\t\twant   uint\n+\t}{\n+\t\t{name: \"global without custom options\", global: 1, want: 1},\n+\t\t{name: \"global with empty overrides\", global: 1, custom: &CustomRateLimit{}, want: 1},\n+\t\t{name: \"global with unrelated override\", global: 1, custom: testRateLimit(\"urlscan\", 5), want: 1},\n+\t\t{name: \"source override\", global: 1, custom: testRateLimit(\"alienvault\", 5), want: 5},\n+\t\t{name: \"zero override uses global\", global: 1, custom: testRateLimit(\"alienvault\", 0), want: 1},\n+\t\t{name: \"unlimited without custom options\", want: math.MaxUint32},\n+\t\t{name: \"unlimited with empty overrides\", custom: &CustomRateLimit{}, want: math.MaxUint32},\n+\t\t{name: \"override without global\", custom: testRateLimit(\"alienvault\", 5), want: 5},\n+\t} {\n+\t\tt.Run(tc.name, func(t *testing.T) {\n+\t\t\tdefer func() {\n+\t\t\t\tif r := recover(); r != nil {\n+\t\t\t\t\tt.Errorf(\"building rate limiter panicked: %v\", r)\n+\t\t\t\t}\n+\t\t\t}()\n+\t\t\ta := &Agent{sources: []source.Source{AllSources[\"alienvault\"]}}\n+\t\t\tlimiter, err := a.buildMultiRateLimiter(context.Background(), tc.global, tc.custom)\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\t\t\tdefer limiter.Stop()\n+\t\t\tgot, err := limiter.GetLimit(\"alienvault\")\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\t\t\tif got != tc.want {\n+\t\t\t\tt.Errorf(\"rate limit = %d, want %d\", got, tc.want)\n+\t\t\t}\n+\t\t})\n+\t}\n+}\n+\n+func testRateLimit(name string, limit uint) *CustomRateLimit {\n+\tcustom := &CustomRateLimit{}\n+\tcustom.Custom.Map = map[string]uint{name: limit}\n+\treturn custom\n+}"
+  }
+ ],
+ "test_files": [
+  "pkg/agent/agent_test.go"
+ ]
+}

@@ -5,5 +5,11 @@
  "state": "open",
  "reviews": [],
  "review_comments": [],
- "comments": []
+ "comments": [
+  {
+   "role": "contributor",
+   "created_at": "2026-11-17T17:22:12Z",
+   "body": "**merge-train (2026-11-17): not on this train — one finding to fix.** Validated at `bad49616e`.\n\nThe intended fix works: a person with no chats who opens an unshared agent link now sees the no-access stage, and reverting `Portal.vue` turns the new test red.\n\n**Finding — the new `threadsLoaded` guard (`src/frontend/src/views/Portal.vue:3154`) stops agent-page landing whenever the thread list did not load cleanly.** `threadsLoaded` only latches on a clean sessions read (`:2398`) and is not a watch source (`:3140`). While `store.sessionsFailed` is true, clicking an agent in the sidebar moves the URL but the stage does not follow.\n\nReproduced in this PR's own harness: `arm({ sessionsFail: true })`, boot on `/workspace/c/t1`, emit `open-agent 'sage'` from `PortalSidebar`.\n\n| `Portal.vue` | URL after click | Conversation on stage |\n|---|---|---|\n| `dev` | `/workspace/a/sage` | `sage`, `newChat: true` |\n| this PR | `/workspace/a/sage` | `scout`, `newChat: false` |\n\nSo a live composer for one agent sits under another agent's URL, and it only recovers if a later clean read changes `threads.length` — a person with zero chats never recovers. `dev` handles this path correctly today.\n\nThe guard itself is needed (removing it turns `portalDraftLanding.mount.spec.js` red), so this needs your call on what \"thread read settled\" means when the list failed — land as `dev` does, or show a failed state — plus a test for the failed-list side.\n\nOptional, same area: a cold link to a reachable, non-first agent with zero chats (`/workspace/a/sage`) still shows the first agent, on `dev` and here alike. Adding `threadsLoaded` as a fourth watch source fixes that (the five neighbouring specs stay green) but does not fix the finding above.\n\nRides the next train once fixed. `status-needs-fix` is set; on a fork PR it does not clear on push, so a maintainer removes it on re-review.\n"
+  }
+ ]
 }

@@ -1,0 +1,17 @@
+{
+ "repo": "mountain-loop/yaak",
+ "number": 840,
+ "url": "https://github.com/mountain-loop/yaak/pull/840",
+ "title": "fix(http): do not send Secure cookies over plain http",
+ "merged_at": "2026-11-17T17:26:33Z",
+ "files": [
+  {
+   "filename": "crates/yaak-http/src/cookies.rs",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -107,6 +107,11 @@ impl CookieStore {\n             return false;\n         }\n \n+        // Secure cookies are only sent over https (loopback hosts count as secure contexts)\n+        if cookie.secure && url.scheme() != \"https\" && !is_localhost(&url_host) {\n+            return false;\n+        }\n+\n         // Check path\n         let url_path = url.path();\n \n@@ -378,6 +383,25 @@ mod tests {\n         assert_eq!(header, Some(\"session=abc123\".to_string()));\n     }\n \n+    #[test]\n+    fn test_secure_cookie_not_sent_over_http() {\n+        let store = CookieStore::new();\n+        let https_url = Url::parse(\"https://example.com/\").unwrap();\n+        store.store_cookies_from_response(&https_url, &[\"token=abc; Secure\".to_string()]);\n+\n+        // Sent over https\n+        assert_eq!(store.get_cookie_header(&https_url), Some(\"token=abc\".to_string()));\n+\n+        // Never sent over plain http\n+        let http_url = Url::parse(\"http://example.com/\").unwrap();\n+        assert!(store.get_cookie_header(&http_url).is_none());\n+\n+        // Loopback hosts are treated as a secure context\n+        let local_url = Url::parse(\"http://localhost:3000/\").unwrap();\n+        store.store_cookies_from_response(&local_url, &[\"local=1; Secure\".to_string()]);\n+        assert_eq!(store.get_cookie_header(&local_url), Some(\"local=1\".to_string()));\n+    }\n+\n     #[test]\n     fn test_cookie_domain_matching() {\n         let store = CookieStore::new();"
+  }
+ ],
+ "test_files": []
+}

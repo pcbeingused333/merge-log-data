@@ -1,0 +1,24 @@
+{
+ "repo": "resend/resend-rust",
+ "number": 134,
+ "url": "https://github.com/resend/resend-rust/pull/134",
+ "title": "fix(receiving): keep text and html when forwarding without passthrough",
+ "merged_at": "2026-11-17T16:00:33Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -6,7 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),\n and this project adheres to\n [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n \n-<!--## Unreleased-->\n+## Unreleased\n+\n+### Fixed\n+\n+- `ReceivingSvc::forward` without `passthrough` no longer drops the HTML body when both `text` and `html` are set\n+\n \n ## [0.36.1] - 2026-11-13\n "
+  },
+  {
+   "filename": "src/receiving.rs",
+   "status": "modified",
+   "additions": 47,
+   "deletions": 8,
+   "patch": "@@ -142,14 +142,7 @@ impl ReceivingSvc {\n                 .with_filename(\"forwarded_message.eml\")\n                 .with_content_type(\"message/rfc822\");\n \n-            let mut email = CreateEmailBaseOptions::new(opts.from, opts.to, subject)\n-                .with_attachments(vec![attachment]);\n-\n-            if let Some(text) = &opts.text {\n-                email = email.with_text(text);\n-            } else if let Some(html) = &opts.html {\n-                email = email.with_html(html);\n-            }\n+            let email = non_passthrough_email(opts, subject, attachment);\n \n             let res = email_svc.send(email).await?;\n \n@@ -160,6 +153,27 @@ impl ReceivingSvc {\n     }\n }\n \n+/// Builds the email sent by a forward without `passthrough`: the raw message is attached and\n+/// both the caller supplied text and HTML bodies are kept.\n+fn non_passthrough_email(\n+    opts: ForwardReceivingEmail,\n+    subject: String,\n+    attachment: CreateAttachment,\n+) -> CreateEmailBaseOptions {\n+    let mut email =\n+        CreateEmailBaseOptions::new(opts.from, opts.to, subject).with_attachments(vec![attachment]);\n+\n+    if let Some(text) = &opts.text {\n+        email = email.with_text(text);\n+    }\n+\n+    if let Some(html) = &opts.html {\n+        email = email.with_html(html);\n+    }\n+\n+    email\n+}\n+\n #[allow(unreachable_pub)]\n pub mod types {\n     use std::collections::HashMap;\n@@ -485,6 +499,31 @@ mod test {\n         Ok(())\n     }\n \n+    #[test]\n+    fn non_passthrough_forward_keeps_text_and_html() {\n+        use crate::types::{CreateAttachment, ForwardReceivingEmail, InboundEmailId};\n+\n+        let opts = ForwardReceivingEmail::new(\n+            InboundEmailId::new(\"id\"),\n+            \"from@example.test\",\n+            vec![\"to@example.test\"],\n+        )\n+        .with_text(\"plain\")\n+        .with_html(\"<p>rich</p>\");\n+        let attachment = CreateAttachment::from_content(b\"raw\".to_vec());\n+\n+        let email = super::non_passthrough_email(opts, \"Fwd: hi\".to_owned(), attachment);\n+        let json = serde_json::to_value(email).unwrap();\n+        assert_eq!(\n+            json.get(\"text\").and_then(serde_json::Value::as_str),\n+            Some(\"plain\")\n+        );\n+        assert_eq!(\n+            json.get(\"html\").and_then(serde_json::Value::as_str),\n+            Some(\"<p>rich</p>\")\n+        );\n+    }\n+\n     #[test]\n     fn passthrough_keeps_attachment_content_id() {\n         let raw = b\"Content-Type: multipart/mixed; boundary=x\\r\\n\\r\\n--x\\r\\nContent-Type: image/png\\r\\nContent-Disposition: attachment; filename=logo.png\\r\\nContent-ID: <logo@example.test>\\r\\n\\r\\nPNG\\r\\n--x--\\r\\n\";"
+  }
+ ],
+ "test_files": []
+}

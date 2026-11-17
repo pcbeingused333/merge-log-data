@@ -1,0 +1,26 @@
+{
+ "repo": "go-co-op/gocron",
+ "number": 990,
+ "url": "https://github.com/go-co-op/gocron/pull/990",
+ "title": "fix: validate variadic task arguments by assignability",
+ "merged_at": "2026-11-17T19:53:55Z",
+ "files": [
+  {
+   "filename": "scheduler.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 24,
+   "patch": "@@ -956,36 +956,14 @@ func (s *scheduler) NewJob(jobDefinition JobDefinition, task Task, options ...Jo\n \treturn s.addOrUpdateJob(uuid.Nil, jobDefinition, task, options)\n }\n \n-func (s *scheduler) verifyInterfaceVariadic(taskFunc reflect.Value, tsk task, variadicStart int) error {\n-\tifaceType := taskFunc.Type().In(variadicStart).Elem()\n-\tfor i := variadicStart; i < len(tsk.parameters); i++ {\n-\t\tif !reflect.TypeOf(tsk.parameters[i]).Implements(ifaceType) {\n-\t\t\treturn ErrNewJobWrongTypeOfParameters\n-\t\t}\n-\t}\n-\treturn nil\n-}\n-\n func (s *scheduler) verifyVariadic(taskFunc reflect.Value, tsk task, variadicStart int) error {\n \tif err := s.verifyNonVariadic(taskFunc, tsk, variadicStart); err != nil {\n \t\treturn err\n \t}\n-\tparameterType := taskFunc.Type().In(variadicStart)\n-\tparameterTypeKind := parameterType.Elem().Kind()\n-\tif parameterTypeKind == reflect.Interface {\n-\t\treturn s.verifyInterfaceVariadic(taskFunc, tsk, variadicStart)\n-\t}\n-\tif parameterTypeKind == reflect.Pointer {\n-\t\tparameterTypeKind = reflect.Indirect(reflect.ValueOf(parameterType)).Kind()\n-\t}\n-\n+\telemType := taskFunc.Type().In(variadicStart).Elem()\n \tfor i := variadicStart; i < len(tsk.parameters); i++ {\n \t\targumentType := reflect.TypeOf(tsk.parameters[i])\n-\t\targumentTypeKind := argumentType.Kind()\n-\t\tif argumentTypeKind == reflect.Interface || argumentTypeKind == reflect.Pointer {\n-\t\t\targumentTypeKind = argumentType.Elem().Kind()\n-\t\t}\n-\t\tif argumentTypeKind != parameterTypeKind {\n+\t\tif argumentType == nil || !argumentType.AssignableTo(elemType) {\n \t\t\treturn ErrNewJobWrongTypeOfParameters\n \t\t}\n \t}"
+  },
+  {
+   "filename": "scheduler_variadic_test.go",
+   "status": "added",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,38 @@\n+package gocron\n+\n+import (\n+\t\"errors\"\n+\t\"testing\"\n+\t\"time\"\n+)\n+\n+func TestNewJobVariadicArgumentValidation(t *testing.T) {\n+\ttype count int\n+\ttests := []struct {\n+\t\tname string\n+\t\tfn   any\n+\t\targ  any\n+\t}{\n+\t\t{\"named int for variadic of different named type\", func(...count) {}, 1},\n+\t\t{\"wrong slice type\", func(...[]int) {}, []string{\"x\"}},\n+\t\t{\"nil argument for interface variadic\", func(...any) {}, nil},\n+\t}\n+\tfor _, tc := range tests {\n+\t\tt.Run(tc.name, func(t *testing.T) {\n+\t\t\ts, err := NewScheduler()\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\t\t\tdefer func() { _ = s.Shutdown() }()\n+\t\t\tdefer func() {\n+\t\t\t\tif p := recover(); p != nil {\n+\t\t\t\t\tt.Errorf(\"NewJob panicked: %v\", p)\n+\t\t\t\t}\n+\t\t\t}()\n+\t\t\t_, err = s.NewJob(DurationJob(time.Hour), NewTask(tc.fn, tc.arg))\n+\t\t\tif !errors.Is(err, ErrNewJobWrongTypeOfParameters) {\n+\t\t\t\tt.Errorf(\"expected ErrNewJobWrongTypeOfParameters, got %v\", err)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "scheduler_variadic_test.go"
+ ]
+}

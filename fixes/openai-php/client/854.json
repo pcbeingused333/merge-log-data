@@ -1,0 +1,26 @@
+{
+ "repo": "openai-php/client",
+ "number": 854,
+ "url": "https://github.com/openai-php/client/pull/854",
+ "title": "fix(responses): parse reasoning text content part events",
+ "merged_at": "2026-11-17T14:02:04Z",
+ "files": [
+  {
+   "filename": "src/Responses/Responses/Streaming/ContentPart.php",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -11,13 +11,15 @@\n use OpenAI\\Responses\\Meta\\MetaInformation;\n use OpenAI\\Responses\\Responses\\Output\\OutputMessageContentOutputText;\n use OpenAI\\Responses\\Responses\\Output\\OutputMessageContentRefusal;\n+use OpenAI\\Responses\\Responses\\Output\\OutputReasoningText;\n use OpenAI\\Testing\\Responses\\Concerns\\Fakeable;\n \n /**\n  * @phpstan-import-type OutputTextType from OutputMessageContentOutputText\n  * @phpstan-import-type ContentRefusalType from OutputMessageContentRefusal\n+ * @phpstan-import-type ReasoningTextType from OutputReasoningText\n  *\n- * @phpstan-type ContentPartType array{type: string, content_index: int, item_id: string, output_index: int, sequence_number: int, part: OutputTextType|ContentRefusalType}\n+ * @phpstan-type ContentPartType array{type: string, content_index: int, item_id: string, output_index: int, sequence_number: int, part: OutputTextType|ContentRefusalType|ReasoningTextType}\n  *\n  * @implements ResponseContract<ContentPartType>\n  */\n@@ -37,7 +39,7 @@ private function __construct(\n         public readonly string $itemId,\n         public readonly int $outputIndex,\n         public readonly int $sequenceNumber,\n-        public readonly OutputMessageContentOutputText|OutputMessageContentRefusal $part,\n+        public readonly OutputMessageContentOutputText|OutputMessageContentRefusal|OutputReasoningText $part,\n         private readonly MetaInformation $meta,\n     ) {}\n \n@@ -49,6 +51,7 @@ public static function from(array $attributes, MetaInformation $meta): self\n         $part = match ($attributes['part']['type']) {\n             'output_text' => OutputMessageContentOutputText::from($attributes['part']),\n             'refusal' => OutputMessageContentRefusal::from($attributes['part']),\n+            'reasoning_text' => OutputReasoningText::from($attributes['part']),\n         };\n \n         return new self("
+  },
+  {
+   "filename": "tests/Responses/Responses/CreateStreamedResponse.php",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -11,13 +11,15 @@\n use OpenAI\\Responses\\Responses\\Output\\OutputProgram;\n use OpenAI\\Responses\\Responses\\Output\\OutputProgramOutput;\n use OpenAI\\Responses\\Responses\\Output\\OutputReasoning;\n+use OpenAI\\Responses\\Responses\\Output\\OutputReasoningText;\n use OpenAI\\Responses\\Responses\\Output\\OutputShellCall;\n use OpenAI\\Responses\\Responses\\Output\\OutputShellCallOutput;\n use OpenAI\\Responses\\Responses\\Output\\OutputToolSearchCall;\n use OpenAI\\Responses\\Responses\\Output\\OutputToolSearchOutput;\n use OpenAI\\Responses\\Responses\\Streaming\\ApplyPatchCallOperationDiffDelta;\n use OpenAI\\Responses\\Responses\\Streaming\\ApplyPatchCallOperationDiffDone;\n use OpenAI\\Responses\\Responses\\Streaming\\CompactionCompacting;\n+use OpenAI\\Responses\\Responses\\Streaming\\ContentPart;\n use OpenAI\\Responses\\Responses\\Streaming\\CustomToolCallInputDelta;\n use OpenAI\\Responses\\Responses\\Streaming\\CustomToolCallInputDone;\n use OpenAI\\Responses\\Responses\\Streaming\\OutputItem;\n@@ -401,3 +403,23 @@\n         ->type->toBe('response.compaction.compacting')\n         ->itemId->toBe('cmp_123');\n });\n+\n+test('content part events keep reasoning text', function (string $type) {\n+    $attributes = [\n+        'type' => $type,\n+        'content_index' => 0,\n+        'item_id' => 'rs_test',\n+        'output_index' => 0,\n+        'sequence_number' => 1,\n+        'part' => ['text' => 'Let me think.', 'type' => 'reasoning_text'],\n+    ];\n+\n+    $response = CreateStreamedResponse::from($attributes + ['__meta' => meta()]);\n+\n+    expect($response)\n+        ->event->toBe($type)\n+        ->response->toBeInstanceOf(ContentPart::class)\n+        ->response->part->toBeInstanceOf(OutputReasoningText::class)\n+        ->response->part->text->toBe('Let me think.')\n+        ->and($response->toArray())->toBe(['event' => $type, 'data' => $attributes]);\n+})->with(['response.content_part.added', 'response.content_part.done']);"
+  }
+ ],
+ "test_files": [
+  "tests/Responses/Responses/CreateStreamedResponse.php"
+ ]
+}

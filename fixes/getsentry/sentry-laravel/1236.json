@@ -1,0 +1,26 @@
+{
+ "repo": "getsentry/sentry-laravel",
+ "number": 1236,
+ "url": "https://github.com/getsentry/sentry-laravel/pull/1236",
+ "title": "fix(tracing): register the view name composer once per view factory",
+ "merged_at": "2026-11-17T14:57:56Z",
+ "files": [
+  {
+   "filename": "src/Sentry/Laravel/Tracing/ServiceProvider.php",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 9,
+   "patch": "@@ -25,6 +25,11 @@ class ServiceProvider extends BaseServiceProvider\n         Integrations\\LighthouseIntegration::class,\n     ];\n \n+    /**\n+     * @var ViewFactory|null\n+     */\n+    private $viewComposerFactory;\n+\n     public function boot(): void\n     {\n         // Only register if a DSN is set or Spotlight is enabled\n@@ -128,17 +133,24 @@ private function wrapViewEngine(Engine $realEngine): Engine\n         /** @var ViewFactory $viewFactory */\n         $viewFactory = $this->app->make('view');\n \n-        $viewFactory->composer('*', static function (View $view) use ($viewFactory): void {\n-            $viewName = $view->name();\n-            $basePath = base_path();\n+        // Engines can be resolved many times (e.g. when Octane resets the engine resolver) while the view factory is\n+        // retained. This remembers only the last factory, so the composer is registered once per change of factory\n+        // (if `view` went A -> B -> A, A would get a second composer) rather than on every resolve.\n+        if ($this->viewComposerFactory !== $viewFactory) {\n+            $this->viewComposerFactory = $viewFactory;\n \n-            // Views rendered from a file (like Laravel Folio pages) are named after their full path, strip the base path to keep the name short\n-            if (Str::startsWith($viewName, $basePath . \\DIRECTORY_SEPARATOR)) {\n-                $viewName = substr($viewName, \\strlen($basePath));\n-            }\n+            $viewFactory->composer('*', static function (View $view) use ($viewFactory): void {\n+                $viewName = $view->name();\n+                $basePath = base_path();\n \n-            $viewFactory->share(ViewEngineDecorator::SHARED_KEY, $viewName);\n-        });\n+                // Views rendered from a file (like Laravel Folio pages) are named after their full path, strip the base path to keep the name short\n+                if (Str::startsWith($viewName, $basePath . \\DIRECTORY_SEPARATOR)) {\n+                    $viewName = substr($viewName, \\strlen($basePath));\n+                }\n+\n+                $viewFactory->share(ViewEngineDecorator::SHARED_KEY, $viewName);\n+            });\n+        }\n \n         return new ViewEngineDecorator($realEngine, $viewFactory);\n     }"
+  },
+  {
+   "filename": "test/Sentry/Features/ViewEngineDecoratorTest.php",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -44,6 +44,44 @@ public function testViewEngineIsNotDoubleDecorated(): void\n         }\n     }\n \n+    public function testViewComposerIsRegisteredOnlyOnceWhenEnginesAreRecreated(): void\n+    {\n+        /** @var EngineResolver $engineResolver */\n+        $engineResolver = $this->app->make('view.engine.resolver');\n+\n+        $engineResolver->resolve('blade');\n+\n+        $before = $this->countWildcardComposers();\n+\n+        // `EngineResolver::forget()` does not exist on older Laravel versions, so clear the resolved engine cache directly\n+        $resolved = new ReflectionProperty($engineResolver, 'resolved');\n+        if (\\PHP_VERSION_ID < 80100) {\n+            $resolved->setAccessible(true);\n+        }\n+\n+        for ($i = 0; $i < 10; $i++) {\n+            $cache = $resolved->getValue($engineResolver);\n+            unset($cache['blade']);\n+            $resolved->setValue($engineResolver, $cache);\n+            $engineResolver->resolve('blade');\n+        }\n+\n+        $this->assertSame($before, $this->countWildcardComposers());\n+    }\n+\n+    private function countWildcardComposers(): int\n+    {\n+        $events = $this->app->make('view')->getDispatcher();\n+\n+        $property = new ReflectionProperty($events, 'wildcards');\n+\n+        if (\\PHP_VERSION_ID < 80100) {\n+            $property->setAccessible(true);\n+        }\n+\n+        return count($property->getValue($events)['composing: *'] ?? []);\n+    }\n+\n     public function testNamedViewUsesViewNameAsSpanDescription(): void\n     {\n         $this->app->make('view')->addLocation(self::STUBS_PATH . '/views');"
+  }
+ ],
+ "test_files": [
+  "test/Sentry/Features/ViewEngineDecoratorTest.php"
+ ]
+}

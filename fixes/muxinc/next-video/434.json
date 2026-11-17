@@ -1,0 +1,56 @@
+{
+ "repo": "muxinc/next-video",
+ "number": 434,
+ "url": "https://github.com/muxinc/next-video/pull/434",
+ "title": "fix: encode object keys in storage provider URLs",
+ "merged_at": "2026-11-17T17:33:52Z",
+ "files": [
+  {
+   "filename": "src/providers/amazon-s3/transformer.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -6,7 +6,7 @@ export function transform(asset: Asset) {\n \n   const src = new URL(providerMetadata.endpoint);\n   src.hostname = `${providerMetadata.bucket}.${src.hostname}`;\n-  src.pathname = providerMetadata.key;\n+  src.pathname = providerMetadata.key.split('/').map(encodeURIComponent).join('/');\n \n   const source: AssetSource = { src: `${src}` };\n "
+  },
+  {
+   "filename": "src/providers/backblaze/transformer.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -6,7 +6,7 @@ export function transform(asset: Asset) {\n \n   const src = new URL(providerMetadata.endpoint);\n   src.hostname = `${providerMetadata.bucket}.${src.hostname}`;\n-  src.pathname = providerMetadata.key;\n+  src.pathname = providerMetadata.key.split('/').map(encodeURIComponent).join('/');\n \n   const source: AssetSource = { src: `${src}` };\n "
+  },
+  {
+   "filename": "src/providers/cloudflare-r2/transformer.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -5,7 +5,7 @@ export function transform(asset: Asset) {\n   if (!providerMetadata) return asset;\n \n   const src = new URL(providerMetadata.bucketUrlPublic);\n-  src.pathname = providerMetadata.key;\n+  src.pathname = providerMetadata.key.split('/').map(encodeURIComponent).join('/');\n \n   const source: AssetSource = { src: `${src}` };\n "
+  },
+  {
+   "filename": "tests/providers/amazon-s3/transformer.test.ts",
+   "status": "modified",
+   "additions": 32,
+   "deletions": 0,
+   "patch": "@@ -26,3 +26,35 @@ test('transform', async () => {\n     sources: [{ src: 'https://bucket.amazon-s3-url.com/key' }],\n   });\n });\n+\n+for (const [key, pathname] of [\n+  ['videos/demo.mp4', '/videos/demo.mp4'],\n+  ['videos/demo%20clip.mp4', '/videos/demo%2520clip.mp4'],\n+  ['videos/100%.mp4', '/videos/100%25.mp4'],\n+  ['videos/demo clip.mp4', '/videos/demo%20clip.mp4'],\n+  ['videos/café?#.mp4', '/videos/caf%C3%A9%3F%23.mp4'],\n+]) {\n+  test(`transform preserves object key ${key}`, () => {\n+    const asset: Asset = {\n+      status: 'ready',\n+      originalFilePath: '/videos/get-started.mp4',\n+      createdAt: 0,\n+      updatedAt: 0,\n+      provider: 'amazon-s3',\n+      providerMetadata: {\n+        ['amazon-s3']: {\n+          endpoint: 'https://storage.example.com',\n+          bucket: 'bucket',\n+          key,\n+        },\n+      },\n+    };\n+\n+    const src = new URL(transform(asset).sources![0].src);\n+\n+    assert.strictEqual(src.pathname, pathname);\n+    assert.strictEqual(decodeURIComponent(src.pathname.slice(1)), key);\n+    assert.strictEqual(src.search, '');\n+    assert.strictEqual(src.hash, '');\n+  });\n+}"
+  },
+  {
+   "filename": "tests/providers/backblaze/transformer.test.ts",
+   "status": "modified",
+   "additions": 32,
+   "deletions": 0,
+   "patch": "@@ -26,3 +26,35 @@ test('transform', async () => {\n     sources: [{ src: 'https://bucket.backblaze-url.com/key' }],\n   });\n });\n+\n+for (const [key, pathname] of [\n+  ['videos/demo.mp4', '/videos/demo.mp4'],\n+  ['videos/demo%20clip.mp4', '/videos/demo%2520clip.mp4'],\n+  ['videos/100%.mp4', '/videos/100%25.mp4'],\n+  ['videos/demo clip.mp4', '/videos/demo%20clip.mp4'],\n+  ['videos/café?#.mp4', '/videos/caf%C3%A9%3F%23.mp4'],\n+]) {\n+  test(`transform preserves object key ${key}`, () => {\n+    const asset: Asset = {\n+      status: 'ready',\n+      originalFilePath: '/videos/get-started.mp4',\n+      createdAt: 0,\n+      updatedAt: 0,\n+      provider: 'backblaze',\n+      providerMetadata: {\n+        ['backblaze']: {\n+          endpoint: 'https://storage.example.com',\n+          bucket: 'bucket',\n+          key,\n+        },\n+      },\n+    };\n+\n+    const src = new URL(transform(asset).sources![0].src);\n+\n+    assert.strictEqual(src.pathname, pathname);\n+    assert.strictEqual(decodeURIComponent(src.pathname.slice(1)), key);\n+    assert.strictEqual(src.search, '');\n+    assert.strictEqual(src.hash, '');\n+  });\n+}"
+  },
+  {
+   "filename": "tests/providers/cloudflare-r2/transformer.test.ts",
+   "status": "added",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,35 @@\n+import assert from 'node:assert';\n+import { test } from 'node:test';\n+import { transform } from '../../../src/providers/cloudflare-r2/transformer.js';\n+import type { Asset } from '../../../src/assets.js';\n+\n+for (const [key, pathname] of [\n+  ['videos/demo.mp4', '/videos/demo.mp4'],\n+  ['videos/demo%20clip.mp4', '/videos/demo%2520clip.mp4'],\n+  ['videos/100%.mp4', '/videos/100%25.mp4'],\n+  ['videos/demo clip.mp4', '/videos/demo%20clip.mp4'],\n+  ['videos/café?#.mp4', '/videos/caf%C3%A9%3F%23.mp4'],\n+]) {\n+  test(`transform preserves object key ${key}`, () => {\n+    const asset: Asset = {\n+      status: 'ready',\n+      originalFilePath: '/videos/get-started.mp4',\n+      createdAt: 0,\n+      updatedAt: 0,\n+      provider: 'cloudflare-r2',\n+      providerMetadata: {\n+        ['cloudflare-r2']: {\n+          bucketUrlPublic: 'https://bucket.r2.dev',\n+          key,\n+        },\n+      },\n+    };\n+\n+    const src = new URL(transform(asset).sources![0].src);\n+\n+    assert.strictEqual(src.pathname, pathname);\n+    assert.strictEqual(decodeURIComponent(src.pathname.slice(1)), key);\n+    assert.strictEqual(src.search, '');\n+    assert.strictEqual(src.hash, '');\n+  });\n+}"
+  }
+ ],
+ "test_files": [
+  "tests/providers/amazon-s3/transformer.test.ts",
+  "tests/providers/backblaze/transformer.test.ts",
+  "tests/providers/cloudflare-r2/transformer.test.ts"
+ ]
+}
