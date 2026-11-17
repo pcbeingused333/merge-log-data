@@ -1,0 +1,26 @@
+{
+ "repo": "scylladb/python-driver",
+ "number": 1272,
+ "url": "https://github.com/scylladb/python-driver/pull/1272",
+ "title": "cluster: isolate policy errors in ProfileManager.on_down",
+ "merged_at": "2026-11-16T22:23:16Z",
+ "files": [
+  {
+   "filename": "cassandra/cluster.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -719,7 +719,10 @@ def on_down(self, host):\n         if not self.pools_allowed:\n             return\n         for p in self.profiles.values():\n-            p.load_balancing_policy.on_down(host)\n+            try:\n+                p.load_balancing_policy.on_down(host)\n+            except Exception:\n+                log.exception(\"Error in load balancing policy down handler for host %s\", host)\n             if host._is_removed:\n                 return\n "
+  },
+  {
+   "filename": "tests/unit/test_cluster.py",
+   "status": "modified",
+   "additions": 42,
+   "deletions": 1,
+   "patch": "@@ -41,7 +41,7 @@\n from cassandra.driver_config import DriverConfigReporter\n from cassandra.metadata import Metadata\n from cassandra.pool import Host, _HostReconnectionHandler\n-from cassandra.policies import ExponentialReconnectionPolicy, HostDistance, RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, SimpleConvictionPolicy\n+from cassandra.policies import DCAwareRoundRobinPolicy, ExponentialReconnectionPolicy, HostDistance, RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, SimpleConvictionPolicy\n from cassandra.query import SimpleStatement, named_tuple_factory, tuple_factory\n from tests.unit.utils import (mock_session_pools, move_host, new_session_with_pool_state,\n                               run_isolated_subprocess)\n@@ -6304,6 +6304,47 @@ def test_profile_manager_positive_callbacks(event, pools_allowed, removed):\n     assert observed.mock_calls == expected\n \n \n+def test_profile_manager_down_isolates_policy_errors():\n+    manager = ProfileManager()\n+    failed = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())\n+    failed.set_location_info('remote', 'rack1')\n+    healthy = Host('127.0.0.2', SimpleConvictionPolicy, host_id=uuid.uuid4())\n+    healthy.set_location_info('remote', 'rack1')\n+\n+    failing = Mock()\n+    failing.on_down.side_effect = RuntimeError('policy failed')\n+    later = DCAwareRoundRobinPolicy(local_dc='local', used_hosts_per_remote_dc=1)\n+    later._dc_live_hosts = {'remote': (failed, healthy)}\n+    manager.profiles['first'] = ExecutionProfile(load_balancing_policy=failing)\n+    manager.profiles['later'] = ExecutionProfile(load_balancing_policy=later)\n+\n+    assert list(later.make_query_plan()) == [failed]\n+    with patch('cassandra.cluster.log') as log:\n+        manager.on_down(failed)\n+\n+    failing.on_down.assert_called_once_with(failed)\n+    assert log.exception.call_count == 1\n+    assert list(later.make_query_plan()) == [healthy]\n+\n+\n+def test_profile_manager_down_stops_when_removed_during_callback():\n+    manager = ProfileManager()\n+    host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())\n+    first, second = Mock(), Mock()\n+\n+    def remove_then_fail(_):\n+        host._is_removed = True\n+        raise RuntimeError('policy failed')\n+\n+    first.on_down.side_effect = remove_then_fail\n+    manager.profiles['first'] = ExecutionProfile(load_balancing_policy=first)\n+    manager.profiles['second'] = ExecutionProfile(load_balancing_policy=second)\n+\n+    manager.on_down(host)\n+\n+    second.on_down.assert_not_called()\n+\n+\n class ExecutionProfileTest(unittest.TestCase):\n     def setUp(self):\n         if connection_class is None:"
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_cluster.py"
+ ]
+}

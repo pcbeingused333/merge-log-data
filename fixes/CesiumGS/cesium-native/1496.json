@@ -1,0 +1,49 @@
+{
+ "repo": "CesiumGS/cesium-native",
+ "number": 1496,
+ "url": "https://github.com/CesiumGS/cesium-native/pull/1496",
+ "title": "fix(tiles): fail load when a converted tile has no model",
+ "merged_at": "2026-11-16T22:17:25Z",
+ "files": [
+  {
+   "filename": "CHANGES.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -16,6 +16,7 @@\n \n ##### Fixes :wrench:\n \n+- Fixed a crash in `TilesetJsonLoader` when a `.cmpt` tile failed to convert with only warnings and produced no glTF model. The tile now fails to load instead of dereferencing an empty `std::optional`.\n - Fixed `CesiumCurl::CurlAssetAccessor` ignoring `allowDirectoryCreation` on macOS, causing uploads to `file:` URLs in missing directories to fail.\n - `CesiumVectorOverlays::VectorTilesRasterOverlay` now builds its geographic projection from the overlay ellipsoid instead of a hardcoded WGS84 ellipsoid. A hardcoded ellipsoid can disagree with the one stored by the host, which creates an extra texture-coordinate set and can crash when this overlay is combined with another geographic overlay.\n - Fixed bugs and potential crashes when using the `GltfModifier` on a tileset with raster overlays (such as cartographic polygons)."
+  },
+  {
+   "filename": "Cesium3DTilesSelection/src/TilesetJsonLoader.cpp",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -1313,7 +1313,7 @@ TilesetJsonLoader::loadTileContent(const TileLoadInput& loadInput) {\n                        pCompletedRequest = std::move(pCompletedRequest)](\n                           GltfConverterResult&& result) mutable {\n                         logTileLoadResult(pLogger, tileUrl, result.errors);\n-                        if (result.errors) {\n+                        if (result.errors || !result.model) {\n                           return TileLoadResult::createFailedResult(\n                               pAssetAccessor,\n                               std::move(pCompletedRequest));"
+  },
+  {
+   "filename": "Cesium3DTilesSelection/test/TestTilesetJsonLoader.cpp",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 0,
+   "patch": "@@ -740,6 +740,27 @@ TEST_CASE(\"Test loading individual tile of tileset json\") {\n                 \"Received status code 404 for tile content nonexistent.b3dm\"));\n   }\n \n+  SUBCASE(\"Tile with invalid composite content fails without crashing\") {\n+    auto loaderResult = createTilesetJsonLoader(\n+        testDataPath / \"MultipleKindsOfTilesets\" /\n+        \"ErrorInvalidCmptTileset.json\");\n+    REQUIRE(loaderResult.pRootTile);\n+    REQUIRE(loaderResult.pRootTile->getChildren().size() == 1);\n+\n+    auto pRootTile = &loaderResult.pRootTile->getChildren()[0];\n+\n+    const auto& tileID = std::get<std::string>(pRootTile->getTileID());\n+    CHECK(tileID == \"invalid.cmpt\");\n+\n+    // The cmpt file is shorter than the 16-byte header, so the converter\n+    // reports a warning and produces no model.\n+    auto tileLoadResult = loadTileContent(\n+        testDataPath / \"MultipleKindsOfTilesets\" / tileID,\n+        *loaderResult.pLoader,\n+        *pRootTile);\n+    CHECK(tileLoadResult.state == TileLoadResultState::Failed);\n+  }\n+\n   SUBCASE(\"Tile with complex structural metadata\") {\n     auto loaderResult =\n         createTilesetJsonLoader(testDataPath / \"ComplexTypes\" / \"tileset.json\");"
+  },
+  {
+   "filename": "Cesium3DTilesSelection/test/data/MultipleKindsOfTilesets/ErrorInvalidCmptTileset.json",
+   "status": "added",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,38 @@\n+{\n+    \"asset\": {\n+      \"version\": \"1.0\",\n+      \"tilesetVersion\": \"1.2.3\"\n+    },\n+    \"extras\": {\n+      \"name\": \"Sample Tileset\"\n+    },\n+    \"geometricError\": 240,\n+    \"root\": {\n+      \"boundingVolume\": {\n+        \"region\": [\n+          -1.3197209591796106,\n+          0.6988424218,\n+          -1.3196390408203893,\n+          0.6989055782,\n+          0,\n+          88\n+        ]\n+      },\n+      \"geometricError\": 70,\n+      \"refine\": \"REPLACE\",\n+      \"content\": {\n+        \"uri\": \"invalid.cmpt\",\n+        \"boundingVolume\": {\n+          \"region\": [\n+            -1.3197004795898053,\n+            0.6988582109,\n+            -1.3196595204101946,\n+            0.6988897891,\n+            0,\n+            88\n+          ]\n+        }\n+      }\n+    }\n+  }\n+  \n\\ No newline at end of file"
+  },
+  {
+   "filename": "Cesium3DTilesSelection/test/data/MultipleKindsOfTilesets/invalid.cmpt",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+cmpt\n\\ No newline at end of file"
+  }
+ ],
+ "test_files": [
+  "Cesium3DTilesSelection/test/TestTilesetJsonLoader.cpp",
+  "Cesium3DTilesSelection/test/data/MultipleKindsOfTilesets/ErrorInvalidCmptTileset.json",
+  "Cesium3DTilesSelection/test/data/MultipleKindsOfTilesets/invalid.cmpt"
+ ]
+}

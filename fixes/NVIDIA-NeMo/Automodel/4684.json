@@ -1,0 +1,26 @@
+{
+ "repo": "NVIDIA-NeMo/Automodel",
+ "number": 4684,
+ "url": "https://github.com/NVIDIA-NeMo/Automodel/pull/4684",
+ "title": "fix(datasets): raise when NanogptDataset can never yield a sample",
+ "merged_at": "2026-11-17T01:14:06Z",
+ "files": [
+  {
+   "filename": "nemo_automodel/components/datasets/llm/nanogpt_dataset.py",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 1,
+   "patch": "@@ -454,8 +454,19 @@ def _get_file_iterator(\n             Training sample dictionaries from all files\n         \"\"\"\n         while True:\n+            yielded_in_pass = False\n             for file in worker_files:\n-                yield from self._process_file_tokens(file, split_single_file, file_start_pos, file_end_pos)\n+                for sample in self._process_file_tokens(file, split_single_file, file_start_pos, file_end_pos):\n+                    yielded_in_pass = True\n+                    yield sample\n+\n+            if not yielded_in_pass:\n+                raise ValueError(\n+                    f\"NanogptDataset produced no samples after a full pass over {len(worker_files)} file(s): \"\n+                    f\"no sample fits: every shard/slice has <= seq_len={self.seq_len} tokens, or (with \"\n+                    \"align_to_bos) no bos_token leaves room for seq_len + 1 tokens. \"\n+                    \"Use a smaller seq_len, larger shards, fewer dataloader workers, or check bos_token.\"\n+                )\n \n             # Start a new epoch, optionally reshuffle\n             if self.shuffle_files:"
+  },
+  {
+   "filename": "tests/unit_tests/datasets/test_nanogpt_dataset.py",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 0,
+   "patch": "@@ -17,6 +17,7 @@\n from unittest.mock import Mock, patch\n \n import numpy as np\n+import pytest\n import torch\n from torch.utils.data import get_worker_info\n \n@@ -322,3 +323,23 @@ def mock_import(name, *args, **kwargs):\n         worker_id, total_workers = _get_worker_id_and_total_workers(mock_worker)\n         assert worker_id == 2\n         assert total_workers == 3\n+\n+\n+def test_nanogpt_dataset_raises_when_no_sample_possible():\n+    # A shard with exactly seq_len tokens cannot yield a sample (needs seq_len + 1); must not spin forever.\n+    toks = np.arange(4, dtype=np.uint16)\n+    with tempfile.TemporaryDirectory() as tmp:\n+        shard = _make_fake_shard(Path(tmp), toks)\n+        ds = NanogptDataset(str(shard), seq_len=4)\n+        with pytest.raises(ValueError, match=\"no sample fits\"):\n+            next(iter(ds))\n+\n+\n+def test_nanogpt_dataset_raises_when_align_to_bos_finds_no_bos():\n+    # Plenty of tokens, but no BOS present: alignment skips to the end, so no sample can ever be produced.\n+    toks = np.arange(1, 101, dtype=np.uint16)\n+    with tempfile.TemporaryDirectory() as tmp:\n+        shard = _make_fake_shard(Path(tmp), toks)\n+        ds = NanogptDataset(str(shard), seq_len=4, align_to_bos=True, bos_token=0)\n+        with pytest.raises(ValueError, match=\"no sample fits\"):\n+            next(iter(ds))"
+  }
+ ],
+ "test_files": [
+  "tests/unit_tests/datasets/test_nanogpt_dataset.py"
+ ]
+}

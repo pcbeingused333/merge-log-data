@@ -21,6 +21,18 @@
    "state": "COMMENTED",
    "submitted_at": "2026-11-16T12:26:37Z",
    "body": "<!-- ccr-overview-v2 -->\n\n### 🟡 Changes recommended\n\nThe shutdown path relies on undocumented concurrent Read/Close guarantees, risking races or blocked compressed reads, and can incorrectly report shutdown-induced read errors as failures.\n\n<details open>\n<summary><strong>2 open issues</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png\" alt=\"High severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Document or support concurrent read interruption on Close](https://github.com/Azure/azure-kusto-go/pull/364#discussion_r4585691236) · New\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Avoid reporting shutdown-induced compressed read errors](https://github.com/Azure/azure-kusto-go/pull/364#discussion_r4585691281) · New\n</details>\n\n<details>\n<summary><strong>1 resolved since last review</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png\" alt=\"High severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Synchronize decompressor cleanup with active reads](https://github.com/Azure/azure-kusto-go/pull/364#discussion_r4548668089)\n</details>\n\n<sub>Review effort: Max</sub>"
+  },
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-17T06:04:36Z",
+   "body": ""
+  },
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-17T06:06:57Z",
+   "body": ""
   }
  ],
  "review_comments": [
@@ -47,6 +59,18 @@
    "path": "azkustodata/query/v2/iterative_dataset.go",
    "created_at": "2026-11-16T12:26:37Z",
    "body": "When this interrupts a stalled gzip/deflate read, `originalCloser.Close` returns the induced read error, so an otherwise successful dataset shutdown now reports failure. Keep closing the reader while preserving the previous nil result (or filtering shutdown-induced errors), and add a compressed dataset test that checks the return value."
+  },
+  {
+   "role": "collaborator",
+   "path": "azkustodata/query/v2/iterative_dataset.go",
+   "created_at": "2026-11-17T06:04:36Z",
+   "body": "@pcbeingused333 - Could we instead create a cancellable request context before starting the HTTP query and have  dataset.Close() cancel it? The reader goroutine could then exit the interrupted read and perform decompressor/body cleanup sequentially. This would avoid concurrent decompressor read/close and avoid returning the shutdown-induced read error through Close() . \r\n\r\nWe should document that  Close()  initiates cancellation rather than waiting for cleanup, and add gzip/deflate stalled-read regression tests."
+  },
+  {
+   "role": "collaborator",
+   "path": "azkustodata/query/v2/iterative_dataset.go",
+   "created_at": "2026-11-17T06:06:57Z",
+   "body": "Could we document that callers supplying a reader to  NewIterativeDataset are responsible for interrupting blocked reads, rather than closing that reader concurrently from dataset.Close() ? The reader goroutine can retain its existing cleanup responsibility after reading stops. \r\n\r\nFor  client.IterativeQuery , the SDK owns the HTTP request and can interrupt it through request-context cancellation."
   }
  ],
  "comments": [
@@ -54,6 +78,11 @@
    "role": "author",
    "created_at": "2026-11-16T10:46:46Z",
    "body": "Addressed the compressed-response cleanup concern: the transport closes first, active reads finish before decompressor cleanup, and repeated closes share the same result. Added gzip/deflate stalled-read coverage and a close-order regression test; both affected packages pass under the race detector.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-17T07:43:10Z",
+   "body": "Thanks @pragatibaheti. Reworked along the lines you suggested:\n\n- `Client.IterativeQuery` now creates a cancellable request context and cancels it from `dataset.Close()`, which interrupts a read blocked on the response body.\n- `iterativeDataset.Close()` no longer closes the reader; it cancels the dataset context and returns nil. The reader goroutine keeps its cleanup responsibility and closes the decompressor/body sequentially after the read stops, so there is no concurrent decompressor read/close and no shutdown-induced error is returned from `Close()`.\n- Documented on `NewIterativeDataset` that the dataset closes the reader from its read goroutine, `Close()` only initiates cancellation (it does not wait for cleanup), and callers supplying their own reader are responsible for interrupting blocked reads.\n- The concurrency changes in `response.go`/`frame_reader.go` are reverted as no longer needed. The test now checks that `Close()` does not close the reader mid-read and that cleanup happens exactly once after the read is interrupted.\n\nI also added stalled-read regression tests for identity, gzip and deflate responses (`azkustodata/kusto_close_stalled_test.go`): an `httptest` server sends the dataset header and the primary table header and then stalls; `Client.IterativeQuery` -> `Close()` returns nil, the dataset's `Tables()` channel closes and the server sees the connection released within 2s, under `-race`.\n\n`go test -race ./azkustodata/query/v2 ./azkustodata/internal/response` and the new test pass.\n\nThis comment was prepared with the help of an AI coding assistant (Claude Code).\n"
   }
  ]
 }

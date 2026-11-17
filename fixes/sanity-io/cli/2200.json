@@ -1,0 +1,63 @@
+{
+ "repo": "sanity-io/cli",
+ "number": 2200,
+ "url": "https://github.com/sanity-io/cli/pull/2200",
+ "title": "fix(cli): use HTTPS for development server links",
+ "merged_at": "2026-11-17T01:31:41Z",
+ "files": [
+  {
+   "filename": ".changeset/pr-2200.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@sanity/cli': patch\n+---\n+\n+Fix development server startup and dashboard links when HTTPS is enabled through Vite configuration."
+  },
+  {
+   "filename": "packages/@sanity/cli/src/actions/dev/servers/__tests__/getDashboardAppUrl.test.ts",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -6,6 +6,16 @@ import {getDashboardAppURL} from '../getDashboardAppUrl.js'\n describe('#getDashboardAppUrl', () => {\n   const mockFetch = setupFetchStub()\n \n+  test.each([false, true])('uses the resolved protocol for HTTPS=%s', async (https) => {\n+    mockFetch.mockResolvedValue({ok: false, statusText: 'Unavailable'})\n+\n+    const result = await getDashboardAppURL({https, organizationId: 'org-123'})\n+    const url = `${https ? 'https' : 'http'}://localhost:3333`\n+\n+    expect(new URL(mockFetch.mock.calls[0][0]).searchParams.get('url')).toBe(url)\n+    expect(new URL(result).searchParams.get('dev')).toBe(url)\n+  })\n+\n   test('should send default dashboard app url if fetch timesout', async () => {\n     mockFetch.mockImplementation(\n       (_url, {signal}) =>"
+  },
+  {
+   "filename": "packages/@sanity/cli/src/actions/dev/servers/__tests__/startAppDevServer.test.ts",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 0,
+   "patch": "@@ -50,6 +50,26 @@ describe('startAppDevServer', () => {\n     vi.clearAllMocks()\n   })\n \n+  test.each([undefined, {}])('uses resolved HTTPS=%j for app URLs', async (https) => {\n+    const started = createMockDevServer({port: 4443})\n+    Object.assign(started.server.config.server, {https})\n+    mockStartDevServer.mockResolvedValue(started)\n+    const output = createMockOutput()\n+\n+    await startAppDevServer(createOptions({output}))\n+    expect(mockGetDashboardAppURL).toHaveBeenCalledWith({\n+      httpHost: 'localhost',\n+      httpPort: 4443,\n+      https: Boolean(https),\n+      organizationId: 'org-1',\n+    })\n+\n+    await startAppDevServer(createOptions({cliConfig: workbenchCliConfig(), output}))\n+    expect(output.log).toHaveBeenCalledWith(\n+      expect.stringContaining(`${https ? 'https' : 'http'}://localhost:4443`),\n+    )\n+  })\n+\n   test('exits with error when organizationId is missing', async () => {\n     const output = createMockOutput()\n     const result = await startAppDevServer(\n@@ -136,6 +156,7 @@ describe('startAppDevServer', () => {\n     expect(mockGetDashboardAppURL).toHaveBeenCalledWith({\n       httpHost: 'localhost',\n       httpPort: 3334,\n+      https: false,\n       organizationId: 'org-1',\n     })\n     expect(output.log).toHaveBeenCalledWith('Dev server started on port 3334')"
+  },
+  {
+   "filename": "packages/@sanity/cli/src/actions/dev/servers/__tests__/startStudioDevServer.test.ts",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 1,
+   "patch": "@@ -119,6 +119,22 @@ describe('startStudioDevServer', () => {\n     expect(result.server).toBeDefined()\n   })\n \n+  test.each([\n+    {https: undefined, protocol: 'http'},\n+    {https: {}, protocol: 'https'},\n+  ])('announces $protocol from the resolved server configuration', async ({https, protocol}) => {\n+    const started = createMockDevServer({port: 4443})\n+    Object.assign(started.server.config.server, {https})\n+    mockStartDevServer.mockResolvedValueOnce(started)\n+    mockGetDevServerConfig.mockReturnValueOnce({...DEV_SERVER_CONFIG, basePath: '/studio'})\n+\n+    await startStudioDevServer(createDevOptions())\n+\n+    expect(started.server.config.logger.info).toHaveBeenCalledWith(\n+      expect.stringContaining(`${protocol}://localhost:4443/studio`),\n+    )\n+  })\n+\n   describe('unclaimed sign-in URL', () => {\n     const unclaimedOptions = createDevOptions({\n       cliConfig: {api: {projectId: 'abc123'}} as CliConfig,\n@@ -200,7 +216,10 @@ describe('startStudioDevServer', () => {\n   })\n \n   describe('load-in-dashboard', () => {\n-    test('resolves the org and logs the dashboard URL for non-workbench studios', async () => {\n+    test.each([undefined, {}])('passes resolved HTTPS=%j to the dashboard', async (https) => {\n+      const started = createMockDevServer()\n+      Object.assign(started.server.config.server, {https})\n+      mockStartDevServer.mockResolvedValue(started)\n       mockGetProjectCliClient.mockResolvedValue({\n         projects: {\n           getById: vi.fn().mockResolvedValue({organizationId: 'org-x'}),\n@@ -219,6 +238,7 @@ describe('startStudioDevServer', () => {\n       expect(mockGetDashboardAppURL).toHaveBeenCalledWith({\n         httpHost: 'localhost',\n         httpPort: 3333,\n+        https: Boolean(https),\n         organizationId: 'org-x',\n       })\n       expect(output.log).toHaveBeenCalledWith('Dev server started on port 3333')"
+  },
+  {
+   "filename": "packages/@sanity/cli/src/actions/dev/servers/getDashboardAppUrl.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -24,13 +24,15 @@ const getDefaultDashboardURL = ({\n export const getDashboardAppURL = async ({\n   httpHost = 'localhost',\n   httpPort = 3333,\n+  https = false,\n   organizationId,\n }: {\n   httpHost?: string\n   httpPort?: number\n+  https?: boolean\n   organizationId: string\n }): Promise<string> => {\n-  const url = `http://${httpHost}:${httpPort}`\n+  const url = `${https ? 'https' : 'http'}://${httpHost}:${httpPort}`\n \n   const abortController = new AbortController()\n   // Wait for 5 seconds before aborting the request"
+  },
+  {
+   "filename": "packages/@sanity/cli/src/actions/dev/servers/startAppDevServer.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 2,
+   "patch": "@@ -61,19 +61,20 @@ export async function startAppDevServer(options: DevActionOptions): Promise<Star\n       isApp: true,\n     })\n \n-    const {port} = server.config.server\n+    const {https, port} = server.config.server\n \n     // Federated apps surface through the workbench, which announces the URL;\n     // only the package-unavailable fallback announces from here.\n     if (isWorkbenchApp && announceUrl) {\n-      const url = `http://${toDisplayHost(config.httpHost)}:${port}`\n+      const url = `${https ? 'https' : 'http'}://${toDisplayHost(config.httpHost)}:${port}`\n       output.log(`App dev server started at ${styleText(['blue', 'underline'], url)}`)\n     } else if (!isWorkbenchApp) {\n       const httpHost = config.httpHost || 'localhost'\n \n       const dashboardAppUrl = await getDashboardAppURL({\n         httpHost,\n         httpPort: port,\n+        https: Boolean(https),\n         organizationId,\n       })\n       output.log(`Dev server started on port ${port}`)"
+  },
+  {
+   "filename": "packages/@sanity/cli/src/actions/dev/servers/startStudioDevServer.ts",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 2,
+   "patch": "@@ -138,7 +138,7 @@ export async function startStudioDevServer(\n     const {close, server} = await startDevServer(config)\n \n     const {info: loggerInfo} = server.config.logger\n-    const {port} = server.config.server\n+    const {https, port} = server.config.server\n     const httpHost = config.httpHost || 'localhost'\n \n     if (loadInDashboard) {\n@@ -152,14 +152,16 @@ export async function startStudioDevServer(\n           await getDashboardAppURL({\n             httpHost,\n             httpPort: port,\n+            https: Boolean(https),\n             organizationId: organizationId!,\n           }),\n         ),\n       )\n     } else {\n       const startupDuration = Date.now() - startTime\n+      const protocol = https ? 'https' : 'http'\n       const url = withUnclaimedSignInHash(\n-        `http://${httpHost || 'localhost'}:${port}${config.basePath}`,\n+        `${protocol}://${httpHost || 'localhost'}:${port}${config.basePath}`,\n         projectId,\n       )\n       const appType = 'Sanity Studio'"
+  }
+ ],
+ "test_files": [
+  "packages/@sanity/cli/src/actions/dev/servers/__tests__/getDashboardAppUrl.test.ts",
+  "packages/@sanity/cli/src/actions/dev/servers/__tests__/startAppDevServer.test.ts",
+  "packages/@sanity/cli/src/actions/dev/servers/__tests__/startStudioDevServer.test.ts"
+ ]
+}

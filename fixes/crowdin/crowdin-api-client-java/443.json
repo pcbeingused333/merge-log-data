@@ -1,0 +1,26 @@
+{
+ "repo": "crowdin/crowdin-api-client-java",
+ "number": 443,
+ "url": "https://github.com/crowdin/crowdin-api-client-java/pull/443",
+ "title": "fix: honor ISO 8601 offsets when deserializing dates",
+ "merged_at": "2026-11-17T07:20:31Z",
+ "files": [
+  {
+   "filename": "src/main/java/com/crowdin/client/core/http/impl/json/DateDeserializer.java",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -7,6 +7,8 @@\n \n import java.io.IOException;\n import java.text.SimpleDateFormat;\n+import java.time.OffsetDateTime;\n+import java.time.format.DateTimeParseException;\n import java.util.Date;\n \n public class DateDeserializer extends JsonDeserializer<Date> {\n@@ -24,6 +26,11 @@ public Date deserialize(JsonParser p, DeserializationContext ctxt) throws IOExce\n \n     @SneakyThrows\n     public static Date deserializeDate(String date) {\n+        try {\n+            return Date.from(OffsetDateTime.parse(date).toInstant());\n+        } catch (DateTimeParseException e) {\n+            // Preserve support for legacy timestamps without an offset.\n+        }\n         try {\n             SimpleDateFormat format = new SimpleDateFormat(\"yyyy-MM-dd'T'HH:mm:ss\");\n             return format.parse(date);"
+  },
+  {
+   "filename": "src/test/java/com/crowdin/client/core/http/impl/json/DateDeserializerTest.java",
+   "status": "added",
+   "additions": 52,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,52 @@\n+package com.crowdin.client.core.http.impl.json;\n+\n+import org.junit.jupiter.api.Test;\n+\n+import java.time.Instant;\n+import java.util.Date;\n+import java.util.TimeZone;\n+\n+import static org.junit.jupiter.api.Assertions.assertEquals;\n+import static org.junit.jupiter.api.Assertions.assertNull;\n+\n+public class DateDeserializerTest {\n+\n+    @Test\n+    public void testDeserializeWithOffsetsInNonUtcTimeZone() {\n+        TimeZone original = TimeZone.getDefault();\n+        try {\n+            TimeZone.setDefault(TimeZone.getTimeZone(\"America/New_York\"));\n+            JacksonJsonTransformer transformer = new JacksonJsonTransformer();\n+            String[] dates = {\n+                \"2019-07-11T07:40:22+00:00\",\n+                \"2019-07-11T09:40:22+02:00\",\n+                \"2019-07-11T03:40:22-04:00\",\n+                \"2019-07-11T07:40:22Z\"\n+            };\n+            for (String date : dates) {\n+                assertEquals(Date.from(Instant.parse(\"2019-07-11T07:40:22Z\")),\n+                        transformer.parse(\"\\\"\" + date + \"\\\"\", Date.class), date);\n+            }\n+            assertEquals(Date.from(Instant.parse(\"2019-07-11T07:40:22.123Z\")),\n+                    transformer.parse(\"\\\"2019-07-11T07:40:22.123+00:00\\\"\", Date.class));\n+        } finally {\n+            TimeZone.setDefault(original);\n+        }\n+    }\n+\n+    @Test\n+    public void testLegacyDatesAndEmptyValues() {\n+        TimeZone original = TimeZone.getDefault();\n+        try {\n+            TimeZone.setDefault(TimeZone.getTimeZone(\"America/New_York\"));\n+            Date expected = Date.from(Instant.parse(\"2019-07-11T11:40:22Z\"));\n+            assertEquals(expected, DateDeserializer.deserializeDate(\"2019-07-11T07:40:22\"));\n+            assertEquals(expected, DateDeserializer.deserializeDate(\"2019-07-11 07:40:22\"));\n+            JacksonJsonTransformer transformer = new JacksonJsonTransformer();\n+            assertNull(transformer.parse(\"\\\"\\\"\", Date.class));\n+            assertNull(transformer.parse(\"null\", Date.class));\n+        } finally {\n+            TimeZone.setDefault(original);\n+        }\n+    }\n+}"
+  }
+ ],
+ "test_files": [
+  "src/test/java/com/crowdin/client/core/http/impl/json/DateDeserializerTest.java"
+ ]
+}

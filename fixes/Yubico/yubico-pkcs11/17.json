@@ -1,0 +1,26 @@
+{
+ "repo": "Yubico/yubico-pkcs11",
+ "number": 17,
+ "url": "https://github.com/Yubico/yubico-pkcs11/pull/17",
+ "title": "fix: mark undersized attribute values as unavailable",
+ "merged_at": "2026-11-17T07:53:53Z",
+ "files": [
+  {
+   "filename": "crates/pkcs11-common/src/backend.rs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -1296,7 +1296,7 @@ impl<B: Backend> Engine<B> {\n                         if attr.pValue.is_null() {\n                             attr.ulValueLen = value.len() as CK_ULONG;\n                         } else if (attr.ulValueLen as usize) < value.len() {\n-                            attr.ulValueLen = CKR_BUFFER_TOO_SMALL as CK_ULONG;\n+                            attr.ulValueLen = CK_UNAVAILABLE_INFORMATION as CK_ULONG;\n                             any_too_small = true;\n                         } else {\n                             std::ptr::copy_nonoverlapping("
+  },
+  {
+   "filename": "crates/pkcs11-common/tests/attribute_value.rs",
+   "status": "added",
+   "additions": 110,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,110 @@\n+use pkcs11_common::backend::*;\n+use pkcs11_sys::*;\n+use std::ptr::null_mut;\n+\n+struct TestBackend;\n+\n+impl Backend for TestBackend {\n+    type SlotData = ();\n+    type SessionData = ();\n+    type ModuleData = ();\n+\n+    fn library_info() -> LibraryInfo {\n+        unimplemented!()\n+    }\n+    fn initialize(_: Option<&str>) -> Result<((), Vec<()>), CK_RV> {\n+        Ok(((), vec![()]))\n+    }\n+    fn is_present(_: &()) -> bool {\n+        true\n+    }\n+    fn slot_info(_: CK_SLOT_ID, _: &()) -> SlotInfo {\n+        unimplemented!()\n+    }\n+    fn token_info(_: &mut ()) -> Option<TokenInfo> {\n+        unimplemented!()\n+    }\n+    fn mechanism_list(_: &()) -> Vec<CK_MECHANISM_TYPE> {\n+        vec![]\n+    }\n+    fn mechanism_info(_: &(), _: CK_MECHANISM_TYPE) -> Option<MechanismInfo> {\n+        None\n+    }\n+    fn new_session_data(_: &mut (), _: CK_SESSION_HANDLE, _: CK_FLAGS) {}\n+    fn login(\n+        _: &mut Slot<Self>,\n+        _: CK_SESSION_HANDLE,\n+        _: CK_USER_TYPE,\n+        _: &[u8],\n+        _: &[u8],\n+    ) -> Result<(), CK_RV> {\n+        unimplemented!()\n+    }\n+    fn logout(_: &mut Slot<Self>) -> Result<(), CK_RV> {\n+        unimplemented!()\n+    }\n+    fn generate_random(_: &Slot<Self>, _: &mut [u8]) -> Result<(), CK_RV> {\n+        unimplemented!()\n+    }\n+    fn object_handles(_: &Slot<Self>) -> Vec<CK_OBJECT_HANDLE> {\n+        vec![1]\n+    }\n+    fn get_one_attribute_value(\n+        _: &(),\n+        _: CK_OBJECT_HANDLE,\n+        attr: CK_ATTRIBUTE_TYPE,\n+    ) -> Option<Vec<u8>> {\n+        match attr {\n+            value if value == CKA_LABEL as CK_ATTRIBUTE_TYPE => Some(b\"label\".to_vec()),\n+            value if value == CKA_ID as CK_ATTRIBUTE_TYPE => Some(vec![42]),\n+            _ => None,\n+        }\n+    }\n+}\n+\n+#[test]\n+fn short_attribute_buffer_marks_length_unavailable_and_processes_other_attributes() {\n+    let engine = Engine::<TestBackend>::new();\n+    let mut session = 0;\n+    let mut short = [0xAAu8; 2];\n+    let mut id = [0u8; 1];\n+    let mut attrs = [\n+        CK_ATTRIBUTE {\n+            type_: CKA_LABEL as CK_ATTRIBUTE_TYPE,\n+            pValue: short.as_mut_ptr().cast(),\n+            ulValueLen: short.len() as CK_ULONG,\n+        },\n+        CK_ATTRIBUTE {\n+            type_: CKA_ID as CK_ATTRIBUTE_TYPE,\n+            pValue: id.as_mut_ptr().cast(),\n+            ulValueLen: id.len() as CK_ULONG,\n+        },\n+        CK_ATTRIBUTE {\n+            type_: CKA_LABEL as CK_ATTRIBUTE_TYPE,\n+            pValue: null_mut(),\n+            ulValueLen: 0,\n+        },\n+    ];\n+    unsafe {\n+        assert_eq!(engine.initialize(null_mut()), CKR_OK.into());\n+        assert_eq!(\n+            engine.open_session(\n+                0,\n+                CKF_SERIAL_SESSION as CK_FLAGS,\n+                null_mut(),\n+                None,\n+                &mut session\n+            ),\n+            CKR_OK.into()\n+        );\n+        assert_eq!(\n+            engine.get_attribute_value(session, 1, attrs.as_mut_ptr(), attrs.len() as CK_ULONG),\n+            CKR_BUFFER_TOO_SMALL.into()\n+        );\n+    }\n+    assert_eq!(attrs[0].ulValueLen, CK_UNAVAILABLE_INFORMATION as CK_ULONG);\n+    assert_eq!(short, [0xAA; 2]);\n+    assert_eq!(attrs[1].ulValueLen, 1);\n+    assert_eq!(id, [42]);\n+    assert_eq!(attrs[2].ulValueLen, 5);\n+}"
+  }
+ ],
+ "test_files": [
+  "crates/pkcs11-common/tests/attribute_value.rs"
+ ]
+}

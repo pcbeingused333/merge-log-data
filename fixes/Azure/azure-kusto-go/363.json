@@ -1,0 +1,26 @@
+{
+ "repo": "Azure/azure-kusto-go",
+ "number": 363,
+ "url": "https://github.com/Azure/azure-kusto-go/pull/363",
+ "title": "fix: report dataset frame read errors between tables",
+ "merged_at": "2026-11-17T04:58:12Z",
+ "files": [
+  {
+   "filename": "azkustodata/query/v2/iterative_dataset.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 4,
+   "patch": "@@ -133,8 +133,6 @@ func parseRoutine(d *iterativeDataset, cancel context.CancelFunc) {\n \n func readDataSet(d *iterativeDataset) error {\n \n-\tvar err error\n-\n \t// The first frame should be a DataSetHeader. We don't need to save it - just validate it.\n \tif header, _, err := nextFrame(d); err == nil {\n \t\tif err = validateDataSetHeader(header); err != nil {\n@@ -162,7 +160,11 @@ func readDataSet(d *iterativeDataset) error {\n \t// If we get a TableHeader, we read the table.\n \t// If we get a DataTable, it means we have reached QueryCompletionInformation\n \t// If we get a DataSetCompletion, we are done.\n-\tfor decoder, frameType, err := nextFrame(d); err == nil; decoder, frameType, err = nextFrame(d) {\n+\tfor {\n+\t\tdecoder, frameType, err := nextFrame(d)\n+\t\tif err != nil {\n+\t\t\treturn err\n+\t\t}\n \t\tif frameType == DataTableFrameType {\n \t\t\tif err = handleDataTable(d, decoder); err != nil {\n \t\t\t\treturn err\n@@ -188,7 +190,6 @@ func readDataSet(d *iterativeDataset) error {\n \t\treturn errors.ES(errors.OpQuery, errors.KInternal, \"unexpected frame type %s, expected DataTable, TableHeader, or DataSetCompletion\", frameType)\n \t}\n \n-\treturn err\n }\n \n // nextFrame reads the next frame from the buffered channel."
+  },
+  {
+   "filename": "azkustodata/query/v2/read_error_test.go",
+   "status": "added",
+   "additions": 73,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,73 @@\n+package v2\n+\n+import (\n+\t\"context\"\n+\t\"errors\"\n+\t\"io\"\n+\t\"strings\"\n+\t\"testing\"\n+\t\"testing/iotest\"\n+\t\"time\"\n+\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+func TestStreamingDataSet_ReadErrorAfterTableCompletion(t *testing.T) {\n+\tconst prefix = `[{\"FrameType\":\"DataSetHeader\",\"IsProgressive\":false,\"Version\":\"v2.0\",\"IsFragmented\":true,\"ErrorReportingPlacement\":\"EndOfTable\"}\n+,{\"FrameType\":\"DataTable\",\"TableId\":0,\"TableKind\":\"QueryProperties\",\"TableName\":\"@ExtendedProperties\",\"Columns\":[],\"Rows\":[]}\n+,{\"FrameType\":\"TableHeader\",\"TableId\":1,\"TableKind\":\"PrimaryResult\",\"TableName\":\"PrimaryResult\",\"Columns\":[{\"ColumnName\":\"Value\",\"ColumnType\":\"string\"}]}\n+,{\"FrameType\":\"TableFragment\",\"TableId\":1,\"Rows\":[[\"example\"]]}\n+`\n+\tconst tableEnd = `,{\"FrameType\":\"TableCompletion\",\"TableId\":1,\"RowCount\":1}\n+`\n+\tconst datasetEnd = `,{\"FrameType\":\"DataSetCompletion\",\"HasErrors\":false,\"Cancelled\":false}\n+]\n+`\n+\treadErr := errors.New(\"connection lost\")\n+\tfor _, tt := range []struct {\n+\t\tname     string\n+\t\tresponse string\n+\t\tfail     bool\n+\t}{\n+\t\t{\"complete\", prefix + tableEnd + datasetEnd, false},\n+\t\t{\"failure during table\", prefix, true},\n+\t\t{\"failure after table\", prefix + tableEnd, true},\n+\t} {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)\n+\t\t\tdefer cancel()\n+\t\t\tvar reader io.Reader = strings.NewReader(tt.response)\n+\t\t\tif tt.fail {\n+\t\t\t\treader = io.MultiReader(reader, iotest.ErrReader(readErr))\n+\t\t\t}\n+\t\t\tdataset, err := NewIterativeDataset(ctx, io.NopCloser(reader), 1, 1, 1)\n+\t\t\trequire.NoError(t, err)\n+\t\t\tdefer dataset.Close()\n+\t\t\trows := 0\n+\t\t\tvar reportedErrors []error\n+\t\t\tfor result := range dataset.Tables() {\n+\t\t\t\tif result.Err() != nil {\n+\t\t\t\t\treportedErrors = append(reportedErrors, result.Err())\n+\t\t\t\t\tcontinue\n+\t\t\t\t}\n+\t\t\t\ttable := result.Table()\n+\t\t\t\tfor row := range table.Rows() {\n+\t\t\t\t\tif row.Err() != nil {\n+\t\t\t\t\t\treportedErrors = append(reportedErrors, row.Err())\n+\t\t\t\t\t} else if table.IsPrimaryResult() && row.Row() != nil {\n+\t\t\t\t\t\trows++\n+\t\t\t\t\t}\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\trequire.Equal(t, 1, rows)\n+\t\t\tif tt.fail {\n+\t\t\t\trequire.NotEmpty(t, reportedErrors)\n+\t\t\t\tfor _, err := range reportedErrors {\n+\t\t\t\t\trequire.ErrorIs(t, err, readErr)\n+\t\t\t\t}\n+\t\t\t} else {\n+\t\t\t\trequire.Empty(t, reportedErrors)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "azkustodata/query/v2/read_error_test.go"
+ ]
+}
