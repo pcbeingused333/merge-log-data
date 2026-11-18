@@ -1,0 +1,26 @@
+{
+ "repo": "Nixtla/neuralforecast",
+ "number": 1769,
+ "url": "https://github.com/Nixtla/neuralforecast/pull/1769",
+ "title": "fix(core): align stored dates after appending validation data",
+ "merged_at": "2026-11-17T21:02:31Z",
+ "files": [
+  {
+   "filename": "neuralforecast/core.py",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 1,
+   "patch": "@@ -1047,10 +1047,23 @@ def fit(\n                     f\"{val_dataset.min_size} to {val_dataset.max_size}\"\n                 )\n             val_size = val_dataset.min_size\n+            train_indptr = self.dataset.indptr\n             self.dataset = self.dataset.append(val_dataset)\n-            _, _, self.last_dates, _ = TimeSeriesDataset.from_df(\n+            _, _, self.last_dates, val_ds = TimeSeriesDataset.from_df(\n                 df=val_df, id_col=id_col, time_col=time_col, target_col=target_col\n             )\n+            # Match append's per-series order: training followed by validation.\n+            self.ds = np.concatenate(\n+                [\n+                    np.concatenate(\n+                        (\n+                            self.ds[train_indptr[i] : train_indptr[i + 1]],\n+                            val_ds[val_dataset.indptr[i] : val_dataset.indptr[i + 1]],\n+                        )\n+                    )\n+                    for i in range(self.dataset.n_groups)\n+                ]\n+            )\n \n         if val_size is not None:\n             if self.dataset.min_size < val_size:"
+  },
+  {
+   "filename": "tests/test_core.py",
+   "status": "modified",
+   "additions": 48,
+   "deletions": 0,
+   "patch": "@@ -1793,6 +1793,54 @@ def test_val_df_equivalence_with_val_size(setup_airplane_data):\n     np.testing.assert_allclose(losses_val_size, losses_val_df, atol=1e-4)\n \n \n+@pytest.mark.parametrize(\"backend\", [\"pandas\", \"polars\"])\n+@pytest.mark.parametrize(\"ragged\", [False, True])\n+def test_val_df_predict_insample(backend, ragged):\n+    df = AirPassengersPanel[[\"unique_id\", \"ds\", \"y\"]]\n+    train = df.groupby(\"unique_id\", observed=True).head(120)\n+    if ragged:\n+        train = train.drop(train[train.unique_id == \"Airline2\"].head(12).index)\n+    val = df.groupby(\"unique_id\", observed=True).tail(24)\n+    expected = pd.concat([train, val]).sort_values([\"unique_id\", \"ds\"])\n+    # Validation rows need not arrive in series/time order.\n+    val = val.sample(frac=1, random_state=42)\n+    if backend == \"polars\":\n+        train, val = polars.from_pandas(train), polars.from_pandas(val)\n+\n+    nf = NeuralForecast(\n+        models=[\n+            NHITS(\n+                h=12,\n+                input_size=24,\n+                max_steps=2,\n+                accelerator=\"cpu\",\n+                enable_progress_bar=False,\n+                logger=False,\n+            )\n+        ],\n+        freq=\"ME\" if backend == \"pandas\" else \"1mo\",\n+    )\n+    nf.fit(train, val_df=val)\n+    predictions = nf.predict_insample()\n+    np.testing.assert_array_equal(nf.ds, expected.ds.to_numpy())\n+    np.testing.assert_array_equal(\n+        nf.last_dates, expected.groupby(\"unique_id\", observed=True).ds.max()\n+    )\n+    if backend == \"polars\":\n+        predictions = predictions.to_pandas()\n+    actuals = predictions[[\"unique_id\", \"ds\", \"y\"]].drop_duplicates()\n+    pd.testing.assert_frame_equal(\n+        actuals.sort_values([\"unique_id\", \"ds\"]).reset_index(drop=True),\n+        expected.reset_index(drop=True),\n+        check_dtype=False,\n+    )\n+    # cross_validation(df=None) also pairs self.ds with the stored dataset.\n+    cv = nf.cross_validation(df=None, n_windows=1, step_size=12)\n+    if backend == \"polars\":\n+        cv = cv.to_pandas()\n+    assert len(cv) == expected.unique_id.nunique() * 12\n+\n+\n # drop_last_loader only drops training batches: with fewer series than\n # valid_batch_size, validation must still run\n @pytest.mark.parametrize(\"model_cls, kwargs\", [(MLP, {}), (TSMixer, {\"n_series\": 3})])"
+  }
+ ],
+ "test_files": [
+  "tests/test_core.py"
+ ]
+}

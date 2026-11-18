@@ -1,0 +1,33 @@
+{
+ "repo": "heymrun/heym",
+ "number": 1022,
+ "url": "https://github.com/heymrun/heym/pull/1022",
+ "title": "fix(collab): hide cursors from other tabs of the same account",
+ "merged_at": "2026-11-18T07:09:57Z",
+ "files": [
+  {
+   "filename": "frontend/src/features/collab/components/CollabOverlay.vue",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -49,6 +49,7 @@ function ringStyle(user: CollabUserView): Record<string, string> {\n         type=\"button\"\n         class=\"relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full\"\n         :class=\"user.isSelf ? 'cursor-default' : 'cursor-pointer'\"\n+        :disabled=\"user.isSelf\"\n         :style=\"ringStyle(user)\"\n         :title=\"avatarLabel(user)\"\n         :aria-label=\"avatarLabel(user)\""
+  },
+  {
+   "filename": "frontend/src/features/collab/usePresence.test.ts",
+   "status": "added",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,25 @@\n+import { ref } from \"vue\";\n+import { describe, expect, it } from \"vitest\";\n+\n+import type { CollabIdentity, CursorPoint } from \"@/features/collab/types\";\n+import { createPresence } from \"@/features/collab/usePresence\";\n+\n+describe(\"createPresence\", () => {\n+  it.each([\"canvas\", \"header\"] as const)(\"hides same-account cursors in the %s region\", (region) => {\n+    const local: CollabIdentity = { sid: \"first\", userId: \"me\", name: \"Me\", permission: \"write\" };\n+    const otherTab = { ...local, sid: \"second\" };\n+    const collaborator = { ...local, sid: \"third\", userId: \"other\", name: \"Other\" };\n+    const point: CursorPoint = { region, anchor: \"start\", x: 10, y: 20 };\n+\n+    for (const [self, sibling] of [[local, otherTab], [otherTab, local]] as const) {\n+      const presence = createPresence(ref(self), ref(false));\n+      presence.onCursor(sibling, point);\n+      presence.onCursor(collaborator, point);\n+\n+      expect(presence.cursors.value.map(({ sid }) => sid)).toEqual([collaborator.sid]);\n+      expect(presence.users.value.filter(({ isSelf }) => isSelf)).toMatchObject([\n+        { userId: self.userId, sids: [self.sid, sibling.sid] },\n+      ]);\n+    }\n+  });\n+});"
+  },
+  {
+   "filename": "frontend/src/features/collab/usePresence.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -165,7 +165,7 @@ export function createPresence(me: Ref<CollabIdentity | null>, selfMic: Ref<bool\n \n   const cursors = computed<RemoteCursor[]>(() =>\n     [...peers.values()].flatMap((peer) =>\n-      peer.cursor\n+      peer.cursor && peer.identity.userId !== me.value?.userId\n         ? [\n             {\n               sid: peer.identity.sid,"
+  }
+ ],
+ "test_files": [
+  "frontend/src/features/collab/usePresence.test.ts"
+ ]
+}

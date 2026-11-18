@@ -15,6 +15,11 @@
    "role": "contributor",
    "created_at": "2026-11-08T09:58:10Z",
    "body": "One thing worth checking before this merges. AWS's own Python sample for this endpoint ([aws-samples/amazon-transcribe-streaming-python-websockets](https://github.com/aws-samples/amazon-transcribe-streaming-python-websockets/blob/main/example.py)) leaves `ping_interval` at the default but sets `ping_timeout=None`:\n\n```python\nasync with websockets.connect(request_url,\n                              extra_headers=extra_headers,\n                              ping_timeout=None,\n                              ) as websocket:\n```\n\nSo pings are clearly accepted: the sample sends one every 20s, and `_verify_connection` in `websocket_service.py` already pings this endpoint on every reconnect. But AWS turned off the part that waits for the pong.\n\nIf the endpoint doesn't answer pings reliably, restoring the default `ping_timeout` would close healthy connections about 40s in, which is worse than the half-open case this fixes. I can't run it without AWS credentials. Could someone who has them stream a minute or two through this branch and confirm the connection survives past 40s?\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-17T21:42:46Z",
+   "body": "Thanks for checking against the AWS sample. We don't have AWS credentials either, so we haven't streamed a live session through this branch; the test only covers a silent local socket. The concern is fair: the sample sets `ping_timeout=None`, so we can't tell whether the endpoint answers pings reliably. If someone with AWS access can stream 1-2 minutes and confirm the connection survives past 40s, that settles it. Otherwise we can keep the default `ping_interval` and set an explicit, larger `ping_timeout` (e.g. 60s) so half-open sockets still get detected. Happy to push that instead if you prefer.\n\nDisclosure: this reply was drafted with AI assistance (Claude Code) and has not been verified against a live AWS endpoint.\n"
   }
  ]
 }

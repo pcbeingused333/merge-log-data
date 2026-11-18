@@ -1,0 +1,26 @@
+{
+ "repo": "NPC-Worldwide/npcpy",
+ "number": 363,
+ "url": "https://github.com/NPC-Worldwide/npcpy/pull/363",
+ "title": "fix(lora): use greedy decoding when temperature is 0",
+ "merged_at": "2026-11-17T22:40:18Z",
+ "files": [
+  {
+   "filename": "npcpy/gen/response.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 2,
+   "patch": "@@ -1008,13 +1008,18 @@ def get_lora_response(\n         max_new_tokens = kwargs.get(\"max_tokens\", 512)\n         temperature = kwargs.get(\"temperature\", 0.7)\n \n+        # transformers rejects temperature=0 when do_sample=True; use greedy\n+        # decoding for temperature <= 0 and only pass temperature when sampling.\n+        generate_kwargs = {\"do_sample\": bool(temperature and temperature > 0)}\n+        if generate_kwargs[\"do_sample\"]:\n+            generate_kwargs[\"temperature\"] = temperature\n+\n         with torch.no_grad():\n             outputs = model_with_adapter.generate(\n                 **inputs,\n                 max_new_tokens=max_new_tokens,\n-                temperature=temperature,\n-                do_sample=True,\n                 pad_token_id=tokenizer.eos_token_id,\n+                **generate_kwargs,\n             )\n \n         response_content = tokenizer.decode("
+  },
+  {
+   "filename": "tests/test_lora_temperature.py",
+   "status": "added",
+   "additions": 62,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,62 @@\n+\"\"\"get_lora_response must not pass temperature=0 together with do_sample=True.\"\"\"\n+\n+import importlib.util\n+import json\n+from pathlib import Path\n+import sys\n+from types import SimpleNamespace\n+from unittest.mock import MagicMock, Mock, patch\n+\n+import pytest\n+\n+\n+@pytest.fixture\n+def response_module():\n+    path = Path(__file__).parents[1] / \"npcpy\" / \"gen\" / \"response.py\"\n+    spec = importlib.util.spec_from_file_location(\"lora_response_test\", path)\n+    module = importlib.util.module_from_spec(spec)\n+    with patch.dict(sys.modules, {\n+        \"npcpy.data.image\": SimpleNamespace(compress_image=Mock()),\n+        \"npcpy.npc_sysenv\": SimpleNamespace(\n+            get_system_message=Mock(), lookup_provider=Mock(),\n+            render_markdown=Mock(), MINIMAX_MODELS=(),\n+        ),\n+    }):\n+        spec.loader.exec_module(module)\n+    return module\n+\n+\n+def _run(response_module, tmp_path, **kwargs):\n+    (tmp_path / \"adapter_config.json\").write_text(\n+        json.dumps({\"base_model_name_or_path\": \"base/model\"})\n+    )\n+    torch = MagicMock()\n+    torch.cuda.is_available.return_value = False\n+    tokenizer = MagicMock()\n+    tokenizer.pad_token = \"<pad>\"\n+    tokenizer.return_value = {\"input_ids\": MagicMock()}\n+    tokenizer.decode.return_value = \"ok\"\n+    model = MagicMock()\n+    model.generate.return_value = [MagicMock()]\n+    transformers = SimpleNamespace(\n+        AutoTokenizer=SimpleNamespace(from_pretrained=Mock(return_value=tokenizer)),\n+        AutoModelForCausalLM=SimpleNamespace(from_pretrained=Mock(return_value=MagicMock())),\n+    )\n+    peft = SimpleNamespace(PeftModel=SimpleNamespace(from_pretrained=Mock(return_value=model)))\n+    with patch.dict(sys.modules, {\"torch\": torch, \"transformers\": transformers, \"peft\": peft}):\n+        out = response_module.get_lora_response(\n+            prompt=\"hi\", model=str(tmp_path), messages=[], **kwargs\n+        )\n+    return out, model.generate.call_args.kwargs\n+\n+\n+def test_temperature_zero_uses_greedy_decoding(response_module, tmp_path):\n+    out, gen_kwargs = _run(response_module, tmp_path, temperature=0)\n+    assert gen_kwargs[\"do_sample\"] is False\n+    assert \"temperature\" not in gen_kwargs\n+\n+\n+def test_positive_temperature_still_samples(response_module, tmp_path):\n+    out, gen_kwargs = _run(response_module, tmp_path, temperature=0.4)\n+    assert gen_kwargs[\"do_sample\"] is True\n+    assert gen_kwargs[\"temperature\"] == 0.4"
+  }
+ ],
+ "test_files": [
+  "tests/test_lora_temperature.py"
+ ]
+}

@@ -39,6 +39,12 @@
    "state": "CHANGES_REQUESTED",
    "submitted_at": "2026-11-03T17:47:21Z",
    "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-18T07:22:05Z",
+   "body": ""
   }
  ],
  "review_comments": [
@@ -131,6 +137,18 @@
    "path": "backend/common.go",
    "created_at": "2026-11-03T17:44:19Z",
    "body": "Noting here that the xattrs are copied after the file is moved, so there is a window of time where metadata such as objectlock info is missing from other racing requests. Might need to be addressed somehow."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/common.go",
+   "created_at": "2026-11-18T07:21:13Z",
+   "body": "nit: the deferred `Close` drops its error, and the copy is already published by then. On NFS without `--fsync`, a failed write-back can surface only at `close()`, so the object would go live with missing data and the PUT would still succeed. `fallbackLink` checks `tmp.f.Close()` before publishing for the same reason. Closing here first covers it (the deferred `Close` then just returns `ErrClosed`):\n\n```go\nerr = destFile.Close()\nif err != nil {\n\treturn fmt.Errorf(\"close temporary destination: %w\", err)\n}\n\nerr = os.Rename(tmpName, destination)\n```"
+  },
+  {
+   "role": "contributor",
+   "path": "backend/common.go",
+   "created_at": "2026-11-18T07:22:00Z",
+   "body": "Not blocking, for a follow-up: this reuses `linkatOTmpfile`'s temp naming, and this path keeps the file around much longer. Listings skip only the root `.sgwtmp` directory, so during the copy the hidden file is listed as `.<name>.sgwtmp.<n>` with a partial size and no ETag, and a crash mid-copy leaves it behind. The name also adds 28 bytes, so a key whose last segment is 228–255 bytes fails here with `ENAMETOOLONG`. `linkatOTmpfile` already fails overwrites of such keys on main, so both can be fixed together in a separate change."
   }
  ],
  "comments": [

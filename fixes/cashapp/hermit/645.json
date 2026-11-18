@@ -1,0 +1,26 @@
+{
+ "repo": "cashapp/hermit",
+ "number": 645,
+ "url": "https://github.com/cashapp/hermit/pull/645",
+ "title": "fix(envars): expand variables in Append before dedupe and revert",
+ "merged_at": "2026-11-18T07:20:23Z",
+ "files": [
+  {
+   "filename": "envars/ops.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 3,
+   "patch": "@@ -194,14 +194,16 @@ func (e *Append) String() string {\n func (e *Append) Envar() string { return e.Name }\n func (e *Append) Apply(transform *Transform) {\n \tvalue, _ := transform.get(e.Name)\n-\tout := splitAndDrop(value, e.Value)\n-\tout = append(out, e.Value)\n+\tappended := transform.expand(e.Value)\n+\tout := splitAndDrop(value, appended)\n+\tout = append(out, appended)\n \ttransform.set(e.Name, strings.Join(out, \":\"))\n }\n \n func (e *Append) Revert(transform *Transform) {\n \tvalue, _ := transform.get(e.Name)\n-\tout := splitAndDrop(value, e.Value)\n+\tappended := transform.expand(e.Value)\n+\tout := splitAndDrop(value, appended)\n \ttransform.set(e.Name, strings.Join(out, \":\"))\n }\n "
+  },
+  {
+   "filename": "envars/ops_test.go",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -42,6 +42,10 @@ func TestOpApplyRevert(t *testing.T) {\n \t\t\tEnvars{\"GOBIN\": \"/go/bin\", \"PATH\": \"/bin\"},\n \t\t\t&Prepend{Name: \"PATH\", Value: \"${GOBIN}\"},\n \t\t\tEnvars{\"GOBIN\": \"/go/bin\", \"PATH\": \"/go/bin:/bin\"}},\n+\t\t{\"AppendWithVariableSuffix\",\n+\t\t\tEnvars{\"SDKROOT\": \"/opt/sdk\", \"PATH\": \"/bin\"},\n+\t\t\t&Append{Name: \"PATH\", Value: \"${SDKROOT}/bin\"},\n+\t\t\tEnvars{\"SDKROOT\": \"/opt/sdk\", \"PATH\": \"/bin:/opt/sdk/bin\"}},\n \t}\n \tfor _, test := range tests {\n \t\tt.Run(test.name, func(t *testing.T) {\n@@ -134,3 +138,14 @@ func TestEncodeDecodeOps(t *testing.T) {\n \tassert.NoError(t, err)\n \tassert.Equal(t, repr.String(expected, repr.Indent(\"  \")), repr.String(actual, repr.Indent(\"  \")))\n }\n+\n+func TestAppendVariableIdempotentAndReverts(t *testing.T) {\n+\tbase := Envars{\"PATH\": \"/usr/bin\", \"SDKROOT\": \"/opt/sdk\"}\n+\tops := Infer([]string{\"PATH=${PATH}:${SDKROOT}/bin\"})\n+\tonce := base.Apply(\"/project\", ops).Combined()\n+\tassert.Equal(t, \"/usr/bin:/opt/sdk/bin\", once[\"PATH\"])\n+\ttwice := once.Apply(\"/project\", ops).Combined()\n+\tassert.Equal(t, \"/usr/bin:/opt/sdk/bin\", twice[\"PATH\"])\n+\treverted := once.Revert(\"/project\", ops).Combined()\n+\tassert.Equal(t, base, reverted)\n+}"
+  }
+ ],
+ "test_files": [
+  "envars/ops_test.go"
+ ]
+}

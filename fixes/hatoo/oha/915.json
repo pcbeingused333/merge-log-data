@@ -1,0 +1,26 @@
+{
+ "repo": "hatoo/oha",
+ "number": 915,
+ "url": "https://github.com/hatoo/oha/pull/915",
+ "title": "fix: resolve chained redirects against the current URL",
+ "merged_at": "2026-11-18T05:45:16Z",
+ "files": [
+  {
+   "filename": "src/client.rs",
+   "status": "modified",
+   "additions": 31,
+   "deletions": 6,
+   "patch": "@@ -42,6 +42,12 @@ fn format_host_port(host: &str, port: u16) -> String {\n     }\n }\n \n+/// A redirect may reuse the current connection only if both the scheme and the\n+/// authority are unchanged (e.g. `http://B` -> `https://B` needs a new connection).\n+fn can_reuse_connection(from: &Url, to: &Url) -> bool {\n+    from.scheme() == to.scheme() && from.authority() == to.authority()\n+}\n+\n #[derive(Debug, Clone, Copy)]\n pub struct ConnectionTime {\n     pub dns_lookup: std::time::Duration,\n@@ -940,7 +946,7 @@ impl Client {\n         };\n \n         let (mut send_request, send_request_base) =\n-            if base_url.authority() == url.authority() && !self.disable_keepalive {\n+            if can_reuse_connection(&base_url, &url) && !self.disable_keepalive {\n                 // reuse connection\n                 (send_request, None)\n             } else {\n@@ -953,8 +959,8 @@ impl Client {\n             send_request = stream;\n         }\n \n-        let mut request = self.generate_request(&mut seed.clone())?.1;\n-        if url.authority() != base_url.authority() {\n+        let (request_url, mut request, _) = self.generate_request(&mut seed.clone())?;\n+        if url.authority() != request_url.authority() {\n             request.headers_mut().insert(\n                 http::header::HOST,\n                 http::HeaderValue::from_str(url.authority())?,\n@@ -994,9 +1000,15 @@ impl Client {\n         }\n \n         if let Some(location) = parts.headers.get(\"Location\") {\n-            let (send_request_redirect, new_status, len) =\n-                Box::pin(self.redirect(base_url, seed, send_request, location, limit - 1, rng))\n-                    .await?;\n+            let (send_request_redirect, new_status, len) = Box::pin(self.redirect(\n+                Cow::Owned(url),\n+                seed,\n+                send_request,\n+                location,\n+                limit - 1,\n+                rng,\n+            ))\n+            .await?;\n             send_request = send_request_redirect;\n             status = new_status;\n             len_bytes = len;\n@@ -2653,3 +2665,16 @@ pub mod fast {\n         });\n     }\n }\n+\n+#[cfg(test)]\n+mod redirect_reuse_tests {\n+    use super::*;\n+\n+    #[test]\n+    fn connection_is_reused_only_for_same_scheme_and_authority() {\n+        let u = |s: &str| Url::parse(s).unwrap();\n+        assert!(can_reuse_connection(&u(\"http://b/x\"), &u(\"http://b/y\")));\n+        assert!(!can_reuse_connection(&u(\"http://b/x\"), &u(\"https://b/y\")));\n+        assert!(!can_reuse_connection(&u(\"http://a/x\"), &u(\"http://b/y\")));\n+    }\n+}"
+  },
+  {
+   "filename": "tests/tests.rs",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -730,6 +730,44 @@ async fn test_redirect() {\n     }\n }\n \n+#[rstest]\n+#[case(false)]\n+#[case(true)]\n+#[tokio::test]\n+async fn test_chained_relative_redirects(#[case] cross_authority: bool) {\n+    let (listener, port) = bind_port().await;\n+    let (tx, rx) = kanal::unbounded();\n+    let target = format!(\"http://127.0.0.1:{port}\");\n+    let app = Router::new()\n+        .route(\"/start\", get(|| async { Redirect::temporary(\"/dir/next\") }))\n+        .route(\"/dir/next\", get(|| async { Redirect::temporary(\"leaf\") }))\n+        .route(\n+            \"/dir/leaf\",\n+            get(move |headers: HeaderMap| async move {\n+                tx.send(headers[\"host\"].to_str().unwrap().to_string())\n+                    .unwrap();\n+                \"done\"\n+            }),\n+        );\n+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });\n+\n+    let start = if cross_authority {\n+        let (listener, _) = bind_port().await;\n+        let address = listener.local_addr().unwrap();\n+        let location = format!(\"{target}/start\");\n+        let app = Router::new().route(\n+            \"/start\",\n+            get(move || async move { Redirect::temporary(&location) }),\n+        );\n+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });\n+        format!(\"http://{address}/start\")\n+    } else {\n+        format!(\"{target}/start\")\n+    };\n+    run([\"-n\", \"1\", \"-c\", \"1\", \"--redirect\", \"5\", &start]).await;\n+    assert_eq!(rx.try_recv().unwrap(), Some(format!(\"127.0.0.1:{port}\")));\n+}\n+\n #[tokio::test]\n async fn test_connect_to() {\n     assert_eq!("
+  }
+ ],
+ "test_files": [
+  "tests/tests.rs"
+ ]
+}

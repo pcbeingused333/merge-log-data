@@ -1,0 +1,68 @@
+{
+ "repo": "LottieFiles/dotlottie-web",
+ "number": 1007,
+ "url": "https://github.com/LottieFiles/dotlottie-web/pull/1007",
+ "title": "fix(vue): apply themeData after the animation loads",
+ "merged_at": "2026-11-18T06:34:26Z",
+ "files": [
+  {
+   "filename": ".changeset/vue-reapply-theme-data.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@lottiefiles/dotlottie-vue': patch\n+---\n+\n+fix: apply `themeData` after the animation loads, so the initial value and later `src` changes keep the custom theme"
+  },
+  {
+   "filename": "packages/vue/package.json",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -40,6 +40,8 @@\n     \"dev\": \"tsdown --watch\",\n     \"lint\": \"biome check --write .\",\n     \"stats:ts\": \"tsc -p tsconfig.build.json --extendedDiagnostics\",\n+    \"test\": \"vitest run --browser.headless\",\n+    \"test:watch\": \"vitest\",\n     \"type-check\": \"tsc --noEmit\"\n   },\n   \"peerDependencies\": {\n@@ -49,10 +51,13 @@\n     \"@lottiefiles/dotlottie-web\": \"workspace:*\"\n   },\n   \"devDependencies\": {\n+    \"@vitest/browser\": \"^4.0.18\",\n+    \"@vitest/browser-playwright\": \"^4.0.18\",\n     \"@vue/runtime-dom\": \"^3.4.6\",\n     \"@vue/tsconfig\": \"^0.9.1\",\n     \"tsdown\": \"^0.21.10\",\n-    \"typescript\": \"6.0.3\"\n+    \"typescript\": \"6.0.3\",\n+    \"vitest\": \"^4.0.18\"\n   },\n   \"publishConfig\": {\n     \"access\": \"public\","
+  },
+  {
+   "filename": "packages/vue/setup-file.ts",
+   "status": "added",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,6 @@\n+import { DotLottie } from '@lottiefiles/dotlottie-web';\n+\n+// eslint-disable-next-line node/no-unsupported-features/node-builtins\n+const wasmUrl = new URL('../web/src/core/dotlottie-player.wasm?url', import.meta.url).href;\n+\n+DotLottie.setWasmUrl(wasmUrl);"
+  },
+  {
+   "filename": "packages/vue/src/dotlottie.ts",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -322,6 +322,16 @@ export const DotLottieVue = defineComponent({\n         autoplay: shouldAutoplay.value,\n       });\n \n+      // The core clears theme data on every load, so apply `themeData` after each load,\n+      // including the initial one and reloads triggered by a `src` change.\n+      const instance = dotLottie;\n+\n+      instance.addEventListener('load', () => {\n+        if (props.themeData && !themeId?.value) {\n+          instance.setThemeData(props.themeData);\n+        }\n+      });\n+\n       if (playOnHover?.value) {\n         canvas.value.addEventListener('mouseenter', hoverHandler);\n         canvas.value.addEventListener('mouseleave', hoverHandler);"
+  },
+  {
+   "filename": "packages/vue/tests/dotlottie-vue.spec.ts",
+   "status": "added",
+   "additions": 77,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,77 @@\n+import { DotLottie } from '@lottiefiles/dotlottie-web';\n+import { afterEach, describe, expect, test, vi } from 'vitest';\n+import type { App } from 'vue';\n+import { createApp, h, nextTick, reactive } from 'vue';\n+import type { DotLottieVueInstance } from '../src';\n+import { DotLottieVue } from '../src';\n+\n+// eslint-disable-next-line node/no-unsupported-features/node-builtins\n+const lottieSrc = new URL('../../../fixtures/test.json', import.meta.url).href;\n+// eslint-disable-next-line node/no-unsupported-features/node-builtins\n+const dotLottieSrc = new URL('../../../fixtures/test.lottie', import.meta.url).href;\n+\n+const themeData = JSON.stringify({ rules: [{ id: 'c0', type: 'Color', value: [1, 0, 1] }] });\n+\n+describe('DotLottieVue themeData', () => {\n+  let app: App | undefined;\n+\n+  afterEach(() => {\n+    app?.unmount();\n+    app = undefined;\n+    vi.restoreAllMocks();\n+  });\n+\n+  function mount(props: Record<string, unknown>): { instance: () => DotLottie } {\n+    let component: DotLottieVueInstance | null = null;\n+\n+    app = createApp({\n+      render: () =>\n+        h(DotLottieVue, {\n+          ...props,\n+          ref: (el: unknown) => {\n+            component = el as DotLottieVueInstance | null;\n+          },\n+        }),\n+    });\n+    app.mount(document.body.appendChild(document.createElement('div')));\n+\n+    return {\n+      instance: () => {\n+        const instance = component?.getDotLottieInstance();\n+\n+        if (!instance) throw new Error('expected a player instance');\n+\n+        return instance;\n+      },\n+    };\n+  }\n+\n+  test('applies the initial themeData once the animation loads', async () => {\n+    const setThemeData = vi.spyOn(DotLottie.prototype, 'setThemeData');\n+    const { instance } = mount({ src: lottieSrc, autoplay: true, themeData });\n+\n+    await vi.waitFor(() => {\n+      expect(instance().isLoaded).toBe(true);\n+      expect(setThemeData).toHaveBeenCalledWith(themeData);\n+    });\n+  });\n+\n+  test('re-applies themeData after src changes', async () => {\n+    const setThemeData = vi.spyOn(DotLottie.prototype, 'setThemeData');\n+    const props = reactive({ src: lottieSrc, autoplay: true, themeData });\n+    const { instance } = mount(props);\n+\n+    await vi.waitFor(() => {\n+      expect(instance().isLoaded).toBe(true);\n+      expect(setThemeData).toHaveBeenCalledTimes(1);\n+    });\n+\n+    props.src = dotLottieSrc;\n+    await nextTick();\n+\n+    await vi.waitFor(() => {\n+      expect(setThemeData).toHaveBeenCalledTimes(2);\n+      expect(setThemeData).toHaveBeenLastCalledWith(themeData);\n+    });\n+  });\n+});"
+  },
+  {
+   "filename": "packages/vue/vitest.config.ts",
+   "status": "added",
+   "additions": 32,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,32 @@\n+import fs from 'node:fs';\n+import path from 'node:path';\n+import { fileURLToPath } from 'node:url';\n+import { playwright } from '@vitest/browser-playwright';\n+import { defineConfig } from 'vitest/config';\n+\n+const __dirname = path.dirname(fileURLToPath(import.meta.url));\n+\n+const webPkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../web/package.json'), 'utf-8'));\n+\n+export default defineConfig({\n+  define: {\n+    __PACKAGE_NAME__: JSON.stringify(webPkg.name),\n+    __PACKAGE_VERSION__: JSON.stringify(webPkg.version),\n+  },\n+  resolve: {\n+    alias: {\n+      '@lottiefiles/dotlottie-web': path.resolve(__dirname, '../web/src/index.ts'),\n+    },\n+  },\n+  test: {\n+    name: 'vue',\n+    browser: {\n+      enabled: true,\n+      provider: playwright(),\n+      instances: [{ browser: 'chromium' }],\n+      screenshotFailures: false,\n+    },\n+    testTimeout: 10000,\n+    setupFiles: ['./setup-file.ts'],\n+  },\n+});"
+  },
+  {
+   "filename": "pnpm-lock.yaml",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -512,6 +512,12 @@ importers:\n         specifier: ^3.3.4\n         version: 3.5.16(typescript@6.0.3)\n     devDependencies:\n+      '@vitest/browser':\n+        specifier: ^4.0.18\n+        version: 4.0.18(msw@2.8.6(@types/node@25.6.0)(typescript@6.0.3))(vite@7.3.1(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.30.1)(terser@5.40.0)(tsx@4.19.4)(yaml@2.8.0))(vitest@4.0.18)\n+      '@vitest/browser-playwright':\n+        specifier: ^4.0.18\n+        version: 4.0.18(msw@2.8.6(@types/node@25.6.0)(typescript@6.0.3))(playwright@1.60.0)(vite@7.3.1(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.30.1)(terser@5.40.0)(tsx@4.19.4)(yaml@2.8.0))(vitest@4.0.18)\n       '@vue/runtime-dom':\n         specifier: ^3.4.6\n         version: 3.5.16\n@@ -524,6 +530,9 @@ importers:\n       typescript:\n         specifier: 6.0.3\n         version: 6.0.3\n+      vitest:\n+        specifier: ^4.0.18\n+        version: 4.0.18(@types/node@25.6.0)(@vitest/browser-playwright@4.0.18)(jiti@2.6.1)(lightningcss@1.30.1)(msw@2.8.6(@types/node@25.6.0)(typescript@6.0.3))(terser@5.40.0)(tsx@4.19.4)(yaml@2.8.0)\n \n   packages/wc:\n     dependencies:"
+  },
+  {
+   "filename": "vitest.config.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -19,6 +19,7 @@ export default defineConfig({\n       'packages/web/vitest.config.node.ts',\n       'packages/react/vitest.config.ts',\n       'packages/wc/vitest.config.ts',\n+      'packages/vue/vitest.config.ts',\n     ],\n   },\n });"
+  }
+ ],
+ "test_files": [
+  "packages/vue/tests/dotlottie-vue.spec.ts"
+ ]
+}

@@ -1,0 +1,40 @@
+{
+ "repo": "open-compass/opencompass",
+ "number": 2702,
+ "url": "https://github.com/open-compass/opencompass/pull/2702",
+ "title": "[Fix] Stop sending temperature in ClaudeSDK requests",
+ "merged_at": "2026-11-18T04:29:06Z",
+ "files": [
+  {
+   "filename": "opencompass/configs/models/claude/claude_fable_5.py",
+   "status": "modified",
+   "additions": 0,
+   "deletions": 1,
+   "patch": "@@ -10,7 +10,6 @@\n         max_out_len=131072,\n         query_per_second=1,\n         retry=10,\n-        temperature=1.0,\n         thinking=dict(type='adaptive', display='summarized'),\n         claude_extra_kwargs=dict(\n             output_config=dict(effort='max'),"
+  },
+  {
+   "filename": "opencompass/configs/models/claude/claude_opus_5.py",
+   "status": "modified",
+   "additions": 0,
+   "deletions": 1,
+   "patch": "@@ -10,7 +10,6 @@\n         max_out_len=131072,\n         query_per_second=1,\n         retry=10,\n-        temperature=1.0,\n         thinking=dict(type='adaptive'),\n         claude_extra_kwargs=dict(\n             output_config=dict(effort='max'),"
+  },
+  {
+   "filename": "opencompass/models/claude_sdk_api.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 2,
+   "patch": "@@ -56,7 +56,7 @@ def __init__(\n         query_per_second: int = 2,\n         max_seq_len: int = 2048,\n         meta_template: Optional[Dict] = None,\n-        temperature: Optional[float] = 0.0,\n+        temperature: Optional[float] = None,\n         thinking: Optional[Dict] = None,\n         base_url: Optional[str] = None,\n         stream: bool = False,\n@@ -92,6 +92,12 @@ def __init__(\n         self.anthropic = Anthropic(**client_kwargs)\n         self.model = path\n         self.temperature = temperature\n+        if temperature is not None:\n+            # anthropic>=1.0 dropped temperature from messages.create, and\n+            # the API (2026-10-21) answers 400 to it, so it is never sent.\n+            self.logger.warning(\n+                'ClaudeSDK ignores temperature: the Anthropic SDK and API no '\n+                'longer accept it.')\n         self.thinking = thinking\n         self.base_url = base_url\n         self.stream = stream\n@@ -267,7 +273,6 @@ def _generate(\n                 api_params = {\n                     'model': self.model,\n                     'max_tokens': max_out_len,\n-                    'temperature': self.temperature,\n                     'messages': messages,\n                 }\n                 if system_prompts:"
+  },
+  {
+   "filename": "tests/models/test_claude_sdk_api.py",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -5,6 +5,7 @@\n from unittest.mock import MagicMock, patch\n \n from opencompass.models.claude_sdk_api import ClaudeSDK\n+from opencompass.utils import get_logger\n from opencompass.utils.prompt import PromptList\n \n \n@@ -178,6 +179,34 @@ def test_thinking_does_not_force_streaming(self):\n         self.assertEqual(api_params['thinking'], thinking)\n         self.assertNotIn('stream', api_params)\n \n+    @patch.dict('os.environ', {}, clear=True)\n+    def test_temperature_is_never_sent(self):\n+        \"\"\"Test temperature is left out: the SDK and API reject it.\"\"\"\n+        for kwargs in ({}, {\n+                'temperature': 0.3\n+        }, {\n+                'temperature': None\n+        }, {\n+                'thinking': {\n+                    'type': 'enabled',\n+                    'budget_tokens': 1024\n+                }\n+        }):\n+            model, _, client = self.build_model(**kwargs)\n+\n+            model._generate('hello', max_out_len=64)\n+\n+            api_params = client.messages.create.call_args.kwargs\n+            self.assertNotIn('temperature', api_params)\n+\n+    @patch.dict('os.environ', {}, clear=True)\n+    def test_configured_temperature_logs_a_warning(self):\n+        \"\"\"Test a configured temperature is reported as ignored.\"\"\"\n+        with self.assertLogs(get_logger(), level='WARNING') as logs:\n+            self.build_model(temperature=0.3)\n+        self.assertTrue(\n+            any('ignores temperature' in line for line in logs.output))\n+\n     @patch.dict('os.environ', {}, clear=True)\n     def test_generate_with_thinking_content(self):\n         \"\"\"Test non-streaming thinking content is preserved.\"\"\""
+  }
+ ],
+ "test_files": [
+  "tests/models/test_claude_sdk_api.py"
+ ]
+}

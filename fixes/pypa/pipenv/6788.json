@@ -1,0 +1,33 @@
+{
+ "repo": "pypa/pipenv",
+ "number": 6788,
+ "url": "https://github.com/pypa/pipenv/pull/6788",
+ "title": "fix(requirements): keep sys_platform on path/file entries with --from-pipfile",
+ "merged_at": "2026-11-18T01:50:13Z",
+ "files": [
+  {
+   "filename": "news/+pipfile-path-sys-platform.bugfix.rst",
+   "status": "added",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,2 @@\n+Keep the ``sys_platform`` key of path and file entries in the output of ``pipenv requirements --from-pipfile``,\n+as is already done for version and VCS entries."
+  },
+  {
+   "filename": "pipenv/utils/dependencies.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 3,
+   "patch": "@@ -2071,9 +2071,8 @@ def requirement_from_pipfile(package_name, package_spec, include_markers=True):\n                 parts.append(\"-e\")\n             parts.append(path)\n \n-            if include_markers:\n-                if \"markers\" in package_spec and package_spec[\"markers\"]:\n-                    parts.append(f\"; {package_spec['markers']}\")\n+            if markers:\n+                parts.append(markers.strip())\n             return \" \".join(parts)\n \n     # Handle standard version specifications"
+  },
+  {
+   "filename": "tests/unit/test_requirements_vcs_markers.py",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -27,3 +27,22 @@ def test_vcs_marker_omitted_when_markers_excluded():\n \n def test_vcs_without_markers_unchanged():\n     assert requirement_from_pipfile(\"pkg\", {\"git\": URL, \"ref\": \"abc123\"}) == f\"pkg @ git+{URL}@abc123\"\n+\n+\n+@pytest.mark.parametrize(\"key\", [\"path\", \"file\"])\n+def test_path_sys_platform_kept_without_lock(key):\n+    spec = {key: \"./w\", \"sys_platform\": \"== 'win32'\"}\n+    assert requirement_from_pipfile(\"w\", spec) == \"./w ; sys_platform == 'win32'\"\n+\n+\n+def test_path_markers_and_sys_platform_combined():\n+    spec = {\"path\": \"./w\", \"markers\": \"python_version >= '3.9'\", \"sys_platform\": \"== 'win32'\"}\n+    assert (\n+        requirement_from_pipfile(\"w\", spec)\n+        == \"./w ; python_version >= '3.9' and sys_platform == 'win32'\"\n+    )\n+\n+\n+def test_path_marker_omitted_when_markers_excluded():\n+    spec = {\"path\": \"./w\", \"sys_platform\": \"== 'win32'\"}\n+    assert requirement_from_pipfile(\"w\", spec, include_markers=False) == \"./w\""
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_requirements_vcs_markers.py"
+ ]
+}

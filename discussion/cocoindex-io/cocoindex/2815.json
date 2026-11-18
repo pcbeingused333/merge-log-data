@@ -3,7 +3,27 @@
  "number": 2815,
  "url": "https://github.com/cocoindex-io/cocoindex/pull/2815",
  "state": "open",
- "reviews": [],
- "review_comments": [],
- "comments": []
+ "reviews": [
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-17T22:12:59Z",
+   "body": "Thanks for tracking this down. The fix is right: `files.list` needs both flags to return shared-drive items, `files.get` (metadata and `alt=media`) takes `supportsAllDrives`, and `files.export` takes only `fileId` and `mimeType`. The Drive discovery document that `googleapiclient` ships says the same, and the new test fails on main and passes on this branch. Every page of the listing goes through the same `files.list` call, and the source makes no other file requests, so nothing else needs the flags.\n\nOne change is needed before merge: the `cocoindex_agents` example has its own fake Drive service, and this change breaks its tests (inline comment on `python/tests/connectors/test_google_drive_source.py:245`). With that fixed, this looks good to merge."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "member",
+   "path": "python/tests/connectors/test_google_drive_source.py",
+   "created_at": "2026-11-17T22:12:59Z",
+   "body": "`examples/cocoindex_agents/tests/fake_drive.py` has another fake of this Drive surface, and its signatures don't take the new parameters: `_Files.list` (line 111), `get` (line 124) and `get_media` (line 127). On this branch, 4 of the 5 tests in `examples/cocoindex_agents/tests/test_google_drive.py` fail with `TypeError: _Files.list() got an unexpected keyword argument 'includeItemsFromAllDrives'`. CI runs pytest only on `python/`, so it won't catch this. The example depends on `cocoindex[google_drive]>=1.2.0`, so its own environment breaks as soon as a release includes this change.\n\nPlease give that fake the same parameters as `_FakeDriveFiles` here:\n\n```python\n    def list(\n        self,\n        *,\n        q: str,\n        fields: str,\n        pageToken: str | None,\n        includeItemsFromAllDrives: bool,\n        supportsAllDrives: bool,\n    ) -> _Request:\n\n    def get(self, *, fileId: str, fields: str, supportsAllDrives: bool) -> _Request:\n\n    def get_media(self, *, fileId: str, supportsAllDrives: bool) -> _Request:\n```\n\nWith this, all 87 example tests pass on this branch. I ran them from the repo root with:\n\n```\nPYTHONPATH=examples/cocoindex_agents:examples/cocoindex_agents/tests uv run pytest -c examples/cocoindex_agents/pyproject.toml --rootdir examples/cocoindex_agents examples/cocoindex_agents/tests\n```"
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-18T03:00:01Z",
+   "body": "Thanks for catching this. The example's fake Drive service now accepts the shared-drive flags in `list`, `get`, and `get_media`. On the previous PR commit four example tests failed; with the updated signatures all 87 example tests pass.\n\nThis follow-up was prepared with AI assistance (Codex).\n"
+  }
+ ]
 }

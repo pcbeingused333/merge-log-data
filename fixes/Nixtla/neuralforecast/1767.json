@@ -1,0 +1,26 @@
+{
+ "repo": "Nixtla/neuralforecast",
+ "number": 1767,
+ "url": "https://github.com/Nixtla/neuralforecast/pull/1767",
+ "title": "fix: align augment_calendar_df features with the input index",
+ "merged_at": "2026-11-17T23:34:30Z",
+ "files": [
+  {
+   "filename": "neuralforecast/utils.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -452,7 +452,7 @@ def augment_calendar_df(df, freq=\"H\"):\n     ds_data = np.vstack(\n         [feat(ds_col) for feat in time_features_from_frequency_str(freq)]\n     ).transpose(1, 0)\n-    ds_data = pd.DataFrame(ds_data, columns=freq_map[freq])\n+    ds_data = pd.DataFrame(ds_data, columns=freq_map[freq], index=df.index)\n \n     return pd.concat([df, ds_data], axis=1), freq_map[freq]\n "
+  },
+  {
+   "filename": "tests/test_utils.py",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -68,6 +68,35 @@ def test_augment_calendar_df_weekly():\n     np.testing.assert_allclose(out[\"yearweek\"], np.arange(4) / 52.0 - 0.5)\n \n \n+def _calendar_df():\n+    return pd.DataFrame(\n+        {\n+            \"unique_id\": \"a\",\n+            \"ds\": pd.date_range(\"2024-01-01\", periods=3, freq=\"D\"),\n+            \"y\": range(3),\n+        }\n+    )\n+\n+\n+@pytest.mark.parametrize(\n+    \"make_index\",\n+    [\n+        lambda df: pd.Index([10, 11, 12]),\n+        lambda df: df.sample(frac=1, random_state=0).index,\n+        lambda df: pd.Index([0, 0, 1]),\n+        lambda df: pd.Index([\"x\", \"y\", \"z\"]),\n+    ],\n+    ids=[\"offset\", \"shuffled\", \"duplicated\", \"string\"],\n+)\n+def test_augment_calendar_df_non_range_index(make_index):\n+    df = _calendar_df()\n+    df.index = make_index(df)\n+    out, cols = augment_calendar_df(df, freq=\"D\")\n+    expected, _ = augment_calendar_df(df.reset_index(drop=True), freq=\"D\")\n+    assert out.index.equals(df.index)\n+    np.testing.assert_allclose(out[cols].to_numpy(), expected[cols].to_numpy())\n+\n+\n @pytest.mark.skipif(\n     not hasattr(pd.errors, \"Pandas4Warning\"),\n     reason=\"Pandas4Warning only exists in pandas>=3.1\","
+  }
+ ],
+ "test_files": [
+  "tests/test_utils.py"
+ ]
+}

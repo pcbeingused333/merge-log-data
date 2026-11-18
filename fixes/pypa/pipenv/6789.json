@@ -1,0 +1,33 @@
+{
+ "repo": "pypa/pipenv",
+ "number": 6789,
+ "url": "https://github.com/pypa/pipenv/pull/6789",
+ "title": "fix(uninstall): use resolved names for editable packages",
+ "merged_at": "2026-11-18T01:50:09Z",
+ "files": [
+  {
+   "filename": "news/+editable-uninstall-name.bugfix.rst",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+Uninstall editable packages by their resolved distribution name instead of passing\n+editable install arguments to pip, so ``pipenv uninstall -e ./package`` also\n+removes the installed package from the environment."
+  },
+  {
+   "filename": "pipenv/routines/uninstall.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -121,6 +121,7 @@ def do_uninstall(project: Project, ctx: RoutineContext):\n         return\n \n     package_args = list(packages) + [f\"-e {pkg}\" for pkg in editable_packages]\n+    package_names = {}\n \n     # Determine packages and their dependencies for removal\n     for category in categories:\n@@ -134,6 +135,8 @@ def do_uninstall(project: Project, ctx: RoutineContext):\n             name, normalized_name, _ = project.pipfile.generate_entry(\n                 install_req, package, category=pipfile_category\n             )\n+            # pip uninstall accepts distribution names, not editable install arguments.\n+            package_names[package] = normalized_name\n \n             # Remove the package from the Pipfile\n             if project.pipfile.remove_package(\n@@ -179,7 +182,7 @@ def do_uninstall(project: Project, ctx: RoutineContext):\n     project.lockfile.write(lockfile_content)\n \n     # Perform uninstallation of packages and dependencies\n-    for package in package_args:\n+    for package in package_names.values():\n         if not _uninstall_from_environment(project, package, system=system):\n             failure = True\n "
+  },
+  {
+   "filename": "tests/integration/test_uninstall.py",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 0,
+   "patch": "@@ -1,8 +1,36 @@\n+from pathlib import Path\n+\n import pytest\n \n from pipenv.utils.shell import temp_environ\n \n \n+@pytest.mark.install\n+@pytest.mark.uninstall\n+@pytest.mark.parametrize(\"package_arg\", [\"-e ./demo\", \"editable-demo\"])\n+def test_uninstall_local_editable(pipenv_instance_file_pypi, package_arg):\n+    with pipenv_instance_file_pypi() as p:\n+        package_dir = Path(p.path) / \"demo\"\n+        package_dir.mkdir()\n+        (package_dir / \"setup.py\").write_text(\n+            'from setuptools import setup\\n'\n+            'setup(name=\"editable-demo\", version=\"0.1\", py_modules=[])\\n'\n+        )\n+\n+        c = p.pipenv(\"install -e ./demo\")\n+        assert c.returncode == 0\n+        assert p.pipfile[\"packages\"][\"editable-demo\"][\"editable\"] is True\n+        c = p.pipenv(\"run python -m pip show editable-demo\")\n+        assert c.returncode == 0\n+\n+        c = p.pipenv(f\"uninstall {package_arg}\")\n+        assert c.returncode == 0\n+        assert \"editable-demo\" not in p.pipfile[\"packages\"]\n+        assert \"editable-demo\" not in p.lockfile[\"default\"]\n+        c = p.pipenv(\"run python -m pip show editable-demo\")\n+        assert c.returncode != 0\n+\n+\n @pytest.mark.uninstall\n @pytest.mark.install\n def test_uninstall_requests(pipenv_instance_file_pypi):"
+  }
+ ],
+ "test_files": [
+  "tests/integration/test_uninstall.py"
+ ]
+}

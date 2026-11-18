@@ -1,0 +1,26 @@
+{
+ "repo": "k8sgpt-ai/k8sgpt",
+ "number": 1952,
+ "url": "https://github.com/k8sgpt-ai/k8sgpt/pull/1952",
+ "title": "fix: do not panic when OCI GenAI returns no text",
+ "merged_at": "2026-11-17T22:44:36Z",
+ "files": [
+  {
+   "filename": "pkg/ai/ocigenai.go",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 1,
+   "patch": "@@ -136,12 +136,26 @@ func extractGeneratedText(llmInferenceResponse generativeaiinference.BaseChatRes\n \tswitch response := llmInferenceResponse.(type) {\n \tcase generativeaiinference.GenericChatResponse:\n \t\tif len(response.Choices) > 0 && len(response.Choices[0].Message.GetContent()) > 0 {\n-\t\t\tif content, ok := response.Choices[0].Message.GetContent()[0].(generativeaiinference.TextContent); ok {\n+\t\t\tcontent, ok := response.Choices[0].Message.GetContent()[0].(generativeaiinference.TextContent)\n+\t\t\tif ok && content.Text != nil {\n+\t\t\t\tfinishReason := \"\"\n+\t\t\t\tif response.Choices[0].FinishReason != nil {\n+\t\t\t\t\tfinishReason = *response.Choices[0].FinishReason\n+\t\t\t\t}\n+\t\t\t\tif err := checkCompletionContent(*content.Text, finishReason); err != nil {\n+\t\t\t\t\treturn \"\", err\n+\t\t\t\t}\n \t\t\t\treturn *content.Text, nil\n \t\t\t}\n \t\t}\n \t\treturn \"\", errors.New(\"no text found in oci response\")\n \tcase generativeaiinference.CohereChatResponse:\n+\t\tif response.Text == nil {\n+\t\t\treturn \"\", errors.New(\"no text found in oci response\")\n+\t\t}\n+\t\tif err := checkCompletionContent(*response.Text, string(response.FinishReason)); err != nil {\n+\t\t\treturn \"\", err\n+\t\t}\n \t\treturn *response.Text, nil\n \tdefault:\n \t\treturn \"\", fmt.Errorf(\"unknown oci response type: %s\", reflect.TypeOf(llmInferenceResponse).Name())"
+  },
+  {
+   "filename": "pkg/ai/ocigenai_text_test.go",
+   "status": "added",
+   "additions": 95,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,95 @@\n+package ai\n+\n+import (\n+\t\"testing\"\n+\n+\t\"github.com/oracle/oci-go-sdk/v65/generativeaiinference\"\n+\t\"github.com/stretchr/testify/assert\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+func TestExtractGeneratedText_CohereNilText(t *testing.T) {\n+\tout, err := extractGeneratedText(generativeaiinference.CohereChatResponse{\n+\t\tFinishReason: generativeaiinference.CohereChatResponseFinishReasonError,\n+\t})\n+\n+\trequire.Error(t, err)\n+\tassert.Empty(t, out)\n+\tassert.Contains(t, err.Error(), \"no text found\")\n+}\n+\n+func TestExtractGeneratedText_CohereBlankText(t *testing.T) {\n+\tblank := \"  \"\n+\tout, err := extractGeneratedText(generativeaiinference.CohereChatResponse{\n+\t\tText:         &blank,\n+\t\tFinishReason: generativeaiinference.CohereChatResponseFinishReasonMaxTokens,\n+\t})\n+\n+\trequire.Error(t, err)\n+\tassert.Empty(t, out)\n+\tassert.Contains(t, err.Error(), \"empty completion\")\n+\tassert.Contains(t, err.Error(), \"MAX_TOKENS\")\n+}\n+\n+func TestExtractGeneratedText_CohereText(t *testing.T) {\n+\ttext := \"the pod is crash looping\"\n+\tout, err := extractGeneratedText(generativeaiinference.CohereChatResponse{\n+\t\tText:         &text,\n+\t\tFinishReason: generativeaiinference.CohereChatResponseFinishReasonComplete,\n+\t})\n+\n+\trequire.NoError(t, err)\n+\tassert.Equal(t, text, out)\n+}\n+\n+func TestExtractGeneratedText_GenericNilText(t *testing.T) {\n+\tout, err := extractGeneratedText(generativeaiinference.GenericChatResponse{\n+\t\tChoices: []generativeaiinference.ChatChoice{{\n+\t\t\tMessage: generativeaiinference.AssistantMessage{\n+\t\t\t\tContent: []generativeaiinference.ChatContent{\n+\t\t\t\t\tgenerativeaiinference.TextContent{},\n+\t\t\t\t},\n+\t\t\t},\n+\t\t}},\n+\t})\n+\n+\trequire.Error(t, err)\n+\tassert.Empty(t, out)\n+\tassert.Contains(t, err.Error(), \"no text found\")\n+}\n+\n+func TestExtractGeneratedText_GenericBlankText(t *testing.T) {\n+\tblank := \"\"\n+\tfinish := \"length\"\n+\tout, err := extractGeneratedText(generativeaiinference.GenericChatResponse{\n+\t\tChoices: []generativeaiinference.ChatChoice{{\n+\t\t\tFinishReason: &finish,\n+\t\t\tMessage: generativeaiinference.AssistantMessage{\n+\t\t\t\tContent: []generativeaiinference.ChatContent{\n+\t\t\t\t\tgenerativeaiinference.TextContent{Text: &blank},\n+\t\t\t\t},\n+\t\t\t},\n+\t\t}},\n+\t})\n+\n+\trequire.Error(t, err)\n+\tassert.Empty(t, out)\n+\tassert.Contains(t, err.Error(), \"empty completion\")\n+\tassert.Contains(t, err.Error(), \"finish reason: length\")\n+}\n+\n+func TestExtractGeneratedText_GenericText(t *testing.T) {\n+\ttext := \"ok\"\n+\tout, err := extractGeneratedText(generativeaiinference.GenericChatResponse{\n+\t\tChoices: []generativeaiinference.ChatChoice{{\n+\t\t\tMessage: generativeaiinference.AssistantMessage{\n+\t\t\t\tContent: []generativeaiinference.ChatContent{\n+\t\t\t\t\tgenerativeaiinference.TextContent{Text: &text},\n+\t\t\t\t},\n+\t\t\t},\n+\t\t}},\n+\t})\n+\n+\trequire.NoError(t, err)\n+\tassert.Equal(t, text, out)\n+}"
+  }
+ ],
+ "test_files": [
+  "pkg/ai/ocigenai_text_test.go"
+ ]
+}

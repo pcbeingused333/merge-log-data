@@ -3,8 +3,40 @@
  "number": 2663,
  "url": "https://github.com/versity/versitygw/pull/2663",
  "state": "open",
- "reviews": [],
- "review_comments": [],
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-18T06:55:05Z",
+   "body": "Please add integration tests in tests/integration, modeled on `ListObjects_url_encoding`, and register them in group-tests.go (test group + name map):\n- `ListObjectVersions_url_encoding` (versioning group): put `a+ b.txt`, `dir a/obj`, and `del me+` with a delete marker. List with `EncodingType: url, Delimiter: \"/\"` and assert `EncodingType`, the version and delete-marker keys (`a%2B+b.txt`, `del+me%2B`) and the CommonPrefix `dir+a/`. Add a page with `Prefix`/`KeyMarker` containing \"+ \" and `MaxKeys: 1` to cover encoded Prefix/KeyMarker/NextKeyMarker, and check that `gibberish` returns InvalidArgument.\n- `ListMultipartUploads_url_encoding`: the same with uploads (` x(test)+` → `+x%28test%29%2B`, `dir b/up` → CP `dir+b/`), including Prefix/KeyMarker/NextKeyMarker and the invalid value.\nThis matters more than usual: aws-cli/boto3 send `encoding-type=url` on every ListObjectVersions call and decode the response, so this PR changes the wire output for those clients."
+  },
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-18T06:55:52Z",
+   "body": "The bats tests for these issues are still skipped: tests/test_rest_list_multipart_uploads.sh:158-160 and :184-186 (#2156), and tests/test_rest_list_object_versions.sh:73-75 and :81-83 (#2169). They only check keys and errors, so they should pass with this fix. Please drop the `skip` blocks."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "s3api/utils/utils.go",
+   "created_at": "2026-11-18T06:52:15Z",
+   "body": "`ListVersionsResult.EncodingType` (s3response/s3response.go:593) has no `omitempty`, so every ListObjectVersions response without `encoding-type` still carries an empty `<EncodingType></EncodingType>`. S3 omits the element unless it was requested. The #2169 thread calls this out, and ListObjects/V2 got the same fix in a7b91dd0. Please add `xml:\",omitempty\"` there, plus a unit test that marshals an unencoded result and asserts the element is absent. The Go SDK can't tell empty from absent, so an SDK test won't catch this."
+  },
+  {
+   "role": "contributor",
+   "path": "s3api/utils/utils.go",
+   "created_at": "2026-11-18T06:53:03Z",
+   "body": "`urlEncodeString` goes through a pointer round trip (`*urlEncodeKeyName(&name)`) and sits apart from the helper it wraps. Inverting them is cleaner: `urlEncodeString(name string) string { return s3KeyNameEscaper.Replace(url.QueryEscape(name)) }`, with `urlEncodeKeyName` as a nil-safe wrapper around it. Please keep both next to each other above `urlEncodeCommonPrefixes`."
+  },
+  {
+   "role": "contributor",
+   "path": "s3api/utils/utils.go",
+   "created_at": "2026-11-18T06:53:51Z",
+   "body": "These four inline copy-and-encode loops(1356, 1377, 1385 lines) break the pattern the file already uses (`urlEncodeObjectKeys`, `urlEncodeCommonPrefixes`). Please extract `urlEncodeVersionKeys`, `urlEncodeDeleteMarkerKeys`, `urlEncodeUploadKeys` and `urlEncodeUploadPrefixes` (for `[]s3response.CommonPrefix`) next to them, so both exported functions read as flat field assignments like `URLEncodeListObjectsResult`."
+  }
+ ],
  "comments": [
   {
    "role": "collaborator",

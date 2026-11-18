@@ -1,0 +1,26 @@
+{
+ "repo": "k8sgpt-ai/k8sgpt",
+ "number": 1943,
+ "url": "https://github.com/k8sgpt-ai/k8sgpt/pull/1943",
+ "title": "fix: keep amazonbedrock catalog max tokens when maxtokens is unset",
+ "merged_at": "2026-11-18T07:04:53Z",
+ "files": [
+  {
+   "filename": "pkg/ai/amazonbedrock.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -837,8 +837,11 @@ func (a *AmazonBedRockClient) extractModelFromInferenceProfile(profile *bedrock.\n \n // GetCompletion sends a request to the model for generating completion based on the provided prompt.\n func (a *AmazonBedRockClient) GetCompletion(ctx context.Context, prompt string) (string, error) {\n-\t// override config defaults\n-\ta.model.Config.MaxTokens = a.maxTokens\n+\t// override config defaults. 0 means maxtokens was omitted (a hand-written\n+\t// config); copying it over the catalog limit sends 0, which Bedrock rejects.\n+\tif a.maxTokens > 0 {\n+\t\ta.model.Config.MaxTokens = a.maxTokens\n+\t}\n \ta.model.Config.Temperature = a.temperature\n \ta.model.Config.TopP = a.topP\n "
+  },
+  {
+   "filename": "pkg/ai/amazonbedrock_maxtokens_test.go",
+   "status": "added",
+   "additions": 122,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,122 @@\n+package ai\n+\n+import (\n+\t\"context\"\n+\t\"encoding/json\"\n+\t\"testing\"\n+\n+\t\"github.com/aws/aws-sdk-go-v2/service/bedrockruntime\"\n+\t\"github.com/stretchr/testify/assert\"\n+\t\"github.com/stretchr/testify/mock\"\n+)\n+\n+// A hand-written provider omits maxtokens, so GetMaxTokens() is 0. Bedrock\n+// rejects a request whose max_tokens, maxTokenCount or max_new_tokens is 0.\n+// The per-model catalog already carries a positive limit; that value has to\n+// go out unless the user set one.\n+func TestAmazonBedrockUnsetMaxTokensKeepsCatalogDefault(t *testing.T) {\n+\tcases := []struct {\n+\t\tname       string\n+\t\tmodel      string\n+\t\tconfigured int\n+\t\treply      string\n+\t\tpath       []string\n+\t}{\n+\t\t{\n+\t\t\tname:  \"messages max_tokens\",\n+\t\t\tmodel: \"anthropic.claude-sonnet-4-20250514-v1:0\",\n+\t\t\treply: `{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}`,\n+\t\t\tpath:  []string{\"max_tokens\"},\n+\t\t},\n+\t\t{\n+\t\t\tname:  \"titan maxTokenCount\",\n+\t\t\tmodel: \"amazon.titan-text-express-v1\",\n+\t\t\treply: `{\"results\":[{\"outputText\":\"ok\"}]}`,\n+\t\t\tpath:  []string{\"textGenerationConfig\", \"maxTokenCount\"},\n+\t\t},\n+\t\t{\n+\t\t\tname:  \"nova max_new_tokens\",\n+\t\t\tmodel: \"amazon.nova-pro-v1:0\",\n+\t\t\treply: `{\"output\":{\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}}`,\n+\t\t\tpath:  []string{\"inferenceConfig\", \"max_new_tokens\"},\n+\t\t},\n+\t\t{\n+\t\t\tname:       \"configured max tokens overrides the catalog\",\n+\t\t\tmodel:      \"anthropic.claude-sonnet-4-20250514-v1:0\",\n+\t\t\tconfigured: 512,\n+\t\t\treply:      `{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}`,\n+\t\t\tpath:       []string{\"max_tokens\"},\n+\t\t},\n+\t}\n+\n+\tfor _, tc := range cases {\n+\t\tt.Run(tc.name, func(t *testing.T) {\n+\t\t\tcatalog := bedrockCatalogMaxTokens(t, tc.model)\n+\t\t\twant := catalog\n+\t\t\tif tc.configured > 0 {\n+\t\t\t\twant = tc.configured\n+\t\t\t}\n+\n+\t\t\tmockRuntime := new(MockBedrockRuntimeClient)\n+\t\t\tvar body []byte\n+\t\t\tmockRuntime.On(\"InvokeModel\", mock.Anything, mock.Anything).\n+\t\t\t\tRun(func(args mock.Arguments) {\n+\t\t\t\t\tin := args.Get(1).(*bedrockruntime.InvokeModelInput)\n+\t\t\t\t\tbody = append([]byte(nil), in.Body...)\n+\t\t\t\t}).\n+\t\t\t\tReturn(&bedrockruntime.InvokeModelOutput{Body: []byte(tc.reply)}, nil)\n+\n+\t\t\tclient := NewAmazonBedRockClient(nil)\n+\t\t\tclient.client = mockRuntime\n+\t\t\tclient.mgmtClient = new(MockBedrockClient)\n+\n+\t\t\terr := client.Configure(&AIProvider{\n+\t\t\t\tModel:          tc.model,\n+\t\t\t\tProviderRegion: \"us-east-1\",\n+\t\t\t\tMaxTokens:      tc.configured,\n+\t\t\t})\n+\t\t\tassert.NoError(t, err)\n+\n+\t\t\tout, err := client.GetCompletion(context.Background(), \"explain this\")\n+\t\t\tassert.NoError(t, err)\n+\t\t\tassert.Equal(t, \"ok\", out)\n+\t\t\tassert.Equal(t, want, bedrockRequestInt(t, body, tc.path...))\n+\t\t\tmockRuntime.AssertExpectations(t)\n+\t\t})\n+\t}\n+}\n+\n+func bedrockCatalogMaxTokens(t *testing.T, model string) int {\n+\tt.Helper()\n+\tfor _, m := range defaultModels {\n+\t\tif m.Name == model {\n+\t\t\tassert.Greater(t, m.Config.MaxTokens, 0)\n+\t\t\treturn m.Config.MaxTokens\n+\t\t}\n+\t}\n+\tt.Fatalf(\"model %s is not in the bedrock catalog\", model)\n+\treturn 0\n+}\n+\n+func bedrockRequestInt(t *testing.T, body []byte, path ...string) int {\n+\tt.Helper()\n+\tvar cur interface{}\n+\tif !assert.NoError(t, json.Unmarshal(body, &cur)) {\n+\t\treturn -1\n+\t}\n+\tfor _, key := range path {\n+\t\tobj, ok := cur.(map[string]interface{})\n+\t\tif !assert.Truef(t, ok, \"expected object before %s in %s\", key, body) {\n+\t\t\treturn -1\n+\t\t}\n+\t\tcur, ok = obj[key]\n+\t\tif !assert.Truef(t, ok, \"missing %s in %s\", key, body) {\n+\t\t\treturn -1\n+\t\t}\n+\t}\n+\tn, ok := cur.(float64)\n+\tif !assert.Truef(t, ok, \"expected number at %v, got %T (%v)\", path, cur, cur) {\n+\t\treturn -1\n+\t}\n+\treturn int(n)\n+}"
+  }
+ ],
+ "test_files": [
+  "pkg/ai/amazonbedrock_maxtokens_test.go"
+ ]
+}

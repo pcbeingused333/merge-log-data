@@ -1,0 +1,34 @@
+{
+ "repo": "chdb-io/chdb",
+ "number": 804,
+ "url": "https://github.com/chdb-io/chdb/pull/804",
+ "title": "fix: return int64 from when().otherwise() with integer literals",
+ "merged_at": "2026-11-17T23:48:32Z",
+ "files": [
+  {
+   "filename": "datastore/case_when.py",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 4,
+   "patch": "@@ -94,12 +94,17 @@ def to_sql(self, quote_char: str = '\"', **kwargs) -> str:\n             )\n         parts = [\"CASE\"]\n \n+        # ClickHouse types small integer literals as UInt8, so a CASE whose\n+        # branches are all integer literals comes back as uint8 and wraps on\n+        # later subtraction. pandas gives int64 (np.select / np.where).\n+        widen = self._all_integer_literals()\n+\n         for condition, value in self._cases:\n             cond_sql = self._condition_to_sql(condition, quote_char)\n-            val_sql = self._value_to_sql(value)\n+            val_sql = self._value_to_sql(value, widen)\n             parts.append(f\"WHEN {cond_sql} THEN {val_sql}\")\n \n-        parts.append(f\"ELSE {self._value_to_sql(self._default)}\")\n+        parts.append(f\"ELSE {self._value_to_sql(self._default, widen)}\")\n         parts.append(\"END\")\n \n         result = \" \".join(parts)\n@@ -127,8 +132,22 @@ def _condition_to_sql(self, condition: Any, quote_char: str) -> str:\n         else:\n             raise ValueError(f\"Cannot convert {type(condition)} to SQL condition\")\n \n-    def _value_to_sql(self, value: Any) -> str:\n-        \"\"\"Convert a value to SQL literal.\"\"\"\n+    def _all_integer_literals(self) -> bool:\n+        \"\"\"True iff every THEN/ELSE value is a plain integer that fits Int64 (not bool, not NULL).\"\"\"\n+        values = [v for _, v in self._cases] + [self._default]\n+        return all(\n+            isinstance(v, (int, np.integer))\n+            and not isinstance(v, (bool, np.bool_))\n+            and -(2**63) <= int(v) < 2**63\n+            for v in values\n+        )\n+\n+    def _value_to_sql(self, value: Any, widen_int: bool = False) -> str:\n+        \"\"\"Convert a value to SQL literal.\n+\n+        With ``widen_int`` an integer literal is cast to Int64 so the CASE\n+        result matches pandas' int64 instead of ClickHouse's UInt8.\n+        \"\"\"\n         from .column_expr import ColumnExpr\n \n         if value is None:\n@@ -142,7 +161,11 @@ def _value_to_sql(self, value: Any) -> str:\n         elif isinstance(value, (int, float)):\n             if pd.isna(value):\n                 return \"NULL\"\n+            if widen_int and isinstance(value, int):\n+                return f\"toInt64({value})\"\n             return str(value)\n+        elif isinstance(value, np.integer) and widen_int:\n+            return f\"toInt64({int(value)})\"\n         elif isinstance(value, Expression):\n             return value.to_sql(quote_char='\"')\n         elif isinstance(value, ColumnExpr):"
+  },
+  {
+   "filename": "datastore/tests/test_case_when.py",
+   "status": "modified",
+   "additions": 37,
+   "deletions": 0,
+   "patch": "@@ -780,3 +780,40 @@ def test_case_when_in_overlapping_functions(self):\n \n if __name__ == '__main__':\n     unittest.main()\n+\n+\n+class TestCaseWhenIntegerLiteralDtype(unittest.TestCase):\n+    \"\"\"Integer-literal CASE results are int64 like pandas, not uint8 (#797).\"\"\"\n+\n+    def setUp(self):\n+        self.df = pd.DataFrame({\"k\": [\"a\", \"a\", \"b\"], \"v\": [1, 2, 3]})\n+\n+    def test_row_wise_dtype_and_subtraction(self):\n+        store = ds.DataStore(self.df.copy())\n+        got = store.assign(f=store.when(store[\"v\"] > 1, 1).otherwise(0)).to_pandas()[\"f\"]\n+        exp = pd.Series(np.where(self.df[\"v\"] > 1, 1, 0), name=\"f\")\n+        self.assertEqual(got.dtype, exp.dtype)\n+        self.assertEqual((got - 2).tolist(), (exp - 2).tolist())\n+\n+    def test_inside_groupby_agg_dtype(self):\n+        from datastore.expressions import col\n+\n+        store = ds.DataStore(self.df.copy())\n+        got = store.groupby(\"k\").agg(f=store.when(col(\"v\").sum() > 2, 1).otherwise(0)).to_pandas()[\"f\"]\n+        exp = (self.df.groupby(\"k\")[\"v\"].sum() > 2).astype(\"int64\").rename(\"f\")\n+        self.assertEqual(got.dtype, exp.dtype)\n+        self.assertEqual((got - 2).tolist(), (exp - 2).tolist())\n+\n+    def test_non_integer_branches_unchanged(self):\n+        store = ds.DataStore(self.df.copy())\n+        got = store.assign(f=store.when(store[\"v\"] > 1, 1.5).otherwise(0)).to_pandas()[\"f\"]\n+        self.assertEqual(got.tolist(), [0.0, 1.5, 1.5])\n+\n+    def test_integers_beyond_int64_are_not_cast(self):\n+        from datastore.expressions import col\n+\n+        store = ds.DataStore(self.df.copy())\n+        got = store.groupby(\"k\").agg(\n+            f=store.when(col(\"v\").sum() > 0, 2**63).otherwise(2**63 + 1)\n+        ).to_pandas()[\"f\"]\n+        self.assertTrue((got > 0).all())"
+  },
+  {
+   "filename": "datastore/tests/test_groupby_categorical_expr_agg.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 3,
+   "patch": "@@ -89,9 +89,7 @@ def test_aggregate_inside_case_when(source, observed):\n         flag=ds.when(col(\"v\").sum() > 6, 1).otherwise(0)\n     )\n     sums = _grouped(FRAME, observed)[\"v\"].sum()\n-    # when(...).otherwise(...) of 1/0 is uint8 in DataStore, as its SQL path\n-    # (CASE WHEN ... THEN 1 ELSE 0) and row-wise when() return\n-    flags = np.where(sums > 6, 1, 0).astype(\"uint8\")\n+    flags = np.where(sums > 6, 1, 0)\n     pd_result = pd.DataFrame({\"flag\": flags}, index=sums.index)\n     assert_datastore_equals_pandas(ds_result, pd_result, check_index=True)\n "
+  }
+ ],
+ "test_files": [
+  "datastore/tests/test_case_when.py",
+  "datastore/tests/test_groupby_categorical_expr_agg.py"
+ ]
+}
