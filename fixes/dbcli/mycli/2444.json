@@ -1,0 +1,48 @@
+{
+ "repo": "dbcli/mycli",
+ "number": 2444,
+ "url": "https://github.com/dbcli/mycli/pull/2444",
+ "title": "fix: read password file and contributor/sponsor/tip files as UTF-8",
+ "merged_at": "2026-11-18T13:15:15Z",
+ "files": [
+  {
+   "filename": "changelog.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -6,6 +6,7 @@ Bug Fixes\n * Refresh completions after `CREATE`, `ALTER`, `DROP` or `RENAME` statements that start with a SQL comment.\n * Reset completions after `USE`, `\\u`, `\\r` or `connect` statements that start with a SQL comment.\n * Don't flag a single-table `UPDATE` with a `WHERE` clause as destructive when it starts with a `/* ... */` comment.\n+* Read the password file and the contributors, sponsors and tips files as UTF-8 instead of the locale encoding.\n \n \n Internal"
+  },
+  {
+   "filename": "mycli/main.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -397,7 +397,7 @@ def get_password_from_file(password_file: str | None) -> str | None:\n     if not password_file:\n         return None\n     try:\n-        with open(password_file) as fp:\n+        with open(password_file, encoding='utf-8') as fp:\n             return fp.readline().removesuffix('\\n')\n     except FileNotFoundError:\n         click.secho(f\"Password file '{password_file}' not found\", err=True, fg='red')"
+  },
+  {
+   "filename": "mycli/main_modes/repl.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -1170,7 +1170,7 @@ def _contributors_picker() -> str:\n     lines: str = \"\"\n \n     try:\n-        with resources.files(mycli_package).joinpath(\"AUTHORS.txt\").open('r') as f:\n+        with resources.files(mycli_package).joinpath(\"AUTHORS.txt\").open('r', encoding='utf-8') as f:\n             lines += f.read()\n     except FileNotFoundError:\n         pass\n@@ -1186,7 +1186,7 @@ def _sponsors_picker() -> str:\n     lines: str = \"\"\n \n     try:\n-        with resources.files(mycli_package).joinpath(\"SPONSORS.txt\").open('r') as f:\n+        with resources.files(mycli_package).joinpath(\"SPONSORS.txt\").open('r', encoding='utf-8') as f:\n             lines += f.read()\n     except FileNotFoundError:\n         pass\n@@ -1202,7 +1202,7 @@ def _tips_picker() -> str:\n     tips = []\n \n     try:\n-        with resources.files(mycli_package).joinpath('TIPS.txt').open('r') as f:\n+        with resources.files(mycli_package).joinpath('TIPS.txt').open('r', encoding='utf-8') as f:\n             for line in f:\n                 if line.startswith(\"#\"):\n                     continue"
+  },
+  {
+   "filename": "mycli_test/pytests/test_main.py",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@\n from pathlib import Path\n import runpy\n import shutil\n+import subprocess\n import sys\n from tempfile import NamedTemporaryFile\n from textwrap import dedent\n@@ -1405,6 +1406,24 @@ def close(self, **args):\n     assert resolve_connect_password(MockMyCli.connect_args) == ('literal', 'cleartext_password')\n \n \n+def test_get_password_from_file_does_not_use_locale_encoding(tmp_path: Path) -> None:\n+    # EncodingWarning is raised for any open() that falls back to the locale encoding.\n+    password_file = tmp_path / 'password.txt'\n+    password_file.write_text('p\\u00e4ssw\\u00f6rd\\n', encoding='utf-8')\n+    script = '\\n'.join((\n+        'import sys',\n+        'from mycli.main import get_password_from_file',\n+        'assert get_password_from_file(sys.argv[1]) == \"p\\u00e4ssw\\u00f6rd\"',\n+    ))\n+    result = subprocess.run(\n+        [sys.executable, '-X', 'warn_default_encoding', '-W', 'error::EncodingWarning', '-c', script, str(password_file)],\n+        capture_output=True,\n+        encoding='utf8',\n+        errors='replace',\n+    )\n+    assert result.returncode == 0, result.stderr\n+\n+\n def test_password_option_overrides_password_file_and_mysql_pwd(monkeypatch):\n     class Formatter:\n         format_name = None"
+  },
+  {
+   "filename": "mycli_test/pytests/test_main_modes_repl.py",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 1,
+   "patch": "@@ -6,6 +6,8 @@\n from io import StringIO\n import os\n from pathlib import Path\n+import subprocess\n+import sys\n from threading import Event\n from types import SimpleNamespace\n from typing import Any, Literal, cast\n@@ -134,7 +136,7 @@ def __init__(self, files: dict[str, str], path: str | None = None) -> None:\n     def joinpath(self, path: str) -> 'FakeResourceTree':\n         return FakeResourceTree(self.files, path)\n \n-    def open(self, mode: str) -> StringIO:\n+    def open(self, mode: str, encoding: str | None = None) -> StringIO:\n         assert self.path is not None\n         if self.path not in self.files:\n             raise FileNotFoundError(self.path)\n@@ -820,6 +822,23 @@ def test_repl_picker_helpers_cover_present_and_missing_resources(monkeypatch: py\n     assert repl_mode._tips_picker() == r'/? or /help for help!'\n \n \n+def test_repl_picker_helpers_do_not_use_locale_encoding() -> None:\n+    # EncodingWarning is raised for any open() that falls back to the locale encoding.\n+    script = '\\n'.join((\n+        'from mycli.main_modes import repl',\n+        'repl._contributors_picker()',\n+        'repl._sponsors_picker()',\n+        'repl._tips_picker()',\n+    ))\n+    result = subprocess.run(\n+        [sys.executable, '-X', 'warn_default_encoding', '-W', 'error::EncodingWarning', '-c', script],\n+        capture_output=True,\n+        encoding='utf8',\n+        errors='replace',\n+    )\n+    assert result.returncode == 0, result.stderr\n+\n+\n def test_configure_editor_uses_configured_editor(monkeypatch: pytest.MonkeyPatch) -> None:\n     cli = make_repl_cli()\n     cli.config['editor']['editor_command'] = 'nano'"
+  }
+ ],
+ "test_files": [
+  "mycli_test/pytests/test_main.py",
+  "mycli_test/pytests/test_main_modes_repl.py"
+ ]
+}

@@ -1,0 +1,41 @@
+{
+ "repo": "agentscope-ai/QwenPaw",
+ "number": 8730,
+ "url": "https://github.com/agentscope-ai/QwenPaw/pull/8730",
+ "title": "fix(pawapp): disable proxy buffering on chat and tool-call SSE streams",
+ "merged_at": "2026-11-18T08:22:43Z",
+ "files": [
+  {
+   "filename": "src/qwenpaw/app/routers/tool_calls.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -299,4 +299,8 @@ async def _generate():\n     return StreamingResponse(\n         _generate(),\n         media_type=\"text/event-stream\",\n+        headers={\n+            \"Cache-Control\": \"no-cache\",\n+            \"X-Accel-Buffering\": \"no\",\n+        },\n     )"
+  },
+  {
+   "filename": "src/qwenpaw/pawapp/app.py",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 1,
+   "patch": "@@ -206,7 +206,14 @@ async def events():\n                 if managed_stream:\n                     await source.aclose()\n \n-        return StreamingResponse(events(), media_type=\"text/event-stream\")\n+        return StreamingResponse(\n+            events(),\n+            media_type=\"text/event-stream\",\n+            headers={\n+                \"Cache-Control\": \"no-cache\",\n+                \"X-Accel-Buffering\": \"no\",\n+            },\n+        )\n \n     @router.get(\"/chat/history\")\n     async def chat_history("
+  },
+  {
+   "filename": "tests/unit/app/routers/test_tool_calls_stream_headers.py",
+   "status": "added",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,33 @@\n+# -*- coding: utf-8 -*-\n+\"\"\"The tool-call output SSE must not be buffered by reverse proxies.\"\"\"\n+from __future__ import annotations\n+\n+from types import SimpleNamespace\n+\n+from fastapi import FastAPI\n+from fastapi.testclient import TestClient\n+\n+from qwenpaw.app.routers.tool_calls import router\n+\n+\n+class _Stream:\n+    async def subscribe(self):\n+        if False:  # pragma: no cover - empty async generator\n+            yield None\n+\n+\n+def test_tool_call_stream_disables_proxy_buffering() -> None:\n+    entry = SimpleNamespace(\n+        ctx=SimpleNamespace(session_id=\"s1\"),\n+        stream=_Stream(),\n+    )\n+    coordinator = SimpleNamespace(get=lambda _tool_call_id: entry)\n+    app = FastAPI()\n+    app.state.app_services = SimpleNamespace(tool_coordinator=coordinator)\n+    app.include_router(router)\n+\n+    response = TestClient(app).get(\"/tool-calls/s1/tc1/stream\")\n+\n+    assert response.status_code == 200\n+    assert response.headers[\"content-type\"].startswith(\"text/event-stream\")\n+    assert response.headers[\"x-accel-buffering\"] == \"no\""
+  },
+  {
+   "filename": "tests/unit/pawapp/test_app_contract.py",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 0,
+   "patch": "@@ -835,3 +835,31 @@ def message(\n     )\n \n     assert reply.text == \"The final answer is 42.\"\n+\n+\n+def test_chat_stream_disables_proxy_buffering() -> None:\n+    class StreamContext:\n+        app_id = \"fixture\"\n+\n+        def is_app_session_id(self, session_id: str) -> bool:\n+            return session_id.startswith(\"pawapp:fixture\")\n+\n+        async def ensure_chat_session(self, _session_id):\n+            return None\n+\n+        async def chat_stream(self, *_args, **_kwargs):\n+            yield {\"type\": \"done\"}\n+\n+    fixture = FastAPI()\n+    fixture.include_router(_build_capability_router())\n+    fixture.dependency_overrides[get_scoped_ctx] = StreamContext\n+    client = TestClient(fixture)\n+\n+    response = client.post(\n+        \"/chat/stream\",\n+        json={\"message\": \"hi\", \"session_id\": \"pawapp:fixture\"},\n+    )\n+\n+    assert response.status_code == 200\n+    assert response.headers[\"content-type\"].startswith(\"text/event-stream\")\n+    assert response.headers[\"x-accel-buffering\"] == \"no\""
+  }
+ ],
+ "test_files": [
+  "tests/unit/app/routers/test_tool_calls_stream_headers.py",
+  "tests/unit/pawapp/test_app_contract.py"
+ ]
+}

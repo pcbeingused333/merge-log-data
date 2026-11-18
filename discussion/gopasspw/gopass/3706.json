@@ -5,5 +5,11 @@
  "state": "open",
  "reviews": [],
  "review_comments": [],
- "comments": []
+ "comments": [
+  {
+   "role": "member",
+   "created_at": "2026-11-18T17:36:38Z",
+   "body": "Thanks for catching and fixing this! Appreciate the regression test coverage.\r\n\r\nA few suggestions to clean up the implementation and test:\r\n\r\n1. **Avoid manual `..` parsing via `filepath.Rel` (and deduplicate root vs. mount checks):**\r\n   Computing a relative traversal path just to inspect `..` prefixes is a bit roundabout (and `s.Store.Path()` currently isn't passed through `filepath.Abs` like `mp` is, nor guarded against `\"\"`). Since we already resolve `fp` with `filepath.Abs`, a small helper checking exact match or a `filepath.Separator`-bounded prefix is cleaner and matches what we already do in `internal/backend/storage/fs/store.go`:\r\n\r\n   ```go\r\n   func (s *binaryHandler) isInStore(fn string) bool {\r\n   \tfp, err := filepath.Abs(fn)\r\n   \tif err != nil {\r\n   \t\treturn false\r\n   \t}\r\n   \tif isSubpath(s.Store.Path(), fp) {\r\n   \t\treturn true\r\n   \t}\r\n   \tfor _, mp := range s.Store.Mounts() {\r\n   \t\tif isSubpath(mp, fp) {\r\n   \t\t\treturn true\r\n   \t\t}\r\n   \t}\r\n\r\n   \treturn false\r\n   }\r\n\r\n   func isSubpath(base, target string) bool {\r\n   \tif base == \"\" {\r\n   \t\treturn false\r\n   \t}\r\n   \tabsBase, err := filepath.Abs(base)\r\n   \tif err != nil {\r\n   \t\treturn false\r\n   \t}\r\n   \tif target == absBase {\r\n   \t\treturn true\r\n   \t}\r\n   \tif !strings.HasSuffix(absBase, string(filepath.Separator)) {\r\n   \t\tabsBase += string(filepath.Separator)\r\n   \t}\r\n\r\n   \treturn strings.HasPrefix(target, absBase)\r\n   }\r\n   ```\r\n\r\n2. **Minor test cleanups in `TestBinaryCopyStorePathBoundaries`:**\r\n   - Please capture `out.Stdout` (like `TestBinaryCopyNameAmbiguity` above it does) so `out.Warningf` doesn't leak warning lines to stdout during test runs.\r\n   - Replace `map[bool]string{false: \"copy\", true: \"move\"}[move]` with a small test-case struct slice or a simple `if` for readability.\r\n   - Adding quick assertions on `isInStore` for `filepath.Dir(storePath)` (parent directory -> `false`) and `filepath.Join(storePath, \"..hidden\")` (dot-prefixed child -> `true`) would round out the boundary cases nicely."
+  }
+ ]
 }

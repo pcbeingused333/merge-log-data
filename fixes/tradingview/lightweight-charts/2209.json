@@ -1,0 +1,48 @@
+{
+ "repo": "tradingview/lightweight-charts",
+ "number": 2209,
+ "url": "https://github.com/tradingview/lightweight-charts/pull/2209",
+ "title": "fix: honor zOrder for pane primitives",
+ "merged_at": "2026-11-18T14:46:43Z",
+ "files": [
+  {
+   "filename": "src/model/pane-primitive-wrapper.ts",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 1,
+   "patch": "@@ -86,7 +86,7 @@ export abstract class PrimitiveWrapper<T extends ISeriesPrimitiveBase<TAttachedP\n \t\tthis._primitive.updateAllViews?.();\n \t}\n \n-\tpublic paneViews(): readonly ISeriesPrimitivePaneViewWrapper[] | readonly PrimitivePaneViewWrapper[] {\n+\tpublic allPaneViews(): readonly PrimitivePaneViewWrapper[] {\n \t\tconst base = this._primitive.paneViews?.() ?? [];\n \t\tif (this._paneViewsCache?.base === base) {\n \t\t\treturn this._paneViewsCache.wrapper;\n@@ -108,4 +108,21 @@ export class PanePrimitiveWrapper extends PrimitiveWrapper<IPanePrimitiveBase<un\n \tpublic labelPaneViews(): readonly IPaneView[] {\n \t\treturn [];\n \t}\n+\n+\tpublic paneViews(): readonly PrimitivePaneViewWrapper[] {\n+\t\treturn this._paneViewsByZOrder('normal');\n+\t}\n+\n+\tpublic topPaneViews(): readonly PrimitivePaneViewWrapper[] {\n+\t\treturn this._paneViewsByZOrder('top');\n+\t}\n+\n+\tpublic bottomPaneViews(): readonly PrimitivePaneViewWrapper[] {\n+\t\treturn this._paneViewsByZOrder('bottom');\n+\t}\n+\n+\tprivate _paneViewsByZOrder(zOrder: PrimitivePaneViewZOrder): readonly PrimitivePaneViewWrapper[] {\n+\t\treturn this.allPaneViews()\n+\t\t\t.filter((view: PrimitivePaneViewWrapper) => view.zOrder() === zOrder);\n+\t}\n }"
+  },
+  {
+   "filename": "src/model/series.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -72,7 +72,7 @@ function extractPrimitivePaneViews(\n }\n \n function primitivePaneViewsExtractor(wrapper: SeriesPrimitiveWrapper): readonly ISeriesPrimitivePaneViewWrapper[] {\n-\treturn wrapper.paneViews();\n+\treturn wrapper.allPaneViews();\n }\n function primitivePricePaneViewsExtractor(wrapper: SeriesPrimitiveWrapper): readonly ISeriesPrimitivePaneViewWrapper[] {\n \treturn wrapper.priceAxisPaneViews();"
+  },
+  {
+   "filename": "tests/e2e/graphics/test-cases/plugins/pane-primitive-zorder.js",
+   "status": "added",
+   "additions": 63,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,63 @@\n+function generateData() {\n+\tconst res = [];\n+\tconst time = new Date(Date.UTC(2018, 0, 1, 0, 0, 0, 0));\n+\tfor (let i = 1; i < 500; ++i) {\n+\t\tres.push({\n+\t\t\ttime: time.getTime() / 1000,\n+\t\t\tvalue: i,\n+\t\t});\n+\n+\t\ttime.setUTCDate(time.getUTCDate() + 1);\n+\t}\n+\n+\treturn res;\n+}\n+\n+class PaneRenderer {\n+\tconstructor(color, band) {\n+\t\tthis._color = color;\n+\t\tthis._band = band;\n+\t}\n+\tdraw(target) {\n+\t\ttarget.useMediaCoordinateSpace(scope => {\n+\t\t\tconst ctx = scope.context;\n+\t\t\tconst height = scope.mediaSize.height;\n+\t\t\tconst bandHeight = Math.round(height / 3);\n+\t\t\tctx.fillStyle = this._color;\n+\t\t\tctx.fillRect(0, this._band * bandHeight, scope.mediaSize.width, bandHeight);\n+\t\t});\n+\t}\n+}\n+\n+class PaneView {\n+\tconstructor(color, band, zOrder) {\n+\t\tthis._renderer = new PaneRenderer(color, band);\n+\t\tthis._zOrder = zOrder;\n+\t}\n+\tzOrder() {\n+\t\treturn this._zOrder;\n+\t}\n+\trenderer() {\n+\t\treturn this._renderer;\n+\t}\n+}\n+\n+class TestPlugin {\n+\tconstructor() {\n+\t\tthis._paneViews = [\n+\t\t\tnew PaneView('rgba(247, 37, 133, 0.85)', 0, 'bottom'),\n+\t\t\tnew PaneView('rgba(67, 97, 238, 0.85)', 1, 'normal'),\n+\t\t\tnew PaneView('rgba(76, 201, 240, 0.85)', 2, 'top'),\n+\t\t];\n+\t}\n+\tpaneViews() {\n+\t\treturn this._paneViews;\n+\t}\n+}\n+\n+function runTestCase(container) {\n+\tconst chart = (window.chart = LightweightCharts.createChart(container, { layout: { attributionLogo: false } }));\n+\tconst mainSeries = chart.addSeries(LightweightCharts.LineSeries);\n+\tmainSeries.setData(generateData());\n+\tchart.panes()[0].attachPrimitive(new TestPlugin());\n+}"
+  },
+  {
+   "filename": "tests/unittests/pane-primitive-zorder.spec.ts",
+   "status": "added",
+   "additions": 58,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,58 @@\n+/* eslint-disable @typescript-eslint/no-floating-promises */\n+import { deepStrictEqual, strictEqual } from 'node:assert/strict';\n+import { describe, it } from 'node:test';\n+\n+import { IPanePrimitiveBase, IPanePrimitivePaneView, PrimitivePaneViewZOrder } from '../../src/model/ipane-primitive';\n+import { PanePrimitiveWrapper } from '../../src/model/pane-primitive-wrapper';\n+\n+function paneView(zOrder?: PrimitivePaneViewZOrder): IPanePrimitivePaneView {\n+\treturn {\n+\t\tzOrder: zOrder === undefined ? undefined : () => zOrder,\n+\t\trenderer: () => null,\n+\t};\n+}\n+\n+function wrapperFor(views: readonly IPanePrimitivePaneView[]): PanePrimitiveWrapper {\n+\tconst primitive: IPanePrimitiveBase = {\n+\t\tpaneViews: () => views,\n+\t};\n+\treturn new PanePrimitiveWrapper(primitive);\n+}\n+\n+function layers(wrapper: PanePrimitiveWrapper): [number, number, number] {\n+\treturn [\n+\t\twrapper.bottomPaneViews().length,\n+\t\twrapper.paneViews().length,\n+\t\twrapper.topPaneViews().length,\n+\t];\n+}\n+\n+describe('PanePrimitiveWrapper zOrder', () => {\n+\tit('places each pane view on the layer named by zOrder', () => {\n+\t\tconst bottom = paneView('bottom');\n+\t\tconst normal = paneView('normal');\n+\t\tconst implicitNormal = paneView();\n+\t\tconst top = paneView('top');\n+\t\tconst wrapper = wrapperFor([bottom, normal, implicitNormal, top]);\n+\n+\t\tdeepStrictEqual(layers(wrapper), [1, 2, 1]);\n+\t\tstrictEqual(wrapper.bottomPaneViews()[0].zOrder(), 'bottom');\n+\t\tdeepStrictEqual(wrapper.paneViews().map((view: { zOrder(): PrimitivePaneViewZOrder }) => view.zOrder()), ['normal', 'normal']);\n+\t\tstrictEqual(wrapper.topPaneViews()[0].zOrder(), 'top');\n+\t});\n+\n+\tit('keeps a view on its current layer when zOrder changes without a new array', () => {\n+\t\tlet zOrder: PrimitivePaneViewZOrder = 'bottom';\n+\t\tconst view = paneView('bottom');\n+\t\tview.zOrder = () => zOrder;\n+\t\tconst views = [view];\n+\t\tconst wrapper = wrapperFor(views);\n+\n+\t\tdeepStrictEqual(layers(wrapper), [1, 0, 0]);\n+\t\tconst wrapped = wrapper.bottomPaneViews()[0];\n+\n+\t\tzOrder = 'top';\n+\t\tdeepStrictEqual(layers(wrapper), [0, 0, 1]);\n+\t\tstrictEqual(wrapper.topPaneViews()[0], wrapped);\n+\t});\n+});"
+  },
+  {
+   "filename": "website/docs/plugins/pane-primitives.md",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -44,7 +44,7 @@ mainPane.detachPrimitive(myCustomPanePrimitive);\n Pane primitives follow the same model as\n [series primitives](./series-primitives.mdx) — views that return renderers,\n the `attached` / `detached` lifecycle, `updateAllViews`, and hit testing —\n-with three differences:\n+with four differences:\n \n - A pane primitive is attached to a pane, so\n   [`paneViews`](../api/interfaces/IPanePrimitiveBase.md#paneviews) is its only\n@@ -54,6 +54,7 @@ with three differences:\n   [`{ chart, requestUpdate }`](../api/interfaces/PaneAttachedParameter.md)\n   without a series reference.\n - There is no `autoscaleInfo`: a pane primitive is not tied to a price scale.\n+- Within each `zOrder` layer, pane primitives are drawn before the series and their primitives, so a pane primitive on `'normal'` sits under the series. Use `'top'` to draw it above the series.\n \n ## Implementing a pane primitive\n "
+  }
+ ],
+ "test_files": [
+  "tests/e2e/graphics/test-cases/plugins/pane-primitive-zorder.js",
+  "tests/unittests/pane-primitive-zorder.spec.ts"
+ ]
+}

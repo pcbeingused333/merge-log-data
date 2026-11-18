@@ -1,0 +1,26 @@
+{
+ "repo": "OpenCSGs/csghub-server",
+ "number": 1638,
+ "url": "https://github.com/OpenCSGs/csghub-server/pull/1638",
+ "title": "fix(aigateway): read cumulative usage from native Messages message_delta",
+ "merged_at": "2026-11-18T13:39:12Z",
+ "files": [
+  {
+   "filename": "aigateway/handler/anthropic/native.go",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 1,
+   "patch": "@@ -153,11 +153,27 @@ func (w *nativeResponseWriter) extractUsageFromNativeSSE(eventType string, data\n \t\t\t\tStopReason string `json:\"stop_reason\"`\n \t\t\t} `json:\"delta\"`\n \t\t\tUsage struct {\n-\t\t\t\tOutputTokens int `json:\"output_tokens\"`\n+\t\t\t\tInputTokens              *int `json:\"input_tokens\"`\n+\t\t\t\tOutputTokens             int  `json:\"output_tokens\"`\n+\t\t\t\tCacheReadInputTokens     *int `json:\"cache_read_input_tokens\"`\n+\t\t\t\tCacheCreationInputTokens *int `json:\"cache_creation_input_tokens\"`\n \t\t\t} `json:\"usage\"`\n \t\t}\n \t\tif err := json.Unmarshal(data, &event); err == nil {\n \t\t\tw.outputTokens = int64(event.Usage.OutputTokens)\n+\t\t\t// Anthropic documents message_delta usage as cumulative and newer\n+\t\t\t// responses include input/cache counts there; only override the\n+\t\t\t// message_start values with positive counts so a proxy that sends\n+\t\t\t// zeros does not wipe them.\n+\t\t\tif event.Usage.InputTokens != nil && *event.Usage.InputTokens > 0 {\n+\t\t\t\tw.inputTokens = int64(*event.Usage.InputTokens)\n+\t\t\t}\n+\t\t\tif event.Usage.CacheReadInputTokens != nil && *event.Usage.CacheReadInputTokens > 0 {\n+\t\t\t\tw.cacheReadTokens = int64(*event.Usage.CacheReadInputTokens)\n+\t\t\t}\n+\t\t\tif event.Usage.CacheCreationInputTokens != nil && *event.Usage.CacheCreationInputTokens > 0 {\n+\t\t\t\tw.cacheCreationTokens = int64(*event.Usage.CacheCreationInputTokens)\n+\t\t\t}\n \t\t}\n \t\tif w.recorder != nil {\n \t\t\tfinishReason := messagesStopReasonToFinishReason(event.Delta.StopReason)"
+  },
+  {
+   "filename": "aigateway/handler/anthropic/native_usage_test.go",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -37,3 +37,38 @@ func TestNativeUsage_PromptTokensIncludeCache_Stream(t *testing.T) {\n \tassert.Equal(t, int64(135), u.TotalTokens)\n \tassert.LessOrEqual(t, u.CachedPromptTokens, u.PromptTokens)\n }\n+\n+func TestNativeUsage_MessageDeltaCumulativeUsage_Stream(t *testing.T) {\n+\tgin.SetMode(gin.TestMode)\n+\tc, _ := gin.CreateTestContext(httptest.NewRecorder())\n+\tw := newNativeResponseWriter(c.Writer, true, \"pub-model\", nil)\n+\t// Upstream sends zero usage in message_start and the real totals in message_delta.\n+\tw.extractUsageFromNativeSSE(\"message_start\", []byte(`{\"message\":{\"id\":\"msg_1\",\"usage\":{\"input_tokens\":0,\"output_tokens\":1}}}`))\n+\tw.extractUsageFromNativeSSE(\"message_delta\", []byte(`{\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":10,\"cache_read_input_tokens\":100,\"cache_creation_input_tokens\":20,\"output_tokens\":5}}`))\n+\n+\tu := w.Usage()\n+\tassert.Equal(t, int64(130), u.PromptTokens)\n+\tassert.Equal(t, int64(100), u.CachedPromptTokens)\n+\tassert.Equal(t, int64(20), u.CacheCreationPromptTokens)\n+\tassert.Equal(t, int64(135), u.TotalTokens)\n+}\n+\n+func TestNativeUsage_MessageDeltaWithoutInputKeepsMessageStart_Stream(t *testing.T) {\n+\tgin.SetMode(gin.TestMode)\n+\tc, _ := gin.CreateTestContext(httptest.NewRecorder())\n+\tw := newNativeResponseWriter(c.Writer, true, \"pub-model\", nil)\n+\tw.extractUsageFromNativeSSE(\"message_start\", []byte(`{\"message\":{\"id\":\"msg_1\",\"usage\":{\"input_tokens\":10,\"cache_read_input_tokens\":100}}}`))\n+\tw.extractUsageFromNativeSSE(\"message_delta\", []byte(`{\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}`))\n+\n+\tassert.Equal(t, int64(110), w.Usage().PromptTokens)\n+}\n+\n+func TestNativeUsage_MessageDeltaZeroInputKeepsMessageStart_Stream(t *testing.T) {\n+\tgin.SetMode(gin.TestMode)\n+\tc, _ := gin.CreateTestContext(httptest.NewRecorder())\n+\tw := newNativeResponseWriter(c.Writer, true, \"pub-model\", nil)\n+\tw.extractUsageFromNativeSSE(\"message_start\", []byte(`{\"message\":{\"id\":\"msg_1\",\"usage\":{\"input_tokens\":10,\"cache_read_input_tokens\":100}}}`))\n+\tw.extractUsageFromNativeSSE(\"message_delta\", []byte(`{\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":0,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0,\"output_tokens\":5}}`))\n+\n+\tassert.Equal(t, int64(110), w.Usage().PromptTokens)\n+}"
+  }
+ ],
+ "test_files": [
+  "aigateway/handler/anthropic/native_usage_test.go"
+ ]
+}

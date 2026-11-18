@@ -1,0 +1,24 @@
+{
+ "repo": "resend/resend-rust",
+ "number": 137,
+ "url": "https://github.com/resend/resend-rust/pull/137",
+ "title": "fix(receiving): fail forward when the raw email download returns an error status",
+ "merged_at": "2026-11-18T17:59:12Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@ and this project adheres to\n \n ### Fixed\n \n+- `ReceivingSvc::forward` now returns an error when downloading the raw message fails (for example an HTTP 404 for an expired link) instead of forwarding the error body as the `.eml` attachment\n - The async rate limiter now replenishes `RESEND_RATE_LIMIT` requests per 1,100 ms instead of one request per 1,100 ms after the initial burst\n \n ## [0.36.2] - 2026-11-17"
+  },
+  {
+   "filename": "src/receiving.rs",
+   "status": "modified",
+   "additions": 50,
+   "deletions": 2,
+   "patch": "@@ -100,7 +100,7 @@ impl ReceivingSvc {\n             })\n         })?;\n \n-        let raw_response_content = reqwest::get(raw.download_url).await?.bytes().await?;\n+        let raw_response_content = download_raw(raw.download_url).await?;\n \n         let email_svc = EmailsSvc(Arc::<Config>::clone(&self.0));\n \n@@ -138,7 +138,7 @@ impl ReceivingSvc {\n                 format!(\"Fwd: {}\", email_response.subject)\n             };\n \n-            let attachment = CreateAttachment::from_content(raw_response_content.to_vec())\n+            let attachment = CreateAttachment::from_content(raw_response_content)\n                 .with_filename(\"forwarded_message.eml\")\n                 .with_content_type(\"message/rfc822\");\n \n@@ -153,6 +153,18 @@ impl ReceivingSvc {\n     }\n }\n \n+/// Downloads the raw message, failing on a non success status so that an error page is never\n+/// forwarded as if it were the original email.\n+#[maybe_async::maybe_async]\n+async fn download_raw(url: String) -> Result<Vec<u8>> {\n+    Ok(reqwest::get(url)\n+        .await?\n+        .error_for_status()?\n+        .bytes()\n+        .await?\n+        .to_vec())\n+}\n+\n /// Builds the email sent by a forward without `passthrough`: the raw message is attached and\n /// both the caller supplied text and HTML bodies are kept.\n fn non_passthrough_email(\n@@ -706,4 +718,40 @@ mod test {\n         assert!(email.raw.is_some());\n         assert_eq!(email.received_for, vec![\"forwarded@example.com\"]);\n     }\n+\n+    /// Serves one canned HTTP response on a local port and returns the URL.\n+    #[cfg(not(feature = \"blocking\"))]\n+    fn serve_once(response: &'static str) -> String {\n+        use std::io::{Read, Write};\n+\n+        let listener = std::net::TcpListener::bind(\"127.0.0.1:0\").unwrap();\n+        let url = format!(\"http://{}/raw\", listener.local_addr().unwrap());\n+        let _t = std::thread::spawn(move || {\n+            let (mut stream, _) = listener.accept().unwrap();\n+            let mut buf = [0u8; 1024];\n+            let _res = stream.read(&mut buf);\n+            stream.write_all(response.as_bytes()).unwrap();\n+        });\n+        url\n+    }\n+\n+    #[tokio::test]\n+    #[cfg(not(feature = \"blocking\"))]\n+    async fn download_raw_rejects_error_status() {\n+        let url = serve_once(\n+            \"HTTP/1.1 404 Not Found\\r\\nContent-Length: 9\\r\\nConnection: close\\r\\n\\r\\nnot found\",\n+        );\n+\n+        let res = super::download_raw(url).await;\n+        assert!(matches!(res, Err(crate::Error::Http(_))), \"{res:?}\");\n+    }\n+\n+    #[tokio::test]\n+    #[cfg(not(feature = \"blocking\"))]\n+    async fn download_raw_returns_body_on_success() {\n+        let url = serve_once(\"HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\nConnection: close\\r\\n\\r\\nok\");\n+\n+        let res = super::download_raw(url).await.unwrap();\n+        assert_eq!(res, b\"ok\");\n+    }\n }"
+  }
+ ],
+ "test_files": []
+}

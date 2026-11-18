@@ -3,13 +3,74 @@
  "number": 2662,
  "url": "https://github.com/versity/versitygw/pull/2662",
  "state": "open",
- "reviews": [],
- "review_comments": [],
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-18T08:22:21Z",
+   "body": "Please add an integration test. This race also shows up on a plain local disk when the parent is replaced by a file instead of being removed.\n\nOn main, on a local Linux disk, directory-object PUTs of `r/N/b/c/d<w>-<i>/` while another worker PUTs and DELETEs `r/N/b` gave `500 mkdir <bucket>/r/1/b/c: not a directory`, about 1 in 70k operations.\n\nSuggested test: shape it like `PutObject_race_with_parent_object_deletes`, but with directory-object keys two levels under the parent key, so MkdirAll has to make `b` and then `b/c`. The existing test's keys sit one level under the parent, so its Mkdir never sees a parent replaced by a file. Accept only 200 or `ObjectParentIsFile` / `ExistingObjectIsDirectory`.\n\nThe same race with CompleteMultipartUpload didn't hit in ~520k Completes locally, so for that path the unit tests are the realistic coverage."
+  },
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-18T20:45:06Z",
+   "body": "The five inline comments from the first review (`mkdir.go:104`, `mkdir_test.go:178`, `196`, `229`, `284`) aren't addressed yet: neither file changed in 70d75861, and the threads have no reply. Please address them or reply on each thread."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "backend/mkdir.go",
+   "created_at": "2026-11-18T08:18:52Z",
+   "body": "The reason given for the trailing-separator exception is wrong. Linux answers EEXIST to `Mkdir(\"file/\")`, so Linux never gets here with ENOTDIR. macOS/BSD answer ENOTDIR (I checked: macOS `mkdir(\"file/\")` → ENOTDIR, Linux → EEXIST).\n\nThe exception is still needed: with a trailing separator the ENOTDIR can be about the last element itself, which making the parents again never fixes, so it would use up the whole retry budget (~115 ms). Please say that instead, and note that no caller passes such a path; only the internal `a//b` → `a/` recursion makes one.\n\nNit: `i == len(path)` is now checked here and again in `parentGone` below. Compute it once before the loop."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/mkdir_test.go",
+   "created_at": "2026-11-18T08:19:09Z",
+   "body": "`*lstatCalls != 0` can never fail. `stubMkdirAll` only counts Lstat calls when `lstatStub` is non-nil, and this test passes `nil`, so \"without calling Lstat\" from the PR description isn't actually tested. Pass a pass-through stub: `func(int) (bool, error) { return false, nil }`."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/mkdir_test.go",
+   "created_at": "2026-11-18T08:19:30Z",
+   "body": "The four new tests are near copies of `TestMkdirAllParentGoneAfterEEXIST`, `TestMkdirAllParentReplacedByFile`, `TestMkdirAllEEXISTRetriesBounded` and the \"as on Linux\" case of `TestMkdirAllTrailingSeparator`. Only the errno returned by Mkdir differs. Please fold them into those tests as extra table cases (add a Mkdir-errno column) instead of adding 114 lines of parallel tests."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/mkdir_test.go",
+   "created_at": "2026-11-18T08:20:08Z",
+   "body": "These lines are left over from the EEXIST test:\n- `os.Mkdir(target)` / `os.Remove(target)` simulate another writer making the directory, which has nothing to do with an ENOTDIR from Mkdir.\n- \"A delete then puts an object at the parent key\" is wrong: an upload puts it.\n\nSimpler and stronger: replace the parent with a file and `return false, nil`, so the real Mkdir answers ENOTDIR (Linux and macOS both do) instead of a made-up one. The Windows skip doesn't look needed either: Lstat is never reached, and the retry finds the file with `os.Stat`."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/mkdir_test.go",
+   "created_at": "2026-11-18T08:20:35Z",
+   "body": "This doc comment has the same mix-up as mkdir.go: Linux never answers ENOTDIR to `Mkdir(\"file/\")`; macOS/BSD do. Please make it an \"as on macOS\" case of `TestMkdirAllTrailingSeparator` (Mkdir ENOTDIR, Lstat ENOTDIR), so the doubled-separator form is covered too. Also assert `errors.Is(err, syscall.ENOTDIR)` rather than only `err != nil`."
+  },
+  {
+   "role": "contributor",
+   "path": "tests/integration/posix.go",
+   "created_at": "2026-11-18T20:38:41Z",
+   "body": "This test can't reach the path the PR fixes. Mkdir of `b/c` only gets ENOTDIR if directory `b` is removed after MkdirAll made it, and then `b` is uploaded as a file. Only deletes of other objects under `b` remove that directory. With `parentRaceGroupSize` = 2 there is only one directory-object worker per parent, and the parent-key worker only deletes the file `b`, so nothing ever removes it.\n\nOn main, this shape ran 80k directory-object PUTs with no 500. With 3 or 7 directory-object workers per parent (114k and 140k PUTs) it didn't hit either, so no integration test at CI scale can guard this fix. My earlier request didn't account for that. The unit tests are the real coverage.\n\nPlease either drop this test, or keep it as a test of the error codes directory-object PUTs get while the parent key is uploaded, and change the doc comment to say only that."
+  },
+  {
+   "role": "contributor",
+   "path": "tests/integration/posix.go",
+   "created_at": "2026-11-18T20:39:08Z",
+   "body": "If the test stays: a successful upload isn't read back, unlike `PutObject_race_with_parent_object_deletes`, and the parent object's `siblingRaceData` body is written but never checked. Call `checkObjectData(s3client, bucket, key, \"\", body)` before the delete. It works for the directory objects too, since their body is empty."
+  }
+ ],
  "comments": [
   {
    "role": "collaborator",
    "created_at": "2026-11-13T14:32:08Z",
    "body": "This won't automatically run in continuous integration without approval. A member of the Versity organization must allow it."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-18T08:55:12Z",
+   "body": "Thanks @niksis02. I added the integration test in the form you described: `PutObject_race_with_parent_object_deletes_nested_dirs` races directory-object PUTs two levels under a parent key, using keys `r/N/b/c/d<w>-<i>/` and accepting only 200, `ObjectParentIsFile` or `ExistingObjectIsDirectory`.\n\nThe posix integration suite passes (43/43) with it. As you noted, the race is rare (about 1 in 70k), so the test does not fail on main either; it guards the behaviour rather than reproducing the original failure.\n\nThis comment and the test were drafted with Claude Code.\n"
   }
  ]
 }

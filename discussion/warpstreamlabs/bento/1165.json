@@ -3,7 +3,62 @@
  "number": 1165,
  "url": "https://github.com/warpstreamlabs/bento/pull/1165",
  "state": "open",
- "reviews": [],
- "review_comments": [],
- "comments": []
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-18T09:10:27Z",
+   "body": ""
+  },
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-18T15:37:04Z",
+   "body": ""
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-18T15:43:38Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "collaborator",
+   "path": "internal/impl/wasm/wasmpool/pool.go",
+   "created_at": "2026-11-17T12:29:03Z",
+   "body": "Is this keepalive necessary considering we're (1) removing it from the pool, (2) cancelling the cleanup, and (3) returning a strong ref to the caller? Why not rather a simpler:\n\n```go\nfunc (p *WasmModulePool[T]) Get(ctx context.Context) (T, error) {\n\tif b, ok := p.instancePool.Get().(*pooledInstance[T]); ok {\n\t\tb.cleanup.Stop()\n\t\treturn b.module, nil\n\t}\n\treturn p.newInstance(ctx)\n}\n```"
+  },
+  {
+   "role": "collaborator",
+   "path": "internal/impl/wasm/wasmpool/pool.go",
+   "created_at": "2026-11-17T12:29:39Z",
+   "body": "Ahh this was definitely an oversight to use `AddCleanup` like this -- since a new closure is appended each time. Good catch!"
+  },
+  {
+   "role": "collaborator",
+   "path": "internal/impl/wasm/wasmpool/pool.go",
+   "created_at": "2026-11-17T12:33:15Z",
+   "body": "Could we possibly trigger this `Close()` in a goroutine? Docs mention that long running closes shouldn't be blocking (see [Go spec](https://go.dev/doc/gc-guide#Finalizers_cleanups_and_weak_pointers:~:text=Long%20running%20cleanups%20should%20create%20a%20goroutine%20to%20avoid%20blocking%20the%20execution%20of%20other%20cleanups%2E)).\n\n"
+  },
+  {
+   "role": "collaborator",
+   "path": "internal/plugin/runtime/wazero_v1/processor.go",
+   "created_at": "2026-11-18T15:37:04Z",
+   "body": "FYI Have changed the WASM plugins to use this `wasmpool` instead"
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-18T09:35:14Z",
+   "body": "Thanks @gregfurman. Pushed an update: dropped `runtime.KeepAlive` and `Get()` now stops the cleanup directly; in `Put` the idle cleanup runs `Close()` in a goroutine so a slow close doesn't block. Added tests for the cleanup/cancel paths. `go test -race` passes locally.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "collaborator",
+   "created_at": "2026-11-18T15:53:02Z",
+   "body": "I was seeing some race conditions with the python processor. Ended up being some annoying issues when trying to stop the shared runtime. \r\n\r\nMyself + the clanker added some overengineered closing mechanism to workaround this but this component will be replaced with a Bento WASM plugin at a later stage so am not feeling sentimental about it."
+  }
+ ]
 }

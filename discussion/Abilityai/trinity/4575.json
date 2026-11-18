@@ -3,7 +3,14 @@
  "number": 4575,
  "url": "https://github.com/Abilityai/trinity/pull/4575",
  "state": "open",
- "reviews": [],
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-18T20:29:15Z",
+   "body": "\nThanks for this. The fix works for the case in the issue. I reproduced the `ambiguous argument 'origin/main'` error against `github.com/abilityai/trinity-skills` (tag `v0.5.0`, then branch `main`), and this branch fixes it. The new test also fails when the fix is reverted.\n\nThere is one side effect I'd like fixed before merge. Because the fetch now has a destination ref, git also pulls down every upstream tag that points into the fetched history. The old fetch did not. That breaks two things that work on `dev` today:\n\n1. **A tag can take over the branch sync.** If the upstream repo has a tag named `origin/main`, `reset --hard origin/main` picks the tag over the tracking ref. Sync reports success but checks out an older commit. Repro: sync `main`, add two commits upstream, `git tag origin/main HEAD~1`, then sync again. HEAD ends at the tagged commit, not the branch head. On `dev` it ends at the branch head.\n2. **Repointing a branch source to a re-cut tag gets stuck.** Track `main` and sync. Upstream re-cuts `v1` (`git tag -f`). Repoint the source to tag `v1`. It is refused as a moved tag, and every retry is refused too, because the auto-fetched local `v1` blocks the non-force tag fetch. On `dev` the same repoint succeeds.\n\nAdding `--no-tags` to this fetch fixes both. With it, your four tests and the related skill-source tests still pass:\n\n```python\n[*_GIT_HTTP_UA_ARGS, \"fetch\", \"--no-tags\", \"origin\",\n f\"+refs/heads/{self.ref}:refs/remotes/origin/{self.ref}\"]\n```\n\nResetting to `refs/remotes/origin/{self.ref}` instead of `origin/{self.ref}` would also close the first case. That one is optional.\n\nPlease also add tests for these cases. Today the suite stays green if the leading `+` is dropped from the refspec, and that would make every force-pushed branch fail to sync. Three tests that cover it:\n\n- upstream force-pushes the tracked branch, and the next sync lands on the new head\n- an upstream tag named `origin/main` does not change where a `main` sync lands\n- track `main`, re-cut a tag upstream, repoint to that tag, and the sync succeeds\n\nThe full history download on a repoint is a fair tradeoff, and the issue already mentions it. I'm fine with it. Leaving the `last_sync_error` part for a follow-up, as the description says, is also fine.\n"
+  }
+ ],
  "review_comments": [],
  "comments": [
   {

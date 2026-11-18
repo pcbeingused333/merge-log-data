@@ -1,0 +1,34 @@
+{
+ "repo": "OpenCSGs/csghub-server",
+ "number": 1636,
+ "url": "https://github.com/OpenCSGs/csghub-server/pull/1636",
+ "title": "fix(aigateway): moderate both streamed reasoning fields in native chat",
+ "merged_at": "2026-11-18T12:21:27Z",
+ "files": [
+  {
+   "filename": "aigateway/component/moderation.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -997,7 +997,12 @@ func chatCompletionChunkModerationText(chunk types.ChatCompletionChunk) string {\n \tvar b strings.Builder\n \tfor _, choice := range chunk.Choices {\n \t\twriteTextModerationPart(&b, choice.Delta.Content)\n-\t\twriteTextModerationPart(&b, choice.Delta.ReasoningText())\n+\t\t// The wrapper forwards the raw event, so the client may see both fields:\n+\t\t// moderate each distinct value, not only the one chosen for output.\n+\t\twriteTextModerationPart(&b, choice.Delta.ReasoningContent)\n+\t\tif choice.Delta.Reasoning != choice.Delta.ReasoningContent {\n+\t\t\twriteTextModerationPart(&b, choice.Delta.Reasoning)\n+\t\t}\n \t\twriteTextModerationPart(&b, choice.Delta.Refusal)\n \t\tfor _, call := range choice.Delta.ToolCalls {\n \t\t\twriteTextModerationPart(&b, call.Function.Name)"
+  },
+  {
+   "filename": "aigateway/component/moderation_test.go",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 2,
+   "patch": "@@ -358,7 +358,7 @@ func TestChatCompletionChunkModerationTextReasoningPrecedence(t *testing.T) {\n \t})\n \tassert.Equal(t, \"answer\\nsecret reasoning\", onlyReasoning)\n \n-\t// Same precedence as chatDeltaReasoning: do not audit both fields when both are set.\n+\t// The raw event is forwarded with both fields, so both distinct values are audited.\n \tboth := chatCompletionChunkModerationText(types.ChatCompletionChunk{\n \t\tChoices: []types.ChatCompletionChunkChoice{{\n \t\t\tDelta: types.ChatCompletionChunkChoiceDelta{\n@@ -367,7 +367,17 @@ func TestChatCompletionChunkModerationTextReasoningPrecedence(t *testing.T) {\n \t\t\t},\n \t\t}},\n \t})\n-\tassert.Equal(t, \"preferred\", both)\n+\tassert.Equal(t, \"preferred\\nfallback\", both)\n+\n+\tsame := chatCompletionChunkModerationText(types.ChatCompletionChunk{\n+\t\tChoices: []types.ChatCompletionChunkChoice{{\n+\t\t\tDelta: types.ChatCompletionChunkChoiceDelta{\n+\t\t\t\tReasoningContent: \"same\",\n+\t\t\t\tReasoning:        \"same\",\n+\t\t\t},\n+\t\t}},\n+\t})\n+\tassert.Equal(t, \"same\", same)\n }\n \n func TestModerationImpl_CloseStreamCheck(t *testing.T) {"
+  },
+  {
+   "filename": "aigateway/handler/response_writer_wrapper_test.go",
+   "status": "modified",
+   "additions": 66,
+   "deletions": 0,
+   "patch": "@@ -4,14 +4,19 @@ import (\n \t\"context\"\n \t\"encoding/json\"\n \t\"net/http/httptest\"\n+\t\"strings\"\n \t\"testing\"\n \n \t\"github.com/gin-gonic/gin\"\n \t\"github.com/openai/openai-go/v3\"\n \t\"github.com/stretchr/testify/assert\"\n \t\"github.com/stretchr/testify/mock\"\n \t\"opencsg.com/csghub-server/_mocks/opencsg.com/csghub-server/aigateway/component\"\n+\tmockrpc \"opencsg.com/csghub-server/_mocks/opencsg.com/csghub-server/builder/rpc\"\n+\taicomponent \"opencsg.com/csghub-server/aigateway/component\"\n \t\"opencsg.com/csghub-server/builder/rpc\"\n+\t\"opencsg.com/csghub-server/common/config\"\n+\tcommontypes \"opencsg.com/csghub-server/common/types\"\n )\n \n func TestResponseWriterWrapper_StreamWrite(t *testing.T) {\n@@ -162,3 +167,64 @@ func TestResponseWriterWrapper_StreamWrite_WithWhiteSpace(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestResponseWriterWrapper_StreamWrite_FallbackReasoningModeration(t *testing.T) {\n+\t// The real moderation component runs; only the moderation service is\n+\t// stubbed. The stub flags text only when it contains the fallback marker.\n+\tnewModeration := func(t *testing.T, seen *[]string) aicomponent.Moderation {\n+\t\tclient := mockrpc.NewMockModerationSvcClient(t)\n+\t\tclient.EXPECT().PassLLMRespCheck(mock.Anything, mock.Anything).\n+\t\t\tRunAndReturn(func(_ context.Context, req commontypes.LLMCheckRequest) (*rpc.CheckResult, error) {\n+\t\t\t\t*seen = append(*seen, req.Text)\n+\t\t\t\treturn &rpc.CheckResult{IsSensitive: strings.Contains(req.Text, \"LEAKED-FALLBACK\"), Reason: \"toxic\"}, nil\n+\t\t\t})\n+\t\treturn aicomponent.NewModerationImplWithClient(&config.Config{}, client, nil)\n+\t}\n+\tevent := func(delta string) []byte {\n+\t\treturn []byte(`data: {\"id\":\"test-id\",\"choices\":[{\"index\":0,\"delta\":` + delta + `}]}` + \"\\n\\n\")\n+\t}\n+\n+\tt.Run(\"hit on fallback field blocks the original chunk\", func(t *testing.T) {\n+\t\tvar seen []string\n+\t\tw := httptest.NewRecorder()\n+\t\tctx, _ := gin.CreateTestContext(w)\n+\t\twrapper := NewResponseWriterWrapper(ChatWriterParams{InternalWriter: ctx.Writer, Stream: true, ModerationComponent: newModeration(t, &seen), RequestCtx: context.Background()})\n+\n+\t\t_, err := wrapper.Write(event(`{\"reasoning_content\":\"harmless\",\"reasoning\":\"LEAKED-FALLBACK\"}`))\n+\n+\t\tassert.ErrorIs(t, err, ErrSensitiveContent)\n+\t\tassert.Len(t, seen, 1)\n+\t\tassert.Contains(t, seen[0], \"LEAKED-FALLBACK\")\n+\t\tbody := w.Body.String()\n+\t\tassert.NotContains(t, body, \"LEAKED-FALLBACK\")\n+\t\tassert.NotContains(t, body, \"harmless\")\n+\t\tassert.Contains(t, body, `\"finish_reason\":\"sensitive\"`)\n+\t\tassert.Contains(t, body, \"data: [DONE]\")\n+\t})\n+\n+\tt.Run(\"hit on fallback field with empty primary blocks the chunk\", func(t *testing.T) {\n+\t\tvar seen []string\n+\t\tw := httptest.NewRecorder()\n+\t\tctx, _ := gin.CreateTestContext(w)\n+\t\twrapper := NewResponseWriterWrapper(ChatWriterParams{InternalWriter: ctx.Writer, Stream: true, ModerationComponent: newModeration(t, &seen), RequestCtx: context.Background()})\n+\n+\t\t_, err := wrapper.Write(event(`{\"reasoning\":\"LEAKED-FALLBACK\"}`))\n+\n+\t\tassert.ErrorIs(t, err, ErrSensitiveContent)\n+\t\tassert.NotContains(t, w.Body.String(), \"LEAKED-FALLBACK\")\n+\t\tassert.Contains(t, w.Body.String(), `\"finish_reason\":\"sensitive\"`)\n+\t})\n+\n+\tt.Run(\"moderation disabled leaves the event unchanged\", func(t *testing.T) {\n+\t\tinput := event(`{\"reasoning_content\":\"harmless\",\"reasoning\":\"LEAKED-FALLBACK\"}`)\n+\t\tw := httptest.NewRecorder()\n+\t\tctx, _ := gin.CreateTestContext(w)\n+\t\twrapper := NewResponseWriterWrapper(ChatWriterParams{InternalWriter: ctx.Writer, Stream: true, RequestCtx: context.Background()})\n+\n+\t\tn, err := wrapper.Write(input)\n+\n+\t\tassert.NoError(t, err)\n+\t\tassert.Equal(t, len(input), n)\n+\t\tassert.Equal(t, string(input), w.Body.String())\n+\t})\n+}"
+  }
+ ],
+ "test_files": [
+  "aigateway/component/moderation_test.go",
+  "aigateway/handler/response_writer_wrapper_test.go"
+ ]
+}

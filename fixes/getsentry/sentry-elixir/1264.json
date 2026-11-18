@@ -1,0 +1,26 @@
+{
+ "repo": "getsentry/sentry-elixir",
+ "number": 1264,
+ "url": "https://github.com/getsentry/sentry-elixir/pull/1264",
+ "title": "fix(logs): preserve false in named parameters",
+ "merged_at": "2026-11-18T14:40:52Z",
+ "files": [
+  {
+   "filename": "lib/sentry/log_event.ex",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -164,7 +164,7 @@ defmodule Sentry.LogEvent do\n     # Convert to list of values in template order for storage\n     processed_params =\n       Enum.map(keys, fn key ->\n-        value = Map.get(parameters, key) || Map.get(parameters, to_string(key))\n+        value = Map.get(parameters, key, Map.get(parameters, to_string(key)))\n         sanitize_attribute_value(value)\n       end)\n \n@@ -197,7 +197,7 @@ defmodule Sentry.LogEvent do\n   defp interpolate_named_placeholders(template, parameters) do\n     Regex.replace(~r/%\\{(\\w+)\\}/, template, fn _, key ->\n       atom_key = String.to_atom(key)\n-      value = Map.get(parameters, atom_key) || Map.get(parameters, key)\n+      value = Map.get(parameters, atom_key, Map.get(parameters, key))\n       to_string_for_interpolation(value)\n     end)\n   end"
+  },
+  {
+   "filename": "test/sentry/log_event_test.exs",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -43,6 +43,26 @@ defmodule Sentry.LogEventTest do\n       assert result.parameters == [\"Jane\", \"NYC\"]\n     end\n \n+    test \"preserves false in named parameters and prefers atom keys\" do\n+      log_event = %{\n+        level: :info,\n+        msg: {:string, \"active=%{active}\"},\n+        meta: %{time: 1_000_000_000}\n+      }\n+\n+      for parameters <- [\n+            %{active: false},\n+            %{\"active\" => false},\n+            %{\"active\" => true, :active => false}\n+          ] do\n+        result = LogEvent.from_logger_event(log_event, %{}, parameters)\n+\n+        assert result.body == \"active=false\"\n+        assert result.template == \"active=%{active}\"\n+        assert result.parameters == [false]\n+      end\n+    end\n+\n     test \"preserves parameter types with %s placeholders\" do\n       log_event = %{\n         level: :info,"
+  }
+ ],
+ "test_files": [
+  "test/sentry/log_event_test.exs"
+ ]
+}

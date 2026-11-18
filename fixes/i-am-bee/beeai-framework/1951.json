@@ -1,0 +1,26 @@
+{
+ "repo": "i-am-bee/beeai-framework",
+ "number": 1951,
+ "url": "https://github.com/i-am-bee/beeai-framework/pull/1951",
+ "title": "fix(tools): raise ToolError when OpenAPITool gets a non-2xx response",
+ "merged_at": "2026-11-18T11:53:38Z",
+ "files": [
+  {
+   "filename": "python/beeai_framework/tools/openapi.py",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -374,6 +374,12 @@ async def _run(\n                 )\n                 output = OpenAPIToolOutput(response.status_code, response.text)\n                 await self.emitter.emit(\"after_fetch\", AfterFetchEvent(url=str(url), data=output))\n+                if not response.is_success:\n+                    # The operation path, not the resolved URL, so a credential in the server URL is not echoed\n+                    message = f\"{method.upper()} {raw_path} failed with HTTP {response.status_code}\"\n+                    if response.text:\n+                        message += f\": {response.text[:500]}\"\n+                    raise ToolError(message)\n                 return output\n         except httpx.HTTPError as err:\n             raise ToolError(f\"Request to {url} has failed.\", cause=err)"
+  },
+  {
+   "filename": "python/tests/tools/test_openapi.py",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -427,3 +427,37 @@ async def test_array_path_and_header_parameters_use_simple_style(monkeypatch: py\n \n     assert url == \"https://example.invalid/pets/1%2C2\"\n     assert headers[\"X-Tags\"] == \"a,b\"\n+\n+\n+@pytest.mark.unit\n+@pytest.mark.asyncio\n+@pytest.mark.parametrize(\"status\", [302, 404, 500])\n+async def test_non_success_status_raises_tool_error(monkeypatch: pytest.MonkeyPatch, status: int) -> None:\n+    async def fake_request(self: httpx.AsyncClient, method: str, url: str, **kwargs: object) -> httpx.Response:\n+        return httpx.Response(status, text='{\"error\": \"nope\"}')\n+\n+    monkeypatch.setattr(httpx.AsyncClient, \"request\", fake_request)\n+\n+    [tool] = OpenAPITool.from_schema(_schema(\"https://example.invalid\", \"/pets\", {}))\n+\n+    with pytest.raises(ToolError, match=str(status)):\n+        await tool.run({})\n+\n+\n+@pytest.mark.unit\n+@pytest.mark.asyncio\n+async def test_non_success_error_truncates_long_body(monkeypatch: pytest.MonkeyPatch) -> None:\n+    async def fake_request(self: httpx.AsyncClient, method: str, url: str, **kwargs: object) -> httpx.Response:\n+        return httpx.Response(502, text=\"<html>\" + \"x\" * 5000)\n+\n+    monkeypatch.setattr(httpx.AsyncClient, \"request\", fake_request)\n+\n+    [tool] = OpenAPITool.from_schema(_schema(\"https://example.invalid\", \"/pets\", {}))\n+\n+    with pytest.raises(ToolError) as exc_info:\n+        await tool.run({})\n+\n+    message = str(exc_info.value)\n+    assert \"502\" in message\n+    assert \"<html>xxx\" in message\n+    assert \"x\" * 600 not in message"
+  }
+ ],
+ "test_files": [
+  "python/tests/tools/test_openapi.py"
+ ]
+}

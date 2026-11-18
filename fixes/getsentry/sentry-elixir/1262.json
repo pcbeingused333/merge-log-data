@@ -1,0 +1,26 @@
+{
+ "repo": "getsentry/sentry-elixir",
+ "number": 1262,
+ "url": "https://github.com/getsentry/sentry-elixir/pull/1262",
+ "title": "fix: hibernate sources after loading the source map",
+ "merged_at": "2026-11-18T14:50:48Z",
+ "files": [
+  {
+   "filename": "lib/sentry/sources.ex",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -39,7 +39,7 @@ defmodule Sentry.Sources do\n         _error -> :ok\n       end\n \n-    {:noreply, state}\n+    {:noreply, state, :hibernate}\n   end\n \n   ## Other functions"
+  },
+  {
+   "filename": "test/sources_test.exs",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -6,6 +6,21 @@ defmodule Sentry.SourcesTest do\n \n   alias Sentry.Sources\n \n+  @tag :tmp_dir\n+  test \"hibernates after loading source code into ETS\", %{tmp_dir: tmp_dir} do\n+    file = Path.join(tmp_dir, \"example.ex\")\n+    lines = %{1 => \"defmodule Example do\", 2 => \"end\"}\n+    path = Path.join(tmp_dir, \"sources.map\")\n+    File.write!(path, Sources.encode_source_code_map(%{file => lines}))\n+    Sentry.TestHelpers.put_test_config(source_code_map_path: path)\n+    on_exit(fn -> :ets.delete(Sources, file) end)\n+\n+    assert {:noreply, :no_state, :hibernate} =\n+             Sources.handle_continue(:load_source_code_map, :no_state)\n+\n+    assert Sources.get_lines_for_file(file) == lines\n+  end\n+\n   describe \"load_files/1\" do\n     test \"loads files\" do\n       paths = ["
+  }
+ ],
+ "test_files": [
+  "test/sources_test.exs"
+ ]
+}

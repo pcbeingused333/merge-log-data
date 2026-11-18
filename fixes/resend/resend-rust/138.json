@@ -1,0 +1,24 @@
+{
+ "repo": "resend/resend-rust",
+ "number": 138,
+ "url": "https://github.com/resend/resend-rust/pull/138",
+ "title": "fix(rate_limit): treat an empty jitter range as no jitter instead of panicking",
+ "merged_at": "2026-11-18T18:37:37Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,8 @@ and this project adheres to\n \n ### Fixed\n \n+- `send_with_retry_opts` (and the `retry!`/`retry_opts!` macros) no longer panic when `RetryOptions::jitter_range_ms` is\n+  an empty range such as `0..0`; an empty range now means no jitter\n - `ReceivingSvc::forward` now returns an error when downloading the raw message fails (for example an HTTP 404 for an expired link) instead of forwarding the error body as the `.eml` attachment\n - The async rate limiter now replenishes `RESEND_RATE_LIMIT` requests per 1,100 ms instead of one request per 1,100 ms after the initial burst\n "
+  },
+  {
+   "filename": "src/rate_limit.rs",
+   "status": "modified",
+   "additions": 31,
+   "deletions": 1,
+   "patch": "@@ -114,7 +114,12 @@ pub async fn send_with_retry_opts<A: Future<Output = Result<B>> + Send, B: Send>\n         };\n \n         let sleep_millis = ratelimit_reset.map_or(opts.duration_ms, |r| r.saturating_mul(1000));\n-        let jitter = rand::rng().random_range(opts.jitter_range_ms.clone());\n+        // `random_range` panics on an empty range, so treat one (e.g. `0..0`) as \"no jitter\".\n+        let jitter = if opts.jitter_range_ms.is_empty() {\n+            0\n+        } else {\n+            rand::rng().random_range(opts.jitter_range_ms.clone())\n+        };\n         futures_timer::Delay::new(Duration::from_millis(sleep_millis + jitter)).await;\n \n         #[cfg(test)]\n@@ -291,6 +296,31 @@ mod test {\n         );\n     }\n \n+    /// An empty jitter range (e.g. `0..0`, meaning \"no jitter\") must not panic.\n+    #[tokio::test]\n+    #[cfg(not(feature = \"blocking\"))]\n+    async fn test_retry_empty_jitter_range() {\n+        let mut retry_count = 0u32;\n+\n+        let f = || async {\n+            Result::<(), Error>::Err(Error::RateLimit {\n+                ratelimit_limit: None,\n+                ratelimit_remaining: None,\n+                ratelimit_reset: Some(0),\n+            })\n+        };\n+        let opts = RetryOptions {\n+            duration_ms: 0,\n+            jitter_range_ms: 0..0,\n+            max_retries: 1,\n+        };\n+\n+        let res = send_with_retry_opts(f, &opts, &mut retry_count).await;\n+\n+        assert!(res.is_err());\n+        assert_eq!(retry_count, 1);\n+    }\n+\n     #[tokio_shared_rt::test(shared = true)]\n     #[serial_test::serial]\n     #[cfg(not(feature = \"blocking\"))]"
+  }
+ ],
+ "test_files": []
+}

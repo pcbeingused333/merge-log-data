@@ -1,0 +1,33 @@
+{
+ "repo": "PostHog/posthog-js",
+ "number": 5764,
+ "url": "https://github.com/PostHog/posthog-js/pull/5764",
+ "title": "fix(ai): skip JSON parse for Anthropic streamed tool calls without arguments",
+ "merged_at": "2026-11-18T16:10:38Z",
+ "files": [
+  {
+   "filename": ".changeset/quiet-tools-parse.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@posthog/ai': patch\n+---\n+\n+fix(ai): stop logging a parse error for streamed Anthropic tool calls that take no arguments"
+  },
+  {
+   "filename": "packages/ai/src/anthropic/index.ts",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 5,
+   "patch": "@@ -232,11 +232,14 @@ export class WrappedMessages extends AnthropicOriginal.Messages {\n                   // Parse accumulated tool input\n                   const tool = toolsInProgress.get(chunk.index)\n                   if (tool) {\n-                    try {\n-                      tool.block.function.arguments = JSON.parse(tool.inputString)\n-                    } catch (e) {\n-                      // Keep empty object if parsing fails\n-                      console.error('Error parsing tool input:', e)\n+                    // A tool called with no arguments streams no input_json_delta, so there is nothing to parse\n+                    if (tool.inputString) {\n+                      try {\n+                        tool.block.function.arguments = JSON.parse(tool.inputString)\n+                      } catch (e) {\n+                        // Keep empty object if parsing fails\n+                        console.error('Error parsing tool input:', e)\n+                      }\n                     }\n                     toolsInProgress.delete(chunk.index)\n                   }"
+  },
+  {
+   "filename": "packages/ai/tests/anthropic.test.ts",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -695,6 +695,44 @@ describe('PostHogAnthropic', () => {\n       ])\n     })\n \n+    it('should not log a parse error for a streamed tool call with no arguments', async () => {\n+      mockStreamChunks = [\n+        {\n+          type: 'message_start',\n+          message: { id: 'msg_test_123', type: 'message', role: 'assistant', usage: { input_tokens: 20 } as any },\n+        },\n+        {\n+          type: 'content_block_start',\n+          index: 0,\n+          content_block: { type: 'tool_use', id: 'tool_123', name: 'get_time' } as any,\n+        },\n+        { type: 'content_block_stop', index: 0 },\n+        {\n+          type: 'message_delta',\n+          delta: { type: 'stop_reason', stop_reason: 'tool_use' },\n+          usage: { output_tokens: 10 },\n+        },\n+        { type: 'message_stop' },\n+      ]\n+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})\n+\n+      const stream = await client.messages.create({\n+        model: 'claude-sonnet-4-5',\n+        messages: [{ role: 'user', content: 'What time is it?' }],\n+        max_tokens: 2048,\n+        stream: true,\n+        posthogDistinctId: 'test-user-123',\n+      })\n+\n+      for await (const _chunk of stream) {\n+        // Consume the stream so the monitoring branch sees every block.\n+      }\n+      await waitForAsyncCapture()\n+\n+      expect(errorSpy).not.toHaveBeenCalled()\n+      errorSpy.mockRestore()\n+    })\n+\n     it('should capture streamed thinking as reasoning and time the first token from it', async () => {\n       const chunks: MockStreamChunk[] = [\n         {"
+  }
+ ],
+ "test_files": [
+  "packages/ai/tests/anthropic.test.ts"
+ ]
+}

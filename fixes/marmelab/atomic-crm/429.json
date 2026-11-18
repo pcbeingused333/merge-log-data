@@ -1,0 +1,26 @@
+{
+ "repo": "marmelab/atomic-crm",
+ "number": 429,
+ "url": "https://github.com/marmelab/atomic-crm/pull/429",
+ "title": "fix: escape company names in CSV import lookups",
+ "merged_at": "2026-11-18T09:57:38Z",
+ "files": [
+  {
+   "filename": "src/components/atomic-crm/dataImport/fetchRecordsWithCache.test.ts",
+   "status": "modified",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -29,6 +29,39 @@ const makeDataProvider = (records: Company[]) => {\n };\n \n describe(\"fetchRecordsWithCache\", () => {\n+  it(\"escapes quotes and backslashes in names without changing cached records\", async () => {\n+    const companies = [\n+      { id: 1, name: 'Acme \"Research\"' },\n+      { id: 2, name: \"Back\\\\slash\" },\n+      { id: 3, name: 'Mixed\\\\\"Name' },\n+      { id: 4, name: \"Comma, (Inc.)\" },\n+    ];\n+    const dataProvider = {\n+      getList: vi.fn().mockResolvedValue({ data: companies }),\n+      create: vi.fn(),\n+    } as unknown as DataProvider;\n+    const cache = new Map<string, Company>();\n+\n+    const records = await fetchRecordsWithCache<Company>(\n+      \"companies\",\n+      cache,\n+      companies.map(({ name }) => name),\n+      (name) => ({ name }),\n+      dataProvider,\n+    );\n+\n+    expect(dataProvider.getList).toHaveBeenCalledWith(\"companies\", {\n+      filter: {\n+        \"name@in\": String.raw`(\"Acme \\\"Research\\\"\",\"Back\\\\slash\",\"Mixed\\\\\\\"Name\",\"Comma, (Inc.)\")`,\n+      },\n+      pagination: { page: 1, perPage: 4 },\n+      sort: { field: \"id\", order: \"ASC\" },\n+    });\n+    expect(dataProvider.create).not.toHaveBeenCalled();\n+    expect([...records.values()]).toEqual(companies);\n+    expect([...cache.keys()]).toEqual(companies.map(({ name }) => name));\n+  });\n+\n   it(\"finds existing records when another name has duplicates\", async () => {\n     const dataProvider = makeDataProvider([\n       { id: 1, name: \"Acme\" },"
+  },
+  {
+   "filename": "src/components/atomic-crm/dataImport/fetchRecordsWithCache.ts",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -22,7 +22,10 @@ export const fetchRecordsWithCache = async function <T>(\n     const response = await dataProvider.getList(resource, {\n       filter: {\n         \"name@in\": `(${uncachedRecordNames\n-          .map((name) => `\"${name}\"`)\n+          .map(\n+            (name) =>\n+              `\"${name.replaceAll(\"\\\\\", \"\\\\\\\\\").replaceAll('\"', '\\\\\"')}\"`,\n+          )\n           .join(\",\")})`,\n       },\n       pagination: { page, perPage },"
+  }
+ ],
+ "test_files": [
+  "src/components/atomic-crm/dataImport/fetchRecordsWithCache.test.ts"
+ ]
+}

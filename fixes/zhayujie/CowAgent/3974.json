@@ -1,0 +1,26 @@
+{
+ "repo": "zhayujie/CowAgent",
+ "number": 3974,
+ "url": "https://github.com/zhayujie/CowAgent/pull/3974",
+ "title": "fix(modelscope): send the agent system prompt in call_with_tools",
+ "merged_at": "2026-11-18T13:23:17Z",
+ "files": [
+  {
+   "filename": "models/modelscope/modelscope_bot.py",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -473,6 +473,16 @@ def call_with_tools(self, messages, tools=None, stream=False, **kwargs):\n             # No drawing intent, proceed with normal tool call flow\n             session_id = kwargs.get('session_id', 'default_session')\n             session = self.sessions.session_query(\"\", session_id)\n+\n+            # The agent passes its system prompt as `system=`; put it in the\n+            # message list instead of sending it as an unknown request field.\n+            system_prompt = kwargs.pop(\"system\", None)\n+            messages = list(messages)\n+            if system_prompt:\n+                if not messages or messages[0].get(\"role\") != \"system\":\n+                    messages.insert(0, {\"role\": \"system\", \"content\": system_prompt})\n+                else:\n+                    messages[0] = {\"role\": \"system\", \"content\": system_prompt}\n             session.messages = messages\n             \n             args = self.args.copy()"
+  },
+  {
+   "filename": "tests/test_modelscope_agent_system_prompt.py",
+   "status": "added",
+   "additions": 51,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,51 @@\n+# encoding:utf-8\n+\"\"\"call_with_tools must send the agent's system prompt to ModelScope.\"\"\"\n+\n+import os\n+import sys\n+from unittest.mock import MagicMock, patch\n+\n+sys.path.insert(0, os.path.join(os.path.dirname(__file__), \"..\"))\n+\n+from models.modelscope.modelscope_bot import ModelScopeBot\n+\n+\n+def _bot():\n+    bot = ModelScopeBot.__new__(ModelScopeBot)\n+    bot.args = {\"model\": \"Qwen/Qwen3-8B\"}\n+    bot.sessions = MagicMock()\n+    bot.sessions.session_query.return_value = MagicMock(messages=[])\n+    bot._last_context = None\n+    return bot\n+\n+\n+def _sent(bot, messages, **kwargs):\n+    with patch.object(bot, \"_handle_stream_response\", return_value=iter(())) as handler:\n+        bot.call_with_tools(messages, stream=True, **kwargs)\n+    session, args = handler.call_args[0]\n+    return session.messages, args\n+\n+\n+def test_system_prompt_is_prepended_to_messages():\n+    user = {\"role\": \"user\", \"content\": \"hello\"}\n+    sent, args = _sent(_bot(), [user], system=\"You are a cat.\")\n+    assert sent == [{\"role\": \"system\", \"content\": \"You are a cat.\"}, user]\n+    assert \"system\" not in args\n+\n+\n+def test_existing_system_message_is_replaced_not_duplicated():\n+    user = {\"role\": \"user\", \"content\": \"hello\"}\n+    sent, _ = _sent(_bot(), [{\"role\": \"system\", \"content\": \"old\"}, user], system=\"new\")\n+    assert sent == [{\"role\": \"system\", \"content\": \"new\"}, user]\n+\n+\n+def test_callers_message_list_is_not_mutated():\n+    messages = [{\"role\": \"user\", \"content\": \"hello\"}]\n+    _sent(_bot(), messages, system=\"You are a cat.\")\n+    assert messages == [{\"role\": \"user\", \"content\": \"hello\"}]\n+\n+\n+def test_without_system_messages_are_unchanged():\n+    messages = [{\"role\": \"user\", \"content\": \"hello\"}]\n+    sent, _ = _sent(_bot(), messages)\n+    assert sent == messages"
+  }
+ ],
+ "test_files": [
+  "tests/test_modelscope_agent_system_prompt.py"
+ ]
+}

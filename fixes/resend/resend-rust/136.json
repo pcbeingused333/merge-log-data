@@ -1,0 +1,24 @@
+{
+ "repo": "resend/resend-rust",
+ "number": 136,
+ "url": "https://github.com/resend/resend-rust/pull/136",
+ "title": "fix(config): replenish the configured async request rate",
+ "merged_at": "2026-11-18T17:24:53Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -6,7 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),\n and this project adheres to\n [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n \n-<!--## Unreleased-->\n+## Unreleased\n+\n+### Fixed\n+\n+- The async rate limiter now replenishes `RESEND_RATE_LIMIT` requests per 1,100 ms instead of one request per 1,100 ms after the initial burst\n \n ## [0.36.1] - 2026-11-13\n "
+  },
+  {
+   "filename": "src/config.rs",
+   "status": "modified",
+   "additions": 32,
+   "deletions": 5,
+   "patch": "@@ -149,11 +149,7 @@ impl Config {\n             .expect(\"env variable `RESEND_RATE_LIMIT` should be a valid u32\");\n \n         #[cfg(not(feature = \"blocking\"))]\n-        let quota = Quota::with_period(Duration::from_millis(1100))\n-            .expect(\"Valid quota\")\n-            .allow_burst(\n-                NonZeroU32::new(rate_limit_per_sec).expect(\"Rate limit is a valid non zero u32\"),\n-            );\n+        let quota = Self::rate_limit_quota(rate_limit_per_sec);\n \n         #[cfg(not(feature = \"blocking\"))]\n         let limiter = Arc::new(RateLimiter::direct_with_clock(quota, MonotonicClock));\n@@ -169,6 +165,15 @@ impl Config {\n         }\n     }\n \n+    #[cfg(not(feature = \"blocking\"))]\n+    fn rate_limit_quota(rate_limit: u32) -> Quota {\n+        let rate = NonZeroU32::new(rate_limit).expect(\"Rate limit is a valid non zero u32\");\n+        // Governor replenishes one cell per period; burst size only sets capacity.\n+        Quota::with_period(Duration::from_millis(1100) / rate.get())\n+            .expect(\"Valid quota\")\n+            .allow_burst(rate)\n+    }\n+\n     /// Constructs a new [`RequestBuilder`].\n     pub(crate) fn build(&self, method: Method, path: &str) -> RequestBuilder {\n         let mut url = self.base_url.clone();\n@@ -264,6 +269,28 @@ impl fmt::Debug for Config {\n mod test {\n     use super::*;\n \n+    #[cfg(not(feature = \"blocking\"))]\n+    #[test]\n+    fn rate_limit_quota_replenishes_configured_rate() {\n+        use governor::clock::FakeRelativeClock;\n+\n+        for rate in [1, 9, 20] {\n+            let clock = FakeRelativeClock::default();\n+            let limiter =\n+                RateLimiter::direct_with_clock(Config::rate_limit_quota(rate), clock.clone());\n+\n+            for _ in 0..rate {\n+                assert!(limiter.check().is_ok());\n+            }\n+            assert!(limiter.check().is_err());\n+\n+            clock.advance(Duration::from_millis(1100));\n+            let replenished = (0..rate).filter(|_| limiter.check().is_ok()).count();\n+            assert_eq!(replenished, rate as usize, \"rate {rate}\");\n+            assert!(limiter.check().is_err());\n+        }\n+    }\n+\n     fn url_for(base_url: &str, path: &str) -> String {\n         let config = Config::builder(\"re_test\")\n             .base_url(base_url.parse().unwrap())"
+  }
+ ],
+ "test_files": []
+}

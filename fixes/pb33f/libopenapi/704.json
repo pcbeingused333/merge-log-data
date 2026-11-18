@@ -1,0 +1,34 @@
+{
+ "repo": "pb33f/libopenapi",
+ "number": 704,
+ "url": "https://github.com/pb33f/libopenapi/pull/704",
+ "title": "fix: preserve explode presence in parameter hashes",
+ "merged_at": "2026-11-18T13:04:36Z",
+ "files": [
+  {
+   "filename": "datamodel/low/v3/parameter.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -184,7 +184,9 @@ func (p *Parameter) Hash() uint64 {\n \t\tif p.Style.Value != \"\" {\n \t\t\tlow.HashString(h, \"style\", p.Style.Value)\n \t\t}\n-\t\tlow.HashBool(h, p.Explode.Value)\n+\t\tif !p.Explode.IsEmpty() {\n+\t\t\tlow.HashBool(h, p.Explode.Value)\n+\t\t}\n \t\th.WriteByte(low.HASH_PIPE)\n \t\tlow.HashBool(h, p.AllowReserved.Value)\n \t\th.WriteByte(low.HASH_PIPE)"
+  },
+  {
+   "filename": "datamodel/low/v3/parameter_test.go",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -365,3 +365,30 @@ schema:\n \thash2 := n.Hash()\n \tassert.NotEqual(t, hash1, hash2)\n }\n+\n+func TestParameter_Hash_ExplodePresence(t *testing.T) {\n+\tbuild := func(spec string) *Parameter {\n+\t\tvar node yaml.Node\n+\t\trequire.NoError(t, yaml.Unmarshal([]byte(spec), &node))\n+\t\tvar parameter Parameter\n+\t\trequire.NoError(t, low.BuildModel(node.Content[0], &parameter))\n+\t\trequire.NoError(t, parameter.Build(context.Background(), nil, node.Content[0], nil))\n+\t\treturn &parameter\n+\t}\n+\tspec := \"name: a\\nin: query\\nschema: {type: array}\\n\"\n+\tabsent := build(spec)\n+\texplicitFalse := build(spec + \"explode: false\\n\")\n+\texplicitTrue := build(spec + \"explode: true\\n\")\n+\tassert.NotEqual(t, absent.Hash(), explicitFalse.Hash())\n+\tassert.NotEqual(t, absent.Hash(), explicitTrue.Hash())\n+\tassert.Equal(t, explicitTrue.Hash(), build(spec+\"explode: true\\n\").Hash())\n+\n+\t// Key node only, matching a built low parameter that NewParameter treats as present.\n+\tkeyOnly := build(spec)\n+\tkeyOnly.Explode = low.NodeReference[bool]{\n+\t\tKeyNode: &yaml.Node{Kind: yaml.ScalarNode, Value: \"explode\"},\n+\t\tValue:   true,\n+\t}\n+\tassert.False(t, low.AreEqual(absent, keyOnly))\n+\tassert.Equal(t, explicitTrue.Hash(), keyOnly.Hash())\n+}"
+  },
+  {
+   "filename": "what-changed/model/parameter_test.go",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -1069,3 +1069,41 @@ required: false`\n \tassert.Len(t, extChanges.GetAllChanges(), 1)\n \tassert.Equal(t, 1, extChanges.TotalBreakingChanges())\n }\n+\n+func TestCompareParameters_V3_ExplodePresence(t *testing.T) {\n+\tlow.ClearHashCache()\n+\tbuild := func(spec string) *v3.Parameter {\n+\t\tvar node yaml.Node\n+\t\tif !assert.NoError(t, yaml.Unmarshal([]byte(spec), &node)) {\n+\t\t\tt.FailNow()\n+\t\t}\n+\t\tvar parameter v3.Parameter\n+\t\tassert.NoError(t, low.BuildModel(node.Content[0], &parameter))\n+\t\tassert.NoError(t, parameter.Build(context.Background(), nil, node.Content[0], nil))\n+\t\treturn &parameter\n+\t}\n+\tspec := \"name: a\\nin: query\\nschema: {type: array}\\n\"\n+\tabsent := build(spec)\n+\texplicitFalse := build(spec + \"explode: false\\n\")\n+\tfor _, tc := range []struct {\n+\t\tname        string\n+\t\tleft, right *v3.Parameter\n+\t\tchangeType  int\n+\t}{\n+\t\t{\"added\", absent, explicitFalse, PropertyAdded},\n+\t\t{\"removed\", explicitFalse, absent, PropertyRemoved},\n+\t} {\n+\t\tt.Run(tc.name, func(t *testing.T) {\n+\t\t\tchanges := CompareParameters(tc.left, tc.right)\n+\t\t\tif !assert.NotNil(t, changes) {\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t\tassert.Equal(t, 1, changes.TotalChanges())\n+\t\t\tassert.Equal(t, 0, changes.TotalBreakingChanges())\n+\t\t\tif assert.Len(t, changes.GetAllChanges(), 1) {\n+\t\t\t\tassert.Equal(t, \"explode\", changes.GetAllChanges()[0].Property)\n+\t\t\t\tassert.Equal(t, tc.changeType, changes.GetAllChanges()[0].ChangeType)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "datamodel/low/v3/parameter_test.go",
+  "what-changed/model/parameter_test.go"
+ ]
+}

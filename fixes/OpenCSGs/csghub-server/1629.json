@@ -1,0 +1,26 @@
+{
+ "repo": "OpenCSGs/csghub-server",
+ "number": 1629,
+ "url": "https://github.com/OpenCSGs/csghub-server/pull/1629",
+ "title": "fix(aigateway): keep a cut-off Messages tool call serializable",
+ "merged_at": "2026-11-18T08:15:35Z",
+ "files": [
+  {
+   "filename": "aigateway/handler/anthropic/common.go",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 1,
+   "patch": "@@ -396,11 +396,20 @@ func chatResponseToMessagesResponse(data []byte, model string) (*types.Anthropic\n \t// Tool calls.\n \tif len(msg.ToolCalls) > 0 {\n \t\tfor _, call := range msg.ToolCalls {\n+\t\t\tinputArgs := json.RawMessage(call.Function.Arguments)\n+\t\t\t// Arguments cut off by max_tokens are not valid JSON and would\n+\t\t\t// make json.Marshal of the whole Messages response fail. Send an\n+\t\t\t// empty object instead, as responsesResponseToMessagesResponse\n+\t\t\t// already does. A truncated turn (finish_reason length) reports\n+\t\t\t// max_tokens rather than tool_use, so clients do not run the tool.\n+\t\t\tif len(inputArgs) == 0 || !json.Valid(inputArgs) {\n+\t\t\t\tinputArgs = json.RawMessage(`{}`)\n+\t\t\t}\n \t\t\tcontentBlocks = append(contentBlocks, types.AnthropicContentBlock{\n \t\t\t\tType:  \"tool_use\",\n \t\t\t\tID:    call.ID,\n \t\t\t\tName:  call.Function.Name,\n-\t\t\t\tInput: json.RawMessage(call.Function.Arguments),\n+\t\t\t\tInput: inputArgs,\n \t\t\t})\n \t\t}\n \t}"
+  },
+  {
+   "filename": "aigateway/handler/anthropic/common_test.go",
+   "status": "modified",
+   "additions": 59,
+   "deletions": 0,
+   "patch": "@@ -353,6 +353,65 @@ func TestChatResponseToMessagesResponse(t *testing.T) {\n \t\tassert.Equal(t, \"tool_use\", resp.Content[0].Type)\n \t\tassert.Equal(t, \"call_1\", resp.Content[0].ID)\n \t\tassert.Equal(t, \"get_weather\", resp.Content[0].Name)\n+\t\tassert.JSONEq(t, `{\"city\":\"SF\"}`, string(resp.Content[0].Input))\n+\t\tassert.Equal(t, \"tool_use\", *resp.StopReason)\n+\t})\n+\n+\tt.Run(\"truncated tool call arguments still serialize\", func(t *testing.T) {\n+\t\tchatJSON := `{\n+\t\t\t\"id\": \"chatcmpl-5\",\n+\t\t\t\"object\": \"chat.completion\",\n+\t\t\t\"created\": 1234567890,\n+\t\t\t\"model\": \"qwen3\",\n+\t\t\t\"choices\": [{\n+\t\t\t\t\"index\": 0,\n+\t\t\t\t\"message\": {\n+\t\t\t\t\t\"role\": \"assistant\",\n+\t\t\t\t\t\"content\": \"\",\n+\t\t\t\t\t\"tool_calls\": [{\n+\t\t\t\t\t\t\"id\": \"call_1\",\n+\t\t\t\t\t\t\"type\": \"function\",\n+\t\t\t\t\t\t\"function\": {\"name\": \"get_weather\", \"arguments\": \"{\\\"city\\\":\"}\n+\t\t\t\t\t}]\n+\t\t\t\t},\n+\t\t\t\t\"finish_reason\": \"length\"\n+\t\t\t}],\n+\t\t\t\"usage\": {\"prompt_tokens\": 10, \"completion_tokens\": 100, \"total_tokens\": 110}\n+\t\t}`\n+\t\tresp, err := chatResponseToMessagesResponse([]byte(chatJSON), \"claude-3\")\n+\t\trequire.NoError(t, err)\n+\t\t_, err = json.Marshal(resp)\n+\t\trequire.NoError(t, err)\n+\t\tassert.JSONEq(t, `{}`, string(resp.Content[0].Input))\n+\t\tassert.Equal(t, \"max_tokens\", *resp.StopReason)\n+\t})\n+\n+\tt.Run(\"empty tool call arguments still serialize\", func(t *testing.T) {\n+\t\tchatJSON := `{\n+\t\t\t\"id\": \"chatcmpl-6\",\n+\t\t\t\"object\": \"chat.completion\",\n+\t\t\t\"created\": 1234567890,\n+\t\t\t\"model\": \"qwen3\",\n+\t\t\t\"choices\": [{\n+\t\t\t\t\"index\": 0,\n+\t\t\t\t\"message\": {\n+\t\t\t\t\t\"role\": \"assistant\",\n+\t\t\t\t\t\"content\": \"\",\n+\t\t\t\t\t\"tool_calls\": [{\n+\t\t\t\t\t\t\"id\": \"call_1\",\n+\t\t\t\t\t\t\"type\": \"function\",\n+\t\t\t\t\t\t\"function\": {\"name\": \"get_weather\", \"arguments\": \"\"}\n+\t\t\t\t\t}]\n+\t\t\t\t},\n+\t\t\t\t\"finish_reason\": \"tool_calls\"\n+\t\t\t}],\n+\t\t\t\"usage\": {\"prompt_tokens\": 10, \"completion_tokens\": 5, \"total_tokens\": 15}\n+\t\t}`\n+\t\tresp, err := chatResponseToMessagesResponse([]byte(chatJSON), \"claude-3\")\n+\t\trequire.NoError(t, err)\n+\t\t_, err = json.Marshal(resp)\n+\t\trequire.NoError(t, err)\n+\t\tassert.JSONEq(t, `{}`, string(resp.Content[0].Input))\n \t\tassert.Equal(t, \"tool_use\", *resp.StopReason)\n \t})\n "
+  }
+ ],
+ "test_files": [
+  "aigateway/handler/anthropic/common_test.go"
+ ]
+}

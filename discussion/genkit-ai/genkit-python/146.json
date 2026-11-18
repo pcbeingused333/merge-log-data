@@ -1,0 +1,29 @@
+{
+ "repo": "genkit-ai/genkit-python",
+ "number": 146,
+ "url": "https://github.com/genkit-ai/genkit-python/pull/146",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-18T17:40:50Z",
+   "body": "Thanks for moving this over from `genkit#7073`! Keeping every `Role.SYSTEM` message fixes multi-turn `ai.generate(system=..., messages=...)` calls and multi-section prompts cleanly. Left two small comments on empty text parts (`Part.from_text('')`) and adding a wire-level test in `anthropic_generate_test.py`.\n\n`cache_control` on system parts is still dropped, but that was already broken on `main`. Tracking it separately in #149 so this PR stays scoped."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "collaborator",
+   "path": "packages/genkit-anthropic/src/genkit_anthropic/_models.py",
+   "created_at": "2026-11-18T17:40:50Z",
+   "body": "When a `Role.SYSTEM` message has `Part.from_text('')` (for example an empty system row in the Dev UI runner), `texts` is `['']`, so `if texts:` evaluates to `True`.\n\nA single empty `Role.SYSTEM` message returns `''` instead of `None`, an empty `Role.SYSTEM` message ahead of `'Answer in French.'` sends `\"system\": \"\\n\\nAnswer in French.\"`, and two empty `Role.SYSTEM` messages join to `'\\n\\n'`, which passes `if system:` in `_build_params` and sends `\"system\": \"\\n\\n\"` on the wire instead of omitting `system`.\n\nMaybe we can check non-empty joined text directly (`if msg.text: system_texts.append(msg.text)`, or `if text := ''.join(texts): system_texts.append(text)`) so empty text parts don't emit leading blank lines or whitespace-only `system` fields?"
+  },
+  {
+   "role": "collaborator",
+   "path": "packages/genkit-anthropic/tests/anthropic_models_test.py",
+   "created_at": "2026-11-18T17:40:50Z",
+   "body": "`test_extract_system_keeps_all_system_messages` only calls the private helper `model._extract_system(messages)` on a `MagicMock`, so `_build_params` and `_to_anthropic_messages` aren't exercised on the wire.\n\nIf `_build_params` regresses how `params['system']` is populated (or if a second `Role.SYSTEM` message ever leaks into `params['messages']`), this unit test would stay green.\n\nCould we also add an `ai.generate` test using `FakeClaudeApi` in `packages/genkit-anthropic/tests/anthropic_generate_test.py` (e.g. `ai.generate(model=MODEL, system='...', messages=[Message(role=Role.SYSTEM, ...), ...], prompt='...')`, plus empty `Part.from_text('')` system messages) asserting `api.body()['system']` and that `api.body()['messages']` contains only the non-system turns?"
+  }
+ ],
+ "comments": []
+}

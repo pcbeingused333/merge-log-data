@@ -1,0 +1,26 @@
+{
+ "repo": "redis/redis-vl-python",
+ "number": 857,
+ "url": "https://github.com/redis/redis-vl-python/pull/857",
+ "title": "fix(query): keep yield_combined_score_as when no combination_method is set",
+ "merged_at": "2026-11-18T11:41:45Z",
+ "files": [
+  {
+   "filename": "redisvl/query/hybrid.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -92,7 +92,8 @@ def __init__(\n             yield_vsim_score_as: The name of the field to yield the vector similarity score as.\n             filter_expression: The filter expression to use for both the text and vector searches. Defaults to None.\n             combination_method: The combination method to use. Options are {RRF, LINEAR}. If not specified, the server\n-                defaults to RRF. If \"RRF\" is specified, then at least one of `rrf_window` or `rrf_constant` must be\n+                defaults to RRF. If only `yield_combined_score_as` is set, RRF is sent explicitly so the alias\n+                reaches the server. If \"RRF\" is specified, then at least one of `rrf_window` or `rrf_constant` must be\n                 provided. If \"LINEAR\" is specified, then at least one of `linear_alpha` or `linear_beta` must be\n                 provided.\n             rrf_window: The window size to use for the reciprocal rank fusion (RRF) combination method. Limits\n@@ -174,6 +175,11 @@ def __init__(\n             filter_expression=filter_expression,\n         )\n \n+        if yield_combined_score_as and not combination_method:\n+            # The server defaults to RRF, but COMBINE (and thus YIELD_SCORE_AS)\n+            # is only emitted when a method is configured.\n+            combination_method = \"RRF\"\n+\n         if combination_method:\n             self.combination_method: CombineResultsMethod | None = (\n                 build_combination_method("
+  },
+  {
+   "filename": "tests/unit/test_hybrid_types.py",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -966,6 +966,26 @@ def test_hybrid_query_combination_method_none():\n     assert \"COMBINE\" not in args\n \n \n+@pytest.mark.skipif(not REDIS_HYBRID_AVAILABLE, reason=SKIP_REASON)\n+def test_hybrid_query_yield_combined_score_as_without_combination_method():\n+    \"\"\"yield_combined_score_as must not be dropped when no method is given.\"\"\"\n+    hybrid_query = HybridQuery(\n+        text=sample_text,\n+        text_field_name=\"description\",\n+        vector=sample_vector,\n+        vector_field_name=\"embedding\",\n+        yield_combined_score_as=\"combined\",\n+    )\n+\n+    assert hybrid_query.combination_method is not None\n+    args = get_query_pieces(hybrid_query)\n+    assert \"COMBINE\" in args\n+    assert args[args.index(\"COMBINE\") + 1] == \"RRF\"\n+    combine_args = args[args.index(\"COMBINE\") :]\n+    assert \"YIELD_SCORE_AS\" in combine_args\n+    assert combine_args[combine_args.index(\"YIELD_SCORE_AS\") + 1] == \"combined\"\n+\n+\n @pytest.mark.skipif(not REDIS_HYBRID_AVAILABLE, reason=SKIP_REASON)\n def test_build_combination_method_invalid_method():\n     \"\"\"Test build_combination_method static method with invalid combination method.\"\"\""
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_hybrid_types.py"
+ ]
+}

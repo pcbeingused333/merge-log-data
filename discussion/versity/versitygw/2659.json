@@ -3,13 +3,86 @@
  "number": 2659,
  "url": "https://github.com/versity/versitygw/pull/2659",
  "state": "open",
- "reviews": [],
- "review_comments": [],
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-18T07:38:52Z",
+   "body": "The original report came from 4 Storage Scale gateways. The fix relies on fsync of a directory handle still succeeding after another node has removed that directory. I confirmed that on ext4, overlayfs, tmpfs and APFS, and NFS directory fsync is a no-op, but not on GPFS. @GH-maggio Could you rerun `8_put_vs_delete_fsync_dir.py` on that cluster against this branch, with deleters on the other gateways too?"
+  },
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-18T11:49:05Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "backend/posix/with_otmpfile.go",
+   "created_at": "2026-11-18T07:26:56Z",
+   "body": "The retained handles only match the published directory on the O_TMPFILE path. There, `linkat` uses `d[0]` as its dirfd, so a removed leaf fails with ENOENT and `publishInDir` retries. Here, `MoveFile` renames by path. If the chain is removed and recreated between `openDirForSync` and the rename, the object lands in the new directories while the dead ones get synced. The PUT returns 200 without flushing any of the object's entries.\n\nOn main, this already happens for the leaf, which uses the pre-opened handle. With a loop replacing the empty directories, 1 of 125 successful PUTs hit it on Linux with `--disableotmp`, and 2 of 384 on macOS; the O_TMPFILE path had 0 of 120. This PR extends it to every ancestor. Publish relative to the handle with `unix.Renameat(unix.AT_FDCWD, tempname, int(d[0].Fd()), filepath.Base(objPath))` (available on linux, darwin and freebsd), and keep `MoveFile` as the EXDEV fallback.\n"
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/fsync.go",
+   "created_at": "2026-11-18T07:32:00Z",
+   "body": "Not blocking, but worth a sentence in the comment: a request now holds one fd per path component, from before the publish through every directory fsync. A 1024-byte key gives up to 512 (511 dirs + bucket); main held at most 2 at a time. At the default concurrency of 5000, the worst case exceeds the usual 1M fd hard limit. The hold is short (a 511-deep `--fsync` PUT took ~30 ms on ext4), so the risk is low."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/fsync_test.go",
+   "created_at": "2026-11-18T07:32:29Z",
+   "body": "Assert the S3 error, not just `err != nil`. PutObject maps EACCES to AccessDenied, and that 403 is the behavior this fix is meant to give. Asserting it also catches a regression to 500:\n```go\nerr := putTestObject(t, p, \"bucket\", \"a/b/object\", \"hello\")\nif !errors.Is(err, s3err.GetAPIError(s3err.ErrAccessDenied)) {\n\tt.Fatalf(\"put = %v, want AccessDenied\", err)\n}\n```\nAlso add doc comments to this test and `TestFsyncNamespaceFailureClosesHandles`, like the neighbouring tests have."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/fsync.go",
+   "created_at": "2026-11-18T07:32:55Z",
+   "body": "`os.Open` already returns a `*PathError` naming the directory, and the callers add `open parent dir:`, so the log now reads `link object in namespace: open parent dir: open sync directory \"bkt/drop\": open bkt/drop: permission denied`. Return `err` unwrapped, as main did."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/fsync_test.go",
+   "created_at": "2026-11-18T07:33:17Z",
+   "body": "Nit: use the `otmpfile`/`rename` subtest names that `TestFsyncPutObject` uses instead of `fallback=false/true` (also at line 176). At line 167, compare the synced paths with `slices.Equal`, as `TestFsyncPutObject` does, rather than only counting them."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/fsync_test.go",
+   "created_at": "2026-11-18T07:33:42Z",
+   "body": "DeleteObject doesn't take `lockObjectPublish`, so the hook can call `p.DeleteObject` on `a/b/object` instead of three `os.Remove` calls. That runs the real `removeParents` path the issue describes."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/fsync.go",
+   "created_at": "2026-11-18T11:45:04Z",
+   "body": "`unix.Renameat` returns a bare errno, so a failed publish now logs `link object in namespace: no such file or directory` without either path (`MoveFile`'s `os.Rename` named both). Wrap it the way `link()` wraps its O_PATH open:\nreturn &os.LinkError{Op: \"renameat\", Old: tempname, New: objPath, Err: err}\n`errors.Is` still sees the errno, so `isParentDirGone` and `publishErr` keep working."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/fsync_renameat.go",
+   "created_at": "2026-11-18T11:48:04Z",
+   "body": "The comment says \"The second result reports whether the platform supports it\", but the support flag is the first result. Simpler: drop the bool and use a build-tagged `const renameInDirSupported = true/false` next to each `renameInDir`. Then the test at fsync_test.go line 276 can check the const instead of making a real `renameat(\"\", -1, \"\")` call to find out."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/fsync_test.go",
+   "created_at": "2026-11-18T11:48:44Z",
+   "body": "Nit: after `DeleteObject`, assert that `bucket/a` is gone. The test now depends on `removeParents` removing the parents; if that ever changes, the test still passes but no longer covers the race."
+  }
+ ],
  "comments": [
   {
    "role": "collaborator",
    "created_at": "2026-11-12T15:27:09Z",
    "body": "This won't automatically run in continuous integration without approval. A member of the Versity organization must allow it."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-18T08:59:35Z",
+   "body": "Thanks for the review, and for measuring the race. Pushed a follow-up commit:\n\n- Publish now renames relative to the retained parent handle (`unix.Renameat(AT_FDCWD, tempname, dirfd, base)`) on linux/darwin/freebsd, so a removed and recreated chain fails with ENOENT and `publishInDir` retries, as on the O_TMPFILE path. `MoveFile` stays as the EXDEV and non-supported-platform fallback. Added `TestFsyncMoveIntoUsesHandle` for the removed-then-recreated chain.\n- Added a sentence on the one-fd-per-path-component hold to the `openDirForSync` comment.\n- `TestFsyncUnreadableAncestor` now asserts AccessDenied; doc comments added; subtests renamed to `otmpfile`/`rename`; the concurrent-delete hook calls `p.DeleteObject`, and the synced paths are compared with `slices.Equal`.\n- The open error is returned unwrapped.\n\nThe GPFS behaviour is not covered by these tests; it still depends on the Storage Scale rerun.\n\nThis comment was drafted with the help of an AI assistant (Claude) and the changes were not reviewed line by line by a human before posting.\n"
   }
  ]
 }

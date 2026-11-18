@@ -2,8 +2,26 @@
  "repo": "OpenCSGs/csghub-server",
  "number": 1636,
  "url": "https://github.com/OpenCSGs/csghub-server/pull/1636",
- "state": "open",
- "reviews": [],
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-18T12:21:15Z",
+   "body": "LGTM"
+  }
+ ],
  "review_comments": [],
- "comments": []
+ "comments": [
+  {
+   "role": "collaborator",
+   "created_at": "2026-11-18T08:29:13Z",
+   "body": "Add regression testing for output blocking when a \"fallback\" (backup) reasoning field triggers a moderation hit.\r\n\r\n- **Location**: [ aigateway/component/moderation_test.go:347 ](https://github.com/OpenCSGs/csghub-server/blob/f882c98f6094affc9cea9eaa015f9a70b531fbd3/aigateway/component/moderation_test.go#L347)\r\n- **Trigger/Evidence**: Existing tests (new or modified) only assert the content of the extracted string. The acceptance criteria for #1635 also require that: (1) if a moderation hit occurs on a \"fallback\" field, the original chunk must not be forwarded; and (2) if moderation is disabled, the original event must remain unchanged. Neither of these scenarios is currently covered by tests.\r\n- **Impact**: Even if the extraction logic passes its tests, an error in the `writer`—such as inadvertently using the original text or failing to block the content—could lead to the leakage of \"fallback\" field data that should have been blocked.\r\n- **Recommendation**: Implement a test case involving the actual `component` and a stubbed `moderator` in conjunction with the `writer`. Specifically, test a scenario where the primary and fallback fields differ, and only the fallback field triggers a moderation hit; the final output must not contain the original reasoning. Additionally, verify that the original event is preserved when moderation is disabled, and ensure correct handling when the primary field is empty.\r\n- **Classification**: A verification gap that should be addressed before merging; this does not necessarily imply a confirmed production failure."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-18T09:45:47Z",
+   "body": "Thanks, added `TestResponseWriterWrapper_StreamWrite_FallbackReasoningModeration` in `aigateway/handler/response_writer_wrapper_test.go`. It drives the real stream writer with the actual moderation component (`NewModerationImplWithClient`); only the moderation service client is stubbed, and it flags text only when it contains the fallback marker. Cases:\n\n- primary (`reasoning_content`) and fallback (`reasoning`) differ and only the fallback is sensitive: the original chunk is not forwarded (only the sensitive-stop chunk and `[DONE]` are written);\n- empty primary, sensitive fallback only: blocked the same way;\n- moderation disabled: the event passes through byte-for-byte.\n\nThe first case fails if the fallback-field moderation in `chatCompletionChunkModerationText` is reverted.\n\nThis comment was drafted with the help of an AI assistant (Claude Code) and the change was tested locally.\n"
+  }
+ ]
 }

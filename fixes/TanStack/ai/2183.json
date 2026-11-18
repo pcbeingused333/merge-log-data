@@ -1,0 +1,33 @@
+{
+ "repo": "TanStack/ai",
+ "number": 2183,
+ "url": "https://github.com/TanStack/ai/pull/2183",
+ "title": "fix(ai-mistral): end the run with RUN_ERROR on finish_reason error",
+ "merged_at": "2026-11-18T13:00:31Z",
+ "files": [
+  {
+   "filename": ".changeset/mistral-finish-reason-error.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@tanstack/ai-mistral': patch\n+---\n+\n+Mistral streams that end with `finish_reason: \"error\"` now end the run with `RUN_ERROR` instead of a clean `RUN_FINISHED`."
+  },
+  {
+   "filename": "packages/ai-mistral/src/adapters/text.ts",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -803,6 +803,12 @@ export class MistralTextAdapter<\n           )\n         }\n         if (finishReason) {\n+          // Mistral reports a failed generation as finish_reason 'error'. It\n+          // must not end the run as a success; the catch below closes open\n+          // lifecycle events and chatStream emits the RUN_ERROR.\n+          if (finishReason === 'error') {\n+            throw new Error(`Provider finish_reason: ${finishReason}`)\n+          }\n           if (finishReason === 'tool_calls' || toolCallsInProgress.size > 0) {\n             for (const [, toolCall] of toolCallsInProgress) {\n               if ("
+  },
+  {
+   "filename": "packages/ai-mistral/tests/mistral-adapter.test.ts",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -2076,6 +2076,22 @@ describe('Mistral usage on every terminal event', () => {\n     expect(finished[0]).toMatchObject({ finishReason: 'stop', usage })\n   })\n \n+  it('ends the run with RUN_ERROR on finish_reason error', async () => {\n+    setupMockStream([\n+      textChunk,\n+      {\n+        ...finishChunk,\n+        choices: [{ index: 0, delta: {}, finishReason: 'error' }],\n+      },\n+    ])\n+    const chunks = await collect()\n+    expect(chunks.some((c) => c.type === 'RUN_FINISHED')).toBe(false)\n+    expect(chunks.find((c) => c.type === 'RUN_ERROR')).toMatchObject({\n+      message: 'Provider finish_reason: error',\n+    })\n+    expect(chunks.map((c) => c.type)).toContain('TEXT_MESSAGE_END')\n+  })\n+\n   it('keeps the usage when the stream ends without a finish_reason', async () => {\n     setupMockStream([{ ...textChunk, usage }])\n     const chunks = await collect()"
+  }
+ ],
+ "test_files": [
+  "packages/ai-mistral/tests/mistral-adapter.test.ts"
+ ]
+}

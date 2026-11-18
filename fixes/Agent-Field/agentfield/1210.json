@@ -1,0 +1,26 @@
+{
+ "repo": "Agent-Field/agentfield",
+ "number": 1210,
+ "url": "https://github.com/Agent-Field/agentfield/pull/1210",
+ "title": "fix(sdk-go): accept SSE data fields without a space in audio generation",
+ "merged_at": "2026-11-18T14:06:31Z",
+ "files": [
+  {
+   "filename": "sdk/go/ai/openrouter_media.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -678,10 +678,10 @@ func (p *OpenRouterMediaProvider) GenerateAudio(ctx context.Context, req AudioRe\n \tscanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)\n \tfor scanner.Scan() {\n \t\tline := scanner.Text()\n-\t\tif !strings.HasPrefix(line, \"data: \") {\n+\t\tif !strings.HasPrefix(line, \"data:\") {\n \t\t\tcontinue\n \t\t}\n-\t\tdata := strings.TrimPrefix(line, \"data: \")\n+\t\tdata := strings.TrimPrefix(line, \"data:\")\n \t\tdata = strings.TrimSpace(data)\n \t\tif data == \"[DONE]\" {\n \t\t\tbreak"
+  },
+  {
+   "filename": "sdk/go/ai/openrouter_media_audio_sse_test.go",
+   "status": "added",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,30 @@\n+package ai\n+\n+import (\n+\t\"context\"\n+\t\"fmt\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"testing\"\n+)\n+\n+func TestGenerateAudioSSEOptionalSpace(t *testing.T) {\n+\tfor _, prefix := range []string{\"data: \", \"data:\"} {\n+\t\tt.Run(prefix, func(t *testing.T) {\n+\t\t\tsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\t\t\tw.Header().Set(\"Content-Type\", \"text/event-stream\")\n+\t\t\t\tfmt.Fprintf(w, \"%s{\\\"choices\\\":[{\\\"delta\\\":{\\\"content\\\":\\\"hello\\\",\\\"audio\\\":{\\\"data\\\":\\\"QUJD\\\"}}}]}\\n\\n%s[DONE]\\n\\n\", prefix, prefix)\n+\t\t\t}))\n+\t\t\tdefer srv.Close()\n+\t\t\tp := &OpenRouterMediaProvider{APIKey: \"local\", BaseURL: srv.URL, Client: srv.Client()}\n+\t\t\tp.SeedModelMeta(\"openai/gpt-audio-mini\", []string{\"text\", \"audio\"}, []string{\"text\"})\n+\t\t\tgot, err := p.GenerateAudio(context.Background(), AudioRequest{Text: \"hi\", Model: \"openai/gpt-audio-mini\", Format: \"pcm16\"})\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\t\t\tif got.Text != \"hello\" || got.Audio == nil || got.Audio.Data != \"QUJD\" {\n+\t\t\t\tt.Fatalf(\"lost SSE output: %+v audio=%+v\", got, got.Audio)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "sdk/go/ai/openrouter_media_audio_sse_test.go"
+ ]
+}

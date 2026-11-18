@@ -3,13 +3,104 @@
  "number": 2660,
  "url": "https://github.com/versity/versitygw/pull/2660",
  "state": "open",
- "reviews": [],
- "review_comments": [],
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-18T07:51:15Z",
+   "body": "On main this is a real bug: `openTmpFileIn` only falls back when the open itself fails. With `fsetxattr` forced to return `ENODATA`, UploadPart logs exactly the line from the issue. However, the fix covers only half of the report (see inline): sidecar and no-meta modes still fail on `linkat` with `EXDEV`, and with `--inherit-default-acl` the probe can get `EACCES` and never take effect."
+  },
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-18T20:36:06Z",
+   "body": "Thanks, all of the round-1 comments are addressed. Two new issues came with the rework, both only with `--inherit-default-acl` (see inline): the probe links across a nested mount, and a probe failure now fails the upload. Could you also update the PR description? It still describes the first design (`probeTmpFileXattr`, xattr-only, the non-deterministic race test)."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "backend/posix/with_otmpfile.go",
+   "created_at": "2026-11-18T07:44:00Z",
+   "body": "This fixes only half of #2652. The probe runs only with xattr metadata and only tests `fsetxattr`, but the issue also reports that `linkat` of the O_TMPFILE fails with `EXDEV`. With `--sidecar` or `--nometa` the O_TMPFILE is still used, so every UploadPart (and every PutObject after a bucket's first) still returns 500. On main, injecting `EXDEV` on `linkat` gives `link tmpfile (fd \"9\" as \"bkt1/.sgwtmp/multipart/…/1\"): invalid cross-device link`, and this PR doesn't change that path.\n\nSuggestion: once per bucket, open a separate probe O_TMPFILE. Set an xattr on it (xattr mode only), `linkat` it to a unique name in the bucket's `.sgwtmp`, then unlink and close it. That covers both failures in every metadata mode and never touches the upload's own file. A tmpfile that was linked and then unlinked can't be linked again, so the probe can't use the upload's fd."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/with_otmpfile.go",
+   "created_at": "2026-11-18T07:44:50Z",
+   "body": "The probe runs before the `f.Chmod(mode)` below, but the real attribute writes happen after it. With `--inherit-default-acl`, a default ACL such as `d:u::r--` creates the O_TMPFILE as 0440. A non-root gateway then gets `EACCES` from `fsetxattr`, because the kernel checks permissions before the filesystem is asked. I checked this on ext4 as uid 1000: `EACCES` before `fchmod`, success after.\n\n`EACCES` isn't treated as unsupported, so the result is never cached and every upload probes again. On a QuTS-like filesystem, the O_TMPFILE is then kept and the upload still fails with 500. Please move the probe after the `Chmod`."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/with_otmpfile.go",
+   "created_at": "2026-11-18T07:45:19Z",
+   "body": "The second `Load` isn't needed. Keep the result of the `Load` on line 93 and probe when it was unknown. The answer depends only on the filesystem, so an upload that raced another probe just gets the same result. The first commit's bug came only from re-reading the map after the open.\n\n```go\nsupported, known := p.otmpXattr.Load(bucket)\nif known && !supported.(bool) {\n\treturn p.openMkTemp(...)\n}\n// open O_TMPFILE ...\nif !known && xattrMeta {\n\tswitch err := probeTmpFileXattr(f); {\n\tcase err == nil:\n\t\tp.otmpXattr.Store(bucket, true)\n\tcase tmpfileXattrUnsupported(err):\n\t\tp.otmpXattr.Store(bucket, false)\n\t\tf.Close()\n\t\treturn p.openMkTemp(...)\n\t}\n}\n```"
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/with_otmpfile.go",
+   "created_at": "2026-11-18T07:46:03Z",
+   "body": "The fallback is silent. Nothing tells the operator that O_TMPFILE was turned off for the bucket, or that `--disableotmp` would skip the probe. Similar fallbacks already log (`warnODirectUnsupportedOnce`). Please log a warning once per bucket path, with the errno, when storing `false`.\n\nThis matters more with `--inherit-default-acl`: the named-file fallback drops the default ACL of the object's directory, so new objects silently get the `--file-perms` mode instead."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/with_otmpfile.go",
+   "created_at": "2026-11-18T07:46:41Z",
+   "body": "This is the first direct `pkg/xattr` import in `backend/posix`. It hard-codes the `user.` prefix that `backend/meta` owns (`xattrPrefix`), and line 133 checks for the concrete `meta.XattrMeta` type. Please keep the xattr details in `backend/meta`: for example a `TestFile(f *os.File) error` method on `XattrMeta` next to `XattrMeta.Test`, behind a small optional interface checked the way `meta.RootDirSetter` is in `New`.\n\nTwo smaller points: the probe writes an empty value, while every real attribute is non-empty; and the `FRemove` error is dropped, so if removal fails the probe attribute stays on the published object. A separate probe file (see the comment on line 133) avoids both."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-18T07:47:22Z",
+   "body": "Entries are never removed. A cached `true` survives DeleteBucket. If the same bucket name is later recreated or relinked (`--bucketlinks`) onto a filesystem with this defect, every upload returns 500 until a restart. Also, with `--inherit-default-acl` the O_TMPFILE is created in the object's directory, which can be on a different mount below the bucket, but the cache key is the bucket path. Please clear the entry in DeleteBucket, or at least document the keying."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/with_otmpfile_xattr_linux_test.go",
+   "created_at": "2026-11-18T07:47:49Z",
+   "body": "This file is missing the Apache license header that every other file in the package has. `// +build linux` is also redundant; `falloc_linux_test.go` uses only `//go:build linux`."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/with_otmpfile_xattr_linux_test.go",
+   "created_at": "2026-11-18T07:48:20Z",
+   "body": "This test doesn't exercise the race it describes. All 16 goroutines get through the first check and open their file within microseconds, so each runs the 20 ms probe itself and falls back on its own `EOPNOTSUPP`. The re-check branch is practically never taken, and the test passes on the first commit, which had the bug.\n\nTo make it deterministic, use the existing `openat` hook: call `unix.Openat`, then `p.otmpXattr.Store(p.BucketPath(bucket), false)`. That simulates another upload's probe finishing between the check and the open. Then assert that a named temp file was used."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/with_otmpfile_xattr_linux_test.go",
+   "created_at": "2026-11-18T07:48:56Z",
+   "body": "These tests only check which kind of temp file gets opened. Please add backend-level tests with the hook returning `ENODATA` that run:\n- PutObject\n- UploadPart followed by CompleteMultipartUpload\n- a versioned overwrite, since the versioning directory has its own cache key\n\nEach should succeed and the object should still have its etag and checksum attributes. Once `linkat` is probed, add the same tests in sidecar mode with an `EXDEV` hook. Integration tests can't hit this defect on CI's ext4, so unit tests are the right level here.\n\nNit: `f` is cleaned up twice (line 75 and the `defer`)."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/with_otmpfile.go",
+   "created_at": "2026-11-18T20:34:33Z",
+   "body": "With `--inherit-default-acl`, this opens the probe O_TMPFILE in the object's directory, but line 263 links it into `tmpDir` (`bucket/.sgwtmp`). If the object's directory is on a nested mount, the probe gets `EXDEV`, and the whole bucket is marked unsupported.\n\nOn main, inherit mode with a tmpfs mounted at `bkt1/sub` works: PUT `sub/obj`, then HEAD returns the ETag, Content-Type and metadata. The named-file path this PR then falls back to (the same as `--disableotmp`) returns 200 for that PUT, but the object has no ETag, no Content-Type and no metadata, because `MoveFile`'s cross-device fallback copies only the data. Every later upload in the bucket also loses default-ACL inheritance. Whether this happens depends on which key is uploaded first after each restart.\n\nPlease open and link the probe in `tmpDir` in both modes. The result is keyed by bucket, so the probe should test the bucket's filesystem. That also makes the `openOTmp` closure unnecessary, and lets the probe run before the upload's own O_TMPFILE is opened."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/with_otmpfile.go",
+   "created_at": "2026-11-18T20:34:59Z",
+   "body": "Returning probe errors fails uploads that succeed on main. Example: with `--inherit-default-acl`, a bucket root at 0555 and a writable `sub/`, main accepts PUT `sub/obj` and never creates `.sgwtmp` (non-root gateway). Here, `mkdirAll(bucket/.sgwtmp)` on line 231 gets `EACCES`, so every PUT returns AccessDenied, and the result is never cached. A probe-name collision (no `EEXIST` retry, unlike `linkatOTmpfile`), an `unlink` failure or `EMFILE` would fail the upload in the same way.\n\nWhen the probe's error isn't \"unsupported\", please treat the result as unknown: keep the upload's O_TMPFILE, don't cache, and let the upload report its own ENOSPC/EDQUOT/EROFS as it does on main. Also, the comment on line 230 is wrong: a mkdir error is returned from here; it isn't reported by the named file's open."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/with_otmpfile_xattr_linux_test.go",
+   "created_at": "2026-11-18T20:35:39Z",
+   "body": "Nits:\n- The wrapper closure does nothing: pass `mk` directly.\n- `aws.ToString(&out.ETag)` on line 202 is just `out.ETag`.\n- The versioned overwrite only checks the current object. Please also read back the previous version and check its body and etag, since that copy goes through the versioning directory's separate probe entry."
+  }
+ ],
  "comments": [
   {
    "role": "collaborator",
    "created_at": "2026-11-12T15:32:09Z",
    "body": "This won't automatically run in continuous integration without approval. A member of the Versity organization must allow it."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-18T08:47:03Z",
+   "body": "Thanks for the detailed review. Pushed a commit that reworks the probe along your suggestions:\n- The probe now runs on a separate O_TMPFILE, once per bucket path: it sets a non-empty xattr (xattr mode only, via a `meta.TmpFileTester` that `XattrMeta` implements, so `pkg/xattr` stays in `backend/meta`) and `linkat`s the file into the bucket's `.sgwtmp`, then unlinks it. ENODATA/EOPNOTSUPP/ENOSYS/EXDEV select the named-file fallback, so sidecar and nometa modes are covered too. Other errors are returned and not cached.\n- The probe file is chmodded to 0600 before the xattr, so a default ACL can't make it unwritable (EACCES) with `--inherit-default-acl`.\n- The second `Load` is gone: the upload uses the `Load` made before opening and probes only when the bucket was unknown.\n- A warning with the errno is logged once per bucket when the fallback is stored; the entry is removed in `DeleteBucket` (also the versioning key). Keying by bucket path is documented in `probeOTmp`, including the inherit-ACL different-mount case, which is not probed separately.\n- Tests: license header and `//go:build` only; the old race test is replaced (the re-check no longer exists) by one where all concurrent uploads get a named file; new tests run PutObject, UploadPart + CompleteMultipartUpload and a versioned overwrite with the hook returning ENODATA (xattr) and EXDEV (sidecar), checking the etags.\n\nThis comment was drafted with Claude Code.\n"
   }
  ]
 }

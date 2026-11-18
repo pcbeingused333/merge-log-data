@@ -1,0 +1,33 @@
+{
+ "repo": "i-am-bee/beeai-framework",
+ "number": 1955,
+ "url": "https://github.com/i-am-bee/beeai-framework/pull/1955",
+ "title": "fix(adapters): report LangChain finish reason from provider response metadata",
+ "merged_at": "2026-11-18T11:54:07Z",
+ "files": [
+  {
+   "filename": "typescript/src/adapters/langchain/backend/chat.test.ts",
+   "status": "added",
+   "additions": 61,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,61 @@\n+/**\n+ * Copyright 2025 © BeeAI a Series of LF Projects, LLC\n+ * SPDX-License-Identifier: Apache-2.0\n+ */\n+\n+import { LangChainChatModel } from \"@/adapters/langchain/backend/chat.js\";\n+import { ChatModelOutput } from \"@/backend/chat.js\";\n+import { UserMessage } from \"@/backend/message.js\";\n+import { FakeListChatModel } from \"@langchain/core/utils/testing\";\n+import { AIMessageChunk } from \"@langchain/core/messages\";\n+import { describe, expect, it } from \"vitest\";\n+\n+const finishReasonFor = (response_metadata: Record<string, unknown>) => {\n+  const model = new LangChainChatModel(new FakeListChatModel({ responses: [\"hi\"] }));\n+  const prepare = (\n+    model as unknown as {\n+      prepareOutput: (o: AIMessageChunk) => { finishReason?: string };\n+    }\n+  ).prepareOutput.bind(model);\n+  return prepare(new AIMessageChunk({ content: \"hi\", response_metadata })).finishReason;\n+};\n+\n+describe(\"LangChain chat adapter finish reason\", () => {\n+  it.each([\n+    [{ finish_reason: \"stop\" }, \"stop\"],\n+    [{ finish_reason: \"length\" }, \"length\"],\n+    [{ finish_reason: \"tool_calls\" }, \"tool-calls\"],\n+    [{ finish_reason: \"content_filter\" }, \"content-filter\"],\n+    [{ stop_reason: \"end_turn\" }, \"stop\"],\n+    [{ stop_reason: \"max_tokens\" }, \"length\"],\n+    [{ stop_reason: \"tool_use\" }, \"tool-calls\"],\n+    [{ stop_reason: \"refusal\" }, \"content-filter\"],\n+    [{ done_reason: \"length\" }, \"length\"],\n+    [{ stopReason: \"tool_use\" }, \"tool-calls\"],\n+    [{ messageStop: { stopReason: \"max_tokens\" } }, \"length\"],\n+    [{ finishReason: \"MAX_TOKENS\" }, \"length\"],\n+    [{ finish_reason: \"something_new\" }, \"other\"],\n+    [{}, undefined],\n+  ])(\"maps %j to %s\", (meta, expected) => {\n+    expect(finishReasonFor(meta)).toBe(expected);\n+  });\n+\n+  it(\"creates a model output\", async () => {\n+    const model = new LangChainChatModel(new FakeListChatModel({ responses: [\"hi\"] }));\n+    const out = await model.create({ messages: [new UserMessage(\"x\")] });\n+    expect(out.getTextContent()).toBe(\"hi\");\n+  });\n+\n+  it(\"keeps the last finish reason when a trailing chunk has none\", () => {\n+    const model = new LangChainChatModel(new FakeListChatModel({ responses: [\"hi\"] }));\n+    const prepare = (\n+      model as unknown as { prepareOutput: (o: AIMessageChunk) => ChatModelOutput }\n+    ).prepareOutput.bind(model);\n+    const chunks = [\n+      prepare(new AIMessageChunk({ content: \"a\", response_metadata: {} })),\n+      prepare(new AIMessageChunk({ content: \"b\", response_metadata: { finish_reason: \"length\" } })),\n+      prepare(new AIMessageChunk({ content: \"\", response_metadata: {} })),\n+    ];\n+    expect(ChatModelOutput.fromChunks(chunks).finishReason).toBe(\"length\");\n+  });\n+});"
+  },
+  {
+   "filename": "typescript/src/adapters/langchain/backend/chat.ts",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 2,
+   "patch": "@@ -22,6 +22,41 @@ import {\n import { AIMessageChunk } from \"@langchain/core/messages\";\n import { toBeeAIMessages, toLCMessages } from \"./utils.js\";\n \n+const FINISH_REASONS: Record<string, ChatModelFinishReason> = {\n+  stop: \"stop\",\n+  end_turn: \"stop\",\n+  stop_sequence: \"stop\",\n+  length: \"length\",\n+  max_tokens: \"length\",\n+  model_context_window_exceeded: \"length\",\n+  tool_calls: \"tool-calls\",\n+  function_call: \"tool-calls\",\n+  tool_use: \"tool-calls\",\n+  content_filter: \"content-filter\",\n+  content_filtered: \"content-filter\",\n+  guardrail_intervened: \"content-filter\",\n+  refusal: \"content-filter\",\n+  safety: \"content-filter\",\n+  error: \"error\",\n+};\n+\n+function toFinishReason(metadata?: Record<string, unknown>): ChatModelFinishReason | undefined {\n+  // Ollama reports \"done_reason\", OpenAI \"finish_reason\", Anthropic \"stop_reason\",\n+  // Bedrock \"stopReason\" and Google \"finishReason\".\n+  const raw =\n+    metadata?.done_reason ??\n+    metadata?.finish_reason ??\n+    metadata?.stop_reason ??\n+    metadata?.stopReason ??\n+    // @langchain/aws streams the Converse event as is: { messageStop: { stopReason } }\n+    (metadata?.messageStop as { stopReason?: unknown } | undefined)?.stopReason ??\n+    metadata?.finishReason;\n+  if (typeof raw !== \"string\" || !raw) {\n+    return undefined;\n+  }\n+  return FINISH_REASONS[raw.toLowerCase()] ?? \"other\";\n+}\n+\n export class LangChainChatModel extends ChatModel {\n   public readonly emitter: ChatModelEmitter;\n \n@@ -89,8 +124,7 @@ export class LangChainChatModel extends ChatModel {\n   protected prepareOutput(output: AIMessageChunk) {\n     const messages = toBeeAIMessages([output]);\n \n-    const stop: ChatModelFinishReason =\n-      (output.response_metadata?.stop_sequence as ChatModelFinishReason) || \"stop\";\n+    const stop = toFinishReason(output.response_metadata);\n     return new ChatModelOutput(\n       messages,\n       {"
+  },
+  {
+   "filename": "typescript/src/backend/chat.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -598,7 +598,9 @@ export class ChatModelOutput extends Serializable {\n       this.dedupe();\n     }\n \n-    this.finishReason = other.finishReason;\n+    if (other.finishReason) {\n+      this.finishReason = other.finishReason;\n+    }\n     if (this.usage && other.usage) {\n       this.usage = customMerge([this.usage, other.usage], {\n         totalTokens: takeBigger,"
+  }
+ ],
+ "test_files": [
+  "typescript/src/adapters/langchain/backend/chat.test.ts"
+ ]
+}

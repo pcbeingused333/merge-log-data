@@ -1,0 +1,17 @@
+{
+ "repo": "bosun-ai/swiftide",
+ "number": 1247,
+ "url": "https://github.com/bosun-ai/swiftide/pull/1247",
+ "title": "fix(duckdb): keep node cache usable after clearing",
+ "merged_at": "2026-11-18T13:35:02Z",
+ "files": [
+  {
+   "filename": "swiftide-integrations/src/duckdb/node_cache.rs",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 4,
+   "patch": "@@ -69,13 +69,17 @@ impl<T: Chunk> NodeCache for Duckdb<T> {\n     }\n \n     async fn clear(&self) -> anyhow::Result<()> {\n-        let sql = format!(\"DROP TABLE IF EXISTS {}\", self.cache_table);\n+        self.lazy_create_cache()\n+            .await\n+            .context(\"failed to create cache table\")?;\n+\n+        let sql = format!(\"DELETE FROM {}\", self.cache_table);\n         let lock = self.connection.lock().unwrap();\n         let mut stmt = lock\n             .prepare(&sql)\n             .context(\"Failed to prepare duckdb statement for cache clear\")?;\n \n-        stmt.execute([]).context(\"failed to delete cache table\")?;\n+        stmt.execute([]).context(\"failed to clear cache table\")?;\n \n         Ok(())\n     }\n@@ -108,9 +112,19 @@ mod tests {\n         let duckdb = setup_duckdb();\n         let node = TextNode::new(\"test_clear\");\n \n+        // Clearing an unused cache and clearing twice must both succeed.\n+        duckdb.clear().await.unwrap();\n+        duckdb.clear().await.unwrap();\n+\n+        for _ in 0..2 {\n+            duckdb.set(&node).await;\n+            assert!(duckdb.get(&node).await);\n+            duckdb.clear().await.unwrap();\n+            assert!(!duckdb.get(&node).await);\n+            duckdb.clear().await.unwrap();\n+        }\n+\n         duckdb.set(&node).await;\n         assert!(duckdb.get(&node).await);\n-        duckdb.clear().await.unwrap();\n-        assert!(!duckdb.get(&node).await);\n     }\n }"
+  }
+ ],
+ "test_files": []
+}

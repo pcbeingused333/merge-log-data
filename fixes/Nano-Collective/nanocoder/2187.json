@@ -1,0 +1,33 @@
+{
+ "repo": "Nano-Collective/nanocoder",
+ "number": 2187,
+ "url": "https://github.com/Nano-Collective/nanocoder/pull/2187",
+ "title": "fix(hooks): close stdin of hook and formatter commands",
+ "merged_at": "2026-11-18T09:57:47Z",
+ "files": [
+  {
+   "filename": ".changeset/hook-stdin-eof.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+\"@nanocollective/nanocoder\": patch\n+---\n+\n+Lifecycle hooks and formatters no longer hang until their timeout when the command reads stdin. Their stdin is now closed immediately, so `cat`, `jq` and similar commands see EOF instead of waiting for input that never arrives."
+  },
+  {
+   "filename": "source/services/lifecycle-hooks.spec.ts",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -387,6 +387,26 @@ test.serial('a hook that times out does not block the action', async t => {\n \tt.is(outcome.output, '');\n });\n \n+test.serial('a hook that reads stdin sees EOF instead of hanging', async t => {\n+\twithHooks({\n+\t\t'post-tool-use': [\n+\t\t\t{\n+\t\t\t\tcommand: node(\n+\t\t\t\t\t\"process.stdin.resume();process.stdin.on('end',()=>console.log('eof'))\",\n+\t\t\t\t),\n+\t\t\t\ttimeout: 5000,\n+\t\t\t},\n+\t\t],\n+\t});\n+\n+\tconst outcome = await runLifecycleHooks('post-tool-use', {\n+\t\ttoolName: 'write_file',\n+\t});\n+\n+\tt.deepEqual(outcome.failures, []);\n+\tt.is(outcome.output, 'eof');\n+});\n+\n test.serial('a hook naming a missing binary blocks like any non-zero exit', async t => {\n \twithHooks({\n \t\t'pre-tool-use': [{command: 'nanocoder-definitely-not-a-real-binary'}],"
+  },
+  {
+   "filename": "source/services/lifecycle-hooks.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -638,6 +638,11 @@ export function runHookCommand(\n \t\t\tenv,\n \t\t\tshell: true,\n \t\t\tdetached: process.platform !== 'win32',\n+\t\t\t// Nothing is written to a hook's stdin (see docs/features/hooks.md), so\n+\t\t\t// give it EOF immediately. A piped stdin that is never closed makes a\n+\t\t\t// command that reads input (`cat`, `jq`, a formatter run without a file\n+\t\t\t// argument) block until the timeout kills it.\n+\t\t\tstdio: ['ignore', 'pipe', 'pipe'],\n \t\t});\n \n \t\tconst timeoutMs = hook.timeout ?? defaultTimeoutMs;"
+  }
+ ],
+ "test_files": [
+  "source/services/lifecycle-hooks.spec.ts"
+ ]
+}

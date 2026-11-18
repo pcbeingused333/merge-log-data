@@ -1,0 +1,26 @@
+{
+ "repo": "moov-io/ach",
+ "number": 1930,
+ "url": "https://github.com/moov-io/ach/pull/1930",
+ "title": "fix: keep EffectiveEntryDate and ForeignExchangeReference when segmenting IAT files",
+ "merged_at": "2026-11-18T16:23:53Z",
+ "files": [
+  {
+   "filename": "file.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -1563,14 +1563,19 @@ func createSegmentFileIATBatchHeader(serviceClassCode int, IATBh *IATBatchHeader\n \tnbh := NewIATBatchHeader()\n \tnbh.ID = base.ID()\n \tnbh.ServiceClassCode = serviceClassCode\n+\tnbh.IATIndicator = IATBh.IATIndicator\n \tnbh.ForeignExchangeIndicator = IATBh.ForeignExchangeIndicator\n \tnbh.ForeignExchangeReferenceIndicator = IATBh.ForeignExchangeReferenceIndicator\n+\tnbh.ForeignExchangeReference = IATBh.ForeignExchangeReference\n \tnbh.ISODestinationCountryCode = IATBh.ISODestinationCountryCode\n \tnbh.OriginatorIdentification = IATBh.OriginatorIdentification\n \tnbh.StandardEntryClassCode = IATBh.StandardEntryClassCode\n \tnbh.CompanyEntryDescription = IATBh.CompanyEntryDescription\n \tnbh.ISOOriginatingCurrencyCode = IATBh.ISOOriginatingCurrencyCode\n \tnbh.ISODestinationCurrencyCode = IATBh.ISODestinationCurrencyCode\n+\tnbh.EffectiveEntryDate = IATBh.EffectiveEntryDate\n+\tnbh.SettlementDate = IATBh.SettlementDate\n+\tnbh.OriginatorStatusCode = IATBh.OriginatorStatusCode\n \tnbh.ODFIIdentification = IATBh.ODFIIdentification\n \treturn nbh\n }"
+  },
+  {
+   "filename": "file_test.go",
+   "status": "modified",
+   "additions": 42,
+   "deletions": 0,
+   "patch": "@@ -2865,3 +2865,45 @@ func TestFileLineNumbers(t *testing.T) {\n \trequire.Equal(t, 14, file.IATBatches[0].GetControl().LineNumber)\n \trequire.Equal(t, 15, file.Control.LineNumber)\n }\n+\n+func TestFile__SegmentFileIATPreservesPaymentInstructions(t *testing.T) {\n+\tf, err := os.Open(filepath.Join(\"test\", \"testdata\", \"iat-mixedDebitCredit.ach\"))\n+\trequire.NoError(t, err)\n+\tdefer f.Close()\n+\n+\tachFile, err := NewReader(f).Read()\n+\trequire.NoError(t, err)\n+\n+\t// Overlay non-default IAT header fields so a missed copy cannot match NewIATBatchHeader zeros.\n+\theader := achFile.IATBatches[0].GetHeader()\n+\theader.IATIndicator = IATCOR\n+\theader.ForeignExchangeIndicator = \"FV\"\n+\theader.ForeignExchangeReferenceIndicator = 1\n+\theader.ForeignExchangeReference = \"1.250000\"\n+\theader.SettlementDate = \"100\"\n+\theader.OriginatorStatusCode = 1\n+\trequire.NoError(t, achFile.Validate())\n+\n+\tcreditFile, debitFile, err := achFile.SegmentFile(NewSegmentFileConfiguration())\n+\trequire.NoError(t, err)\n+\n+\tfor _, tc := range []struct {\n+\t\tname string\n+\t\tfile *File\n+\t}{\n+\t\t{\"credit\", creditFile},\n+\t\t{\"debit\", debitFile},\n+\t} {\n+\t\tt.Run(tc.name, func(t *testing.T) {\n+\t\t\trequire.Len(t, tc.file.IATBatches, 1)\n+\t\t\tgot := tc.file.IATBatches[0].GetHeader()\n+\t\t\trequire.Equal(t, IATCOR, got.IATIndicator)\n+\t\t\trequire.Equal(t, \"FV\", got.ForeignExchangeIndicator)\n+\t\t\trequire.Equal(t, 1, got.ForeignExchangeReferenceIndicator)\n+\t\t\trequire.Equal(t, \"1.250000\", got.ForeignExchangeReference)\n+\t\t\trequire.Equal(t, \"190808\", got.EffectiveEntryDate)\n+\t\t\trequire.Equal(t, \"100\", got.SettlementDate)\n+\t\t\trequire.Equal(t, 1, got.OriginatorStatusCode)\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "file_test.go"
+ ]
+}

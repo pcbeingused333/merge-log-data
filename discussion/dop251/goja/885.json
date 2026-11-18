@@ -1,0 +1,23 @@
+{
+ "repo": "dop251/goja",
+ "number": 885,
+ "url": "https://github.com/dop251/goja/pull/885",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-18T11:05:18Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "builtin_global.go",
+   "created_at": "2026-11-18T11:05:18Z",
+   "body": "The base 10 path looks right to me: 0 differences from V8 on 100k random decimal strings (up to 40 digits, signs, trailing junk).\n\nThe same double rounding is still here for radix 4, 8, 16 and 32, though, and for those the spec does not allow an approximation either (only a radix that is not 2, 4, 8, 10, 16 or 32 may be implementation-approximated). Examples on this branch vs node 24:\n\n```js\nparseInt(\"c760b46463a0c40d05\", 16)  // goja 3.677870375570711e+21, V8 3.677870375570712e+21\nparseInt(\"itaunfap8aa0q\", 32)       // goja 21809762542452810000,  V8 21809762542452814000\nparseInt(\"-1701324071575532202006324217\", 8) // goja -4.540150585159297e+24, V8 -4.5401505851592977e+24\n```\n\nOn 100k random strings in radix 2/4/8/16/32, 117 come out one ULP off.\n\nOne way to cover every radix with a single rounding is to let `math/big` do it (already imported elsewhere in the package):\n\n```go\nfunc parseLargeInt(s string, base int, sign bool) Value {\n\tend := 0\n\tfor end < len(s) && digitVal(s[end]) < base {\n\t\tend++\n\t}\n\tx, _ := new(big.Int).SetString(s[:end], base)\n\tf, _ := new(big.Float).SetInt(x).Float64() // nearest, ties to even; +Inf on overflow\n\tif sign {\n\t\tf = -f\n\t}\n\treturn valueFloat(f)\n}\n```\n\ncalled as `parseLargeInt(s, base, sign)` from both overflow branches. With that, the same 100k radix 2/4/8/16/32 strings match V8 with 0 differences (base 10 stays at 0 too)."
+  }
+ ],
+ "comments": []
+}

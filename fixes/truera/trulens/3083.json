@@ -1,0 +1,26 @@
+{
+ "repo": "truera/trulens",
+ "number": 3083,
+ "url": "https://github.com/truera/trulens/pull/3083",
+ "title": "fix(bedrock): use chat schema for recent Mistral models",
+ "merged_at": "2026-11-18T20:02:15Z",
+ "files": [
+  {
+   "filename": "src/providers/bedrock/trulens/providers/bedrock/provider.py",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 0,
+   "patch": "@@ -20,6 +20,17 @@\n     \"anthropic.claude-fable-5\",\n )\n \n+# Mistral models that still use the legacy text-completion schema (`prompt` in,\n+# `outputs[0].text` out). Every other `mistral.*` model (Mistral Large 3,\n+# Ministral 3, Magistral, ...) uses the chat schema (`messages` in,\n+# `choices[0].message.content` out).\n+_MISTRAL_LEGACY_PREFIXES = (\n+    \"mistral.mistral-7b\",\n+    \"mistral.mixtral\",\n+    \"mistral.mistral-large-2402\",\n+    \"mistral.mistral-small-2402\",\n+)\n+\n \n class Bedrock(llm_provider.LLMProvider):\n     \"\"\"A set of AWS Feedback Functions.\n@@ -173,6 +184,17 @@ def _create_chat_completion(\n                 \"maxTokens\": 8191,\n             })\n \n+        elif base_model_id.startswith(\"mistral\") and not (\n+            base_model_id.startswith(_MISTRAL_LEGACY_PREFIXES)\n+        ):\n+            body = json.dumps({\n+                \"messages\": messages\n+                or [{\"role\": \"user\", \"content\": messages_str}],\n+                \"temperature\": 0,\n+                \"top_p\": 1,\n+                \"max_tokens\": 4095,\n+            })\n+\n         elif base_model_id.startswith(\"mistral\"):\n             body = json.dumps({\n                 \"prompt\": messages_str,\n@@ -238,6 +260,12 @@ def _create_chat_completion(\n                 \"generations\"\n             )[0][\"text\"]\n \n+        elif base_model_id.startswith(\"mistral\") and not (\n+            base_model_id.startswith(_MISTRAL_LEGACY_PREFIXES)\n+        ):\n+            response_body = json.loads(response.get(\"body\").read())[\"choices\"][\n+                0\n+            ][\"message\"][\"content\"]\n         elif base_model_id.startswith(\"mistral\"):\n             response_body = json.loads(response.get(\"body\").read()).get(\n                 \"outputs\""
+  },
+  {
+   "filename": "tests/unit/providers/test_bedrock_mistral_chat.py",
+   "status": "added",
+   "additions": 87,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,87 @@\n+# pyright: reportMissingImports=false, reportMissingModuleSource=false\n+\"\"\"Bedrock Mistral request/response schema (#3081).\n+\n+Recent Mistral models (Large 3, Ministral 3, Magistral) take the chat schema\n+(``messages`` in, ``choices[0].message.content`` out); older ones keep the\n+text-completion schema (``prompt`` in, ``outputs[0].text`` out).\n+\n+The boto3 ``invoke_model`` seam is mocked, so no AWS account is needed.\n+\"\"\"\n+\n+import json\n+from typing import Any, Dict, List\n+\n+import pytest\n+\n+\n+class _DummyBody:\n+    def __init__(self, payload: bytes):\n+        self._payload = payload\n+\n+    def read(self) -> bytes:\n+        return self._payload\n+\n+\n+class _DummyBedrockClient:\n+    def __init__(self, response_payload: Dict[str, Any]):\n+        self._payload = json.dumps(response_payload).encode()\n+        self.calls: List[Dict[str, Any]] = []\n+\n+    def invoke_model(self, *, body, modelId, accept, contentType):  # noqa: N803\n+        self.calls.append({\"body\": body, \"modelId\": modelId})\n+        return {\"body\": _DummyBody(self._payload)}\n+\n+\n+def _make_provider(model_id: str, response_payload: Dict[str, Any]):\n+    from trulens.providers.bedrock import Bedrock\n+\n+    provider = Bedrock(model_id=model_id)\n+    provider.endpoint.client = _DummyBedrockClient(response_payload)\n+    return provider\n+\n+\n+@pytest.mark.optional\n+@pytest.mark.parametrize(\n+    \"model_id\",\n+    [\n+        \"mistral.mistral-large-3-675b-instruct\",\n+        \"mistral.ministral-3-8b-instruct\",\n+        \"mistral.magistral-small-2509\",\n+        \"mistral.mistral-large-2407-v1:0\",\n+        \"us.mistral.pixtral-large-2502-v1:0\",\n+    ],\n+)\n+def test_new_mistral_uses_chat_schema(model_id):\n+    provider = _make_provider(\n+        model_id,\n+        {\"choices\": [{\"message\": {\"role\": \"assistant\", \"content\": \"ok\"}}]},\n+    )\n+\n+    out = provider._create_chat_completion(\n+        messages=[{\"role\": \"user\", \"content\": \"hi\"}]\n+    )\n+\n+    assert out == \"ok\"\n+    body = json.loads(provider.endpoint.client.calls[0][\"body\"])\n+    assert body[\"messages\"] == [{\"role\": \"user\", \"content\": \"hi\"}]\n+    assert \"prompt\" not in body\n+\n+\n+@pytest.mark.optional\n+@pytest.mark.parametrize(\n+    \"model_id\",\n+    [\n+        \"mistral.mistral-7b-instruct-v0:2\",\n+        \"mistral.mixtral-8x7b-instruct-v0:1\",\n+        \"mistral.mistral-large-2402-v1:0\",\n+    ],\n+)\n+def test_legacy_mistral_keeps_prompt_schema(model_id):\n+    provider = _make_provider(model_id, {\"outputs\": [{\"text\": \"legacy-ok\"}]})\n+\n+    out = provider._create_chat_completion(prompt=\"hello\")\n+\n+    assert out == \"legacy-ok\"\n+    body = json.loads(provider.endpoint.client.calls[0][\"body\"])\n+    assert \"prompt\" in body\n+    assert \"messages\" not in body"
+  }
+ ],
+ "test_files": [
+  "tests/unit/providers/test_bedrock_mistral_chat.py"
+ ]
+}

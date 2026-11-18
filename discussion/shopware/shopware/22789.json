@@ -20,6 +20,11 @@
    "role": "contributor",
    "created_at": "2026-11-11T09:11:08Z",
    "body": "Tested against a real production catalog (local copy, 6.7.14.1, ~22k products, 8,988 exported rows, Google Shopping CSV whose body template still had a `{% set %}` ternary on `product.cover`).\n\nAssociations from `ProductExportGenerator::getAssociations()`: the patch removes exactly the two bogus paths (`cover.product.cover.media`, `mainCategories.product.mainCategories.category`); all other associations unchanged. The new bare tokens (`url`, `brand`, ...) resolve to `null` in `EntityDefinitionQueryHelper::getAssociationPath()` and are dropped by `array_filter`.\n\n`product-export:generate --force` (`read_buffer_size: 50`):\n\n| | before | after |\n|---|---|---|\n| runtime | 215 s / 231 s (2 runs) | 61 s |\n| peak RSS | 3.35 / 3.26 GB | 1.28 GB |\n| output | | byte-identical (`cmp`) |\n\nSingle-path `{% set %}` and `{% for %}` aliasing unchanged.\nNot covered: the partial-generation (queue) path; #19564 is unrelated and still open. 👍\n"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-11-18T12:19:52Z",
+   "body": "Nice catch, and the fix does what it says! I tried it on a local shop with product export and SEO URL templates, including the three shipped export templates: the output stays the same, the recursive associations are gone, and an export preview with the cover ternary went from 1.6 s to 0.3 s.\n\nOne case changes, @pcbeingused333: a fallback between two objects followed by a nested relation, for example `{% set media = product.cover.media ?? product.manufacturer.media %}{{ media.mediaFolder.name }}`. On trunk it renders (more by luck), with this change the alias is dropped, `mediaFolder` is not loaded and the template fails with \"Impossible to access an attribute on a null variable\". Could the variable keep all its paths, so later uses resolve against each of them? If not, a short release note would help.\n"
   }
  ]
 }

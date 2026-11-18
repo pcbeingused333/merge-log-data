@@ -1,0 +1,26 @@
+{
+ "repo": "moov-io/ach",
+ "number": 1926,
+ "url": "https://github.com/moov-io/ach/pull/1926",
+ "title": "fix: validate IAT headers during file validation",
+ "merged_at": "2026-11-18T17:23:14Z",
+ "files": [
+  {
+   "filename": "file.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -1148,6 +1148,11 @@ func (f *File) validateBatches(opts *ValidateOpts) error {\n \t\t}\n \t}\n \tfor i := range f.IATBatches {\n+\t\tif header := f.IATBatches[i].Header; header != nil {\n+\t\t\tif err := header.Validate(); err != nil {\n+\t\t\t\treturn err\n+\t\t\t}\n+\t\t}\n \t\tfor _, ed := range f.IATBatches[i].GetEntries() {\n \t\t\tif err := ed.Validate(); err != nil {\n \t\t\t\treturn err"
+  },
+  {
+   "filename": "file_test.go",
+   "status": "modified",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -3019,3 +3019,36 @@ func TestFile__SegmentFileIATPreservesPaymentInstructions(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestFileValidate_IATBatches(t *testing.T) {\n+\tfor _, invalid := range []bool{false, true} {\n+\t\tt.Run(fmt.Sprintf(\"invalid=%v\", invalid), func(t *testing.T) {\n+\t\t\tfile, err := ReadJSONFile(\"test/testdata/iat-debit.json\")\n+\t\t\trequire.NoError(t, err)\n+\t\t\trequire.NoError(t, file.Validate())\n+\t\t\tif invalid {\n+\t\t\t\tfile.IATBatches[0].Header.ISODestinationCountryCode = \"ZZ\"\n+\t\t\t}\n+\n+\t\t\tfor name, validate := range map[string]func() error{\n+\t\t\t\t\"Validate\":     file.Validate,\n+\t\t\t\t\"ValidateWith\": func() error { return file.ValidateWith(&ValidateOpts{}) },\n+\t\t\t\t\"Writer\": func() error {\n+\t\t\t\t\tvar buf bytes.Buffer\n+\t\t\t\t\treturn NewWriter(&buf).Write(file)\n+\t\t\t\t},\n+\t\t\t} {\n+\t\t\t\tt.Run(name, func(t *testing.T) {\n+\t\t\t\t\terr := validate()\n+\t\t\t\t\tif invalid {\n+\t\t\t\t\t\trequire.ErrorContains(t, err, \"ISODestinationCountryCode\")\n+\t\t\t\t\t} else {\n+\t\t\t\t\t\trequire.NoError(t, err)\n+\t\t\t\t\t}\n+\t\t\t\t})\n+\t\t\t}\n+\t\t\trequire.NoError(t, file.ValidateWith(&ValidateOpts{BypassBatchValidation: true}))\n+\t\t\trequire.NoError(t, file.ValidateWith(&ValidateOpts{SkipAll: true}))\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "file_test.go"
+ ]
+}

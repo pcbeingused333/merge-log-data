@@ -2,14 +2,45 @@
  "repo": "truera/trulens",
  "number": 3083,
  "url": "https://github.com/truera/trulens/pull/3083",
- "state": "open",
- "reviews": [],
- "review_comments": [],
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-18T09:42:25Z",
+   "body": "Appreciate that you split the Mistral half out of #3081 and tested the legacy side too: 7B, Mixtral and both 2402 models still score 1.0 on head. I ran the new tests on base and head, then called `relevance()` through the provider against Bedrock on both, and 14 of the 15 Mistral ids I tried score 1.0 on head. The one that doesn't is `mistral.mistral-large-2407-v1:0`.\n\nLarge 2407 takes the `prompt` body but answers in the chat shape (`choices`, `usage`), so while it sits in `_MISTRAL_LEGACY_PREFIXES` the `outputs[0]` read raises `TypeError`, same as on base. Without that entry it sends `messages` and scores 1.0, which matches the InvokeModel example on AWS's [Mistral Large (24.07) page](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mistral-large-2407.html). Pixtral Large replies to `prompt` the same way and isn't in the list, so this PR also fixes its `us.` and `eu.` profiles, which could go in the description. Both suggestions are inline.\n\n| `relevance()`, retries 0, us-east-1 unless noted | base 4014d75 | head 45349d9 |\n|---|---|---|\n| `mistral.mistral-large-3-675b-instruct` | ValidationException: missing field `messages` | 1.0 |\n| `mistral.ministral-3-8b-instruct` | same ValidationException | 1.0 |\n| `mistral.magistral-small-2509` | same ValidationException | 1.0 |\n| `us.mistral.pixtral-large-2502-v1:0` | TypeError, reply has `choices` | 1.0 |\n| `eu.mistral.pixtral-large-2502-v1:0` (eu-west-1) | TypeError, reply has `choices` | 1.0 |\n| `mistral.mistral-large-2407-v1:0` (us-west-2) | TypeError, reply has `choices` | same TypeError; 1.0 with the suggestion |\n| `mistral.mistral-large-2402-v1:0` | 1.0 | 1.0 |\n| `amazon.nova-lite-v1:0` | 1.0 | 1.0 |\n\nHead also scores 1.0 on Ministral 3 3B and 14B, Devstral 2, and Voxtral Mini and Small.\n\n```\nbase + new test file     3 failed, 46 passed   TypeError: 'NoneType' object is not subscriptable\nhead                     49 passed (with test_bedrock_capabilities.py and test_bedrock_nova_serialization.py)\nhead + both suggestions  51 passed, ruff 0.16.3 check and format clean\n```\n"
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-18T20:02:05Z",
+   "body": "Thanks for keeping mistral model usage up to date on bedrock!"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "src/providers/bedrock/trulens/providers/bedrock/provider.py",
+   "created_at": "2026-11-18T09:42:26Z",
+   "body": "`mistral.mistral-large-2407-v1:0` accepts the `prompt` body but replies with `choices`, so this entry sends it to the `outputs[0]` read (`TypeError` in us-west-2 on base and head). With the line removed it sends `messages` and scores 1.0.\n```suggestion\n```"
+  },
+  {
+   "role": "contributor",
+   "path": "tests/unit/providers/test_bedrock_mistral_chat.py",
+   "created_at": "2026-11-18T09:42:26Z",
+   "body": "This pins 2407: it fails until the `_MISTRAL_LEGACY_PREFIXES` entry is dropped (1 failed, then 51 passed with both changes). `list-inference-profiles` shows no Magistral profile in the nine regions I checked; Pixtral Large is the Mistral model with `us.`/`eu.` profiles, and it was broken on base too.\n```suggestion\n        \"mistral.magistral-small-2509\",\n        \"mistral.mistral-large-2407-v1:0\",\n        \"us.mistral.pixtral-large-2502-v1:0\",\n```"
+  }
+ ],
  "comments": [
   {
    "role": "bot",
    "created_at": "2026-11-17T08:59:21Z",
    "body": "<!-- area-reviewers -->\nThis pull request touches areas with designated reviewers:\n\n- **Bedrock provider** — @kimnamu\n\nThese reviews are advisory and do not block merging. A maintainer or area reviewer still approves. See [CONTRIBUTOR_LADDER.md](../blob/main/CONTRIBUTOR_LADDER.md).\n\nCould not send a review request to @kimnamu — tagging here instead. This usually means the account is not a repository collaborator yet."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-18T10:41:40Z",
+   "body": "Thanks @kimnamu, applied both suggestions in c6c299d7: `mistral.mistral-large-2407` is out of the legacy prefix list and the test now pins 2407 and the Pixtral Large profile. Bedrock tests pass (51). The description now has the missing standards checkbox and notes that this also fixes the Pixtral Large `us.`/`eu.` profiles.\n\nThis comment was drafted with Claude Code.\n"
   }
  ]
 }
