@@ -1,0 +1,41 @@
+{
+ "repo": "fishjar/kiss-translator",
+ "number": 1392,
+ "url": "https://github.com/fishjar/kiss-translator/pull/1392",
+ "title": "fix(youtube): accept bridge messages with a null source",
+ "merged_at": "2026-11-19T12:43:48Z",
+ "files": [
+  {
+   "filename": "src/injectors/youtubeBridge.js",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -296,7 +296,8 @@ export function installYoutubeBridge(createAudioBridge) {\n   };\n   const onMessage = async (event) => {\n     if (\n-      event.source !== window ||\n+      // Safari + Tampermonkey delivers same-window messages with a null source.\n+      (event.source !== window && event.source !== null) ||\n       event.origin !== origin ||\n       event.data?.protocol !== protocol ||\n       event.data?.type !== \"request\""
+  },
+  {
+   "filename": "src/injectors/youtubeBridge.test.js",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 2,
+   "patch": "@@ -12,10 +12,10 @@ let originalFetch, originalPost, originalObserver, observed, posts;\n const flush = async () => {\n   for (let i = 0; i < 15; i++) await Promise.resolve();\n };\n-const request = async (action, extra = {}) => {\n+const request = async (action, extra = {}, source = window) => {\n   window.dispatchEvent(\n     new MessageEvent(\"message\", {\n-      source: window,\n+      source,\n       origin: window.location.origin,\n       data: {\n         protocol: \"kiss-youtube-captions-v1\",\n@@ -257,3 +257,9 @@ test(\"production-compiled installer still answers requests once serialized into\n     window.location.origin\n   );\n });\n+\n+test(\"answers requests whose source is null (Safari userscript managers)\", async () => {\n+  installYoutubeBridge();\n+  const response = await request(\"snapshot\", {}, null);\n+  expect(response).toMatchObject({ type: \"response\", requestId: \"snapshot\" });\n+});"
+  },
+  {
+   "filename": "src/subtitle/youtubeAcquisition.js",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -22,7 +22,8 @@ export class YouTubeCaptionBridgeClient {\n     this.onMessage = (event) => {\n       const data = event.data;\n       if (\n-        event.source !== pageWindow() ||\n+        // Safari + Tampermonkey delivers same-window messages with a null source.\n+        (event.source !== pageWindow() && event.source !== null) ||\n         event.origin !== window.location.origin ||\n         data?.protocol !== YOUTUBE_CAPTION_PROTOCOL\n       )"
+  },
+  {
+   "filename": "src/subtitle/youtubeAcquisition.test.js",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -367,3 +367,32 @@ test(\"client accepts bridge responses from unsafeWindow when the userscript has\n     delete global.unsafeWindow;\n   }\n });\n+\n+test(\"client accepts bridge responses with a null source (Safari userscript managers)\", async () => {\n+  window.history.replaceState({}, \"\", \"/watch?v=one\");\n+  const client = new YouTubeCaptionBridgeClient();\n+  try {\n+    const promise = client.request(\"snapshot\", \"one\");\n+    const requestId = [...client.pending.keys()][0];\n+    const respond = (source, origin) =>\n+      window.dispatchEvent(\n+        new MessageEvent(\"message\", {\n+          source,\n+          origin,\n+          data: {\n+            protocol: YOUTUBE_CAPTION_PROTOCOL,\n+            type: \"response\",\n+            requestId,\n+            videoId: \"one\",\n+            result: snapshot(),\n+          },\n+        })\n+      );\n+    respond(null, \"https://evil.test\");\n+    expect(client.pending.size).toBe(1);\n+    respond(null, window.location.origin);\n+    await expect(promise).resolves.toMatchObject({ videoId: \"one\" });\n+  } finally {\n+    client.dispose();\n+  }\n+});"
+  }
+ ],
+ "test_files": [
+  "src/injectors/youtubeBridge.test.js",
+  "src/subtitle/youtubeAcquisition.test.js"
+ ]
+}

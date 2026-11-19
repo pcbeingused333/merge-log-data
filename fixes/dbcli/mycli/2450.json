@@ -1,0 +1,33 @@
+{
+ "repo": "dbcli/mycli",
+ "number": 2450,
+ "url": "https://github.com/dbcli/mycli/pull/2450",
+ "title": "fix: replace undecodable bytes in /system command output",
+ "merged_at": "2026-11-19T10:15:00Z",
+ "files": [
+  {
+   "filename": "changelog.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -3,6 +3,7 @@ Upcoming (TBD)\n \n Bug Fixes\n --------\n+* Don't crash `/system` and `\\!` on command output that isn't valid in the locale encoding; undecodable bytes are replaced.\n * Substitute favorite query parameters `$10` and above instead of replacing them as `$1` followed by a digit.\n * Write the mycli log file as UTF-8 instead of the locale encoding, so non-ASCII queries and data no longer raise `UnicodeEncodeError`.\n "
+  },
+  {
+   "filename": "mycli/packages/special_commands/io_commands.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -867,7 +867,7 @@ def execute_system_command(arg: str, **_) -> list[SQLResult]:\n                 output, error = process.communicate()\n             response = output if not error else error\n             encoding = locale.getpreferredencoding(False)\n-            response_str = response.decode(encoding)\n+            response_str = response.decode(encoding, errors='replace')\n             if process.returncode:\n                 status = f'Command exited with return code {process.returncode}'\n             else:"
+  },
+  {
+   "filename": "mycli_test/pytests/test_special_io_commands.py",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -1893,6 +1893,17 @@ def fake_run(cmd: list[str], check: bool = False) -> SimpleNamespace:\n     assert calls == [[part for part in command.split() if part != '-r']]\n \n \n+def test_execute_system_command_undecodable_output(monkeypatch) -> None:\n+    monkeypatch.setattr(io_commands.locale, 'getpreferredencoding', lambda do_setlocale: 'utf-8')\n+    process = FakeProcess(stdout=b'caf\\xe9 ok', stderr=b'', returncode=0)\n+    monkeypatch.setattr(io_commands.subprocess, 'Popen', lambda command, stdout, stderr: process)\n+\n+    result = io_commands.execute_system_command('echo x')[0]\n+\n+    assert result.preamble == 'caf\\ufffd ok'\n+    assert result.status is None\n+\n+\n def test_execute_system_command_nonraw_paths(monkeypatch) -> None:\n     monkeypatch.setattr(io_commands.locale, 'getpreferredencoding', lambda do_setlocale: 'utf-8')\n "
+  }
+ ],
+ "test_files": [
+  "mycli_test/pytests/test_special_io_commands.py"
+ ]
+}

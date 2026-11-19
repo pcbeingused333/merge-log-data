@@ -1,0 +1,26 @@
+{
+ "repo": "fishjar/kiss-translator",
+ "number": 1394,
+ "url": "https://github.com/fishjar/kiss-translator/pull/1394",
+ "title": "fix(request): keep header values containing colons in GM response parsing",
+ "merged_at": "2026-11-19T12:46:25Z",
+ "files": [
+  {
+   "filename": "src/libs/request.js",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -91,8 +91,11 @@ const parseResponseHeaders = (responseHeaders) => {\n   try {\n     responseHeaders &&\n       responseHeaders.split(/\\r?\\n/).forEach((line) => {\n-        const [name, value] = line.split(\":\").map((item) => item.trim());\n-        if (name && value) {\n+        const idx = line.indexOf(\":\");\n+        if (idx <= 0) return;\n+        const name = line.slice(0, idx).trim();\n+        const value = line.slice(idx + 1).trim();\n+        if (/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) && value) {\n           headers[name] = value;\n         }\n       });"
+  },
+  {
+   "filename": "src/libs/request.test.js",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -215,4 +215,38 @@ describe(\"fetchGM\", () => {\n       statusText: \"OK\",\n     });\n   });\n+\n+  test(\"keeps header values that contain colons and skips invalid names\", async () => {\n+    let requestDetails;\n+    global.GM = {\n+      xmlHttpRequest: jest.fn((details) => {\n+        requestDetails = details;\n+        return { abort: jest.fn() };\n+      }),\n+    };\n+\n+    const request = fetchGM(\"https://example.test\");\n+    requestDetails.onload.call({\n+      response: \"\",\n+      responseHeaders: [\n+        \"HTTP/1.1 200 OK\",\n+        \"location: https://example.test/a:b\",\n+        \"date: Tue, 17 Nov 2026 10:20:30 GMT\",\n+        \"content-type: text/plain\",\n+        \"muidb=ABC123; expires=Tue, 14-Dec-2027 01:39:32 GMT; path=/\",\n+        \"\",\n+      ].join(\"\\r\\n\"),\n+      status: 200,\n+      statusText: \"OK\",\n+    });\n+\n+    const res = await request;\n+    expect(res.headers).toEqual({\n+      location: \"https://example.test/a:b\",\n+      date: \"Tue, 17 Nov 2026 10:20:30 GMT\",\n+      \"content-type\": \"text/plain\",\n+    });\n+    // A Set-Cookie continuation line must not become an invalid header name.\n+    expect(() => new Headers(res.headers)).not.toThrow();\n+  });\n });"
+  }
+ ],
+ "test_files": [
+  "src/libs/request.test.js"
+ ]
+}

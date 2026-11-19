@@ -1,0 +1,57 @@
+{
+ "repo": "redis/redis-vl-python",
+ "number": 850,
+ "url": "https://github.com/redis/redis-vl-python/pull/850",
+ "title": "fix(schema): keep training_threshold when loading SVS-VAMANA index from FT.INFO",
+ "merged_at": "2026-11-19T08:47:23Z",
+ "files": [
+  {
+   "filename": "redisvl/redis/connection.py",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -688,6 +688,15 @@ def parse_vector_attrs(attrs):\n             except (ValueError, TypeError):\n                 pass\n \n+        if \"training_threshold\" in vector_attrs:\n+            # FT.INFO reports the server default when none was set; keep it unset.\n+            try:\n+                training_threshold = int(vector_attrs[\"training_threshold\"])\n+            except (ValueError, TypeError):\n+                training_threshold = None\n+            if training_threshold not in (None, 10 * 1024):\n+                normalized[\"training_threshold\"] = training_threshold\n+\n         if index_missing:\n             normalized[\"index_missing\"] = True\n "
+  },
+  {
+   "filename": "redisvl/schema/fields.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -311,6 +311,9 @@ def validate_svs_params(self):\n                 f\"Unsupported types: BFLOAT16, FLOAT64, INT8, UINT8.\"\n             )\n \n+        if self.training_threshold is not None and self.compression is None:\n+            raise ValueError(\"training_threshold requires compression to be set\")\n+\n         # Reduce validation: must be less than dims and only valid with LeanVec\n         if self.reduce is not None:\n             if self.reduce >= self.dims:"
+  },
+  {
+   "filename": "tests/integration/test_svs_integration.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -337,6 +337,8 @@ def test_from_existing_lvq(self, svs_index_lvq, client):\n         assert embedding_field.attrs.algorithm.value == \"SVS-VAMANA\"\n         assert embedding_field.attrs.compression.value == \"LVQ4x4\"\n         assert embedding_field.attrs.dims == 384\n+        # server default is reported by FT.INFO but must load as unset\n+        assert embedding_field.attrs.training_threshold is None\n \n         # Verify data is accessible\n         info = loaded_index.info()"
+  },
+  {
+   "filename": "tests/unit/test_convert_index_info.py",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 10,
+   "patch": "@@ -1,12 +1,14 @@\n \"\"\"Unit tests for convert_index_info_to_schema function.\"\"\"\n \n+import pytest\n+\n from redisvl.redis.connection import convert_index_info_to_schema\n from redisvl.schema import IndexSchema\n \n \n-def test_convert_index_info_svs_no_compression():\n-    \"\"\"Redis 8.2+ reports an uncompressed SVS-VAMANA field as NO_COMPRESSION.\"\"\"\n-    index_info = {\n+def svs_info(*tail):\n+    \"\"\"FT.INFO reply for an SVS-VAMANA field with the given trailing attributes.\"\"\"\n+    return {\n         \"index_name\": \"svs\",\n         \"index_definition\": [\"key_type\", \"HASH\", \"prefixes\", [\"svs\"]],\n         \"attributes\": [\n@@ -26,19 +28,41 @@ def test_convert_index_info_svs_no_compression():\n                 \"distance_metric\",\n                 \"COSINE\",\n                 \"graph_max_degree\",\n-                40,\n+                32,\n                 \"construction_window_size\",\n-                250,\n-                \"compression\",\n-                \"NO_COMPRESSION\",\n+                200,\n+                *tail,\n             ]\n         ],\n     }\n \n-    result = convert_index_info_to_schema(index_info)\n \n-    assert \"compression\" not in result[\"fields\"][0][\"attrs\"]\n-    assert IndexSchema.from_dict(result).fields[\"emb\"].attrs.compression is None\n+@pytest.mark.parametrize(\n+    \"tail, compression, threshold\",\n+    [\n+        ([\"compression\", \"NO_COMPRESSION\"], None, None),\n+        ([\"compression\", \"GlobalSQ8\", \"training_threshold\", 2048], \"LVQ4x4\", 2048),\n+        ([\"compression\", \"GlobalSQ8\", \"training_threshold\", 10240], \"LVQ4x4\", None),\n+    ],\n+)\n+def test_convert_index_info_svs_compression(tail, compression, threshold):\n+    \"\"\"Redis 8.2+ reply shapes; the reported default threshold (10240) loads as unset.\"\"\"\n+    result = convert_index_info_to_schema(svs_info(*tail))\n+\n+    attrs = IndexSchema.from_dict(result).fields[\"emb\"].attrs\n+    assert attrs.compression == compression\n+    assert attrs.training_threshold == threshold\n+\n+\n+def test_reported_default_threshold_matches_unset_target():\n+    \"\"\"A live default (10240) must not make a target without it look different.\"\"\"\n+    from redisvl.migration.utils import schemas_equal\n+\n+    live = convert_index_info_to_schema(\n+        svs_info(\"compression\", \"GlobalSQ8\", \"training_threshold\", 10240)\n+    )\n+    target = convert_index_info_to_schema(svs_info(\"compression\", \"GlobalSQ8\"))\n+    assert schemas_equal(target, live, strip_excluded=True)\n \n \n def test_convert_index_info_single_prefix():"
+  },
+  {
+   "filename": "tests/unit/test_migration_planner.py",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -1,6 +1,7 @@\n from fnmatch import fnmatch\n from unittest.mock import MagicMock\n \n+import pytest\n import yaml\n from redis.client import Redis\n \n@@ -1318,6 +1319,32 @@ def test_expected_source_count_uses_scanned_target_keys(self, monkeypatch):\n         assert validation.errors == []\n \n \n+def test_merge_patch_rejects_training_threshold_without_compression():\n+    \"\"\"Dropping compression while the source keeps training_threshold is invalid.\"\"\"\n+    source_schema = IndexSchema.from_dict(\n+        {\n+            \"index\": {\"name\": \"test_idx\", \"prefix\": \"test\"},\n+            \"fields\": [\n+                {\n+                    \"name\": \"v\",\n+                    \"type\": \"vector\",\n+                    \"attrs\": {\n+                        \"algorithm\": \"svs-vamana\",\n+                        \"dims\": 8,\n+                        \"compression\": \"LVQ8\",\n+                        \"training_threshold\": 2048,\n+                    },\n+                }\n+            ],\n+        }\n+    )\n+    patch = SchemaPatch(\n+        changes={\"update_fields\": [{\"name\": \"v\", \"attrs\": {\"compression\": None}}]}\n+    )\n+    with pytest.raises(ValueError, match=\"training_threshold requires compression\"):\n+        MigrationPlanner().merge_patch(source_schema, patch)\n+\n+\n def test_merge_patch_preserves_svs_vamana_compression():\n     \"\"\"Test MigrationPlanner.merge_patch preserves SVS-VAMANA compression.\"\"\"\n     source_schema = IndexSchema.from_dict("
+  },
+  {
+   "filename": "tests/unit/test_validation.py",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -876,6 +876,31 @@ def test_svs_vamana_reduce_with_lvq4_raises_error(self):\n         ):\n             IndexSchema.from_dict(schema_dict)\n \n+    def test_svs_vamana_training_threshold_without_compression_raises_error(self):\n+        \"\"\"Test SVS-VAMANA rejects training_threshold without compression.\"\"\"\n+        schema_dict = {\n+            \"index\": {\n+                \"name\": \"test-svs-index\",\n+                \"prefix\": \"test\",\n+                \"storage_type\": \"hash\",\n+            },\n+            \"fields\": [\n+                {\n+                    \"name\": \"embedding\",\n+                    \"type\": \"vector\",\n+                    \"attrs\": {\n+                        \"algorithm\": \"svs-vamana\",\n+                        \"dims\": 768,\n+                        \"datatype\": \"float32\",\n+                        \"distance_metric\": \"cosine\",\n+                        \"training_threshold\": 2048,\n+                    },\n+                }\n+            ],\n+        }\n+        with pytest.raises(Exception, match=\"training_threshold requires compression\"):\n+            IndexSchema.from_dict(schema_dict)\n+\n     def test_svs_vamana_reduce_without_compression_raises_error(self):\n         \"\"\"Test SVS-VAMANA rejects reduce parameter without compression.\"\"\"\n         schema_dict = {"
+  }
+ ],
+ "test_files": [
+  "tests/integration/test_svs_integration.py",
+  "tests/unit/test_convert_index_info.py",
+  "tests/unit/test_migration_planner.py",
+  "tests/unit/test_validation.py"
+ ]
+}

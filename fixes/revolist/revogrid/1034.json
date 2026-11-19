@@ -1,0 +1,34 @@
+{
+ "repo": "revolist/revogrid",
+ "number": 1034,
+ "url": "https://github.com/revolist/revogrid/pull/1034",
+ "title": "fix(clipboard): emit replaced paste data in afterpasteapply",
+ "merged_at": "2026-11-19T15:01:22Z",
+ "files": [
+  {
+   "filename": "e2e/clipboard.spec.ts",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 0,
+   "patch": "@@ -116,6 +116,29 @@ test.describe('clipboard', () => {\n     await expect(dataCell(page, 2, 2)).toHaveText('PM');\n   });\n \n+  test('emits afterpasteapply with the replaced paste data', async ({ page }) => {\n+    await mountGrid(page, {\n+      columns: basicColumns(['id', 'name', 'role']),\n+      source: SAMPLE_ROWS.trio,\n+      range: true,\n+    });\n+    await page.evaluate(() => {\n+      const grid = document.querySelector('revo-grid') as HTMLElement;\n+      (window as any).__afterPaste = null;\n+      grid.addEventListener('beforepasteapply', (e: Event) => {\n+        (e as CustomEvent).detail.parsed = [['Replaced']];\n+      });\n+      grid.addEventListener('afterpasteapply', (e: Event) => {\n+        (window as any).__afterPaste = (e as CustomEvent).detail.parsed;\n+      });\n+    });\n+    await setCellsFocus(page, { x: 1, y: 1 });\n+    await dispatchClipboardEvent(page, 'paste', 'Nia\\tQA');\n+\n+    await expect(dataCell(page, 1, 1)).toHaveText('Replaced');\n+    expect(await page.evaluate(() => (window as any).__afterPaste)).toEqual([['Replaced']]);\n+  });\n+\n   test('cuts the selected range as tabular text and clears the source cells', async ({ page }) => {\n     await mountGrid(page, {\n       columns: basicColumns(['id', 'name', 'role']),"
+  },
+  {
+   "filename": "src/components/clipboard/revogr-clipboard.tsx",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -159,7 +159,7 @@ export class Clipboard {\n     // post paste action\n     const afterPasteApply = this.afterPasteApply.emit({\n       raw: data,\n-      parsed: parsedData,\n+      parsed: beforePasteApply.detail.parsed,\n       dataText,\n       event: e,\n     });"
+  },
+  {
+   "filename": "test/clipboard.spec.ts",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -52,3 +52,37 @@ describe('clipboard tabular text', () => {\n     ]);\n   });\n });\n+\n+describe('clipboard paste events', () => {\n+  it('emits afterpasteapply with the data replaced in beforepasteapply', () => {\n+    const clipboard = new Clipboard();\n+    const replaced = [['replaced']];\n+    const pasteRegion = jest.fn();\n+    const afterPasteApply = jest.fn(payload => ({\n+      detail: payload,\n+      defaultPrevented: false,\n+    }));\n+    (clipboard as any).beforePaste = {\n+      emit: jest.fn(p => ({ detail: p, defaultPrevented: false })),\n+    };\n+    (clipboard as any).beforePasteApply = {\n+      emit: jest.fn(p => ({\n+        detail: { ...p, parsed: replaced },\n+        defaultPrevented: false,\n+      })),\n+    };\n+    (clipboard as any).pasteRegion = { emit: pasteRegion };\n+    (clipboard as any).afterPasteApply = { emit: afterPasteApply };\n+\n+    clipboard.onPaste({\n+      clipboardData: {\n+        types: ['text/plain'],\n+        getData: () => 'original',\n+      },\n+      preventDefault: jest.fn(),\n+    } as unknown as ClipboardEvent);\n+\n+    expect(pasteRegion).toHaveBeenCalledWith(replaced);\n+    expect(afterPasteApply.mock.calls[0][0].parsed).toBe(replaced);\n+  });\n+});"
+  }
+ ],
+ "test_files": [
+  "e2e/clipboard.spec.ts",
+  "test/clipboard.spec.ts"
+ ]
+}

@@ -1,0 +1,40 @@
+{
+ "repo": "Unstructured-IO/unstructured-ingest",
+ "number": 836,
+ "url": "https://github.com/Unstructured-IO/unstructured-ingest/pull/836",
+ "title": "fix(weaviate): normalize staged metadata dates to UTC",
+ "merged_at": "2026-11-19T19:41:01Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -1,3 +1,9 @@\n+## [1.12.5]\n+\n+### Fixes\n+\n+- **Preserve UTC instants when staging Weaviate metadata dates.** Epoch timestamps no longer depend on the host timezone, and dates with explicit offsets are converted to UTC before formatting with a `Z` suffix. Dates without a timezone continue to be treated as UTC.\n+\n ## [1.12.4]\n \n ### Fixes"
+  },
+  {
+   "filename": "test/unit/connectors/weaviate/test_weaviate_stager.py",
+   "status": "added",
+   "additions": 61,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,61 @@\n+import time\n+\n+import pytest\n+\n+from unstructured_ingest.data_types.file_data import FileData, SourceIdentifiers\n+from unstructured_ingest.processes.connectors.weaviate.weaviate import (\n+    WeaviateUploadStager,\n+    WeaviateUploadStagerConfig,\n+)\n+\n+\n+@pytest.fixture\n+def non_utc_timezone(monkeypatch):\n+    if not hasattr(time, \"tzset\"):\n+        pytest.skip(\"time.tzset is unavailable\")\n+    with monkeypatch.context() as patch:\n+        patch.setenv(\"TZ\", \"EST5EDT\")\n+        time.tzset()\n+        try:\n+            yield\n+        finally:\n+            patch.undo()\n+            time.tzset()\n+\n+\n+@pytest.mark.parametrize(\"flatten_metadata\", [False, True])\n+@pytest.mark.parametrize(\n+    \"value, expected\",\n+    [\n+        (\"1700000000\", \"2023-11-14T22:13:20.000000Z\"),\n+        (\"1700000000.25\", \"2023-11-14T22:13:20.250000Z\"),\n+        (\"2023-11-15T03:43:20+05:30\", \"2023-11-14T22:13:20.000000Z\"),\n+        (\"2023-11-14T17:13:20-05:00\", \"2023-11-14T22:13:20.000000Z\"),\n+        (\"2023-11-14T22:13:20Z\", \"2023-11-14T22:13:20.000000Z\"),\n+        (\"2023-11-14T22:13:20\", \"2023-11-14T22:13:20.000000Z\"),\n+    ],\n+)\n+def test_staged_dates_are_utc(non_utc_timezone, flatten_metadata, value, expected):\n+    stager = WeaviateUploadStager(\n+        upload_stager_config=WeaviateUploadStagerConfig(\n+            flatten_metadata=flatten_metadata, auto_schema=True\n+        )\n+    )\n+    file_data = FileData(\n+        source_identifiers=SourceIdentifiers(fullpath=\"x.txt\", filename=\"x.txt\"),\n+        connector_type=\"weaviate\",\n+        identifier=\"rec-123\",\n+    )\n+    source_dates = dict.fromkeys((\"date_created\", \"date_modified\", \"date_processed\"), value)\n+    result = stager.conform_dict(\n+        {\"metadata\": {\"data_source\": source_dates, \"last_modified\": value}}, file_data\n+    )\n+\n+    if flatten_metadata:\n+        for field in source_dates:\n+            assert result[f\"data_source_{field}\"] == expected\n+        assert result[\"last_modified\"] == expected\n+    else:\n+        for field in source_dates:\n+            assert result[\"metadata\"][\"data_source\"][field] == expected\n+        assert result[\"metadata\"][\"last_modified\"] == expected"
+  },
+  {
+   "filename": "unstructured_ingest/__version__.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -1 +1 @@\n-__version__ = \"1.12.4\"  # pragma: no cover\n+__version__ = \"1.12.5\"  # pragma: no cover"
+  },
+  {
+   "filename": "unstructured_ingest/processes/connectors/weaviate/weaviate.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 4,
+   "patch": "@@ -3,7 +3,7 @@\n from abc import ABC, abstractmethod\n from contextlib import contextmanager\n from dataclasses import dataclass, field\n-from datetime import date, datetime\n+from datetime import datetime, timezone\n from pathlib import Path\n from typing import TYPE_CHECKING, Any, Generator, Optional\n \n@@ -91,13 +91,16 @@ class WeaviateUploadStager(UploadStager):\n     )\n \n     @staticmethod\n-    def parse_date_string(date_string: str) -> date:\n+    def parse_date_string(date_string: str) -> datetime:\n         try:\n             timestamp = float(date_string)\n-            return datetime.fromtimestamp(timestamp)\n+            return datetime.fromtimestamp(timestamp, tz=timezone.utc)\n         except Exception as e:\n             logger.debug(f\"date {date_string} string not a timestamp: {e}\")\n-        return parser.parse(date_string)\n+        parsed = parser.parse(date_string)\n+        if parsed.tzinfo is None:\n+            return parsed.replace(tzinfo=timezone.utc)\n+        return parsed.astimezone(timezone.utc)\n \n     def conform_dict(self, element_dict: dict, file_data: FileData) -> dict:\n         \"\"\""
+  }
+ ],
+ "test_files": [
+  "test/unit/connectors/weaviate/test_weaviate_stager.py"
+ ]
+}

@@ -1,0 +1,40 @@
+{
+ "repo": "Unstructured-IO/unstructured-ingest",
+ "number": 837,
+ "url": "https://github.com/Unstructured-IO/unstructured-ingest/pull/837",
+ "title": "fix(bedrock): invoke embedding inference profiles through modelId",
+ "merged_at": "2026-11-19T19:35:36Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -1,3 +1,9 @@\n+## [1.12.3]\n+\n+### Fixes\n+\n+- Send Bedrock inference profile IDs and ARNs as `modelId` for synchronous and asynchronous embeddings, avoiding an unsupported `inferenceProfileId` request parameter. Keep the configured embedding model for provider-specific request and response formatting.\n+\n ## [1.12.2]\n \n ### Fixes"
+  },
+  {
+   "filename": "test/unit/embedders/test_bedrock.py",
+   "status": "modified",
+   "additions": 76,
+   "deletions": 0,
+   "patch": "@@ -56,3 +56,79 @@ def test_inference_profile_manual():\n         inference_profile_id=\"manual-profile\",\n     )\n     assert config.inference_profile_id == \"manual-profile\"\n+\n+\n+@pytest.mark.parametrize(\"asynchronous\", [False, True])\n+@pytest.mark.parametrize(\"model_name\", [\"amazon.titan-embed-text-v2:0\", \"cohere.embed-english-v3\"])\n+@pytest.mark.parametrize(\n+    \"profile\",\n+    [\n+        None,\n+        \"us.amazon.titan-embed-text-v2:0\",\n+        \"arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/test\",\n+    ],\n+)\n+def test_invoke_model_with_inference_profile(\n+    asynchronous: bool, model_name: str, profile: str | None\n+):\n+    import asyncio\n+    import json\n+    from contextlib import asynccontextmanager\n+    from io import BytesIO\n+\n+    from botocore.session import Session\n+    from botocore.validate import validate_parameters\n+\n+    from unstructured_ingest.embed.bedrock import AsyncBedrockEmbeddingEncoder\n+\n+    config = BedrockEmbeddingConfig(model_name=model_name, inference_profile_id=profile)\n+    shape = (\n+        Session().get_service_model(\"bedrock-runtime\").operation_model(\"InvokeModel\").input_shape\n+    )\n+    cohere = model_name.startswith(\"cohere.\")\n+    payload = {\"embeddings\": [[1.0]]} if cohere else {\"embedding\": [1.0]}\n+    calls = []\n+\n+    def validate_request(params: dict) -> None:\n+        validate_parameters(params, shape)\n+        assert params[\"modelId\"] == (profile or model_name)\n+        expected_body = (\n+            {\"texts\": [\"hello\"], \"input_type\": \"search_document\"}\n+            if cohere\n+            else {\"inputText\": \"hello\"}\n+        )\n+        assert json.loads(params[\"body\"]) == expected_body\n+        calls.append(params)\n+\n+    class SyncClient:\n+        def invoke_model(self, **params):\n+            validate_request(params)\n+            return {\"body\": BytesIO(json.dumps(payload).encode())}\n+\n+    class AsyncBody:\n+        async def __aenter__(self):\n+            return self\n+\n+        async def __aexit__(self, *args):\n+            pass\n+\n+        async def json(self):\n+            return payload\n+\n+    class AsyncClient:\n+        async def invoke_model(self, **params):\n+            validate_request(params)\n+            return {\"body\": AsyncBody()}\n+\n+    @asynccontextmanager\n+    async def get_async_client(self):\n+        yield AsyncClient()\n+\n+    if asynchronous:\n+        with patch.object(BedrockEmbeddingConfig, \"get_async_client\", get_async_client):\n+            result = asyncio.run(AsyncBedrockEmbeddingEncoder(config=config).embed_query(\"hello\"))\n+    else:\n+        with patch.object(BedrockEmbeddingConfig, \"get_client\", return_value=SyncClient()):\n+            result = BedrockEmbeddingEncoder(config=config).embed_query(\"hello\")\n+    assert result == [1.0]\n+    assert len(calls) == 1"
+  },
+  {
+   "filename": "unstructured_ingest/__version__.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -1 +1 @@\n-__version__ = \"1.12.2\"  # pragma: no cover\n+__version__ = \"1.12.3\"  # pragma: no cover"
+  },
+  {
+   "filename": "unstructured_ingest/embed/bedrock.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 13,
+   "patch": "@@ -33,7 +33,6 @@ def invoke_model(\n             modelId: str,\n             accept: str,\n             contentType: str,\n-            inferenceProfileId: str = None,\n         ) -> dict:\n             pass\n \n@@ -44,7 +43,6 @@ async def invoke_model(\n             modelId: str,\n             accept: str,\n             contentType: str,\n-            inferenceProfileId: str = None,\n         ) -> dict:\n             pass\n \n@@ -90,7 +88,7 @@ class BedrockEmbeddingConfig(EmbeddingConfig):\n         description=\"AWS Bedrock model name\",\n     )\n     inference_profile_id: str | None = Field(\n-        description=\"AWS Bedrock inference profile ID\",\n+        description=\"AWS Bedrock inference profile ID or ARN\",\n         default_factory=lambda: os.getenv(\"BEDROCK_INFERENCE_PROFILE_ID\"),\n     )\n \n@@ -234,15 +232,11 @@ def embed_query(self, query: str) -> list[float]:\n         try:\n             invoke_params = {\n                 \"body\": json.dumps(body),\n-                \"modelId\": self.config.embedder_model_name,\n+                \"modelId\": self.config.inference_profile_id or self.config.embedder_model_name,\n                 \"accept\": \"application/json\",\n                 \"contentType\": \"application/json\",\n             }\n \n-            # Add inference profile if configured\n-            if self.config.inference_profile_id:\n-                invoke_params[\"inferenceProfileId\"] = self.config.inference_profile_id\n-\n             response = bedrock_client.invoke_model(**invoke_params)\n         except Exception as e:\n             raise self.wrap_error(e=e)\n@@ -286,15 +280,12 @@ async def embed_query(self, query: str) -> list[float]:\n                 try:\n                     invoke_params = {\n                         \"body\": json.dumps(body),\n-                        \"modelId\": self.config.embedder_model_name,\n+                        \"modelId\": self.config.inference_profile_id\n+                        or self.config.embedder_model_name,\n                         \"accept\": \"application/json\",\n                         \"contentType\": \"application/json\",\n                     }\n \n-                    # Add inference profile if configured\n-                    if self.config.inference_profile_id:\n-                        invoke_params[\"inferenceProfileId\"] = self.config.inference_profile_id\n-\n                     response = await bedrock_client.invoke_model(**invoke_params)\n                 except Exception as e:\n                     raise self.wrap_error(e=e)"
+  }
+ ],
+ "test_files": [
+  "test/unit/embedders/test_bedrock.py"
+ ]
+}

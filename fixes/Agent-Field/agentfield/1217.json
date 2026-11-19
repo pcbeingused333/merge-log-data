@@ -1,0 +1,40 @@
+{
+ "repo": "Agent-Field/agentfield",
+ "number": 1217,
+ "url": "https://github.com/Agent-Field/agentfield/pull/1217",
+ "title": "fix(sdk-go): honor the Retry-After header on 429 responses",
+ "merged_at": "2026-11-19T14:03:57Z",
+ "files": [
+  {
+   "filename": "sdk/go/ai/client.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -202,7 +202,7 @@ func (c *Client) sendRequest(ctx context.Context, req *Request, body []byte) (*R\n \n \t// Check for errors\n \tif httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {\n-\t\treturn nil, newAPIError(httpResp.StatusCode, respBody)\n+\t\treturn nil, newAPIErrorFromResponse(httpResp, respBody)\n \t}\n \n \t// Parse response\n@@ -273,7 +273,7 @@ func (c *Client) openStream(ctx context.Context, req *Request, body []byte) (*ht\n \t\trespBody, _ := io.ReadAll(httpResp.Body)\n \t\thttpResp.Body.Close()\n \t\tcancel()\n-\t\treturn nil, nil, newAPIError(httpResp.StatusCode, respBody)\n+\t\treturn nil, nil, newAPIErrorFromResponse(httpResp, respBody)\n \t}\n \treturn httpResp, cancel, nil\n }"
+  },
+  {
+   "filename": "sdk/go/ai/errors.go",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -3,6 +3,10 @@ package ai\n import (\n \t\"encoding/json\"\n \t\"fmt\"\n+\t\"net/http\"\n+\t\"strconv\"\n+\t\"strings\"\n+\t\"time\"\n )\n \n const maxAPIErrorBody = 4 << 10\n@@ -18,6 +22,9 @@ type APIError struct {\n \tType       string\n \tCode       string\n \tBody       []byte\n+\t// RetryAfter is the delay requested by the provider via the Retry-After\n+\t// response header, or zero when absent or unparseable.\n+\tRetryAfter time.Duration\n }\n \n // Error returns a human-readable description including the HTTP status.\n@@ -55,3 +62,32 @@ func newAPIError(statusCode int, body []byte) *APIError {\n \tapiErr.Body = append([]byte(nil), body...)\n \treturn apiErr\n }\n+\n+// newAPIErrorFromResponse builds an APIError and records the Retry-After\n+// header of resp so rate-limit handling can honor the provider's hint.\n+func newAPIErrorFromResponse(resp *http.Response, body []byte) *APIError {\n+\tapiErr := newAPIError(resp.StatusCode, body)\n+\tapiErr.RetryAfter = parseRetryAfter(resp.Header.Get(\"Retry-After\"), time.Now())\n+\treturn apiErr\n+}\n+\n+// parseRetryAfter parses a Retry-After header value, which is either a number\n+// of seconds or an HTTP date. It returns 0 for empty, invalid, or past values.\n+func parseRetryAfter(value string, now time.Time) time.Duration {\n+\tvalue = strings.TrimSpace(value)\n+\tif value == \"\" {\n+\t\treturn 0\n+\t}\n+\tif secs, err := strconv.ParseFloat(value, 64); err == nil {\n+\t\tif secs > 0 {\n+\t\t\treturn time.Duration(secs * float64(time.Second))\n+\t\t}\n+\t\treturn 0\n+\t}\n+\tif when, err := http.ParseTime(value); err == nil {\n+\t\tif d := when.Sub(now); d > 0 {\n+\t\t\treturn d\n+\t\t}\n+\t}\n+\treturn 0\n+}"
+  },
+  {
+   "filename": "sdk/go/ai/errors_test.go",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -2,8 +2,12 @@ package ai\n \n import (\n \t\"bytes\"\n+\t\"context\"\n \t\"errors\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n \t\"testing\"\n+\t\"time\"\n \n \t\"github.com/stretchr/testify/require\"\n )\n@@ -17,3 +21,33 @@ func TestAPIErrorCapsUnparseableBody(t *testing.T) {\n \trequire.Len(t, apiErr.Body, maxAPIErrorBody)\n \trequire.True(t, errors.Is(err, &APIError{StatusCode: 502}))\n }\n+\n+func TestAPIErrorCarriesRetryAfterHeader(t *testing.T) {\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tw.Header().Set(\"Retry-After\", \"7\")\n+\t\tw.WriteHeader(http.StatusTooManyRequests)\n+\t\t_, _ = w.Write([]byte(`{\"error\":{\"message\":\"slow down\",\"type\":\"rate_limit_error\"}}`))\n+\t}))\n+\tdefer server.Close()\n+\n+\tclient, err := NewClient(&Config{APIKey: \"k\", BaseURL: server.URL, Model: \"m\"})\n+\trequire.NoError(t, err)\n+\n+\t_, err = client.Complete(context.Background(), \"hi\")\n+\tvar apiErr *APIError\n+\trequire.ErrorAs(t, err, &apiErr)\n+\trequire.Equal(t, 7*time.Second, apiErr.RetryAfter)\n+\trequire.Equal(t, 7*time.Second, retryAfterFromError(err))\n+}\n+\n+func TestParseRetryAfter(t *testing.T) {\n+\tnow := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)\n+\trequire.Equal(t, time.Duration(0), parseRetryAfter(\"\", now))\n+\trequire.Equal(t, time.Duration(0), parseRetryAfter(\"soon\", now))\n+\trequire.Equal(t, time.Duration(0), parseRetryAfter(\"-3\", now))\n+\trequire.Equal(t, 30*time.Second, parseRetryAfter(\"30\", now))\n+\trequire.Equal(t, 90*time.Second,\n+\t\tparseRetryAfter(now.Add(90*time.Second).Format(http.TimeFormat), now))\n+\trequire.Equal(t, time.Duration(0),\n+\t\tparseRetryAfter(now.Add(-time.Minute).Format(http.TimeFormat), now))\n+}"
+  },
+  {
+   "filename": "sdk/go/ai/rate_limiter.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -367,13 +367,16 @@ func isRateLimitError(err error) bool {\n \treturn false\n }\n \n-// retryAfterFromError extracts a Retry-After hint from an APIError body when the\n-// provider surfaces one. It returns 0 when no usable value is present.\n+// retryAfterFromError extracts a Retry-After hint from an APIError: the\n+// Retry-After response header when present, else a numeric error code. It returns 0 when no usable value is present.\n func retryAfterFromError(err error) time.Duration {\n \tvar apiErr *APIError\n \tif !errors.As(err, &apiErr) {\n \t\treturn 0\n \t}\n+\tif apiErr.RetryAfter > 0 {\n+\t\treturn apiErr.RetryAfter\n+\t}\n \tif apiErr.Code == \"\" {\n \t\treturn 0\n \t}"
+  }
+ ],
+ "test_files": [
+  "sdk/go/ai/errors_test.go"
+ ]
+}

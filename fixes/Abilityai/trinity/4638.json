@@ -1,0 +1,26 @@
+{
+ "repo": "Abilityai/trinity",
+ "number": 4638,
+ "url": "https://github.com/Abilityai/trinity/pull/4638",
+ "title": "fix(frontend): render Speech provider options in Direct calls settings",
+ "merged_at": "2026-11-19T14:48:05Z",
+ "files": [
+  {
+   "filename": "src/frontend/src/components/settings/DirectVoiceSettings.vue",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 2,
+   "patch": "@@ -16,11 +16,12 @@\n         Speech provider\n         <BaseSelect\n           :model-value=\"state.provider\"\n-          :options=\"PROVIDERS\"\n           :disabled=\"saving\"\n           data-testid=\"direct-voice-provider\"\n           @update:model-value=\"save({ provider: $event })\"\n-        />\n+        >\n+          <option v-for=\"p in PROVIDERS\" :key=\"p.value\" :value=\"p.value\">{{ p.label }}</option>\n+        </BaseSelect>\n       </label>\n     </div>\n     <p"
+  },
+  {
+   "filename": "src/frontend/tests/unit/directVoiceSettings.spec.js",
+   "status": "added",
+   "additions": 43,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,43 @@\n+// @vitest-environment jsdom\n+/**\n+ * #4588 — Settings > Direct calls: the \"Speech provider\" select rendered with\n+ * no options, because BaseSelect takes its <option>s through the default slot\n+ * and has no `options` prop (the `:options` binding fell through as an\n+ * attribute). Mount the real component and assert the options exist.\n+ */\n+import { beforeEach, describe, expect, it, vi } from 'vitest'\n+import { mount, flushPromises } from '@vue/test-utils'\n+import { createPinia, setActivePinia } from 'pinia'\n+import DirectVoiceSettings from '../../src/components/settings/DirectVoiceSettings.vue'\n+import { useSettingsStore } from '../../src/stores/settings'\n+\n+describe('DirectVoiceSettings speech provider select', () => {\n+  let store\n+  beforeEach(() => {\n+    setActivePinia(createPinia())\n+    store = useSettingsStore()\n+    store.getDirectVoiceSettings = vi.fn().mockResolvedValue({\n+      enabled: true, provider: 'gemini', ready_provider: 'gemini', reason: null,\n+    })\n+    store.setDirectVoiceSettings = vi.fn().mockImplementation(async (p) => ({\n+      enabled: true, provider: 'auto', ready_provider: null, reason: null, ...p,\n+    }))\n+  })\n+\n+  it('offers Automatic, Gemini and ElevenLabs and reflects the stored provider', async () => {\n+    const w = mount(DirectVoiceSettings)\n+    await flushPromises()\n+    const select = w.find('[data-testid=\"direct-voice-provider\"]')\n+    const options = select.findAll('option')\n+    expect(options.map((o) => o.attributes('value'))).toEqual(['auto', 'gemini', 'elevenlabs'])\n+    expect(options.map((o) => o.text())).toEqual(['Automatic', 'Gemini', 'ElevenLabs'])\n+    expect(select.element.value).toBe('gemini')\n+  })\n+\n+  it('choosing a provider saves it', async () => {\n+    const w = mount(DirectVoiceSettings)\n+    await flushPromises()\n+    await w.find('[data-testid=\"direct-voice-provider\"]').setValue('elevenlabs')\n+    expect(store.setDirectVoiceSettings).toHaveBeenCalledWith({ provider: 'elevenlabs' })\n+  })\n+})"
+  }
+ ],
+ "test_files": [
+  "src/frontend/tests/unit/directVoiceSettings.spec.js"
+ ]
+}

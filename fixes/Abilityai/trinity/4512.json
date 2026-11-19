@@ -1,0 +1,26 @@
+{
+ "repo": "Abilityai/trinity",
+ "number": 4512,
+ "url": "https://github.com/Abilityai/trinity/pull/4512",
+ "title": "fix(validation): keep JSON response format for custom validation_prompt instructions",
+ "merged_at": "2026-11-19T14:48:18Z",
+ "files": [
+  {
+   "filename": "src/backend/services/validation_service.py",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 17,
+   "patch": "@@ -36,6 +36,27 @@\n logger = logging.getLogger(__name__)\n \n \n+# JSON response contract the parser relies on; shared by the default prompt and\n+# the custom-instructions frame so an operator prompt cannot drop it.\n+_RESPONSE_FORMAT = \"\"\"## Response Format\n+Respond with a JSON object (and nothing else):\n+```json\n+{\n+  \"status\": \"pass\" | \"fail\" | \"partial\",\n+  \"summary\": \"One sentence summary of validation result\",\n+  \"items\": [\n+    {\n+      \"check\": \"What was verified\",\n+      \"result\": \"pass\" | \"fail\",\n+      \"evidence\": \"What was found or not found\"\n+    }\n+  ],\n+  \"recommendation\": \"Action to take if failed (optional)\"\n+}\n+```\"\"\"\n+_RESPONSE_FORMAT_ESCAPED = _RESPONSE_FORMAT.replace(\"{\", \"{{\").replace(\"}\", \"}}\")\n+\n+\n # ---------------------------------------------------------------------------\n # Default validation prompt template\n # ---------------------------------------------------------------------------\n@@ -66,22 +87,7 @@\n 3. Check for completeness — were all parts of the task addressed?\n 4. Look for errors, partial completions, or hallucinated success claims\n \n-## Response Format\n-Respond with a JSON object (and nothing else):\n-```json\n-{{\n-  \"status\": \"pass\" | \"fail\" | \"partial\",\n-  \"summary\": \"One sentence summary of validation result\",\n-  \"items\": [\n-    {{\n-      \"check\": \"What was verified\",\n-      \"result\": \"pass\" | \"fail\",\n-      \"evidence\": \"What was found or not found\"\n-    }}\n-  ],\n-  \"recommendation\": \"Action to take if failed (optional)\"\n-}}\n-```\n+\"\"\" + _RESPONSE_FORMAT_ESCAPED + \"\"\"\n \n Begin your validation now. Remember: you are AUDITING, not executing.\"\"\"\n \n@@ -130,7 +136,9 @@ class ValidationStatus(str, Enum):\n ```\n \n ## Validation Instructions\n-{custom_instructions}\"\"\"\n+{custom_instructions}\n+\n+\"\"\" + _RESPONSE_FORMAT\n \n \n def _substitute(template: str, values: dict) -> str:"
+  },
+  {
+   "filename": "tests/unit/test_validation.py",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -114,6 +114,19 @@ def test_prompt_builder_with_custom_prompt(self):\n         assert \"Check if Test task was done\" in prompt\n         assert \"AUDITOR\" not in prompt  # Custom doesn't include default\n \n+    def test_custom_instructions_keep_json_response_format(self):\n+        \"\"\"Instructions-only custom prompts must still ask for the JSON verdict (#4508).\"\"\"\n+        service = ValidationService()\n+        prompt = service._build_validation_prompt(\n+            original_message=\"Test task\",\n+            execution_response=\"Done\",\n+            custom_prompt=\"Check that the report mentions revenue.\",\n+        )\n+\n+        assert \"Check that the report mentions revenue.\" in prompt\n+        assert \"Respond with a JSON object\" in prompt\n+        assert '\"status\": \"pass\" | \"fail\" | \"partial\"' in prompt\n+\n     def test_prompt_builder_truncates_long_response(self):\n         \"\"\"Long responses should be truncated.\"\"\"\n         service = ValidationService()"
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_validation.py"
+ ]
+}

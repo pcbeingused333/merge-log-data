@@ -1,0 +1,26 @@
+{
+ "repo": "ENTERPILOT/GoModel",
+ "number": 1544,
+ "url": "https://github.com/ENTERPILOT/GoModel/pull/1544",
+ "title": "fix(gemini): count toolUsePromptTokenCount in prompt tokens",
+ "merged_at": "2026-11-19T12:06:45Z",
+ "files": [
+  {
+   "filename": "internal/providers/gemini/gemini_test.go",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -1034,6 +1034,21 @@ func TestChatCompletion_NativeUsageMetadata(t *testing.T) {\n \tassert.Equal(t, 7, resp.Usage.RawUsage[\"completion_reasoning_tokens\"])\n }\n \n+func TestUsageFromGeminiCountsToolUsePromptTokens(t *testing.T) {\n+\tusage := usageFromGemini(geminiUsageMetadata{\n+\t\tPromptTokenCount:        100,\n+\t\tCandidatesTokenCount:    20,\n+\t\tThoughtsTokenCount:      7,\n+\t\tToolUsePromptTokenCount: 30,\n+\t\tTotalTokenCount:         157,\n+\t})\n+\n+\tassert.Equal(t, 130, usage.PromptTokens)\n+\tassert.Equal(t, 27, usage.CompletionTokens)\n+\tassert.Equal(t, 157, usage.TotalTokens)\n+\tassert.Equal(t, 30, usage.RawUsage[\"tool_use_prompt_token_count\"])\n+}\n+\n func TestCopyJSONNumberAcceptsOnlyNumericValues(t *testing.T) {\n \ttests := []struct {\n \t\tname    string"
+  },
+  {
+   "filename": "internal/providers/gemini/native.go",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -1353,7 +1353,10 @@ func openAIMessageFromGeminiParts(parts []geminiPart, ids *toolCallIDs, supplied\n func usageFromGemini(usage geminiUsageMetadata) core.Usage {\n \tcompletionTokens := usage.CandidatesTokenCount + usage.ThoughtsTokenCount\n \tout := core.Usage{\n-\t\tPromptTokens:     usage.PromptTokenCount,\n+\t\t// Tokens fed back by built-in tools (search, url_context, code\n+\t\t// execution) are billed as input and counted in totalTokenCount, but\n+\t\t// reported apart from promptTokenCount.\n+\t\tPromptTokens:     usage.PromptTokenCount + usage.ToolUsePromptTokenCount,\n \t\tCompletionTokens: completionTokens,\n \t\tTotalTokens:      usage.TotalTokenCount,\n \t}"
+  }
+ ],
+ "test_files": [
+  "internal/providers/gemini/gemini_test.go"
+ ]
+}

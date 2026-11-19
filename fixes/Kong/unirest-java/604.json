@@ -1,0 +1,42 @@
+{
+ "repo": "Kong/unirest-java",
+ "number": 604,
+ "url": "https://github.com/Kong/unirest-java/pull/604",
+ "title": "fix: honor Content-Type charset in JavaResponse.getContentReader",
+ "merged_at": "2026-11-19T13:32:17Z",
+ "files": [
+  {
+   "filename": "unirest-bdd-tests/src/test/java/BehaviorTests/MockServer.java",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -79,6 +79,7 @@ public class MockServer {\n     public static final String QUERY = HOST + \"/query\";\n     public static final String DELETE = HOST + \"/delete\";\n     public static final String GZIP = HOST + \"/gzip\";\n+    public static final String LATIN1 = HOST + \"/latin1\";\n     public static final String EMPTY_GZIP = HOST + \"/empty-gzip\";\n     public static final String PATCH = HOST + \"/patch\";\n     public static final String INVALID_REQUEST = HOST + \"/invalid\";\n@@ -139,6 +140,7 @@ public static void reset() {\n             c.routes.get(\"/get\", MockServer::jsonResponse);\n             c.routes.query(\"/query\", MockServer::jsonResponse);\n             c.routes.get(\"/gzip\", MockServer::gzipResponse);\n+            c.routes.get(\"/latin1\", MockServer::latin1Response);\n             c.routes.post(\"/empty-gzip\", MockServer::emptyGzipResponse);\n             c.routes.get(\"/redirect\", MockServer::redirect);\n             c.routes.post(\"/redirect\", MockServer::redirect);\n@@ -279,6 +281,11 @@ private static Object emptyGzipResponse(Context response) throws Exception {\n         return null;\n     }\n \n+    private static void latin1Response(Context context) {\n+        context.contentType(\"text/plain; charset=ISO-8859-1\");\n+        context.result(\"caf\\u00e9\".getBytes(StandardCharsets.ISO_8859_1));\n+    }\n+\n     private static void gzipResponse(Context context) {\n         context.header(\"Content-Encoding\", \"gzip\");\n         jsonResponse(context, true);"
+  },
+  {
+   "filename": "unirest-bdd-tests/src/test/java/BehaviorTests/ObjectFunctionalTest.java",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 0,
+   "patch": "@@ -30,8 +30,10 @@\n import org.junit.jupiter.api.Test;\n import kong.unirest.core.Unirest;\n \n+import java.io.BufferedReader;\n import java.util.HashMap;\n import java.util.Map;\n+import java.util.stream.Collectors;\n \n import static com.google.common.collect.ImmutableMap.of;\n import static org.junit.jupiter.api.Assertions.assertEquals;\n@@ -64,6 +66,25 @@ void canUseAFunctionToTransformAsync() throws Exception {\n         assertEquals(\"bar\", r.get(\"foo\"));\n     }\n \n+    @Test\n+    void contentReaderHonorsCharsetOfContentType() {\n+        var r = Unirest.get(MockServer.LATIN1)\n+                .asObject(i -> new BufferedReader(i.getContentReader()).lines().collect(Collectors.joining()))\n+                .getBody();\n+\n+        assertEquals(\"caf\\u00e9\", r);\n+    }\n+\n+    @Test\n+    void contentReaderHonorsCharsetOfContentTypeAsync() throws Exception {\n+        var r = Unirest.get(MockServer.LATIN1)\n+                .asObjectAsync(i -> new BufferedReader(i.getContentReader()).lines().collect(Collectors.joining()))\n+                .get()\n+                .getBody();\n+\n+        assertEquals(\"caf\\u00e9\", r);\n+    }\n+\n     @Test\n     void willNotStopForParsingExceptions() {\n         MockServer.setStringResponse(\"call me ishmael\");"
+  },
+  {
+   "filename": "unirest/src/main/java/kong/unirest/core/java/JavaResponse.java",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -29,6 +29,7 @@\n \n import java.io.*;\n import java.net.http.HttpResponse;\n+import java.nio.charset.Charset;\n import java.util.zip.GZIPInputStream;\n \n import static kong.unirest.core.HeaderNames.CONTENT_TYPE;\n@@ -145,7 +146,7 @@ private String getCharset(String charset) {\n \n     @Override\n     public InputStreamReader getContentReader() {\n-        return new InputStreamReader(getContent());\n+        return new InputStreamReader(getContent(), Charset.forName(getCharSet()));\n     }\n \n     @Override"
+  },
+  {
+   "filename": "unirest/src/test/java/kong/unirest/core/java/JavaResponseTest.java",
+   "status": "added",
+   "additions": 65,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,65 @@\n+/**\n+ * The MIT License\n+ *\n+ * Copyright for portions of unirest-java are held by Kong Inc (c) 2013.\n+ *\n+ * Permission is hereby granted, free of charge, to any person obtaining\n+ * a copy of this software and associated documentation files (the\n+ * \"Software\"), to deal in the Software without restriction, including\n+ * without limitation the rights to use, copy, modify, merge, publish,\n+ * distribute, sublicense, and/or sell copies of the Software, and to\n+ * permit persons to whom the Software is furnished to do so, subject to\n+ * the following conditions:\n+ *\n+ * The above copyright notice and this permission notice shall be\n+ * included in all copies or substantial portions of the Software.\n+ *\n+ * THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND,\n+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF\n+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND\n+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE\n+ * LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION\n+ * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION\n+ * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.\n+ */\n+\n+\n+package kong.unirest.core.java;\n+\n+import kong.unirest.core.Config;\n+import kong.unirest.core.HttpRequestSummary;\n+import org.junit.jupiter.api.Test;\n+\n+import java.io.ByteArrayInputStream;\n+import java.io.InputStream;\n+import java.net.http.HttpHeaders;\n+import java.net.http.HttpResponse;\n+import java.nio.charset.StandardCharsets;\n+import java.util.List;\n+import java.util.Map;\n+\n+import static org.assertj.core.api.Assertions.assertThat;\n+import static org.mockito.Mockito.mock;\n+import static org.mockito.Mockito.when;\n+\n+class JavaResponseTest {\n+\n+    @Test\n+    void contentReaderHonorsCharsetFromContentType() throws Exception {\n+        HttpResponse<InputStream> http = mock(HttpResponse.class);\n+        when(http.headers()).thenReturn(HttpHeaders.of(\n+                Map.of(\"Content-Type\", List.of(\"text/plain; charset=ISO-8859-1\")), (a, b) -> true));\n+        when(http.body()).thenReturn(new ByteArrayInputStream(\"café\".getBytes(StandardCharsets.ISO_8859_1)));\n+\n+        var response = new JavaResponse(http, new Config(), mock(HttpRequestSummary.class));\n+\n+        try (var reader = response.getContentReader()) {\n+            var sb = new StringBuilder();\n+            int c;\n+            while ((c = reader.read()) != -1) {\n+                sb.append((char) c);\n+            }\n+            assertThat(sb.toString()).isEqualTo(\"caf\\u00e9\");\n+        }\n+    }\n+}"
+  }
+ ],
+ "test_files": [
+  "unirest-bdd-tests/src/test/java/BehaviorTests/MockServer.java",
+  "unirest-bdd-tests/src/test/java/BehaviorTests/ObjectFunctionalTest.java",
+  "unirest/src/test/java/kong/unirest/core/java/JavaResponseTest.java"
+ ]
+}

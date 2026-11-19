@@ -9,6 +9,18 @@
    "state": "COMMENTED",
    "submitted_at": "2026-11-18T23:28:05Z",
    "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-19T19:22:52Z",
+   "body": "Thank you for the contribution. I have a few minor suggestions to tidy this up, otherwise looks good."
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-19T19:24:47Z",
+   "body": ""
   }
  ],
  "review_comments": [
@@ -17,6 +29,36 @@
    "path": "package-lock.json",
    "created_at": "2026-11-18T23:28:05Z",
    "body": "**AIKIDO-2026-531524 in undici** - medium severity\nWhen a client composed the cache interceptor with a downstream handler that threw during cached-response replay, the throw could escape as an uncaught exception or unhandled rejection and terminate the Node.js process. A malicious or compromised HTTP server could trigger this by serving a cacheable response that exceeded `dump`’s configured `maxSize` or had more than five `Content-Encoding` values; stale-entry revalidation could also trigger it.\n\n<details><summary>Details</summary>\n\n**Remediation** Aikido suggests bumping this package to version 8.12.4 to resolve this issue\n\n<sub>Reply `@AikidoSec ignore: [REASON]` to ignore this issue.</sub>\n<sub>[More info](https://app.aikido.dev/repositories/1854557/pull_requests/1300/latest?groupId=85165)</sub>\n</details>"
+  },
+  {
+   "role": "contributor",
+   "path": "libs/services/directory-services/entra-id-directory.service.ts",
+   "created_at": "2026-11-19T17:39:49Z",
+   "body": "This belongs in `libs/utils/nodeUtils.ts` `NodeUtils` class. Then we'll call it in a new function here\n\n```typescript\nprivate getFetchOptions() {\n    return NodeUtils.getProxyUrl() != null\n      ? ({ dispatcher: new EnvHttpProxyAgent() } as RequestInit)\n      : undefined;\n  }\n```"
+  },
+  {
+   "role": "contributor",
+   "path": "libs/services/directory-services/entra-id-directory.service.ts",
+   "created_at": "2026-11-19T19:04:36Z",
+   "body": "Building on the previous comment, we can re-write this as:\n```typescript\nimport { NodeUtils } from \"@/libs/utils/nodeUtils\";\n\n...\n\n  private init() {\n    this.client = Client.init({\n      fetchOptions: this.getFetchOptions(),\n      ...\n    });\n  }\n```"
+  },
+  {
+   "role": "contributor",
+   "path": "libs/services/directory-services/entra-id-directory.service.ts",
+   "created_at": "2026-11-19T19:11:21Z",
+   "body": "We can add another function in `NodeUtils` for this too:\n```typescript\nstatic getProxyAgent(): HttpsProxyAgent<string> | undefined {\n    const proxyUrl = NodeUtils.getProxyUrl();\n    return proxyUrl != null ? new HttpsProxyAgent(proxyUrl) : undefined;\n  }\n```\nand this line just becomes\n```typescript\nagent: NodeUtils.getProxyAgent()\n```\n"
+  },
+  {
+   "role": "contributor",
+   "path": "libs/services/directory-services/entra-id-directory.service.ts",
+   "created_at": "2026-11-19T19:18:53Z",
+   "body": "This will also let us consolidate this check in `NodeApiService`'s `nativeFetch`:\n```typescript\nnativeFetch(request: Request): Promise<Response> {\n    (request as any).agent = NodeUtils.getProxyAgent();\n    return fetch(request);\n  }\n```\nCan you please make this change too?"
+  },
+  {
+   "role": "contributor",
+   "path": "package-lock.json",
+   "created_at": "2026-11-19T19:24:47Z",
+   "body": "@pcbeingused333 Can you please address this version bump? Thank you"
   }
  ],
  "comments": [
@@ -24,6 +66,16 @@
    "role": "none",
    "created_at": "2026-11-18T23:28:08Z",
    "body": "Thank you for your contribution! We've added this to our internal tracking system for review.\nID: PM-47264\nLink: https://bitwarden.atlassian.net/browse/PM-47264\n\nDetails on our contribution process can be found here: https://contributing.bitwarden.com/contributing/pull-requests/community-pr-process."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-19T19:50:24Z",
+   "body": "Thanks @BTreston. Done in the new commit: `getProxyUrl`, `getProxyAgent` and `getFetchOptions` now live in `NodeUtils` (`libs/utils/nodeUtils.ts`) and `EntraIdDirectoryService` calls them (`fetchOptions: NodeUtils.getFetchOptions()`, `agent: NodeUtils.getProxyAgent()`). `undici` is bumped to 8.12.4 in package.json (dependency + override) and the lockfile, per the Aikido note.\n\nI did not change `NodeApiService.nativeFetch`: since #1289 it delegates to Electron's `net.fetch`, which uses Chromium's network stack (system proxy settings and the OS certificate store, which is what fixed the self-hosted CA case). Swapping it for global `fetch` with an `agent` property would drop that behaviour, since Node's `fetch` (undici) ignores `agent`, and it would break the existing spec that asserts the `net.fetch` delegation. If you still want it consolidated, could you say which behaviour you'd like (e.g. `fetch` with `dispatcher: EnvHttpProxyAgent`)?\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-19T20:24:14Z",
+   "body": "## [Codecov](https://app.codecov.io/gh/bitwarden/directory-connector/pull/1300?dropdown=coverage&src=pr&el=h1&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=bitwarden) Report\n:white_check_mark: All modified and coverable lines are covered by tests.\n:white_check_mark: Project coverage is 0.00%. Comparing base ([`de6d86f`](https://app.codecov.io/gh/bitwarden/directory-connector/commit/de6d86f26d3c4be07153476f2a6bdfaa796af0c3?dropdown=coverage&el=desc&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=bitwarden)) to head ([`d0d5b3b`](https://app.codecov.io/gh/bitwarden/directory-connector/commit/d0d5b3b5e2d44e1ed4cc533ea2a1fe5e9d5012fd?dropdown=coverage&el=desc&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=bitwarden)).\n:white_check_mark: All tests successful. No failed tests found.\n\n<details><summary>Additional details and impacted files</summary>\n\n\n\n```diff\n@@     Coverage Diff      @@\n##   main   #1300   +/-   ##\n============================\n============================\n\n```\n</details>\n\n[:umbrella: View full report in Codecov by Harness](https://app.codecov.io/gh/bitwarden/directory-connector/pull/1300?dropdown=coverage&src=pr&el=continue&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=bitwarden).   \n:loudspeaker: Have feedback on the report? [Share it here](https://about.codecov.io/codecov-pr-comment-feedback/?utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=bitwarden).\n<details><summary> :rocket: New features to boost your workflow: </summary>\n\n- :package: [JS Bundle Analysis](https://docs.codecov.com/docs/javascript-bundle-analysis): Save yourself from yourself by tracking and limiting bundle sizes in JS merges.\n</details>"
   }
  ]
 }

@@ -1,0 +1,26 @@
+{
+ "repo": "mamba-org/mamba",
+ "number": 4455,
+ "url": "https://github.com/mamba-org/mamba/pull/4455",
+ "title": "fix: skip malformed process registry JSON files",
+ "merged_at": "2026-11-19T07:59:05Z",
+ "files": [
+  {
+   "filename": "libmamba/src/core/run.cpp",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 1,
+   "patch": "@@ -166,7 +166,20 @@ namespace mamba\n                 continue;\n             }\n \n-            auto running_processes_info = nlohmann::json::parse(pid_file);\n+            nlohmann::json running_processes_info;\n+            try\n+            {\n+                running_processes_info = nlohmann::json::parse(pid_file);\n+            }\n+            catch (const nlohmann::json::parse_error& e)\n+            {\n+                LOG_WARNING << fmt::format(\n+                    \"Failed to parse process record '{}': {}\",\n+                    file_location.string(),\n+                    e.what()\n+                );\n+                continue;\n+            }\n             running_processes_info[\"pid\"] = file_location.filename().replace_extension().string();\n             if (!filter || filter(running_processes_info))\n             {"
+  },
+  {
+   "filename": "micromamba/tests/test_run.py",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 0,
+   "patch": "@@ -1,3 +1,4 @@\n+import json\n import os\n import random\n import shutil\n@@ -74,6 +75,33 @@ def test_basic_succeeds(self, option_flag, make_label_flags):\n         print(res)\n         assert len(res) > 0\n \n+    @pytest.mark.skipif(platform != \"linux\", reason=\"uses XDG_CACHE_HOME\")\n+    @pytest.mark.parametrize(\"record\", [\"\", '{\"name\":'])\n+    @pytest.mark.parametrize(\"label_flags\", [[], [\"--label\", \"new-process\"]])\n+    def test_run_ignores_malformed_process_record(self, tmp_path, monkeypatch, record, label_flags):\n+        monkeypatch.setenv(\"XDG_CACHE_HOME\", str(tmp_path))\n+        proc_dir = tmp_path / \"mamba\" / \"proc\"\n+        proc_dir.mkdir(parents=True)\n+        malformed_record = proc_dir / \"999999.json\"\n+        malformed_record.write_text(record)\n+        valid_record = proc_dir / f\"{os.getpid()}.json\"\n+        valid_record.write_text(\n+            json.dumps(\n+                {\"name\": \"existing-process\", \"command\": [\"true\"], \"prefix\": self.current_prefix}\n+            )\n+        )\n+\n+        assert umamba_run(*label_flags, \"true\") == \"\"\n+        assert malformed_record.read_text() == record\n+        assert json.loads(valid_record.read_text())[\"name\"] == \"existing-process\"\n+\n+        with pytest.raises(subprocess.CalledProcessError) as exc:\n+            umamba_run(\"--label\", \"existing-process\", \"true\")\n+        assert (\n+            \"Another process with name 'existing-process' is currently running.\"\n+            in exc.value.stderr.decode()\n+        )\n+\n     @pytest.mark.skipif(platform == \"win32\", reason=\"bash specific test\")\n     @pytest.mark.parametrize(\"inp\", [\"(\", \"a\\nb\", \"a'b\\\"\"])\n     def test_quoting(self, inp):"
+  }
+ ],
+ "test_files": [
+  "micromamba/tests/test_run.py"
+ ]
+}

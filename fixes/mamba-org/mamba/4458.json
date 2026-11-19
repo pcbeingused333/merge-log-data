@@ -1,0 +1,42 @@
+{
+ "repo": "mamba-org/mamba",
+ "number": 4458,
+ "url": "https://github.com/mamba-org/mamba/pull/4458",
+ "title": "fix: make AND bind tighter than OR in version spec parser",
+ "merged_at": "2026-11-19T10:56:34Z",
+ "files": [
+  {
+   "filename": "libmamba/include/mamba/util/flat_bool_expr_tree.hpp",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 2,
+   "patch": "@@ -126,10 +126,17 @@ namespace mamba::util\n         [[nodiscard]] auto push_operator_impl(O&& op) -> bool;\n     };\n \n+    /**\n+     * Boolean operators, declared in increasing order of precedence.\n+     *\n+     * The default ``InfixParser`` comparator (``std::less<>``) orders operators by their\n+     * enumeration value, so ``logical_and`` must come after ``logical_or`` for ``and`` to bind\n+     * tighter than ``or`` (``a or b and c`` is ``a or (b and c)``).\n+     */\n     enum struct BoolOperator\n     {\n-        logical_and,\n-        logical_or\n+        logical_or,\n+        logical_and\n     };\n \n     template <typename Variable>"
+  },
+  {
+   "filename": "libmamba/tests/src/specs/test_match_spec.cpp",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 4,
+   "patch": "@@ -520,20 +520,20 @@ namespace\n                           .value();\n             REQUIRE(ms.channel().value().str() == \"anaconda\");\n             REQUIRE(ms.name().to_string() == \"numpy\");\n-            REQUIRE(ms.version().to_string() == \">=1.8,(<2|==1.9)\");\n+            REQUIRE(ms.version().to_string() == \"(>=1.8,<2)|==1.9\");\n             REQUIRE(ms.build_string().to_string() == \"3\");\n-            REQUIRE(ms.to_string() == R\"ms(anaconda::numpy[version=\">=1.8,(<2|==1.9)\",build=\"3\"])ms\");\n+            REQUIRE(ms.to_string() == R\"ms(anaconda::numpy[version=\"(>=1.8,<2)|==1.9\",build=\"3\"])ms\");\n         }\n \n         SECTION(\"numpy >1.8,<2|==1.7,!=1.9,~=1.7.1 py34_0\")\n         {\n             auto ms = MatchSpec::parse(R\"(numpy >1.8,<2|==1.7,!=1.9,~=1.7.1 py34_0)\").value();\n             REQUIRE(ms.name().to_string() == \"numpy\");\n-            REQUIRE(ms.version().to_string() == \">1.8,((<2|==1.7),(!=1.9,~=1.7.1))\");\n+            REQUIRE(ms.version().to_string() == \"(>1.8,<2)|(==1.7,(!=1.9,~=1.7.1))\");\n             REQUIRE(ms.build_string().to_string() == \"py34_0\");\n             REQUIRE(\n                 ms.to_string()\n-                == R\"ms(numpy[version=\">1.8,((<2|==1.7),(!=1.9,~=1.7.1))\",build=\"py34_0\"])ms\"\n+                == R\"ms(numpy[version=\"(>1.8,<2)|(==1.7,(!=1.9,~=1.7.1))\",build=\"py34_0\"])ms\"\n             );\n         }\n "
+  },
+  {
+   "filename": "libmamba/tests/src/specs/test_version_spec.cpp",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -428,6 +428,11 @@ namespace\n             REQUIRE(\"*\"_vs.contains(\"1.7.1\"_v));\n             REQUIRE(\"1.5.*|>1.7,<1.8\"_vs.contains(\"1.7.1\"_v));\n             REQUIRE_FALSE(\"1.5.*|>1.7,<1.7.1\"_vs.contains(\"1.7.1\"_v));\n+            // \",\" (and) binds tighter than \"|\" (or): \"<1|>3,>=2\" is \"<1|(>3,>=2)\"\n+            REQUIRE(\"<1|>3,>=2\"_vs.contains(\"0.5\"_v));\n+            REQUIRE_FALSE(\"<1|>3,>=2\"_vs.contains(\"2.5\"_v));\n+            REQUIRE_FALSE(\"<1|>3,>=2\"_vs.contains(\"1.5\"_v));\n+            REQUIRE(\"<1|>3,>=2\"_vs.contains(\"4\"_v));\n             REQUIRE(\"1.7.0.post123\"_vs.contains(\"1.7.0.post123\"_v));\n             REQUIRE(\"1.7.0.post123.gabcdef9\"_vs.contains(\"1.7.0.post123.gabcdef9\"_v));\n             REQUIRE(\"1.7.0.post123+gabcdef9\"_vs.contains(\"1.7.0.post123+gabcdef9\"_v));"
+  },
+  {
+   "filename": "libmamba/tests/src/util/test_flat_bool_expr_tree.cpp",
+   "status": "modified",
+   "additions": 47,
+   "deletions": 0,
+   "patch": "@@ -451,6 +451,53 @@ namespace\n         }\n     }\n \n+    TEST_CASE(\"Infix operator precedence\")\n+    {\n+        SECTION(\"and binds tighter than or\")\n+        {\n+            // Infix:  x0 or x1 and x2  ==  x0 or (x1 and x2)\n+            auto parser = InfixParser<std::size_t, BoolOperator>{};\n+            REQUIRE(parser.push_variable(0));\n+            REQUIRE(parser.push_operator(BoolOperator::logical_or));\n+            REQUIRE(parser.push_variable(1));\n+            REQUIRE(parser.push_operator(BoolOperator::logical_and));\n+            REQUIRE(parser.push_variable(2));\n+            REQUIRE(parser.finalize());\n+            auto tree = flat_bool_expr_tree(std::move(parser).tree());\n+\n+            static constexpr std::size_t n_vars = 3;\n+            for (std::size_t x = 0; x < (1 << n_vars); ++x)\n+            {\n+                const auto values = integer_to_bools<n_vars>(x);\n+                CAPTURE(values);\n+                const auto eval = [&values](std::size_t idx) { return values[idx]; };\n+                REQUIRE(tree.evaluate(eval) == (values[0] || (values[1] && values[2])));\n+            }\n+        }\n+\n+        SECTION(\"and binds tighter than or on the right\")\n+        {\n+            // Infix:  x0 and x1 or x2  ==  (x0 and x1) or x2\n+            auto parser = InfixParser<std::size_t, BoolOperator>{};\n+            REQUIRE(parser.push_variable(0));\n+            REQUIRE(parser.push_operator(BoolOperator::logical_and));\n+            REQUIRE(parser.push_variable(1));\n+            REQUIRE(parser.push_operator(BoolOperator::logical_or));\n+            REQUIRE(parser.push_variable(2));\n+            REQUIRE(parser.finalize());\n+            auto tree = flat_bool_expr_tree(std::move(parser).tree());\n+\n+            static constexpr std::size_t n_vars = 3;\n+            for (std::size_t x = 0; x < (1 << n_vars); ++x)\n+            {\n+                const auto values = integer_to_bools<n_vars>(x);\n+                CAPTURE(values);\n+                const auto eval = [&values](std::size_t idx) { return values[idx]; };\n+                REQUIRE(tree.evaluate(eval) == ((values[0] && values[1]) || values[2]));\n+            }\n+        }\n+    }\n+\n     TEST_CASE(\"Infix traversal\")\n     {\n         auto parser = InfixParser<std::size_t, BoolOperator>{};"
+  }
+ ],
+ "test_files": [
+  "libmamba/tests/src/specs/test_match_spec.cpp",
+  "libmamba/tests/src/specs/test_version_spec.cpp",
+  "libmamba/tests/src/util/test_flat_bool_expr_tree.cpp"
+ ]
+}

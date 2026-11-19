@@ -1,0 +1,26 @@
+{
+ "repo": "i-am-bee/beeai-framework",
+ "number": 1980,
+ "url": "https://github.com/i-am-bee/beeai-framework/pull/1980",
+ "title": "fix(langchain): use the model-level stop_sequences when a call sets none",
+ "merged_at": "2026-11-19T18:52:34Z",
+ "files": [
+  {
+   "filename": "python/beeai_framework/adapters/langchain/backend/chat.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 3,
+   "patch": "@@ -44,9 +44,13 @@ def model_id(self) -> str:\n     def provider_id(self) -> ProviderName:\n         return \"langchain\"\n \n+    def _stop_sequences(self, input: ChatModelInput) -> list[str] | None:\n+        # Per-call stop sequences take precedence over the model-level ones.\n+        return input.stop_sequences if input.stop_sequences is not None else self.parameters.stop_sequences\n+\n     def _prepare_model(self, input: ChatModelInput) -> LCRunnable[LanguageModelInput, LCModelResponse]:\n         parameters = self.parameters.model_dump(exclude_none=True, exclude={\"stop_sequences\", \"stream\", \"tool_choice\"})\n-        parameters[\"stop\"] = input.stop_sequences\n+        parameters[\"stop\"] = self._stop_sequences(input)\n \n         # Note: setting via bind might not work for certain providers\n         for key, value in parameters.items():\n@@ -69,15 +73,15 @@ def _prepare_model(self, input: ChatModelInput) -> LCRunnable[LanguageModelInput\n     async def _create(self, input: ChatModelInput, run: RunContext) -> ChatModelOutput:\n         input_messages = to_lc_messages(input.messages)\n         model = self._prepare_model(input)\n-        lc_response = await model.ainvoke(input=input_messages, stop=input.stop_sequences)\n+        lc_response = await model.ainvoke(input=input_messages, stop=self._stop_sequences(input))\n         return self._transform_output(lc_response)\n \n     async def _create_stream(self, input: ChatModelInput, run: RunContext) -> AsyncGenerator[ChatModelOutput]:\n         input_messages = to_lc_messages(input.messages)\n         model = self._prepare_model(input)\n \n         tmp_chunk: ChatModelOutput | None = None\n-        async for _chunk in model.astream(input=input_messages, stop=input.stop_sequences):\n+        async for _chunk in model.astream(input=input_messages, stop=self._stop_sequences(input)):\n             if _chunk is None:\n                 continue\n "
+  },
+  {
+   "filename": "python/tests/adapters/langchain/test_chat.py",
+   "status": "modified",
+   "additions": 26,
+   "deletions": 0,
+   "patch": "@@ -161,3 +161,29 @@ def test_model_id_uses_the_model_attribute() -> None:\n     model = LangChainChatModel(_NamedFakeChatModel(messages=iter([])))\n \n     assert model.model_id == \"granite4:latest\"\n+\n+\n+class _StopRecordingFakeChatModel(GenericFakeChatModel):\n+    seen_stop: Any = \"unset\"\n+\n+    def _generate(self, messages: Any, stop: Any = None, run_manager: Any = None, **kwargs: Any) -> Any:\n+        self.seen_stop = stop\n+        return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)\n+\n+\n+@pytest.mark.unit\n+@pytest.mark.asyncio\n+@pytest.mark.parametrize(\n+    (\"model_stop\", \"call_stop\", \"expected\"),\n+    [([\"END\"], None, [\"END\"]), ([\"END\"], [\"STOP\"], [\"STOP\"]), (None, [\"STOP\"], [\"STOP\"])],\n+)\n+async def test_stop_sequences_fall_back_to_model_parameters(\n+    model_stop: list[str] | None, call_stop: list[str] | None, expected: list[str]\n+) -> None:\n+    fake = _StopRecordingFakeChatModel(messages=iter([AIMessage(content=\"hi\")]))\n+    model = LangChainChatModel(fake)\n+    model.parameters.stop_sequences = model_stop\n+\n+    await model.run([UserMessage(\"hello\")], stop_sequences=call_stop)\n+\n+    assert fake.seen_stop == expected"
+  }
+ ],
+ "test_files": [
+  "python/tests/adapters/langchain/test_chat.py"
+ ]
+}

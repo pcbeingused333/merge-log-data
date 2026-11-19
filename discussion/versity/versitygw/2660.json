@@ -15,6 +15,18 @@
    "state": "CHANGES_REQUESTED",
    "submitted_at": "2026-11-18T20:36:06Z",
    "body": "Thanks, all of the round-1 comments are addressed. Two new issues came with the rework, both only with `--inherit-default-acl` (see inline): the probe links across a nested mount, and a probe failure now fails the upload. Could you also update the PR description? It still describes the first design (`probeTmpFileXattr`, xattr-only, the non-deterministic race test)."
+  },
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-19T07:53:42Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-19T09:04:29Z",
+   "body": ""
   }
  ],
  "review_comments": [
@@ -89,6 +101,36 @@
    "path": "backend/posix/with_otmpfile_xattr_linux_test.go",
    "created_at": "2026-11-18T20:35:39Z",
    "body": "Nits:\n- The wrapper closure does nothing: pass `mk` directly.\n- `aws.ToString(&out.ETag)` on line 202 is just `out.ETag`.\n- The versioned overwrite only checks the current object. Please also read back the previous version and check its body and etag, since that copy goes through the versioning directory's separate probe entry."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/with_otmpfile.go",
+   "created_at": "2026-11-19T07:52:39Z",
+   "body": "When the probe's own O_TMPFILE open fails because the filesystem has no O_TMPFILE (NFS, for example), nothing is cached. Every upload then repeats the probe: a `stat` in `mkdirAll` plus a failing `openat`, on top of the failing open the upload already does. So the description's \"the first upload to a bucket probes\" doesn't hold on those filesystems.\n\nCould you cache `false` here when `otmpfileUnsupported(err)`, without the warning, since that's the existing, expected fallback? Uploads would then go straight to the named file, which also saves the failing open main does on every upload. A test using the `openat` hook to return `EOPNOTSUPP` would cover it."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/with_otmpfile.go",
+   "created_at": "2026-11-19T07:53:03Z",
+   "body": "Nits:\n- Please restore main's `var (...)` block here. The change is leftover from the removed closure and only adds diff noise.\n- Lines 229–232 can be `xt, _ := p.meta.(meta.TmpFileTester)`.\n- The comments at lines 91–94 and 100–104 describe the same probe; one is enough, without the \"(see probeOTmp)\" pointer.\n- The doc of `TestInheritDefaultACLWriteOnlyDir` still says \"The first PUT in a new bucket makes a named temporary file, as .sgwtmp doesn't exist yet\". The probe now creates `.sgwtmp`, so the first PUT gets an O_TMPFILE."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/with_otmpfile_xattr_linux_test.go",
+   "created_at": "2026-11-19T07:53:33Z",
+   "body": "Nothing guards the two round-2 fixes yet. Two cheap tests would:\n- With `InheritDefaultACL` and a key like `sub/obj`, check in the probe hook that `filepath.Dir(os.Readlink(f.Name()))` is `tmpDir`. For an O_TMPFILE that link reads `<dir>/#<ino> (deleted)`, so this catches the probe moving back to the object's directory without needing a mount.\n- As non-root, with `InheritDefaultACL`, make the bucket root 0555 with a writable `sub/`. PUT `sub/obj` should succeed and leave no cached result. That covers the `mkdirAll` failure branch, which nothing reaches today."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/with_otmpfile.go",
+   "created_at": "2026-11-19T09:03:44Z",
+   "body": "One edge case, which follows from my own round-3 suggestion: with `--inherit-default-acl`, the upload doesn't open its O_TMPFILE in `tmpDir`, so caching this failure for the whole bucket can be wrong. Example: a bucket on NFS with an O_TMPFILE-capable filesystem mounted below it. On main, uploads into that mount get an O_TMPFILE in the object's directory and work. Here they get a named file in the NFS `.sgwtmp`, and `MoveFile`'s cross-device copy drops the xattrs, so the objects lose their ETag and metadata.\n\nCaching this failure is only an optimization, so could you cache it only when the upload opens in the same directory as the probe (`otmpDir == tmpDir`, i.e. without `inherit`)? With `inherit`, leave it unknown, as before. The defect case below still needs to be cached for the whole bucket.\n\nAlso, the doc above still says \"An answer is stored only when the filesystem reported the defect\"; it should mention this case too."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/with_otmpfile_xattr_linux_test.go",
+   "created_at": "2026-11-19T09:04:18Z",
+   "body": "Nit: the doc says the failed open is remembered \"without a warning\", but the test doesn't check that. Either capture the `log` output during the uploads, or drop that part of the doc."
   }
  ],
  "comments": [
@@ -106,6 +148,11 @@
    "role": "author",
    "created_at": "2026-11-18T22:48:42Z",
    "body": "Thanks, both points are addressed in the new commit:\n- The probe O_TMPFILE is now opened and linked in `bucket/.sgwtmp` in both modes, so it always tests the bucket's filesystem (a nested mount under `--inherit-default-acl` no longer marks the bucket unsupported). That also removed the `openOTmp` closure: the probe runs before the upload's own O_TMPFILE is opened.\n- Only ENODATA/EOPNOTSUPP/ENOSYS/EXDEV from the xattr check or the `linkat` select the named file. Any other probe error (mkdir of `.sgwtmp`, open, chmod, link, unlink) leaves the result unknown: nothing is cached and the upload goes on with its own O_TMPFILE, so ENOSPC/EDQUOT/EROFS come from the upload as on main. The wrong comment is gone.\n- Tests: wrapper closure removed, `out.ETag` used directly, the versioned overwrite also reads back the previous version (body and etag); the ENOSPC case now checks the upload succeeds and the probe repeats. I also updated the PR description.\n\n\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-19T08:17:58Z",
+   "body": "Thanks, round 3 is in the new commit:\n- When the probe's own O_TMPFILE open fails with EOPNOTSUPP/EISDIR (NFS), `false` is now cached without the warning, so later uploads go straight to the named file. Test with the `openat` hook: 3 uploads, one failing open.\n- Nits: the `var (...)` block is restored, `xt, _ := p.meta.(meta.TmpFileTester)`, one comment instead of two, and the `TestInheritDefaultACLWriteOnlyDir` doc is fixed.\n- Two guard tests: the probe's `/proc` link directory is `tmpDir` with `InheritDefaultACL` and key `sub/obj`, and a non-root PUT to `sub/obj` with a 0555 bucket root succeeds and caches nothing.\nI also added the new behaviour to the PR description.\n\n"
   }
  ]
 }

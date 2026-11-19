@@ -1,0 +1,26 @@
+{
+ "repo": "NPC-Worldwide/npcpy",
+ "number": 367,
+ "url": "https://github.com/NPC-Worldwide/npcpy/pull/367",
+ "title": "fix(ollama): forward seed, frequency_penalty and presence_penalty as options",
+ "merged_at": "2026-11-19T12:38:09Z",
+ "files": [
+  {
+   "filename": "npcpy/gen/response.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -643,6 +643,9 @@ def get_ollama_response(\n             \"temperature\",\n             \"top_p\",\n             \"top_k\",\n+            \"seed\",\n+            \"frequency_penalty\",\n+            \"presence_penalty\",\n             \"extra_headers\",\n             \"parallel_tool_calls\",\n             \"response_format\","
+  },
+  {
+   "filename": "tests/test_ollama_sampling_params.py",
+   "status": "added",
+   "additions": 69,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,69 @@\n+\"\"\"seed / frequency_penalty / presence_penalty must reach Ollama as options.\"\"\"\n+import importlib.util\n+from pathlib import Path\n+import sys\n+from types import SimpleNamespace\n+from unittest.mock import Mock, patch\n+\n+import pytest\n+\n+\n+@pytest.fixture\n+def response_module():\n+    # Load this provider without the package's unrelated optional integrations.\n+    path = Path(__file__).parents[1] / \"npcpy\" / \"gen\" / \"response.py\"\n+    spec = importlib.util.spec_from_file_location(\"ollama_sampling_test\", path)\n+    module = importlib.util.module_from_spec(spec)\n+    with patch.dict(sys.modules, {\n+        \"npcpy.data.image\": SimpleNamespace(compress_image=Mock()),\n+        \"npcpy.npc_sysenv\": SimpleNamespace(\n+            get_system_message=Mock(), lookup_provider=Mock(),\n+            render_markdown=Mock(), MINIMAX_MODELS=(),\n+        ),\n+        \"torch\": None,\n+    }):\n+        spec.loader.exec_module(module)\n+    return module\n+\n+\n+@pytest.fixture\n+def options(response_module, monkeypatch):\n+    calls = []\n+\n+    class _Client:\n+        def __init__(self, **kwargs):\n+            pass\n+\n+        def chat(self, **kwargs):\n+            calls.append(kwargs)\n+            return {\"message\": {\"role\": \"assistant\", \"content\": \"ok\"}}\n+\n+    monkeypatch.setattr(response_module, \"ollama\", SimpleNamespace(Client=_Client))\n+    monkeypatch.setattr(response_module, \"HAS_OLLAMA\", True)\n+\n+    def run(**kwargs):\n+        response_module.get_ollama_response(\n+            prompt=\"hi\", model=\"llama3.2:latest\", messages=[], **kwargs\n+        )\n+        return calls[-1][\"options\"]\n+\n+    return run\n+\n+\n+@pytest.mark.parametrize(\"key,value\", [\n+    (\"seed\", 42),\n+    (\"frequency_penalty\", 0.5),\n+    (\"presence_penalty\", 0.3),\n+])\n+def test_sampling_param_is_forwarded(options, key, value):\n+    assert options(**{key: value})[key] == value\n+\n+\n+def test_seed_zero_is_forwarded(options):\n+    assert options(seed=0)[\"seed\"] == 0\n+\n+\n+def test_unset_params_are_not_added(options):\n+    opts = options(temperature=0.2)\n+    for key in (\"seed\", \"frequency_penalty\", \"presence_penalty\"):\n+        assert key not in opts"
+  }
+ ],
+ "test_files": [
+  "tests/test_ollama_sampling_params.py"
+ ]
+}

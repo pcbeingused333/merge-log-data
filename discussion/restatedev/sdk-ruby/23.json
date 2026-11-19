@@ -3,7 +3,32 @@
  "number": 23,
  "url": "https://github.com/restatedev/sdk-ruby/pull/23",
  "state": "open",
- "reviews": [],
- "review_comments": [],
- "comments": []
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-19T13:39:39Z",
+   "body": "> [!IMPORTANT]\n> The fix is correct for `DurableFuture` and `DurableCallFuture`, but it fails `steep check`: `settle` is not declared in `sig/restate.rbs`. `CombinedFuture` also still returns `nil` on a second `await` after a non-terminal error.\n\n**Approach:** sound. Caching the non-terminal exception is the only option, since the VM notification is single-shot. Putting the logic in one shared `settle` helper removes the duplicated `rescue`/`ensure` code. The `CombinedFuture` combinator in the same file still has the old pattern, though.\n\n**Reviewed changes**\n\nI reviewed the whole diff and ran the new spec (3/3 pass), RuboCop (clean) and `steep check` (3 problems, 2 of them errors) locally.\n\n- **`settle` helper**: `resolve!` and `resolve_call!` now go through `settle`, which caches any `StandardError` in `@error` and re-raises it, so every `await` after a failure raises the same error.\n- **Spec**: `spec/durable_future_serde_spec.rb` awaits twice after a serde failure on both future types, and checks that a `TerminalError` is cached without calling `resolve_handle` again.\n\nBoth failing PR checks (`Build, lint, typecheck & test` and `verify / verify`) fail during the actions lockfile check, because the `dtolnay/rust-toolchain@stable` pin has moved. CI never ran any Ruby code, so the type error below has not been reported there.\n\n<!--\nPullfrog review metadata. These findings were written against 0dd1e77;\nif commits have landed on fix/c3780-serde-reraise since, treat every specific bug, file, or\nline callout as POTENTIALLY STALE and re-diff before acting on it.\n\n- Mode: Review (initial)\n- Files reviewed: 2\n- Commits reviewed: 1\n- Base: main (f65c084)\n- Head: fix/c3780-serde-reraise (0dd1e77)\n- Reviewed commits:\n  - 0dd1e77 — fix: cache serde failures in DurableFuture instead of returning nil on re-await\n- Prior pullfrog review: none\n-->\n\n### ⚠️ `CombinedFuture` still returns `nil` on a second `await` after a non-terminal failure\n\n`CombinedFuture#resolve_combined!` uses the same `rescue TerminalError` / `ensure @resolved = true` pattern this PR replaces. When a child raises a non-terminal error, for example a serde failure surfaced by `finalize_all_completed` or `finalize_first_succeeded` (both rescue only `TerminalError`), the first `await` raises and the second returns `nil`. I reproduced this on the PR head: `Restate.all_settled`-style (`:all_completed`) over a child with a failing serde gives `raised ArgumentError: bad payload`, then `returned nil`.\n\n<details><summary>Technical details</summary>\n\n````markdown\n# CombinedFuture still loses non-terminal failures on re-await\n\n## Affected sites\n- lib/restate/durable_future.rb:189-196 — `resolve_combined!` rescues only `TerminalError`; `ensure` marks the future resolved with `@value = nil`, `@error = nil` when anything else propagates.\n\n## Required outcome\n- A second `await` on a `CombinedFuture` whose first `await` raised a non-terminal `StandardError` raises the same error instead of returning `nil`.\n- One implementation of the \"record outcome\" logic, shared by `DurableFuture` and `CombinedFuture` (it is not a subclass, so it cannot inherit `settle` today).\n\n## Suggested approach\n- Move `settle` into a small private mixin (or a module function) in `durable_future.rb`, include it in both classes, and rewrite `resolve_combined!` as `settle { @ctx.wait_combined(tree); finalize_value }`.\n- Declare it in `sig/restate.rbs` for whichever owner it ends up on.\n- Add a `CombinedFuture` example to `spec/durable_future_serde_spec.rb` (e.g. `:all_completed` over a child with a raising serde, awaited twice).\n- Optional: the doc comment on `DurableCallFuture#await` (line 89, \"Caches both successes and TerminalError failures\") is now stale.\n````\n\n</details>\n\n\n<!-- PULLFROG_DIVIDER_DO_NOT_REMOVE_PLZ -->\n<sup><a href=\"https://pullfrog.com\"><picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://pullfrog.com/logos/frog-white-full-18px.png\"><img src=\"https://pullfrog.com/logos/frog-green-full-18px.png\" width=\"9px\" height=\"9px\" style=\"vertical-align: middle; \" alt=\"Pullfrog\"></picture></a>&nbsp;&nbsp;｜ [Fix all ➔](https://pullfrog.com/trigger/restatedev/sdk-ruby/23?action=fix&review_id=5976072060) ｜ [Fix 👍s ➔](https://pullfrog.com/trigger/restatedev/sdk-ruby/23?action=fix-approved&review_id=5976072060) ｜ [View workflow run](https://github.com/restatedev/sdk-ruby/actions/runs/44535175503/job/135598561339) ｜ Using `claude-opus-5-5` ｜ [𝕏](https://x.com/pullfrogai)</sup>"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "lib/restate/durable_future.rb",
+   "created_at": "2026-11-19T13:39:38Z",
+   "body": "`settle` is missing from `sig/restate.rbs`, and `durable_future.rb` is in the Steep `check` list. So `bundle exec steep check` (run by `make typecheck`, which `make verify` in CI depends on) now fails with `Ruby::NoMethod` at lines 54 and 100, plus an `UndeclaredMethodDefinition` warning here. I confirmed this locally. Add the method under the `private` section of `DurableFuture` in the RBS:\n\n```rbs\n    def settle: () { () -> untyped } -> void\n```"
+  }
+ ],
+ "comments": [
+  {
+   "role": "contributor",
+   "created_at": "2026-11-19T13:36:33Z",
+   "body": "@pullfrog review"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-19T13:52:39Z",
+   "body": "Thanks for the review. Pushed a follow-up commit that addresses both points from the pullfrog review:\n\n- `settle` is now declared in `sig/restate.rbs` (it lives in a small `Settleable` module included by `DurableFuture` and `CombinedFuture`), which should clear the `steep check` errors.\n- `CombinedFuture#resolve_combined!` goes through the same `settle`, so a second `await` after a non-terminal child failure re-raises instead of returning `nil`. Added a spec awaiting a combined future twice over a child with a failing serde.\n\nThe two red checks fail at the actions lockfile step (the `dtolnay/rust-toolchain@stable` pin moved), before any Ruby runs, so they are unrelated to this change.\n\nThis follow-up was prepared with Claude Code (AI) and submitted by the account owner; the spec file passes locally (the new `CombinedFuture` example fails on 0dd1e77 and passes here) and RuboCop is clean on the touched files; `steep check` could not be run locally, so CI is its first run.\n"
+  }
+ ]
 }

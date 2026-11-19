@@ -1,0 +1,33 @@
+{
+ "repo": "Nano-Collective/nanocoder",
+ "number": 2289,
+ "url": "https://github.com/Nano-Collective/nanocoder/pull/2289",
+ "title": "fix(skills): reject unknown keys in subscribe trigger entries",
+ "merged_at": "2026-11-19T09:51:56Z",
+ "files": [
+  {
+   "filename": ".changeset/subscribe-unknown-keys.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+\"@nanocollective/nanocoder\": patch\n+---\n+\n+A `subscribe:` entry with an unknown key, such as `path:` instead of `paths:`, is now reported with a \"Did you mean\" hint instead of being silently dropped. Before, the typo removed the filter and the trigger fired on every file. Closes #2247."
+  },
+  {
+   "filename": "source/skills/parse-subscribe.spec.ts",
+   "status": "modified",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -175,3 +175,48 @@ test('error message identifies offending index', t => {\n \t\t},\n \t);\n });\n+\n+test('unknown key on file.changed throws instead of widening the trigger', t => {\n+\tt.throws(\n+\t\t() => parseSubscribeBlock([{kind: 'file.changed', path: ['docs/**']}]),\n+\t\t{\n+\t\t\tinstanceOf: SubscribeParseError,\n+\t\t\tmessage: /unknown key \"path\".*Did you mean \"paths\"\\?/,\n+\t\t},\n+\t);\n+});\n+\n+test('unknown key on file.ai-comment throws', t => {\n+\tt.throws(\n+\t\t() => parseSubscribeBlock([{kind: 'file.ai-comment', path: ['src/**']}]),\n+\t\t{instanceOf: SubscribeParseError, message: /unknown key \"path\"/},\n+\t);\n+});\n+\n+test('unknown key on schedule.cron throws', t => {\n+\tt.throws(\n+\t\t() =>\n+\t\t\tparseSubscribeBlock([\n+\t\t\t\t{kind: 'schedule.cron', cron: '0 9 * * MON', paths: ['x']},\n+\t\t\t]),\n+\t\t{instanceOf: SubscribeParseError, message: /unknown key \"paths\"/},\n+\t);\n+});\n+\n+test('unknown key on ci.job.failed throws', t => {\n+\tt.throws(\n+\t\t() => parseSubscribeBlock([{kind: 'ci.job.failed', branch: ['main']}]),\n+\t\t{\n+\t\t\tinstanceOf: SubscribeParseError,\n+\t\t\tmessage: /unknown key \"branch\".*Did you mean \"branches\"\\?/,\n+\t\t},\n+\t);\n+});\n+\n+test('unknown key without a close match has no hint', t => {\n+\tconst err = t.throws(\n+\t\t() => parseSubscribeBlock([{kind: 'file.changed', zzzzzz: 1}]),\n+\t\t{instanceOf: SubscribeParseError},\n+\t);\n+\tt.notRegex(err.message, /Did you mean/);\n+});"
+  },
+  {
+   "filename": "source/skills/parse-subscribe.ts",
+   "status": "modified",
+   "additions": 67,
+   "deletions": 0,
+   "patch": "@@ -88,6 +88,7 @@ function parseTrigger(raw: unknown, index: number): SkillTrigger {\n \t\tthrow new SubscribeParseError(`subscribe[${index}].kind must be a string`);\n \t}\n \n+\tassertKnownKeys(obj, kind, index);\n \tconst base = parseCommonFields(obj, index);\n \n \tif (kind === 'file.changed') {\n@@ -107,6 +108,72 @@ function parseTrigger(raw: unknown, index: number): SkillTrigger {\n \t);\n }\n \n+const COMMON_KEYS = ['kind', 'target', 'confirm'];\n+\n+const KIND_KEYS: Record<string, readonly string[]> = {\n+\t'file.changed': ['paths', 'eventKinds'],\n+\t'file.ai-comment': ['paths'],\n+\t'schedule.cron': ['cron'],\n+\t'ci.job.failed': ['branches'],\n+};\n+\n+/**\n+ * Reject keys the trigger kind does not define. A typo such as `path:` for\n+ * `paths:` would otherwise be dropped silently and the trigger would match\n+ * everything.\n+ */\n+function assertKnownKeys(\n+\tobj: Record<string, unknown>,\n+\tkind: string,\n+\tindex: number,\n+): void {\n+\tconst own = KIND_KEYS[kind];\n+\tif (!own) return; // unsupported kind: reported by the caller\n+\tconst allowed = [...COMMON_KEYS, ...own];\n+\tfor (const key of Object.keys(obj)) {\n+\t\tif (allowed.includes(key)) continue;\n+\t\tconst hint = closestKey(key, allowed);\n+\t\tthrow new SubscribeParseError(\n+\t\t\t`subscribe[${index}] has unknown key \"${key}\" for kind \"${kind}\"` +\n+\t\t\t\t(hint\n+\t\t\t\t\t? `. Did you mean \"${hint}\"?`\n+\t\t\t\t\t: ` (expected: ${allowed.join(', ')})`),\n+\t\t);\n+\t}\n+}\n+\n+function closestKey(\n+\tkey: string,\n+\tcandidates: readonly string[],\n+): string | undefined {\n+\tlet best: string | undefined;\n+\tlet bestDist = 3;\n+\tfor (const c of candidates) {\n+\t\tconst d = editDistance(key.toLowerCase(), c.toLowerCase());\n+\t\tif (d < bestDist) {\n+\t\t\tbestDist = d;\n+\t\t\tbest = c;\n+\t\t}\n+\t}\n+\treturn best;\n+}\n+\n+function editDistance(a: string, b: string): number {\n+\tlet prev = Array.from({length: b.length + 1}, (_, j) => j);\n+\tfor (let i = 1; i <= a.length; i++) {\n+\t\tconst cur = [i];\n+\t\tfor (let j = 1; j <= b.length; j++) {\n+\t\t\tcur[j] = Math.min(\n+\t\t\t\tprev[j] + 1,\n+\t\t\t\tcur[j - 1] + 1,\n+\t\t\t\tprev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),\n+\t\t\t);\n+\t\t}\n+\t\tprev = cur;\n+\t}\n+\treturn prev[b.length];\n+}\n+\n function parseCommonFields(\n \tobj: Record<string, unknown>,\n \tindex: number,"
+  }
+ ],
+ "test_files": [
+  "source/skills/parse-subscribe.spec.ts"
+ ]
+}

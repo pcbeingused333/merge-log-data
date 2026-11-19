@@ -1,0 +1,26 @@
+{
+ "repo": "aws/aws-durable-execution-sdk-java",
+ "number": 896,
+ "url": "https://github.com/aws/aws-durable-execution-sdk-java/pull/896",
+ "title": "fix(otel-plugin): clear MDC spanId when an attempt ends in ExecutionOtelPlugin",
+ "merged_at": "2026-11-19T19:14:08Z",
+ "files": [
+  {
+   "filename": "otel-plugin/src/main/java/software/amazon/lambda/durable/otel/ExecutionOtelPlugin.java",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 2,
+   "patch": "@@ -622,8 +622,16 @@ public void onUserFunctionEnd(UserFunctionEndInfo info) {\n \n         var key = attemptKey(info.id(), info.attempt());\n \n-        // A late user-function End still closes the scope on the owning thread.\n-        attemptScopes.close(key);\n+        try {\n+            // A late user-function End still closes the scope on the owning thread.\n+            attemptScopes.close(key);\n+        } finally {\n+            // Clear span-level MDC after user function completes (keep traceId for handler-level logs between\n+            // steps), even if closing the scope throws.\n+            if (enableMdc) {\n+                MDC.remove(MdcSpanEnricher.MDC_SPAN_ID);\n+            }\n+        }\n \n         if (ended) return;\n "
+  },
+  {
+   "filename": "otel-plugin/src/test/java/software/amazon/lambda/durable/otel/ExecutionOtelPluginTest.java",
+   "status": "modified",
+   "additions": 62,
+   "deletions": 0,
+   "patch": "@@ -28,6 +28,7 @@\n import org.junit.jupiter.api.AfterEach;\n import org.junit.jupiter.api.BeforeEach;\n import org.junit.jupiter.api.Test;\n+import org.slf4j.MDC;\n import software.amazon.lambda.durable.execution.SuspendExecutionException;\n import software.amazon.lambda.durable.plugin.*;\n \n@@ -68,6 +69,67 @@ void tearDown() {\n         OtelPluginAutoConfigurationState.resetInstalledForTest();\n     }\n \n+    @Test\n+    void onUserFunctionEnd_withMdcEnabled_clearsSpanIdButKeepsTraceId() {\n+        var mdcPluginFactory = ExecutionOtelPlugin.factory(\n+                SdkTracerProvider.builder().addSpanProcessor(SimpleSpanProcessor.create(InMemorySpanExporter.create())),\n+                OtelPluginConfig.builder()\n+                        .contextExtractor(() -> null)\n+                        .enableMdc(true)\n+                        .workflowSpanName(\"Workflow\")\n+                        .build());\n+        var mdcPlugin = started(mdcPluginFactory, new InvocationInfo(\"req-1\", ARN, true, Instant.now()));\n+\n+        mdcPlugin.onUserFunctionStart(\n+                new UserFunctionStartInfo(\"op-1\", \"step\", \"STEP\", \"Step\", null, Instant.now(), false, 1));\n+        assertNotNull(MDC.get(MdcSpanEnricher.MDC_SPAN_ID));\n+\n+        mdcPlugin.onUserFunctionEnd(new UserFunctionEndInfo(\n+                \"op-1\",\n+                \"step\",\n+                \"STEP\",\n+                \"Step\",\n+                null,\n+                Instant.now(),\n+                Instant.now(),\n+                false,\n+                1,\n+                UserFunctionOutcome.SUCCEEDED,\n+                null));\n+\n+        assertNull(MDC.get(MdcSpanEnricher.MDC_SPAN_ID), \"spanId should be cleared after the attempt ends\");\n+        assertNotNull(MDC.get(MdcSpanEnricher.MDC_TRACE_ID), \"traceId should persist between steps\");\n+\n+        mdcPlugin.onInvocationEnd(new InvocationEndInfo(\"req-1\", ARN, true, InvocationStatus.SUCCEEDED, null));\n+        assertNull(MDC.get(MdcSpanEnricher.MDC_TRACE_ID));\n+    }\n+\n+    @Test\n+    void userFunction_withMdcDisabled_doesNotInjectSpanId() {\n+        var disabledPlugin = started(factory, new InvocationInfo(\"req-1\", ARN, true, Instant.now()));\n+\n+        disabledPlugin.onUserFunctionStart(\n+                new UserFunctionStartInfo(\"op-1\", \"step\", \"STEP\", \"Step\", null, Instant.now(), false, 1));\n+        assertNull(MDC.get(MdcSpanEnricher.MDC_SPAN_ID), \"spanId should not be injected when MDC is disabled\");\n+        assertNull(MDC.get(MdcSpanEnricher.MDC_TRACE_ID), \"traceId should not be injected when MDC is disabled\");\n+\n+        disabledPlugin.onUserFunctionEnd(new UserFunctionEndInfo(\n+                \"op-1\",\n+                \"step\",\n+                \"STEP\",\n+                \"Step\",\n+                null,\n+                Instant.now(),\n+                Instant.now(),\n+                false,\n+                1,\n+                UserFunctionOutcome.SUCCEEDED,\n+                null));\n+        assertNull(MDC.get(MdcSpanEnricher.MDC_SPAN_ID));\n+\n+        disabledPlugin.onInvocationEnd(new InvocationEndInfo(\"req-1\", ARN, true, InvocationStatus.SUCCEEDED, null));\n+    }\n+\n     // ─── Java agent path (global provider) ───────────────────────────────\n \n     @Test"
+  }
+ ],
+ "test_files": [
+  "otel-plugin/src/test/java/software/amazon/lambda/durable/otel/ExecutionOtelPluginTest.java"
+ ]
+}

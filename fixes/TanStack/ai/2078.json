@@ -1,0 +1,33 @@
+{
+ "repo": "TanStack/ai",
+ "number": 2078,
+ "url": "https://github.com/TanStack/ai/pull/2078",
+ "title": "fix(ai-bedrock): report model_context_window_exceeded as a context_overflow RUN_ERROR",
+ "merged_at": "2026-11-19T12:23:04Z",
+ "files": [
+  {
+   "filename": ".changeset/bedrock-context-window-exceeded.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@tanstack/ai-bedrock': patch\n+---\n+\n+Report a Converse stream that stops with `stopReason: 'model_context_window_exceeded'` as a `RUN_ERROR` with the `context_overflow` code. It was reported as a clean `RUN_FINISHED` with `finishReason: 'stop'`, although the answer was cut off. This matches the Anthropic adapter."
+  },
+  {
+   "filename": "packages/ai-bedrock/src/converse/stream-processor.ts",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 2,
+   "patch": "@@ -1,4 +1,4 @@\n-import { EventType } from '@tanstack/ai'\n+import { CONTEXT_OVERFLOW_CODE, EventType } from '@tanstack/ai'\n import { buildConverseUsage } from './usage'\n import type { AdapterYieldChunk, TokenUsage } from '@tanstack/ai'\n import type { ConverseStreamOutput } from '@aws-sdk/client-bedrock-runtime'\n@@ -79,6 +79,10 @@ export async function* processConverseStream(\n   // contract (usage may arrive after the finish signal).\n   let usage: TokenUsage | undefined\n   let finishReason: NonNullable<AdapterYieldChunk['finishReason']> | undefined\n+  // The model filled its context window before it finished (stopReason\n+  // `model_context_window_exceeded`). The answer is cut off, so the run ends\n+  // with a RUN_ERROR instead of a clean RUN_FINISHED.\n+  let contextWindowExceeded = false\n \n   // Lazily emit RUN_STARTED exactly once, before the first content event.\n   function* ensureRunStarted(): Generator<AdapterYieldChunk> {\n@@ -282,7 +286,8 @@ export async function* processConverseStream(\n     }\n \n     if ('messageStop' in ev) {\n-      const stopReason = ev.messageStop?.stopReason\n+      const stopReason: string | undefined = ev.messageStop?.stopReason\n+      contextWindowExceeded = stopReason === 'model_context_window_exceeded'\n       // Map Converse stopReason to AG-UI's narrower finishReason vocabulary.\n       finishReason =\n         stopReason === 'tool_use'\n@@ -334,6 +339,21 @@ export async function* processConverseStream(\n   // Close any reasoning lifecycle that text never closed.\n   yield* closeReasoning()\n \n+  if (contextWindowExceeded) {\n+    const message =\n+      'The response was cut off because the model reached the end of its context window.'\n+    yield {\n+      type: EventType.RUN_ERROR,\n+      ...(model && { model }),\n+      timestamp: Date.now(),\n+      message,\n+      code: CONTEXT_OVERFLOW_CODE,\n+      error: { message, code: CONTEXT_OVERFLOW_CODE },\n+      ...(usage && { usage }),\n+    }\n+    return\n+  }\n+\n   // Single terminal RUN_FINISHED. Conditional `usage` spread keeps the wire\n   // shape spec-compliant (AG-UI's `usage` is optional with no `| undefined`).\n   yield {"
+  },
+  {
+   "filename": "packages/ai-bedrock/tests/converse/stream-processor.test.ts",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 1,
+   "patch": "@@ -1,5 +1,5 @@\n import { describe, expect, it } from 'vitest'\n-import { EventType } from '@tanstack/ai'\n+import { CONTEXT_OVERFLOW_CODE, EventType } from '@tanstack/ai'\n import type { AdapterYieldChunk } from '@tanstack/ai'\n import { processConverseStream } from '../../src/converse/stream-processor'\n import type {\n@@ -185,6 +185,25 @@ describe('processConverseStream', () => {\n     }\n   })\n \n+  it('ends with a context_overflow RUN_ERROR when the context window is exceeded', async () => {\n+    const events = await collect(\n+      { contentBlockDelta: { delta: { text: 'hi' }, contentBlockIndex: 0 } },\n+      { messageStop: { stopReason: 'model_context_window_exceeded' } },\n+      {\n+        metadata: {\n+          usage: { inputTokens: 7, outputTokens: 11, totalTokens: 18 },\n+        },\n+      },\n+    )\n+    expect(events.some((e) => e.type === EventType.RUN_FINISHED)).toBe(false)\n+    const errors = events.filter((e) => e.type === EventType.RUN_ERROR)\n+    expect(errors).toHaveLength(1)\n+    expect(errors[0]).toMatchObject({\n+      code: CONTEXT_OVERFLOW_CODE,\n+      usage: { promptTokens: 7, completionTokens: 11, totalTokens: 18 },\n+    })\n+  })\n+\n   // Run one text turn with this metadata usage and return the usage on the\n   // terminal RUN_FINISHED.\n   async function finishedUsage(usage: ConverseTokenUsage) {"
+  }
+ ],
+ "test_files": [
+  "packages/ai-bedrock/tests/converse/stream-processor.test.ts"
+ ]
+}

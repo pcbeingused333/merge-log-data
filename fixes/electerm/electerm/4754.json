@@ -1,0 +1,26 @@
+{
+ "repo": "electerm/electerm",
+ "number": 4754,
+ "url": "https://github.com/electerm/electerm/pull/4754",
+ "title": "fix(ai): report an empty OpenAI chat message as an error",
+ "merged_at": "2026-11-19T09:21:49Z",
+ "files": [
+  {
+   "filename": "src/app/lib/ai-response.js",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -152,6 +152,16 @@ function normalizeToolArguments (toolCalls) {\n   })\n }\n \n+function isEmptyContent (content) {\n+  if (content === null || content === undefined) {\n+    return true\n+  }\n+  if (typeof content === 'string') {\n+    return !content.trim()\n+  }\n+  return Array.isArray(content) && !content.length\n+}\n+\n // Returns { message } on success, { error } otherwise\n exports.resolveAIResponse = (data) => {\n   const error = errorMessageFromData(data)\n@@ -174,6 +184,12 @@ exports.resolveAIResponse = (data) => {\n       }\n       return { message: { ...message, tool_calls: toolCalls } }\n     }\n+    if (isEmptyContent(message.content)) {\n+      // e.g. finish_reason 'content_filter' or 'length' with nothing generated\n+      return {\n+        error: `Unexpected AI response(no message): ${stringifyData(data)}`\n+      }\n+    }\n     return { message }\n   }\n   const streamed = contentFromSSEText(data)"
+  },
+  {
+   "filename": "src/test/unit-ci/ai-response.spec.js",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -46,6 +46,21 @@ describe('resolveAIResponse', () => {\n     assert.equal(res.message.tool_calls[0].function.name, 'run_command')\n   })\n \n+  it('reports an empty message without tool calls as an error', () => {\n+    for (const content of ['', '  ', null, undefined]) {\n+      const res = resolveAIResponse({\n+        choices: [\n+          {\n+            finish_reason: 'content_filter',\n+            message: { role: 'assistant', content }\n+          }\n+        ]\n+      })\n+      assert.match(res.error, /^Unexpected AI response\\(no message\\)/)\n+      assert.equal(res.message, undefined)\n+    }\n+  })\n+\n   it('refuses a tool call cut off by finish_reason length', () => {\n     const res = resolveAIResponse({\n       choices: ["
+  }
+ ],
+ "test_files": [
+  "src/test/unit-ci/ai-response.spec.js"
+ ]
+}

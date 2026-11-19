@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 321,
+ "url": "https://github.com/lofcz/LLMTornado/pull/321",
+ "title": "fix(responses): send raw base64 images with MimeType as data URI",
+ "merged_at": "2026-11-19T12:43:02Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/Responses/ResponsesImageInputTests.cs",
+   "status": "added",
+   "additions": 32,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,32 @@\n+using LlmTornado.Code;\n+using LlmTornado.Chat;\n+using LlmTornado.Responses;\n+\n+namespace LlmTornado.Tests.Responses;\n+\n+[TestFixture]\n+public class ResponsesImageInputTests\n+{\n+    private static string GetImageUrl(ChatImage image)\n+    {\n+        ChatMessage message = new ChatMessage(ChatMessageRoles.User, [new ChatMessagePart(image)]);\n+        List<ResponseInputItem> items = ResponseHelpers.ToResponseInputItems([message]);\n+\n+        ResponseInputMessage input = (ResponseInputMessage)items.Single();\n+        ResponseInputContentImage content = (ResponseInputContentImage)input.Content.Single();\n+        return content.ImageUrl!;\n+    }\n+\n+    [Test]\n+    public void RawBase64WithMimeType_IsSentAsDataUri()\n+    {\n+        Assert.That(GetImageUrl(new ChatImage(\"iVBORw0KGgo=\", \"image/png\")), Is.EqualTo(\"data:image/png;base64,iVBORw0KGgo=\"));\n+    }\n+\n+    [Test]\n+    public void HttpsUrlAndDataUri_AreNotModified()\n+    {\n+        Assert.That(GetImageUrl(new ChatImage(\"https://example.com/a.png\", \"image/png\")), Is.EqualTo(\"https://example.com/a.png\"));\n+        Assert.That(GetImageUrl(new ChatImage(\"data:image/png;base64,AAAA\", \"image/png\")), Is.EqualTo(\"data:image/png;base64,AAAA\"));\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Responses/ResponseHelpers.cs",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 1,
+   "patch": "@@ -139,9 +139,20 @@ public static List<ResponseInputItem> ToResponseInputItems(List<ChatMessage> mes\n                                     case ChatMessageTypes.Image:\n                                         if (part.Image is not null)\n                                         {\n+                                            string? imageUrl = part.Image.Url;\n+\n+                                            // raw base64 + MimeType must be sent as a data URI, otherwise the API rejects it (same as Chat Completions)\n+                                            if (!string.IsNullOrWhiteSpace(part.Image.MimeType) && !string.IsNullOrEmpty(imageUrl) &&\n+                                                !imageUrl.StartsWith(\"data:\", StringComparison.OrdinalIgnoreCase) &&\n+                                                !imageUrl.StartsWith(\"http://\", StringComparison.OrdinalIgnoreCase) &&\n+                                                !imageUrl.StartsWith(\"https://\", StringComparison.OrdinalIgnoreCase))\n+                                            {\n+                                                imageUrl = $\"data:{part.Image.MimeType};base64,{imageUrl}\";\n+                                            }\n+\n                                             inputMessage.Content.Add(new ResponseInputContentImage\n                                             {\n-                                                ImageUrl = part.Image.Url,\n+                                                ImageUrl = imageUrl,\n                                                 Detail = part.Image.Detail\n                                             });\n                                         }"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/Responses/ResponsesImageInputTests.cs"
+ ]
+}

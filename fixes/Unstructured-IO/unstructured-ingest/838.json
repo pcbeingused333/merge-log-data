@@ -1,0 +1,40 @@
+{
+ "repo": "Unstructured-IO/unstructured-ingest",
+ "number": 838,
+ "url": "https://github.com/Unstructured-IO/unstructured-ingest/pull/838",
+ "title": "fix(discord): fail the download instead of hanging on an unreadable channel",
+ "merged_at": "2026-11-19T19:53:27Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -1,3 +1,9 @@\n+## [1.12.9]\n+\n+### Fixes\n+\n+- **fix(discord): fail the download instead of hanging when the channel cannot be read.** `DiscordDownloader` fetched messages inside `on_ready`, where discord.py only logs exceptions, and `client.close()` was never reached on that path, so `client.start()` never returned. A missing channel or a `Forbidden` error from `channel.history` therefore hung the download forever. The handler now always closes the client and the error is re-raised from `run_async`.\n+\n ## [1.12.8]\n \n ### Fixes"
+  },
+  {
+   "filename": "test/unit/connectors/test_discord.py",
+   "status": "added",
+   "additions": 111,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,111 @@\n+import asyncio\n+import contextlib\n+from unittest.mock import Mock\n+\n+import pytest\n+from pydantic import Secret\n+\n+from unstructured_ingest.data_types.file_data import (\n+    FileData,\n+    FileDataSourceMetadata,\n+    SourceIdentifiers,\n+)\n+from unstructured_ingest.error import ValueError as IngestValueError\n+from unstructured_ingest.processes.connectors.discord import (\n+    DiscordAccessConfig,\n+    DiscordConnectionConfig,\n+    DiscordDownloader,\n+    DiscordDownloaderConfig,\n+)\n+\n+\n+class _Forbidden(Exception):\n+    pass\n+\n+\n+class _FakeChannel:\n+    name = \"general\"\n+\n+    def __init__(self, messages=None, error=None):\n+        self._messages = messages or []\n+        self._error = error\n+\n+    async def history(self, limit=None):\n+        if self._error:\n+            raise self._error\n+        for message in self._messages:\n+            yield message\n+\n+\n+class _FakeClient:\n+    \"\"\"Mimics discord.Client: ``start`` only returns once ``close`` is called, and an\n+    exception raised inside an event handler is logged, not propagated.\"\"\"\n+\n+    def __init__(self, channel):\n+        self._channel = channel\n+        self._closed = asyncio.Event()\n+        self._handlers = {}\n+        self.close_calls = 0\n+\n+    def event(self, coro):\n+        self._handlers[coro.__name__] = coro\n+        return coro\n+\n+    def get_channel(self, channel_id):\n+        return self._channel\n+\n+    async def start(self, token):\n+        # discord.py's Client._run_event routes handler exceptions to on_error, which only logs\n+        with contextlib.suppress(Exception):\n+            await self._handlers[\"on_ready\"]()\n+        await self._closed.wait()\n+\n+    async def close(self):\n+        self.close_calls += 1\n+        self._closed.set()\n+\n+\n+def _file_data():\n+    return FileData(\n+        identifier=\"1\",\n+        connector_type=\"discord\",\n+        source_identifiers=SourceIdentifiers(filename=\"1.txt\", fullpath=\"1.txt\"),\n+        metadata=FileDataSourceMetadata(record_locator={\"channel_id\": \"1\"}),\n+    )\n+\n+\n+def _downloader(monkeypatch, tmp_path, client):\n+    connection_config = DiscordConnectionConfig(\n+        access_config=Secret(DiscordAccessConfig(token=\"token\"))\n+    )\n+    monkeypatch.setattr(DiscordConnectionConfig, \"get_client\", lambda self: client)\n+    return DiscordDownloader(\n+        connection_config=connection_config,\n+        download_config=DiscordDownloaderConfig(download_dir=tmp_path),\n+    )\n+\n+\n+async def test_discord_download_writes_messages(monkeypatch, tmp_path):\n+    channel = _FakeChannel(messages=[Mock(content=\"hello\"), Mock(content=\"world\")])\n+    downloader = _downloader(monkeypatch, tmp_path, _FakeClient(channel))\n+\n+    response = await asyncio.wait_for(downloader.run_async(file_data=_file_data()), timeout=5)\n+\n+    assert response[\"path\"].read_text() == \"hello\\nworld\"\n+\n+\n+async def test_discord_download_fails_when_channel_history_is_forbidden(monkeypatch, tmp_path):\n+    client = _FakeClient(_FakeChannel(error=_Forbidden(\"403 Forbidden (error code: 50001)\")))\n+    downloader = _downloader(monkeypatch, tmp_path, client)\n+\n+    with pytest.raises(_Forbidden):\n+        await asyncio.wait_for(downloader.run_async(file_data=_file_data()), timeout=5)\n+\n+    assert client.close_calls >= 1\n+\n+\n+async def test_discord_download_fails_when_channel_is_not_found(monkeypatch, tmp_path):\n+    downloader = _downloader(monkeypatch, tmp_path, _FakeClient(None))\n+\n+    with pytest.raises(IngestValueError, match=\"channel not found\"):\n+        await asyncio.wait_for(downloader.run_async(file_data=_file_data()), timeout=5)"
+  },
+  {
+   "filename": "unstructured_ingest/__version__.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -1 +1 @@\n-__version__ = \"1.12.8\"  # pragma: no cover\n+__version__ = \"1.12.9\"  # pragma: no cover"
+  },
+  {
+   "filename": "unstructured_ingest/processes/connectors/discord.py",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 9,
+   "patch": "@@ -127,23 +127,35 @@ async def run_async(self, file_data: FileData, **kwargs: Any) -> DownloadRespons\n         messages = []\n         channel_id = record_locator[\"channel_id\"]\n \n+        failure: list[BaseException] = []\n+\n         @client.event\n         async def on_ready():\n-            logger.debug(\"Discord Bot is ready\")\n-            channel = client.get_channel(int(channel_id))\n-            if not channel:\n-                raise ValueError(f\"channel not found for id: {channel_id}\")\n-            logger.debug(f\"Processing messages for channel: {channel.name}\")\n-            async for msg in channel.history(limit=self.download_config.limit):\n-                messages.append(msg)\n-            logger.debug(f\"Fetched {len(messages)} messages\")\n-            await client.close()\n+            # discord.py logs (and otherwise swallows) exceptions raised in event handlers, so\n+            # record any failure, always close the client so ``client.start`` returns, and\n+            # re-raise below.\n+            try:\n+                logger.debug(\"Discord Bot is ready\")\n+                channel = client.get_channel(int(channel_id))\n+                if not channel:\n+                    raise ValueError(f\"channel not found for id: {channel_id}\")\n+                logger.debug(f\"Processing messages for channel: {channel.name}\")\n+                async for msg in channel.history(limit=self.download_config.limit):\n+                    messages.append(msg)\n+                logger.debug(f\"Fetched {len(messages)} messages\")\n+            except Exception as e:\n+                failure.append(e)\n+            finally:\n+                await client.close()\n \n         try:\n             await client.start(self.connection_config.access_config.get_secret_value().token)\n         finally:\n             await client.close()\n \n+        if failure:\n+            raise failure[0]\n+\n         content = \"\\n\".join([message.content for message in messages])\n \n         with open(download_path, \"w\") as file:"
+  }
+ ],
+ "test_files": [
+  "test/unit/connectors/test_discord.py"
+ ]
+}

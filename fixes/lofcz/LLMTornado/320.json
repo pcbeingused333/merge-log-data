@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 320,
+ "url": "https://github.com/lofcz/LLMTornado/pull/320",
+ "title": "fix(tools): send delegate result, not MethodInvocationResult wrapper, to the model",
+ "merged_at": "2026-11-19T12:43:25Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/ToolRunnerTests.cs",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -21,6 +21,12 @@ public class ToolRunnerTests\n {\n     #region Test Tools - Simulating Real Tool Signatures\n \n+    [Description(\"Returns a non-string object\")]\n+    public static object GetTemperature()\n+    {\n+        return new { temperature = 21 };\n+    }\n+\n     /// <summary>\n     /// Tool with no parameters - like MCP's list_allowed_directories\n     /// </summary>\n@@ -121,6 +127,22 @@ public void NormalizeArguments_ValidJsonWithProperties_ReturnsOriginal()\n \n     #endregion\n \n+    #region Non-string delegate results\n+\n+    [Test]\n+    public async Task CallFuncToolAsync_ObjectResult_ContentIsDelegateValueWithoutWrapper()\n+    {\n+        TornadoAgent agent = CreateTestAgent(GetTemperature);\n+        FunctionCall call = CreateFunctionCall(\"GetTemperature\", null, agent);\n+\n+        FunctionResult result = await ToolRunner.CallFuncToolAsync(agent, call);\n+\n+        Assert.That(result.InvocationSucceeded, Is.True);\n+        Assert.That(result.Content, Is.EqualTo(\"{\\\"temperature\\\":21}\"));\n+    }\n+\n+    #endregion\n+\n     #region CallFuncToolAsync Integration Tests\n \n     [Test]"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/FunctionCall.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -283,7 +283,7 @@ public async ValueTask<MethodInvocationResult> Invoke(string data)\n             }\n             else\n             {\n-                Result = new FunctionResult(this, invocationResult.Result as string ?? invocationResult.ToJson(), FunctionResultSetContentModes.Passthrough);    \n+                Result = new FunctionResult(this, invocationResult.Result as string ?? invocationResult.Result.ToJson(), FunctionResultSetContentModes.Passthrough);    \n             }\n         }\n "
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/ToolRunnerTests.cs"
+ ]
+}

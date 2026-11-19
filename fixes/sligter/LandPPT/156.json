@@ -1,0 +1,26 @@
+{
+ "repo": "sligter/LandPPT",
+ "number": 156,
+ "url": "https://github.com/sligter/LandPPT/pull/156",
+ "title": "fix(api): honor the stop parameter on /v1/chat/completions and /v1/completions",
+ "merged_at": "2026-11-19T11:35:29Z",
+ "files": [
+  {
+   "filename": "src/landppt/api/openai_compat.py",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -21,6 +21,20 @@\n router = APIRouter()\n ai_service = AIService()\n \n+\n+def _apply_stop(text: str, stop) -> str:\n+    \"\"\"Cut ``text`` at the earliest stop sequence (which is not included), as OpenAI does.\"\"\"\n+    if not stop:\n+        return text\n+    sequences = [stop] if isinstance(stop, str) else stop\n+    cut = len(text)\n+    for seq in sequences:\n+        if seq:\n+            idx = text.find(seq)\n+            if idx != -1:\n+                cut = min(cut, idx)\n+    return text[:cut]\n+\n @router.post(\n     \"/chat/completions\",\n     response_model=ChatCompletionResponse,\n@@ -43,6 +57,8 @@ async def create_chat_completion(request: ChatCompletionRequest):\n             # Handle general chat request\n             response_content = await ai_service.handle_general_chat_request(request)\n         \n+        response_content = _apply_stop(response_content, request.stop)\n+\n         if request.stream:\n             return StreamingResponse(\n                 _chat_completion_chunks(request.model, response_content),\n@@ -87,6 +103,8 @@ async def create_completion(request: CompletionRequest):\n             # Handle general completion request\n             response_text = await ai_service.handle_general_completion_request(request)\n         \n+        response_text = _apply_stop(response_text, request.stop)\n+\n         # Calculate token usage (simplified)\n         prompt_tokens = len(prompt.split())\n         completion_tokens = len(response_text.split())"
+  },
+  {
+   "filename": "tests/test_openai_compat_stream.py",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -53,3 +53,37 @@ def test_openapi_declares_json_model_and_sse(client):\n     content = client.get(\"/openapi.json\").json()[\"paths\"][\"/v1/chat/completions\"][\"post\"][\"responses\"][\"200\"][\"content\"]\n     assert content[\"application/json\"][\"schema\"] == {\"$ref\": \"#/components/schemas/ChatCompletionResponse\"}\n     assert \"text/event-stream\" in content\n+\n+\n+@pytest.mark.parametrize(\"stop\", [\"two\", [\"zzz\", \"two\"]])\n+def test_chat_stop_truncates_response(client, stop):\n+    body = _body(False)\n+    body[\"stop\"] = stop\n+    resp = client.post(\"/v1/chat/completions\", json=body)\n+    assert resp.status_code == 200\n+    assert resp.json()[\"choices\"][0][\"message\"][\"content\"] == \"line one\\n\\nline \"\n+\n+\n+def test_chat_stop_truncates_stream(client):\n+    body = _body(True)\n+    body[\"stop\"] = \"two\"\n+    resp = client.post(\"/v1/chat/completions\", json=body)\n+    lines = [l[len(\"data: \"):] for l in resp.text.split(\"\\n\\n\") if l.startswith(\"data: \")]\n+    chunks = [json.loads(l) for l in lines[:-1]]\n+    text = \"\".join(c[\"choices\"][0][\"delta\"].get(\"content\", \"\") for c in chunks)\n+    assert text == \"line one\\n\\nline \"\n+\n+\n+def test_completion_stop_truncates_response(monkeypatch):\n+    async def fake_completion(request):\n+        return CONTENT\n+\n+    monkeypatch.setattr(openai_compat.ai_service, \"is_ppt_request\", lambda text: False)\n+    monkeypatch.setattr(openai_compat.ai_service, \"handle_general_completion_request\", fake_completion)\n+    app = FastAPI()\n+    app.include_router(openai_compat.router, prefix=\"/v1\")\n+    resp = TestClient(app).post(\n+        \"/v1/completions\", json={\"model\": \"landppt-v1\", \"prompt\": \"hi\", \"stop\": [\"two\"]}\n+    )\n+    assert resp.status_code == 200\n+    assert resp.json()[\"choices\"][0][\"text\"] == \"line one\\n\\nline \""
+  }
+ ],
+ "test_files": [
+  "tests/test_openai_compat_stream.py"
+ ]
+}

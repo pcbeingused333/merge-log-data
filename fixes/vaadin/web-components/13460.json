@@ -1,0 +1,41 @@
+{
+ "repo": "vaadin/web-components",
+ "number": 13460,
+ "url": "https://github.com/vaadin/web-components/pull/13460",
+ "title": "fix: move focus on radio-group and checkbox-group focus()",
+ "merged_at": "2026-11-19T15:20:07Z",
+ "files": [
+  {
+   "filename": "packages/checkbox-group/src/vaadin-checkbox-group-mixin.js",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -77,6 +77,26 @@ export const CheckboxGroupMixin = (superclass) =>\n       return this.__filterCheckboxes([...this.children]);\n     }\n \n+    /**\n+     * Override method inherited from `FocusMixin`\n+     * to move focus to the first enabled checkbox.\n+     *\n+     * @param {FocusOptions=} options\n+     * @protected\n+     * @override\n+     */\n+    focus(options) {\n+      if (this.disabled) {\n+        return;\n+      }\n+\n+      const target = this.__checkboxes.find((checkbox) => !checkbox.disabled);\n+      if (target) {\n+        target.focus(options);\n+        super.focus(options);\n+      }\n+    }\n+\n     /** @protected */\n     ready() {\n       super.ready();"
+  },
+  {
+   "filename": "packages/checkbox-group/test/checkbox-group.test.js",
+   "status": "modified",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -258,6 +258,51 @@ describe('vaadin-checkbox-group', () => {\n     });\n   });\n \n+  describe('focus()', () => {\n+    beforeEach(async () => {\n+      group = fixtureSync(`\n+        <vaadin-checkbox-group>\n+          <vaadin-checkbox value=\"1\" label=\"Checkbox 1\" disabled></vaadin-checkbox>\n+          <vaadin-checkbox value=\"2\" label=\"Checkbox 2\"></vaadin-checkbox>\n+          <vaadin-checkbox value=\"3\" label=\"Checkbox 3\"></vaadin-checkbox>\n+        </vaadin-checkbox-group>\n+      `);\n+      await nextFrame();\n+      checkboxes = [...group.querySelectorAll('vaadin-checkbox')];\n+    });\n+\n+    it('should focus the first enabled checkbox', () => {\n+      group.focus();\n+      expect(document.activeElement).to.equal(checkboxes[1].inputElement);\n+      expect(checkboxes[1].hasAttribute('focused')).to.be.true;\n+    });\n+\n+    it('should set focus-ring on the group when focus() is called', () => {\n+      group.focus();\n+      expect(group.hasAttribute('focus-ring')).to.be.true;\n+    });\n+\n+    it('should not set focus-ring when focusVisible is false', () => {\n+      group.focus({ focusVisible: false });\n+      expect(group.hasAttribute('focus-ring')).to.be.false;\n+    });\n+\n+    it('should not move focus when all checkboxes are disabled', () => {\n+      group.disabled = true;\n+      group.focus();\n+      expect(document.activeElement).to.equal(document.body);\n+    });\n+\n+    it('should not set focus-ring when all checkboxes are disabled', () => {\n+      checkboxes.forEach((checkbox) => {\n+        checkbox.disabled = true;\n+      });\n+      group.focus();\n+      expect(group.hasAttribute('focus-ring')).to.be.false;\n+      expect(document.activeElement).to.equal(document.body);\n+    });\n+  });\n+\n   describe('focused attribute', () => {\n     let firstGlobalFocusable;\n "
+  },
+  {
+   "filename": "packages/radio-group/src/vaadin-radio-group-mixin.js",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 0,
+   "patch": "@@ -94,6 +94,27 @@ export const RadioGroupMixin = (superclass) =>\n       return this.__filterRadioButtons([...this.children]);\n     }\n \n+    /**\n+     * Override method inherited from `FocusMixin` to move focus\n+     * to the checked radio button, or to the first enabled one.\n+     *\n+     * @param {FocusOptions=} options\n+     * @protected\n+     * @override\n+     */\n+    focus(options) {\n+      if (this.disabled) {\n+        return;\n+      }\n+\n+      const selected = this.__selectedRadioButton;\n+      const target = selected && !selected.disabled ? selected : this.__radioButtons.find((radio) => !radio.disabled);\n+      if (target) {\n+        target.focus(options);\n+        super.focus(options);\n+      }\n+    }\n+\n     /**\n      * A currently selected radio button.\n      *"
+  },
+  {
+   "filename": "packages/radio-group/test/radio-group.test.js",
+   "status": "modified",
+   "additions": 50,
+   "deletions": 0,
+   "patch": "@@ -218,6 +218,56 @@ describe('radio-group', () => {\n     });\n   });\n \n+  describe('focus()', () => {\n+    beforeEach(async () => {\n+      group = fixtureSync(`\n+        <vaadin-radio-group>\n+          <vaadin-radio-button value=\"1\" label=\"Button 1\" disabled></vaadin-radio-button>\n+          <vaadin-radio-button value=\"2\" label=\"Button 2\"></vaadin-radio-button>\n+          <vaadin-radio-button value=\"3\" label=\"Button 3\"></vaadin-radio-button>\n+        </vaadin-radio-group>\n+      `);\n+      await nextFrame();\n+      buttons = [...group.querySelectorAll('vaadin-radio-button')];\n+    });\n+\n+    it('should focus the first enabled radio button when none is checked', () => {\n+      group.focus();\n+      expect(document.activeElement).to.equal(buttons[1].inputElement);\n+      expect(buttons[1].hasAttribute('focused')).to.be.true;\n+    });\n+\n+    it('should focus the checked radio button', async () => {\n+      group.value = '3';\n+      await nextUpdate(group);\n+      group.focus();\n+      expect(document.activeElement).to.equal(buttons[2].inputElement);\n+    });\n+\n+    it('should set focus-ring on the group when focus() is called', () => {\n+      group.focus();\n+      expect(group.hasAttribute('focus-ring')).to.be.true;\n+    });\n+\n+    it('should not set focus-ring when focusVisible is false', () => {\n+      group.focus({ focusVisible: false });\n+      expect(group.hasAttribute('focus-ring')).to.be.false;\n+    });\n+\n+    it('should not move focus when all radio buttons are disabled', () => {\n+      group.disabled = true;\n+      group.focus();\n+      expect(document.activeElement).to.equal(document.body);\n+    });\n+\n+    it('should not set focus-ring when no radio button is focusable', () => {\n+      group.readonly = true;\n+      group.focus();\n+      expect(group.hasAttribute('focus-ring')).to.be.false;\n+      expect(document.activeElement).to.equal(document.body);\n+    });\n+  });\n+\n   describe('focused state', () => {\n     let firstGlobalFocusable;\n "
+  }
+ ],
+ "test_files": [
+  "packages/checkbox-group/test/checkbox-group.test.js",
+  "packages/radio-group/test/radio-group.test.js"
+ ]
+}

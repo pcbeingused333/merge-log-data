@@ -1,0 +1,49 @@
+{
+ "repo": "openai-php/client",
+ "number": 857,
+ "url": "https://github.com/openai-php/client/pull/857",
+ "title": "fix(chat): keep top_logprobs and refusal logprobs on chat completions",
+ "merged_at": "2026-11-19T13:12:21Z",
+ "files": [
+  {
+   "filename": "src/Responses/Chat/CreateResponseChoiceLogprobs.php",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 2,
+   "patch": "@@ -4,17 +4,22 @@\n \n namespace OpenAI\\Responses\\Chat;\n \n+/**\n+ * @phpstan-type LogprobContentType array{token: string, logprob: float, bytes: ?array<int, int>, top_logprobs?: array<int, array{token: string, logprob: float, bytes: ?array<int, int>}>}\n+ */\n final class CreateResponseChoiceLogprobs\n {\n     /**\n      * @param  ?array<int, CreateResponseChoiceLogprobsContent>  $content\n+     * @param  ?array<int, CreateResponseChoiceLogprobsContent>  $refusal\n      */\n     private function __construct(\n         public readonly ?array $content,\n+        public readonly ?array $refusal = null,\n     ) {}\n \n     /**\n-     * @param  array{content: ?array<int, array{token: string, logprob: float, bytes: ?array<int, int>}>}  $attributes\n+     * @param  array{content: ?array<int, LogprobContentType>, refusal?: ?array<int, LogprobContentType>}  $attributes\n      */\n     public static function from(array $attributes): self\n     {\n@@ -25,13 +30,21 @@ public static function from(array $attributes): self\n             ), $attributes['content']);\n         }\n \n+        $refusal = null;\n+        if (isset($attributes['refusal'])) {\n+            $refusal = array_map(fn (array $result): CreateResponseChoiceLogprobsContent => CreateResponseChoiceLogprobsContent::from(\n+                $result\n+            ), $attributes['refusal']);\n+        }\n+\n         return new self(\n             $content,\n+            $refusal,\n         );\n     }\n \n     /**\n-     * @return array{content: ?array<int, array{token: string, logprob: float, bytes: ?array<int, int>}>}\n+     * @return array{content: ?array<int, array{token: string, logprob: float, bytes: ?array<int, int>, top_logprobs: array<int, array{token: string, logprob: float, bytes: ?array<int, int>}>}>, refusal: ?array<int, array{token: string, logprob: float, bytes: ?array<int, int>, top_logprobs: array<int, array{token: string, logprob: float, bytes: ?array<int, int>}>}>}\n      */\n     public function toArray(): array\n     {\n@@ -40,6 +53,10 @@ public function toArray(): array\n                 static fn (CreateResponseChoiceLogprobsContent $result): array => $result->toArray(),\n                 $this->content,\n             ) : null,\n+            'refusal' => $this->refusal ? array_map(\n+                static fn (CreateResponseChoiceLogprobsContent $result): array => $result->toArray(),\n+                $this->refusal,\n+            ) : null,\n         ];\n     }\n }"
+  },
+  {
+   "filename": "src/Responses/Chat/CreateResponseChoiceLogprobsContent.php",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 2,
+   "patch": "@@ -8,18 +8,21 @@ final class CreateResponseChoiceLogprobsContent\n {\n     /**\n      * @param  ?array<int, int>  $bytes\n+     * @param  array<int, array{token: string, logprob: float, bytes: ?array<int, int>}>  $topLogprobs\n      */\n     private function __construct(\n         public readonly string $token,\n         public readonly float $logprob,\n         public readonly ?array $bytes,\n+        public readonly array $topLogprobs = [],\n     ) {}\n \n     /**\n      * @param array{\n      *     token: string,\n      *     logprob: float,\n-     *     bytes: ?array<int, int>\n+     *     bytes: ?array<int, int>,\n+     *     top_logprobs?: array<int, array{token: string, logprob: float, bytes: ?array<int, int>}>\n      * } $attributes\n      */\n     public static function from(array $attributes): self\n@@ -28,14 +31,16 @@ public static function from(array $attributes): self\n             $attributes['token'],\n             $attributes['logprob'],\n             $attributes['bytes'],\n+            $attributes['top_logprobs'] ?? [],\n         );\n     }\n \n     /**\n      * @return array{\n      *     token: string,\n      *     logprob: float,\n-     *     bytes: ?array<int, int>\n+     *     bytes: ?array<int, int>,\n+     *     top_logprobs: array<int, array{token: string, logprob: float, bytes: ?array<int, int>}>\n      * }\n      */\n     public function toArray(): array\n@@ -44,6 +49,7 @@ public function toArray(): array\n             'token' => $this->token,\n             'logprob' => $this->logprob,\n             'bytes' => $this->bytes,\n+            'top_logprobs' => $this->topLogprobs,\n         ];\n     }\n }"
+  },
+  {
+   "filename": "tests/Fixtures/Chat.php",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -448,13 +448,27 @@ function chatCompletionWithLogprobs(): array\n                             'token' => 'Hello',\n                             'logprob' => 0.0,\n                             'bytes' => [72, 101, 108, 108, 111],\n+                            'top_logprobs' => [\n+                                [\n+                                    'token' => 'Hello',\n+                                    'logprob' => 0.0,\n+                                    'bytes' => [72, 101, 108, 108, 111],\n+                                ],\n+                                [\n+                                    'token' => 'Hi',\n+                                    'logprob' => -3.5,\n+                                    'bytes' => [72, 105],\n+                                ],\n+                            ],\n                         ],\n                         [\n                             'token' => '!',\n                             'logprob' => -0.0005715019651688635,\n                             'bytes' => [33],\n+                            'top_logprobs' => [],\n                         ],\n                     ],\n+                    'refusal' => null,\n                 ],\n                 'finish_reason' => 'stop',\n             ],"
+  },
+  {
+   "filename": "tests/Responses/Chat/CreateResponseChoiceLogprobs.php",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 1,
+   "patch": "@@ -10,7 +10,8 @@\n         ->toBeInstanceOf(CreateResponseChoiceLogprobs::class)\n         ->content->toBeArray()\n         ->content->toHaveCount(2)\n-        ->content->each->toBeInstanceOf(CreateResponseChoiceLogprobsContent::class);\n+        ->content->each->toBeInstanceOf(CreateResponseChoiceLogprobsContent::class)\n+        ->refusal->toBeNull();\n });\n \n test('to array', function () {\n@@ -19,3 +20,29 @@\n     expect($result->toArray())\n         ->toBe(chatCompletionWithLogprobs()['choices'][0]['logprobs']);\n });\n+\n+test('from with refusal logprobs', function () {\n+    $attributes = chatCompletionWithLogprobs()['choices'][0]['logprobs'];\n+    $attributes['content'] = null;\n+    $attributes['refusal'] = [\n+        ['token' => 'No', 'logprob' => -0.1, 'bytes' => [78, 111], 'top_logprobs' => []],\n+    ];\n+\n+    $result = CreateResponseChoiceLogprobs::from($attributes);\n+\n+    expect($result)\n+        ->content->toBeNull()\n+        ->refusal->toHaveCount(1)\n+        ->refusal->each->toBeInstanceOf(CreateResponseChoiceLogprobsContent::class)\n+        ->and($result->toArray())->toBe($attributes);\n+});\n+\n+test('from without top_logprobs and refusal', function () {\n+    $result = CreateResponseChoiceLogprobs::from([\n+        'content' => [['token' => 'Hi', 'logprob' => -0.2, 'bytes' => null]],\n+    ]);\n+\n+    expect($result)\n+        ->refusal->toBeNull()\n+        ->content->{0}->topLogprobs->toBe([]);\n+});"
+  },
+  {
+   "filename": "tests/Responses/Chat/CreateResponseChoiceLogprobsContent.php",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -8,7 +8,11 @@\n     expect($result)\n         ->token->toBe('Hello')\n         ->logprob->toBe(0.0)\n-        ->bytes->toBe([72, 101, 108, 108, 111]);\n+        ->bytes->toBe([72, 101, 108, 108, 111])\n+        ->topLogprobs->toBe([\n+            ['token' => 'Hello', 'logprob' => 0.0, 'bytes' => [72, 101, 108, 108, 111]],\n+            ['token' => 'Hi', 'logprob' => -3.5, 'bytes' => [72, 105]],\n+        ]);\n });\n \n test('to array', function () {"
+  }
+ ],
+ "test_files": [
+  "tests/Fixtures/Chat.php",
+  "tests/Responses/Chat/CreateResponseChoiceLogprobs.php",
+  "tests/Responses/Chat/CreateResponseChoiceLogprobsContent.php"
+ ]
+}

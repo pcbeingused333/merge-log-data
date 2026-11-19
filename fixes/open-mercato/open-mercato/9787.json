@@ -1,0 +1,26 @@
+{
+ "repo": "open-mercato/open-mercato",
+ "number": 9787,
+ "url": "https://github.com/open-mercato/open-mercato/pull/9787",
+ "title": "fix(webhooks): stabilize webhook list pagination",
+ "merged_at": "2026-11-19T12:41:08Z",
+ "files": [
+  {
+   "filename": "packages/webhooks/src/modules/webhooks/api/webhooks/__tests__/route.order.test.ts",
+   "status": "added",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,45 @@\n+/** @jest-environment node */\n+\n+type BeforeList = (\n+  query: { page: string; pageSize: string },\n+  ctx: { auth: { tenantId: string; orgId: string }; container: { resolve: jest.Mock } },\n+) => Promise<void>\n+\n+const captured: { beforeList?: BeforeList } = {}\n+\n+jest.mock('@open-mercato/shared/lib/crud/factory', () => ({\n+  makeCrudRoute: jest.fn((options: { hooks: { beforeList: BeforeList } }) => {\n+    captured.beforeList = options.hooks.beforeList\n+    return { metadata: {}, GET: jest.fn(), POST: jest.fn(), PUT: jest.fn(), DELETE: jest.fn() }\n+  }),\n+}))\n+\n+jest.mock('@open-mercato/shared/lib/i18n/server', () => ({\n+  resolveTranslations: async () => ({ translate: (_key: string, fallback: string) => fallback }),\n+}))\n+\n+import '../route'\n+\n+describe('webhook list ordering', () => {\n+  it('breaks creation timestamp ties by id when paginating', async () => {\n+    const qb = {\n+      where: jest.fn(),\n+      andWhere: jest.fn(),\n+      orderBy: jest.fn(),\n+      limit: jest.fn().mockReturnThis(),\n+      offset: jest.fn(),\n+      getResultAndCount: jest.fn(async () => [[], 0]),\n+    }\n+    const beforeList = captured.beforeList\n+    if (!beforeList) throw new Error('Expected the webhook list hook to be registered')\n+\n+    await expect(beforeList({ page: '2', pageSize: '10' }, {\n+      auth: { tenantId: 'tenant-1', orgId: 'org-1' },\n+      container: { resolve: jest.fn(() => ({ createQueryBuilder: jest.fn(() => qb) })) },\n+    })).rejects.toMatchObject({ status: 200 })\n+\n+    expect(qb.orderBy).toHaveBeenCalledWith({ createdAt: 'desc', id: 'desc' })\n+    expect(qb.limit).toHaveBeenCalledWith(10)\n+    expect(qb.offset).toHaveBeenCalledWith(10)\n+  })\n+})"
+  },
+  {
+   "filename": "packages/webhooks/src/modules/webhooks/api/webhooks/route.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -185,7 +185,7 @@ const crud = makeCrudRoute<WebhookCreateInput, WebhookUpdateInput, z.infer<typeo\n         }\n       }\n \n-      qb.orderBy({ createdAt: 'desc' })\n+      qb.orderBy({ createdAt: 'desc', id: 'desc' })\n       qb.limit(pageSize).offset((page - 1) * pageSize)\n       const [items, total] = await qb.getResultAndCount()\n "
+  }
+ ],
+ "test_files": [
+  "packages/webhooks/src/modules/webhooks/api/webhooks/__tests__/route.order.test.ts"
+ ]
+}

@@ -63,6 +63,12 @@
    "state": "COMMENTED",
    "submitted_at": "2026-11-17T12:57:21Z",
    "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-19T10:36:31Z",
+   "body": "<!-- ccr-overview-v2 -->\n\n### 🟡 Changes recommended\n\nTests do not verify request-context cancellation or cancellation-safe decompressor shutdown ordering, and reader ownership on constructor errors remains undocumented.\n\n<details open>\n<summary><strong>4 open issues</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Test read, decompressor, and body cleanup ordering](https://github.com/Azure/azure-kusto-go/pull/364#discussion_r4627464408) · New\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Assert materialization cancels the outbound request context](https://github.com/Azure/azure-kusto-go/pull/364#discussion_r4627464502) · New\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Test cancellation when ToDataset exits early on a stalled malformed stream](https://github.com/Azure/azure-kusto-go/pull/364#discussion_r4599636448)\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/low-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/low-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/low-v2-light.png\" alt=\"Low severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Document reader ownership when construction fails](https://github.com/Azure/azure-kusto-go/pull/364#discussion_r4627464565) · New\n</details>\n\n<sub>Review effort: Max</sub>"
   }
  ],
  "review_comments": [
@@ -137,6 +143,24 @@
    "path": "azkustodata/kusto.go",
    "created_at": "2026-11-17T12:57:21Z",
    "body": "Couple of comments @pcbeingused333 \r\n\r\n1. Could we also close res when NewIterativeDataset fails? No reader goroutine is started on that path, so nothing subsequently closes the translated response reader. reqCancel() cancels the request but does not invoke that reader’s Close()\r\n\r\n2. Could we add tests for this override on both successful conversion and an early conversion error while the remaining response is stalled? Removing this override currently leaves the root-package tests passing. Please verify request cancellation and exactly-once body cleanup through both IterativeQuery().ToDataset() and Client.Query(). A multi-table/multi-fragment success case should also ensure cancellation does not happen prematurely.\r\n\r\n3. The current assertions observe the HTTP body, not the decompressor. Skipping decompressor Close() still leaves these tests passing. Could we instrument the actual gzip reader and assert: HTTP read returns → gzip read returns → gzip close completes → HTTP body closes? Please cover payload and trailer stalls, exactly-once cleanup, and a decompressor cleanup error that must not prevent HTTP-body closure. Equivalent deflate coverage would be useful."
+  },
+  {
+   "role": "bot",
+   "path": "azkustodata/kusto.go",
+   "created_at": "2026-11-19T10:36:30Z",
+   "body": "The order tests finish `ReadAll` before closing the reader, while the client tests observe only the HTTP body. Neither verifies that dataset cancellation lets the decompressor's `Read` return before its `Close` begins. Add an instrumented gzip/deflate dataset test for payload and trailer stalls that checks read completion, decompressor close completion, then HTTP-body close."
+  },
+  {
+   "role": "bot",
+   "path": "azkustodata/kusto_todataset_test.go",
+   "created_at": "2026-11-19T10:36:30Z",
+   "body": "These success assertions only observe body cleanup, which `readRoutine` already performs at EOF even if `cancelOnCloseDataset.ToDataset` never calls `reqCancel`. Thus the success case does not verify that materialization releases the request context. Please capture the outbound request's context in `trackingTransport` and assert that its `Done()` channel closes after `call(t, client)` for both call paths. Checking the returned dataset's context would not suffice, since the inner dataset cancels that independently."
+  },
+  {
+   "role": "bot",
+   "path": "azkustodata/query/v2/iterative_dataset.go",
+   "created_at": "2026-11-19T10:36:31Z",
+   "body": "The dataset takes ownership of `r` only after successful construction: if `newFrameReader` fails, this function returns without closing it. Please document that callers must close `r` on constructor errors, so callers following this ownership contract do not leak the response body."
   }
  ],
  "comments": [

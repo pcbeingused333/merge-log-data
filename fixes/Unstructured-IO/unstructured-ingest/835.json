@@ -1,0 +1,62 @@
+{
+ "repo": "Unstructured-IO/unstructured-ingest",
+ "number": 835,
+ "url": "https://github.com/Unstructured-IO/unstructured-ingest/pull/835",
+ "title": "fix: omit Windows null timestamps in OneDrive and Outlook",
+ "merged_at": "2026-11-19T19:38:15Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -1,3 +1,9 @@\n+## [1.12.4]\n+\n+### Fixes\n+\n+- **OneDrive no longer aborts when a file time is the Windows null filetime.** Microsoft Graph uses `1601-01-01 00:00:00` for recovered or unsaved files. `datetime.timestamp()` goes through the platform C `mktime`: on Windows that raises `OSError` and stops the ingest, and on other platforms it returns a large negative epoch that is not a real file time. Outlook wrote the same Graph value through `.timestamp()` after labeling it UTC, so the null was stored as a modification time there too. `safe_timestamp()` treats that exact instant as missing, and also returns `None` when `timestamp()` raises `OSError`, `OverflowError`, or `ValueError`. OneDrive and Outlook leave `date_created` and `date_modified` unset. Ordinary timestamps are unchanged.\n+\n ## [1.12.3]\n \n ### Fixes"
+  },
+  {
+   "filename": "test/unit/connectors/test_onedrive.py",
+   "status": "modified",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -1,3 +1,4 @@\n+from datetime import datetime, timezone\n from typing import Any\n from unittest.mock import Mock, patch\n \n@@ -391,6 +392,50 @@ def test_permissions_none_when_fetch_unavailable(self):\n         assert file_data.metadata.permissions_data is None\n         assert file_data.metadata.permissions_version is None\n \n+    @pytest.mark.parametrize(\n+        \"stamp\",\n+        [\n+            datetime(1601, 1, 1, 0, 0, 0),\n+            datetime(1601, 1, 1, 0, 0, 0, tzinfo=timezone.utc),\n+        ],\n+    )\n+    def test_windows_null_filetime_is_omitted(self, stamp: datetime):\n+        # Microsoft Graph uses 1601-01-01 00:00:00 (the Windows FILETIME epoch)\n+        # as a null timestamp. Indexing that file must not raise, and the null\n+        # must not be stored as a modification time.\n+        indexer = _make_indexer()\n+        drive_item = _make_drive_item()\n+        drive_item.last_modified_datetime = stamp\n+        drive_item.created_datetime = stamp\n+        file_data = indexer.drive_item_to_file_data_sync(drive_item)\n+        assert file_data.metadata.date_modified is None\n+        assert file_data.metadata.date_created is None\n+\n+    def test_unrepresentable_timestamp_is_omitted(self):\n+        # Platforms whose C mktime rejects a date raise from datetime.timestamp()\n+        # (OSError on Windows for the 1601 null filetime; ValueError here for\n+        # year 1). The file is still indexed, with that date left unset.\n+        indexer = _make_indexer()\n+        drive_item = _make_drive_item()\n+        drive_item.last_modified_datetime = datetime(1, 1, 1, 0, 0, 0)\n+        drive_item.created_datetime = datetime(2024, 6, 1, 12, 0, 0)\n+        file_data = indexer.drive_item_to_file_data_sync(drive_item)\n+        assert file_data.metadata.date_modified is None\n+        assert float(file_data.metadata.date_created) == pytest.approx(\n+            datetime(2024, 6, 1, 12, 0, 0).timestamp()\n+        )\n+\n+    def test_real_timestamp_is_preserved(self):\n+        indexer = _make_indexer()\n+        drive_item = _make_drive_item()\n+        modified = datetime(2024, 6, 1, 12, 0, 0)\n+        created = datetime(2024, 5, 1, 8, 30, 0)\n+        drive_item.last_modified_datetime = modified\n+        drive_item.created_datetime = created\n+        file_data = indexer.drive_item_to_file_data_sync(drive_item)\n+        assert float(file_data.metadata.date_modified) == pytest.approx(modified.timestamp())\n+        assert float(file_data.metadata.date_created) == pytest.approx(created.timestamp())\n+\n \n def _batch_response(status_code: int = 200, responses: list[dict[str, Any]] | None = None) -> Mock:\n     resp = Mock()"
+  },
+  {
+   "filename": "test/unit/connectors/test_outlook.py",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -141,6 +141,41 @@ def test_version_is_none_when_changekey_is_empty_string(self):\n         assert file_data.metadata.version is None\n \n \n+class TestMessageToFileDataTimestamps:\n+    @pytest.mark.parametrize(\n+        \"stamp\",\n+        [\n+            datetime(1601, 1, 1, 0, 0, 0),\n+            datetime(1601, 1, 1, 0, 0, 0, tzinfo=timezone.utc),\n+        ],\n+    )\n+    def test_windows_null_filetime_is_omitted(self, stamp: datetime):\n+        # Same null filetime as OneDrive: 1601-01-01 00:00:00 must not be\n+        # stored as the message's created or modified time.\n+        indexer = _make_indexer()\n+        message = _make_message()\n+        message.last_modified_datetime = stamp\n+        message.created_datetime = stamp\n+        file_data = indexer._message_to_file_data(message)\n+        assert file_data.metadata.date_modified is None\n+        assert file_data.metadata.date_created is None\n+\n+    def test_real_timestamp_is_preserved(self):\n+        indexer = _make_indexer()\n+        message = _make_message()\n+        modified = datetime(2024, 6, 1, 12, 0, 0)\n+        created = datetime(2024, 5, 1, 8, 30, 0)\n+        message.last_modified_datetime = modified\n+        message.created_datetime = created\n+        file_data = indexer._message_to_file_data(message)\n+        assert float(file_data.metadata.date_modified) == pytest.approx(\n+            modified.replace(tzinfo=timezone.utc).timestamp()\n+        )\n+        assert float(file_data.metadata.date_created) == pytest.approx(\n+            created.replace(tzinfo=timezone.utc).timestamp()\n+        )\n+\n+\n class TestMessageToFileDataIdentity:\n     \"\"\"The message id must reach every identity field unmodified.\n "
+  },
+  {
+   "filename": "unstructured_ingest/__version__.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -1 +1 @@\n-__version__ = \"1.12.3\"  # pragma: no cover\n+__version__ = \"1.12.4\"  # pragma: no cover"
+  },
+  {
+   "filename": "unstructured_ingest/processes/connectors/onedrive.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 2,
+   "patch": "@@ -47,6 +47,7 @@\n )\n from unstructured_ingest.utils.acl import compute_permissions_version\n from unstructured_ingest.utils.dep_check import requires_dependencies\n+from unstructured_ingest.utils.string_and_date_utils import safe_timestamp\n \n if TYPE_CHECKING:\n     from office365.graph_client import GraphClient\n@@ -330,8 +331,8 @@ def drive_item_to_file_data_sync(\n             metadata=FileDataSourceMetadata(\n                 url=drive_item.parent_reference.path + \"/\" + drive_item.name,\n                 version=drive_item.etag,\n-                date_modified=str(date_modified_dt.timestamp()) if date_modified_dt else None,\n-                date_created=str(date_created_at.timestamp()) if date_created_at else None,\n+                date_modified=safe_timestamp(date_modified_dt),\n+                date_created=safe_timestamp(date_created_at),\n                 date_processed=str(time()),\n                 record_locator={\n                     \"user_pname\": self.connection_config.user_pname,"
+  },
+  {
+   "filename": "unstructured_ingest/processes/connectors/outlook.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 3,
+   "patch": "@@ -35,6 +35,7 @@\n     prepare_body_replacement,\n )\n from unstructured_ingest.utils.dep_check import requires_dependencies\n+from unstructured_ingest.utils.string_and_date_utils import safe_timestamp\n \n # Graph accepts $top between 1 and 1000 for /messages and warns that large\n # full-message pages can 504; get_all() still follows @odata.nextLink to\n@@ -344,10 +345,10 @@ def _message_to_file_data(self, message: \"Message\") -> FileData:\n                 # stored empty-string version, defeating the platform's\n                 # unchanged-record skip; normalize falsy to None.\n                 version=message.get_property(\"changeKey\") or None,\n-                date_modified=str(\n-                    message.last_modified_datetime.replace(tzinfo=timezone.utc).timestamp()\n+                date_modified=safe_timestamp(\n+                    message.last_modified_datetime.replace(tzinfo=timezone.utc)\n                 ),\n-                date_created=str(message.created_datetime.replace(tzinfo=timezone.utc).timestamp()),\n+                date_created=safe_timestamp(message.created_datetime.replace(tzinfo=timezone.utc)),\n                 date_processed=str(time.time()),\n                 record_locator={\n                     \"message_id\": message.id,"
+  },
+  {
+   "filename": "unstructured_ingest/utils/string_and_date_utils.py",
+   "status": "modified",
+   "additions": 31,
+   "deletions": 0,
+   "patch": "@@ -99,3 +99,34 @@ def parse_timestamp(value: Optional[str]) -> Optional[float]:\n     if parsed.tzinfo is None:\n         parsed = parsed.replace(tzinfo=timezone.utc)\n     return parsed.timestamp()\n+\n+\n+# Windows FILETIME epoch. Microsoft Graph uses this instant as a null timestamp\n+# on recovered or unsaved files (issue #517).\n+_WINDOWS_NULL_FILETIME = (1601, 1, 1, 0, 0, 0, 0)\n+\n+\n+def safe_timestamp(dt: Optional[datetime]) -> Optional[str]:\n+    \"\"\"Epoch seconds as a string, or None when the value is not a real file time.\n+\n+    ``datetime.timestamp()`` raises OSError or OverflowError for 1601-01-01 on\n+    platforms whose C mktime rejects it, and otherwise returns a large negative\n+    epoch. Dates the platform cannot convert raise ValueError. Indexers omit\n+    all of those instead of aborting the file.\n+    \"\"\"\n+    if dt is None:\n+        return None\n+    if (\n+        dt.year,\n+        dt.month,\n+        dt.day,\n+        dt.hour,\n+        dt.minute,\n+        dt.second,\n+        dt.microsecond,\n+    ) == _WINDOWS_NULL_FILETIME:\n+        return None\n+    try:\n+        return str(dt.timestamp())\n+    except (OSError, OverflowError, ValueError):\n+        return None"
+  }
+ ],
+ "test_files": [
+  "test/unit/connectors/test_onedrive.py",
+  "test/unit/connectors/test_outlook.py"
+ ]
+}

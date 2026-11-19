@@ -1,0 +1,26 @@
+{
+ "repo": "sligter/LandPPT",
+ "number": 159,
+ "url": "https://github.com/sligter/LandPPT/pull/159",
+ "title": "fix(openai): raise on failed or error events in Responses streams",
+ "merged_at": "2026-11-19T11:35:01Z",
+ "files": [
+  {
+   "filename": "src/landppt/ai/providers.py",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 1,
+   "patch": "@@ -634,8 +634,20 @@ async def stream_chat_completion(self, messages: List[AIMessage], **kwargs) -> A\n                 async def _responses_chunks() -> AsyncGenerator[str, None]:\n                     async with self.client.responses.stream(**request_kwargs) as stream:\n                         async for event in stream:\n-                            if getattr(event, \"type\", None) == \"response.output_text.delta\" and getattr(event, \"delta\", None):\n+                            event_type = getattr(event, \"type\", None)\n+                            if event_type == \"response.output_text.delta\" and getattr(event, \"delta\", None):\n                                 yield event.delta\n+                            elif event_type == \"response.failed\":\n+                                error = getattr(getattr(event, \"response\", None), \"error\", None)\n+                                raise RuntimeError(\n+                                    f\"OpenAI Responses stream failed: \"\n+                                    f\"{getattr(error, 'code', None)}: {getattr(error, 'message', None)}\"\n+                                )\n+                            elif event_type == \"error\":\n+                                raise RuntimeError(\n+                                    f\"OpenAI Responses stream error: \"\n+                                    f\"{getattr(event, 'code', None)}: {getattr(event, 'message', None)}\"\n+                                )\n \n                 async for visible_chunk in self._filter_think_chunks(_responses_chunks()):\n                     yield visible_chunk"
+  },
+  {
+   "filename": "tests/test_openai_responses_stream_errors.py",
+   "status": "added",
+   "additions": 87,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,87 @@\n+import os\n+import sys\n+import types\n+\n+import pytest\n+\n+os.environ[\"DEBUG\"] = \"false\"\n+\n+from landppt.ai.base import AIMessage, MessageRole\n+from landppt.ai.providers import OpenAIProvider\n+\n+\n+def _delta(text):\n+    return types.SimpleNamespace(type=\"response.output_text.delta\", delta=text)\n+\n+\n+def _provider(monkeypatch, events):\n+    class _Stream:\n+        def __aiter__(self):\n+            async def _iterate():\n+                for event in events:\n+                    yield event\n+\n+            return _iterate()\n+\n+    class _Manager:\n+        async def __aenter__(self):\n+            return _Stream()\n+\n+        async def __aexit__(self, exc_type, exc, tb):\n+            return None\n+\n+    class _FakeAsyncOpenAI:\n+        def __init__(self, **kwargs):\n+            self.responses = types.SimpleNamespace(stream=lambda **kw: _Manager())\n+\n+    monkeypatch.setitem(sys.modules, \"openai\", types.SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))\n+    return OpenAIProvider(\n+        {\n+            \"api_key\": \"test-key\",\n+            \"base_url\": \"https://api.openai.com/v1\",\n+            \"model\": \"gpt-4.1\",\n+            \"use_responses_api\": True,\n+        }\n+    )\n+\n+\n+async def _collect(provider):\n+    chunks = []\n+    async for chunk in provider.stream_chat_completion(\n+        [AIMessage(role=MessageRole.USER, content=\"hello\")]\n+    ):\n+        chunks.append(chunk)\n+    return chunks\n+\n+\n+@pytest.mark.asyncio\n+async def test_responses_stream_raises_on_response_failed(monkeypatch):\n+    failed = types.SimpleNamespace(\n+        type=\"response.failed\",\n+        response=types.SimpleNamespace(\n+            error=types.SimpleNamespace(code=\"server_error\", message=\"boom\")\n+        ),\n+    )\n+    provider = _provider(monkeypatch, [_delta(\"partial\"), failed])\n+    chunks = []\n+    with pytest.raises(RuntimeError, match=\"server_error: boom\"):\n+        async for chunk in provider.stream_chat_completion(\n+            [AIMessage(role=MessageRole.USER, content=\"hello\")]\n+        ):\n+            chunks.append(chunk)\n+    assert \"\".join(chunks) == \"partial\"\n+\n+\n+@pytest.mark.asyncio\n+async def test_responses_stream_raises_on_error_event(monkeypatch):\n+    error = types.SimpleNamespace(type=\"error\", code=\"rate_limit_exceeded\", message=\"slow down\")\n+    provider = _provider(monkeypatch, [error])\n+    with pytest.raises(RuntimeError, match=\"rate_limit_exceeded: slow down\"):\n+        await _collect(provider)\n+\n+\n+@pytest.mark.asyncio\n+async def test_responses_stream_completes_normally(monkeypatch):\n+    completed = types.SimpleNamespace(type=\"response.completed\")\n+    provider = _provider(monkeypatch, [_delta(\"Hello \"), _delta(\"world\"), completed])\n+    assert \"\".join(await _collect(provider)) == \"Hello world\""
+  }
+ ],
+ "test_files": [
+  "tests/test_openai_responses_stream_errors.py"
+ ]
+}

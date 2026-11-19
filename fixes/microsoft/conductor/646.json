@@ -1,0 +1,48 @@
+{
+ "repo": "microsoft/conductor",
+ "number": 646,
+ "url": "https://github.com/microsoft/conductor/pull/646",
+ "title": "fix(providers): report input/output tokens for interrupted pydantic-ai runs",
+ "merged_at": "2026-11-19T14:08:34Z",
+ "files": [
+  {
+   "filename": "changelog.d/+interrupted-run-token-usage.fixed.md",
+   "status": "added",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,2 @@\n+**Interrupted agent runs**: partial results from the pydantic-ai provider now\n+report `input_tokens` and `output_tokens` instead of `None`."
+  },
+  {
+   "filename": "src/conductor/providers/_pydantic_ai/interrupt.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -453,8 +453,8 @@ def _usage_from_result(result: AgentRunResult[Any] | None) -> dict[str, Any] | N\n     usage = result.usage\n     return {\n         \"requests\": getattr(usage, \"requests\", None),\n-        \"request_tokens\": getattr(usage, \"request_tokens\", None),\n-        \"response_tokens\": getattr(usage, \"response_tokens\", None),\n+        \"input_tokens\": getattr(usage, \"input_tokens\", None),\n+        \"output_tokens\": getattr(usage, \"output_tokens\", None),\n         \"total_tokens\": getattr(usage, \"total_tokens\", None),\n     }\n "
+  },
+  {
+   "filename": "src/conductor/providers/_pydantic_ai/runner.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -214,8 +214,8 @@ def intercepting_callback(event_type: str, data: dict[str, Any]) -> None:\n             content=content,\n             raw_response=outcome.partial_output,\n             tokens_used=total_usage.get(\"total_tokens\"),\n-            input_tokens=total_usage.get(\"request_tokens\"),\n-            output_tokens=total_usage.get(\"response_tokens\"),\n+            input_tokens=total_usage.get(\"input_tokens\"),\n+            output_tokens=total_usage.get(\"output_tokens\"),\n             last_call_input_tokens=outcome.last_call_input_tokens,\n             partial=True,\n             model=model_name,"
+  },
+  {
+   "filename": "tests/test_providers/test_pydantic_ai_interrupt.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 2,
+   "patch": "@@ -454,10 +454,12 @@ async def test_iter_emits_awaiting_model_before_each_request(self) -> None:\n         usage = outcome.result.usage\n         assert outcome.total_usage == {\n             \"requests\": usage.requests,\n-            \"request_tokens\": None,\n-            \"response_tokens\": None,\n+            \"input_tokens\": usage.input_tokens,\n+            \"output_tokens\": usage.output_tokens,\n             \"total_tokens\": usage.total_tokens,\n         }\n+        assert outcome.total_usage[\"input_tokens\"] is not None\n+        assert outcome.total_usage[\"output_tokens\"] is not None\n \n     @pytest.mark.asyncio\n     async def test_noninteractive_emits_awaiting_model_before_each_request(self) -> None:"
+  },
+  {
+   "filename": "tests/test_providers/test_pydantic_ai_provider.py",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -15,7 +15,10 @@\n import pytest\n from pydantic import BaseModel\n from pydantic_ai import Agent\n+from pydantic_ai.messages import ModelResponse, TextPart\n+from pydantic_ai.models.function import AgentInfo, FunctionModel\n from pydantic_ai.models.test import TestModel\n+from pydantic_ai.usage import RequestUsage\n \n from conductor.config.schema import AgentDef, OutputField, RetryPolicy\n from conductor.exceptions import ValidationError\n@@ -164,6 +167,32 @@ async def test_execute_with_interrupt_returns_partial_output(\n         assert output.partial is True\n         assert output.content == {\"result\": \"partial\"}\n \n+    async def test_execute_with_interrupt_reports_partial_token_usage(\n+        self, provider: ClaudeProvider, no_mcp_manager: Any\n+    ) -> None:\n+        \"\"\"Interrupted runs map the model's input/output usage onto AgentOutput.\"\"\"\n+\n+        def respond(messages: list[Any], info: AgentInfo) -> ModelResponse:\n+            return ModelResponse(\n+                parts=[TextPart(\"partial\")],\n+                usage=RequestUsage(input_tokens=11, output_tokens=7),\n+            )\n+\n+        agent = AgentDef(name=\"interrupted\", model=\"test\", prompt=\"do work\")\n+        signal = asyncio.Event()\n+        signal.set()\n+\n+        with patch(\n+            \"conductor.providers._pydantic_ai.agent_builder.build_agent\",\n+            return_value=Agent(model=FunctionModel(respond), output_type=str),\n+        ):\n+            output = await provider.execute(agent, {}, \"do work\", interrupt_signal=signal)\n+\n+        assert output.partial is True\n+        assert output.input_tokens == 11\n+        assert output.output_tokens == 7\n+        assert output.tokens_used == 18\n+\n \n class TestRetryHistory:\n     \"\"\"Tests for retry-history capture.\"\"\""
+  }
+ ],
+ "test_files": [
+  "tests/test_providers/test_pydantic_ai_interrupt.py",
+  "tests/test_providers/test_pydantic_ai_provider.py"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "temporalio/samples-go",
+ "number": 575,
+ "url": "https://github.com/temporalio/samples-go/pull/575",
+ "title": "fix(reqrespquery): return an error when the response timeout expires without a response",
+ "merged_at": "2026-11-19T15:02:59Z",
+ "files": [
+  {
+   "filename": "reqrespquery/requester.go",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 3,
+   "patch": "@@ -81,11 +81,16 @@ func (r *Requester) RequestUppercase(ctx context.Context, str string) (string, e\n \t\t// Wait for interval or timeout\n \t\tselect {\n \t\tcase <-pollCtx.Done():\n-\t\t\t// If we timed out and not the original context, show last error\n-\t\t\tif ctx.Err() == nil && err != nil {\n+\t\t\t// If the original context ended, report that\n+\t\t\tif ctx.Err() != nil {\n+\t\t\t\treturn \"\", ctx.Err()\n+\t\t\t}\n+\t\t\t// Otherwise we timed out waiting for the response. Show the last error\n+\t\t\t// if there was one.\n+\t\t\tif err != nil {\n \t\t\t\treturn \"\", fmt.Errorf(\"timeout, last error: %w\", err)\n \t\t\t}\n-\t\t\treturn \"\", ctx.Err()\n+\t\t\treturn \"\", fmt.Errorf(\"timeout waiting for response: %w\", pollCtx.Err())\n \t\tcase <-t.C:\n \t\t}\n \t}"
+  },
+  {
+   "filename": "reqrespquery/requester_test.go",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -5,6 +5,7 @@ import (\n \t\"strings\"\n \t\"sync\"\n \t\"testing\"\n+\t\"time\"\n \n \t\"github.com/stretchr/testify/mock\"\n \t\"github.com/stretchr/testify/require\"\n@@ -53,3 +54,31 @@ func TestRequester(t *testing.T) {\n \trequire.NoError(t, err)\n \trequire.Equal(t, \"SOME VALUE\", res)\n }\n+\n+func TestRequesterTimeoutWithoutResponse(t *testing.T) {\n+\tc := &mocks.Client{}\n+\t// Queries succeed but never have a response yet\n+\tqueryVal := &mocks.Value{}\n+\tqueryVal.On(\"Get\", mock.AnythingOfType(\"**reqrespquery.Response\")).\n+\t\tMaybe().\n+\t\tReturn(nil)\n+\tc.On(\"QueryWorkflow\", mock.Anything, \"some-workflow\", \"\", \"response\", mock.AnythingOfType(\"string\")).\n+\t\tMaybe().\n+\t\tReturn(queryVal, nil)\n+\tc.On(\"SignalWorkflow\", mock.Anything, \"some-workflow\", \"\", \"request\", mock.AnythingOfType(\"*reqrespquery.Request\")).\n+\t\tOnce().\n+\t\tReturn(nil)\n+\n+\treq, err := reqrespquery.NewRequester(reqrespquery.RequesterOptions{\n+\t\tClient:                c,\n+\t\tTargetWorkflowID:      \"some-workflow\",\n+\t\tResponseQueryInterval: 10 * time.Millisecond,\n+\t\tResponseTimeout:       50 * time.Millisecond,\n+\t})\n+\trequire.NoError(t, err)\n+\n+\tres, err := req.RequestUppercase(context.Background(), \"some value\")\n+\trequire.Error(t, err)\n+\trequire.ErrorIs(t, err, context.DeadlineExceeded)\n+\trequire.Empty(t, res)\n+}"
+  }
+ ],
+ "test_files": [
+  "reqrespquery/requester_test.go"
+ ]
+}

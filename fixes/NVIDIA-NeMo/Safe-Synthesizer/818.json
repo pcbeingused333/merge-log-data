@@ -1,0 +1,26 @@
+{
+ "repo": "NVIDIA-NeMo/Safe-Synthesizer",
+ "number": 818,
+ "url": "https://github.com/NVIDIA-NeMo/Safe-Synthesizer/pull/818",
+ "title": "fix(data_processing): accept CRLF line endings when extracting JSONL records",
+ "merged_at": "2026-11-19T18:36:42Z",
+ "files": [
+  {
+   "filename": "src/nemo_safe_synthesizer/data_processing/record_utils.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -26,8 +26,8 @@\n from ..observability import get_logger\n from .records.json_types import JsonSchema, JsonValue, is_json_object\n \n-RECORD_REGEX_PATTERN = r\"{.+?}(?:\\n|$)\"\n-RECORD_REGEX_PATTEN_LOOKAHEAD = r\"{.+?}(?=\\n|$)\"\n+RECORD_REGEX_PATTERN = r\"{.+?}(?:\\r?\\n|$)\"\n+RECORD_REGEX_PATTERN_LOOKAHEAD = r\"{.+?}(?=\\r?\\n|$)\"\n \n logger = get_logger()\n \n@@ -189,7 +189,7 @@ def normalize_record_keys(record: RawRecordMapping) -> RecordDict:\n \n def extract_records_from_jsonl_string(jsonl_string: str) -> list[str]:\n     \"\"\"Extract and return tabular records from the given JSONL string.\"\"\"\n-    return re.findall(RECORD_REGEX_PATTEN_LOOKAHEAD, jsonl_string)\n+    return re.findall(RECORD_REGEX_PATTERN_LOOKAHEAD, jsonl_string)\n \n \n def extract_groups_from_jsonl_string(jsonl_string: str, bos: str, eos: str) -> list[str]:"
+  },
+  {
+   "filename": "tests/data_processing/test_records.py",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -17,6 +17,8 @@\n     check_record_for_large_numbers,\n     extract_and_validate_records,\n     extract_and_validate_timeseries_records,\n+    extract_groups_from_jsonl_string,\n+    extract_records_from_jsonl_string,\n     is_safe_for_float_conversion,\n     normalize_dataframe,\n )\n@@ -349,6 +351,19 @@ def test_normalize_dataframe_carriage_return_repro(\n     _run_csv_writer(normalized_df)\n \n \n+def test_extract_records_from_jsonl_string_handles_crlf():\n+    lf = '{\"a\": 1}\\n{\"a\": 2}\\n{\"a\": 3}'\n+    crlf = lf.replace(\"\\n\", \"\\r\\n\")\n+    assert extract_records_from_jsonl_string(lf) == ['{\"a\": 1}', '{\"a\": 2}', '{\"a\": 3}']\n+    assert extract_records_from_jsonl_string(crlf) == extract_records_from_jsonl_string(lf)\n+    assert extract_records_from_jsonl_string(crlf + \"\\r\\n\") == extract_records_from_jsonl_string(lf)\n+\n+\n+def test_extract_groups_from_jsonl_string_handles_crlf():\n+    text = '<bos>{\"a\": 1}\\r\\n{\"a\": 2}\\r\\n<eos>'\n+    assert extract_groups_from_jsonl_string(text, \"<bos>\", \"<eos>\") == [text]\n+\n+\n def test_extract_timestamp_seconds():\n     \"\"\"Test _extract_timestamp_seconds with datetime, elapsed, missing, and invalid cases.\"\"\"\n     # Datetime format"
+  }
+ ],
+ "test_files": [
+  "tests/data_processing/test_records.py"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "Abilityai/trinity",
+ "number": 4645,
+ "url": "https://github.com/Abilityai/trinity/pull/4645",
+ "title": "fix(metrics): treat an unreadable objectives file as an unchecked source when retiring a metric",
+ "merged_at": "2026-11-19T14:50:49Z",
+ "files": [
+  {
+   "filename": "src/backend/services/metric_declaration_service.py",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -264,13 +264,26 @@ def _points(agent_name: str, metric: str) -> List[Dict[str, Any]]:\n              \"detail\": None, \"count\": min(count, POINT_COUNT_LIMIT), \"last_point_at\": newest}]\n \n \n+# Join findings that mean an objective file was not (fully) read.\n+_UNCHECKED_OBJECTIVE_FINDINGS = frozenset(\n+    {\"objective_invalid\", \"objective_unreadable\", \"objectives_read_timeout\"})\n+\n+\n async def _objectives(agent_name: str, metric: str) -> List[Dict[str, Any]]:\n     from services import objective_join_service\n \n     joined = await asyncio.wait_for(\n         objective_join_service.read_objective_join(agent_name), _LOOKUP_TIMEOUT)\n     if joined.get(\"unavailable\"):\n         raise RuntimeError(joined[\"unavailable\"])\n+    # The join answers `unavailable: None` with the failure in `findings` when an\n+    # objective file does not parse, cannot be read, or the read ran out of time.\n+    # The metric may be cited in exactly that file, so it is a source that could\n+    # not be checked (#4586), not \"no objective uses it\".\n+    for finding in joined.get(\"findings\") or []:\n+        code = (finding or {}).get(\"code\")\n+        if code in _UNCHECKED_OBJECTIVE_FINDINGS:\n+            raise RuntimeError(code)\n     out = []\n     for objective in joined.get(\"objectives\") or []:\n         if any((m or {}).get(\"name\") == metric for m in objective.get(\"metrics\") or []):"
+  },
+  {
+   "filename": "tests/unit/test_ent1006_metric_declaration_service.py",
+   "status": "modified",
+   "additions": 50,
+   "deletions": 0,
+   "patch": "@@ -373,6 +373,56 @@ def test_no_dashboard_file_means_no_widget_uses_the_metric(agent, monkeypatch):\n     assert body[\"unchecked\"] == []\n \n \n+_REAL_OBJECTIVES = svc._objectives  # the `agent` fixture stubs it; these tests run the real one\n+\n+_FINDING_CODES = (\"objective_invalid\", \"objective_unreadable\", \"objectives_read_timeout\")\n+\n+\n+def _objective_join_answers(monkeypatch, joined):\n+    \"\"\"Fake `read_objective_join`, so `_objectives` itself runs.\"\"\"\n+    from services import objective_join_service\n+\n+    async def fake_join(agent_name):\n+        return joined\n+\n+    monkeypatch.setattr(objective_join_service, \"read_objective_join\", fake_join)\n+    monkeypatch.setattr(svc, \"_objectives\", _REAL_OBJECTIVES)\n+\n+\n+@pytest.mark.parametrize(\"code\", _FINDING_CODES)\n+def test_an_objective_file_that_cannot_be_read_is_unchecked_not_unused(agent, monkeypatch, code):\n+    # The join answers `unavailable: None` with the failure in `findings` when an\n+    # objective file does not parse or cannot be read; the metric it cites is in\n+    # a source that could not be checked (#2196, #4586), not \"no objective uses it\".\n+    _objective_join_answers(monkeypatch, {\n+        \"objectives\": [], \"unavailable\": None,\n+        \"findings\": [{\"code\": code, \"message\": \"x\", \"path\": \"objectives/o.yaml\"}]})\n+    body = asyncio.run(svc.references(AGENT, \"close_rate\"))\n+    assert body[\"references\"] == []\n+    assert body[\"unchecked\"] == [\"objectives\"]\n+\n+\n+@pytest.mark.parametrize(\"code\", _FINDING_CODES)\n+def test_an_unreadable_objective_and_a_broken_dashboard_are_both_unchecked(agent, monkeypatch, code):\n+    _dashboard_answers(monkeypatch, {\"has_dashboard\": False, \"config\": None,\n+                                     \"error\": \"YAML parse error at line 3, column 1: oops\"})\n+    _objective_join_answers(monkeypatch, {\n+        \"objectives\": [], \"unavailable\": None,\n+        \"findings\": [{\"code\": code, \"message\": \"x\", \"path\": \"objectives/o.yaml\"}]})\n+    body = asyncio.run(svc.references(AGENT, \"close_rate\"))\n+    assert body[\"unchecked\"] == [\"objectives\", \"dashboard\"]\n+\n+\n+def test_a_clean_objective_read_with_no_match_is_not_unchecked(agent, monkeypatch):\n+    _objective_join_answers(monkeypatch, {\n+        \"objectives\": [{\"id\": \"o1\", \"metrics\": [{\"name\": \"other\"}]}],\n+        \"unavailable\": None,\n+        \"findings\": [{\"code\": \"objective_file_skipped\", \"message\": \"x\", \"path\": \"objectives\"}]})\n+    body = asyncio.run(svc.references(AGENT, \"close_rate\"))\n+    assert body[\"references\"] == []\n+    assert body[\"unchecked\"] == []\n+\n+\n # ---------------------------------------------------------------------------\n # routes: the HTTP shape and the gate\n # ---------------------------------------------------------------------------"
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_ent1006_metric_declaration_service.py"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "moov-io/ach",
+ "number": 1938,
+ "url": "https://github.com/moov-io/ach/pull/1938",
+ "title": "fix: preserve FileHeader ReferenceCode and FormatCode in SegmentFile",
+ "merged_at": "2026-11-19T15:54:44Z",
+ "files": [
+  {
+   "filename": "file.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -1624,6 +1624,8 @@ func (f *File) addFileHeaderData(file *File) *File {\n \tfile.Header.FileIDModifier = f.Header.FileIDModifier\n \tfile.Header.ImmediateDestinationName = f.Header.ImmediateDestinationName\n \tfile.Header.ImmediateOriginName = f.Header.ImmediateOriginName\n+\tfile.Header.FormatCode = f.Header.FormatCode\n+\tfile.Header.ReferenceCode = f.Header.ReferenceCode\n \treturn file\n }\n "
+  },
+  {
+   "filename": "file_test.go",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -3052,3 +3052,32 @@ func TestFileValidate_IATBatches(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestFile__SegmentFilePreservesFileHeaderCodes(t *testing.T) {\n+\tf, err := os.Open(filepath.Join(\"test\", \"testdata\", \"ppd-mixedDebitCredit.ach\"))\n+\trequire.NoError(t, err)\n+\tdefer f.Close()\n+\n+\tachFile, err := NewReader(f).Read()\n+\trequire.NoError(t, err)\n+\n+\t// Overlay a non-default ReferenceCode so a missed copy cannot match NewFileHeader zeros.\n+\tachFile.Header.ReferenceCode = \"REF12345\"\n+\trequire.NoError(t, achFile.Validate())\n+\n+\tcreditFile, debitFile, err := achFile.SegmentFile(NewSegmentFileConfiguration())\n+\trequire.NoError(t, err)\n+\n+\tfor _, tc := range []struct {\n+\t\tname string\n+\t\tfile *File\n+\t}{\n+\t\t{\"credit\", creditFile},\n+\t\t{\"debit\", debitFile},\n+\t} {\n+\t\tt.Run(tc.name, func(t *testing.T) {\n+\t\t\trequire.Equal(t, \"REF12345\", tc.file.Header.ReferenceCode)\n+\t\t\trequire.Equal(t, \"1\", tc.file.Header.FormatCode)\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "file_test.go"
+ ]
+}

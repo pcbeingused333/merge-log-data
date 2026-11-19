@@ -1,0 +1,26 @@
+{
+ "repo": "dynamiq-ai/dynamiq",
+ "number": 1143,
+ "url": "https://github.com/dynamiq-ai/dynamiq/pull/1143",
+ "title": "fix(memory): keep the most recent messages in Qdrant filter-only search",
+ "merged_at": "2026-11-19T12:44:18Z",
+ "files": [
+  {
+   "filename": "dynamiq/memory/backends/qdrant.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -172,8 +172,11 @@ def search(self, query: str | None = None, limit: int = 1000, filters: dict | No\n                 )\n             elif filters:\n                 documents = self.vector_store.filter_documents(filters=qdrant_filters)\n-                if limit:\n-                    documents = documents[:limit]\n+                # filter_documents has no ordering, so truncating it would keep an arbitrary\n+                # subset. Keep the most recent messages, oldest first, like get_all and InMemory.search.\n+                documents = sorted(documents, key=lambda doc: (doc.metadata or {}).get(\"timestamp\", 0))\n+                if limit and limit > 0:\n+                    documents = documents[-limit:]\n             else:\n                 return []\n "
+  },
+  {
+   "filename": "tests/unit/memory/test_backend_retrieval_contract.py",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -249,3 +249,21 @@ def test_weaviate_filter_only_search_with_limit_returns_the_most_recent(mocker):\n     result = backend.search(query=None, filters={\"field\": \"user_id\", \"operator\": \"==\", \"value\": \"u\"}, limit=LIMIT)\n \n     assert [m.content for m in result] == [\"msg-7\", \"msg-8\", \"msg-9\"]\n+\n+\n+def test_qdrant_filter_only_search_with_limit_returns_the_most_recent(mocker):\n+    \"\"\"filter_documents returns an unordered set; the limit must keep the newest, oldest first.\"\"\"\n+    from dynamiq.memory.backends.qdrant import Qdrant\n+\n+    mocker.patch.object(Qdrant, \"_collection_exists\", return_value=True)\n+    store = mocker.Mock()\n+    # Stored out of order, as a vector DB is free to return them.\n+    store.filter_documents.return_value = [\n+        Document(id=str(i), content=f\"msg-{i}\", metadata={\"role\": \"user\", \"timestamp\": float(i)})\n+        for i in [5, 1, 9, 0, 7, 3, 8, 2, 6, 4]\n+    ]\n+    backend = Qdrant.model_construct(vector_store=store, embedder=mocker.Mock(), connection=mocker.Mock())\n+\n+    result = backend.search(query=None, filters={\"user_id\": \"u\"}, limit=LIMIT)\n+\n+    assert [m.content for m in result] == [\"msg-7\", \"msg-8\", \"msg-9\"]"
+  }
+ ],
+ "test_files": [
+  "tests/unit/memory/test_backend_retrieval_contract.py"
+ ]
+}
