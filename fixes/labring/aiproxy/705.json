@@ -1,0 +1,26 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 705,
+ "url": "https://github.com/labring/aiproxy/pull/705",
+ "title": "fix(openai): map content_filter to SAFETY in Gemini responses",
+ "merged_at": "2026-11-19T02:30:13Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/openai/gemini.go",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -139,6 +139,8 @@ func ConvertOpenAIToGeminiResponse(\n \t\t\tcandidate.FinishReason = relaymodel.GeminiFinishReasonMaxTokens\n \t\tcase relaymodel.FinishReasonToolCalls:\n \t\t\tcandidate.FinishReason = relaymodel.GeminiFinishReasonStop\n+\t\tcase relaymodel.FinishReasonContentFilter:\n+\t\t\tcandidate.FinishReason = relaymodel.GeminiFinishReasonSafety\n \t\tdefault:\n \t\t\tcandidate.FinishReason = relaymodel.GeminiFinishReasonStop\n \t\t}\n@@ -315,6 +317,8 @@ func (s *GeminiStreamState) ConvertOpenAIStreamToGemini(\n \t\t\t\tcandidate.FinishReason = relaymodel.GeminiFinishReasonMaxTokens\n \t\t\tcase relaymodel.FinishReasonToolCalls:\n \t\t\t\tcandidate.FinishReason = relaymodel.GeminiFinishReasonStop\n+\t\t\tcase relaymodel.FinishReasonContentFilter:\n+\t\t\t\tcandidate.FinishReason = relaymodel.GeminiFinishReasonSafety\n \t\t\tdefault:\n \t\t\t\tcandidate.FinishReason = relaymodel.GeminiFinishReasonStop\n \t\t\t}"
+  },
+  {
+   "filename": "core/relay/adaptor/openai/gemini_test.go",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -973,3 +973,32 @@ func TestConvertGeminiRequest_ToolsWithRequiredField(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestConvertOpenAIToGeminiResponse_ContentFilterMapsToSafety(t *testing.T) {\n+\tresp := openai.ConvertOpenAIToGeminiResponse(\n+\t\t&meta.Meta{ActualModel: \"gpt-4o\"},\n+\t\t&relaymodel.TextResponse{\n+\t\t\tChoices: []*relaymodel.TextResponseChoice{\n+\t\t\t\t{Index: 0, FinishReason: relaymodel.FinishReasonContentFilter},\n+\t\t\t},\n+\t\t},\n+\t)\n+\n+\trequire.Len(t, resp.Candidates, 1)\n+\tassert.Equal(t, relaymodel.GeminiFinishReasonSafety, resp.Candidates[0].FinishReason)\n+}\n+\n+func TestConvertOpenAIStreamToGemini_ContentFilterMapsToSafety(t *testing.T) {\n+\tstate := openai.NewGeminiStreamState()\n+\tchunk := &relaymodel.ChatCompletionsStreamResponse{\n+\t\tChoices: []*relaymodel.ChatCompletionsStreamResponseChoice{\n+\t\t\t{Index: 0, FinishReason: relaymodel.FinishReasonContentFilter},\n+\t\t},\n+\t}\n+\n+\tresp := state.ConvertOpenAIStreamToGemini(&meta.Meta{ActualModel: \"gpt-4o\"}, chunk)\n+\n+\trequire.NotNil(t, resp)\n+\trequire.Len(t, resp.Candidates, 1)\n+\tassert.Equal(t, relaymodel.GeminiFinishReasonSafety, resp.Candidates[0].FinishReason)\n+}"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/openai/gemini_test.go"
+ ]
+}

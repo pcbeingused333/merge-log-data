@@ -1,0 +1,16 @@
+{
+ "repo": "helixml/helix",
+ "number": 3646,
+ "url": "https://github.com/helixml/helix/pull/3646",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-19T07:08:07Z",
+   "body": "Request changes — one fix, then ready to ship: give the attachment-bearing create request a client timeout longer than 60s.\n\nMust fix:\n\n1. api/pkg/cli/spectask/task_cmd.go:44 — create with inline `--attach` reuses `taskRequest`'s 60s `http.Client` timeout while the server allows 10 min ingestion on a detached context (`types.SpecTaskInlineAttachmentIngestionTimeout`, spec_driven_task_handlers.go:152): when the CLI times out mid-upload the server still finishes, creates and publishes the task, the CLI prints \"failed to create task\", and a user retry duplicates the task. The old post-create upload path used a no-timeout client, so this is a new ceiling exactly for the large-attachment case this PR enables. Fix: minutes.\n\n```go\ntimeout := 60 * time.Second\nif len(request.Attachments) > 0 {\n    timeout = types.SpecTaskInlineAttachmentIngestionTimeout + time.Minute\n}\n// taskRequestWithTimeout: same as taskRequest but takes the http.Client timeout\n```\n\nAlso:\n- api/pkg/cli/spectask/task_cmd.go:430 — no client-side size pre-check: a >100MB file is buffered 3x (raw + base64 + JSON marshal) before the server 413s; check `len(data)` against `types.SpecTaskAttachmentMaxBytes` and the running total against `types.SpecTaskInlineAttachmentsMaxBytes` before building the request. Effort: minutes.\n- Same-basename files from different dirs now fail create with 400 \"duplicate attachment filename\" — the old multipart upload path accepted them; pre-check in the CLI and report both full paths. Effort: minutes.\n- api/pkg/cli/spectask/spectask_test.go:173 — new test covers only the happy path; add a `--attach` missing-file case asserting no HTTP request is sent. Effort: minutes.\n\nVerified: `go vet` + `go test ./api/pkg/cli/spectask/... -count=1` pass on 10df30c7 (new inline-attachment test asserts exactly one POST and the base64 payload).\nVerified: server side agrees — `go test ./api/pkg/server/ -run 'TestSpecTaskInline|TestCreateTaskFromPrompt'` pass, incl. publish-only-after-attachments-persist; repo has no PR CI (stainless only), so these runs are the verification.\n\nReviewed: 10df30c7179155b244fd2201ac5480af309176d2\n"
+  }
+ ],
+ "review_comments": [],
+ "comments": []
+}

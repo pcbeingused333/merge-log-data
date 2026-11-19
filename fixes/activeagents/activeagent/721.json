@@ -1,0 +1,33 @@
+{
+ "repo": "activeagents/activeagent",
+ "number": 721,
+ "url": "https://github.com/activeagents/activeagent/pull/721",
+ "title": "fix(mock): report finish_reason after a streamed prompt",
+ "merged_at": "2026-11-19T03:16:20Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0\n \n ### Fixed\n \n+- **A streamed Mock prompt reports why it stopped** (`MockProvider`). The\n+  mock emitted `end_turn` in its stream but never recorded it, so\n+  `response.finish_reason` was `nil` after a streamed prompt, as it was not\n+  for the real providers. The mock now records it like they do.\n+\n - **An evaluation run is executed by one job** (`actionagent`). The run job\n   read a run's status, then the scenario runner wrote `running`, as two\n   steps, so a job delivered twice, or two workers that both loaded the run"
+  },
+  {
+   "filename": "lib/active_agent/providers/mock_provider.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -142,6 +142,7 @@ def process_stream_chunk(api_response_chunk)\n         when :message_delta\n           delta = api_response_chunk[:delta]\n           message_stack.last[:stop_reason] = delta[:stop_reason] if delta[:stop_reason]\n+          self.stream_finish_reason = delta[:stop_reason] if delta[:stop_reason]\n \n         when :message_stop\n           # Stream complete"
+  },
+  {
+   "filename": "test/providers/mock_provider_test.rb",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -172,6 +172,17 @@ class MockProviderTest < ActiveSupport::TestCase\n     assert stream_events.any? { |e| e[:type] == :close }\n   end\n \n+  test \"a streamed generation reports why it stopped\" do\n+    provider = ActiveAgent::Providers::MockProvider.new(\n+      service: \"Mock\",\n+      messages: [ { role: \"user\", content: \"hello\" } ],\n+      stream: true,\n+      stream_broadcaster: ->(_message, _delta, _event_type) { }\n+    )\n+\n+    assert_equal \"end_turn\", provider.prompt.finish_reason\n+  end\n+\n   test \"returns appropriate response structure\" do\n     response = @provider.prompt\n "
+  }
+ ],
+ "test_files": [
+  "test/providers/mock_provider_test.rb"
+ ]
+}

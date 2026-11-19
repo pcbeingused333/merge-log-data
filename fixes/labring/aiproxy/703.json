@@ -1,0 +1,26 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 703,
+ "url": "https://github.com/labring/aiproxy/pull/703",
+ "title": "fix(ollama): concatenate all text parts of multi-part messages",
+ "merged_at": "2026-11-19T02:29:01Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/ollama/main.go",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 3,
+   "patch": "@@ -4,6 +4,7 @@ import (\n \t\"bytes\"\n \t\"net/http\"\n \t\"strconv\"\n+\t\"strings\"\n \t\"time\"\n \n \t\"github.com/bytedance/sonic\"\n@@ -59,13 +60,13 @@ func ConvertRequest(meta *meta.Meta, req *http.Request) (adaptor.ConvertResult,\n \n \t\tvar (\n \t\t\timageUrls   []string\n-\t\t\tcontentText string\n+\t\t\tcontentText strings.Builder\n \t\t)\n \n \t\tfor _, part := range openaiContent {\n \t\t\tswitch part.Type {\n \t\t\tcase relaymodel.ContentTypeText:\n-\t\t\t\tcontentText = part.Text\n+\t\t\t\tcontentText.WriteString(part.Text)\n \t\t\tcase relaymodel.ContentTypeImageURL:\n \t\t\t\t_, data, err := image.GetImageFromURL(req.Context(), part.ImageURL.URL)\n \t\t\t\tif err != nil {\n@@ -78,7 +79,7 @@ func ConvertRequest(meta *meta.Meta, req *http.Request) (adaptor.ConvertResult,\n \n \t\tm := Message{\n \t\t\tRole:       message.Role,\n-\t\t\tContent:    contentText,\n+\t\t\tContent:    contentText.String(),\n \t\t\tImages:     imageUrls,\n \t\t\tToolCallID: message.ToolCallID,\n \t\t\tToolCalls:  make([]*Tool, 0, len(message.ToolCalls)),"
+  },
+  {
+   "filename": "core/relay/adaptor/ollama/main_test.go",
+   "status": "modified",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -67,6 +67,39 @@ func TestConvertRequest_JsonObject(t *testing.T) {\n \tassert.Equal(t, \"json\", ollamaReq.Format)\n }\n \n+func TestConvertRequest_MultiPartTextContent(t *testing.T) {\n+\tmeta := meta.NewMeta(\n+\t\t&model.Channel{\n+\t\t\tType: model.ChannelTypeOllama,\n+\t\t},\n+\t\t0,\n+\t\t\"llama2\",\n+\t\tmodel.ModelConfig{},\n+\t)\n+\n+\tbody := `{\"model\":\"llama2\",\"messages\":[{\"role\":\"user\",\"content\":[` +\n+\t\t`{\"type\":\"text\",\"text\":\"Hello, \"},{\"type\":\"text\",\"text\":\"world\"}]}]}`\n+\n+\treq, _ := http.NewRequestWithContext(\n+\t\tt.Context(),\n+\t\thttp.MethodPost,\n+\t\t\"http://localhost:11434/api/chat\",\n+\t\tstrings.NewReader(body),\n+\t)\n+\n+\tresult, err := ollama.ConvertRequest(meta, req)\n+\tassert.NoError(t, err)\n+\n+\tbodyBytes, _ := io.ReadAll(result.Body)\n+\n+\tvar ollamaReq ollama.ChatRequest\n+\n+\terr = json.Unmarshal(bodyBytes, &ollamaReq)\n+\tassert.NoError(t, err)\n+\tassert.Len(t, ollamaReq.Messages, 1)\n+\tassert.Equal(t, \"Hello, world\", ollamaReq.Messages[0].Content)\n+}\n+\n func TestStreamHandler_ToolCallIndexes(t *testing.T) {\n \tgin.SetMode(gin.TestMode)\n "
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/ollama/main_test.go"
+ ]
+}

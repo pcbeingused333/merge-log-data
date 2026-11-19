@@ -1,0 +1,41 @@
+{
+ "repo": "oomol-lab/open-flow",
+ "number": 198,
+ "url": "https://github.com/oomol-lab/open-flow/pull/198",
+ "title": "fix(http): allow empty Basic auth credentials in HTTP Request and OpenAPI",
+ "merged_at": "2026-11-19T06:17:05Z",
+ "files": [
+  {
+   "filename": "packages/open-flow/src/http/common/httpRequest.test.ts",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -48,6 +48,17 @@ it('injects authentication and rejects parameter conflicts and embedded credenti\n   const key = config({ authentication: { type: 'apiKey', name: 'key', in: 'query' } })\n   expect(() => buildHttpRequest(key, { 'url': 'https://example.test?key=old', 'auth.token': 'secret' })).toThrow('conflicts')\n })\n+it('accepts empty Basic credentials but rejects missing credentials and empty tokens', () => {\n+  const basic = config({ authentication: { type: 'basic' } })\n+  const authorization = (input: Record<string, unknown>) =>\n+    new Headers(buildHttpRequest(basic, { url: 'https://example.test', ...input } as never).init.headers).get('authorization')\n+  expect(authorization({ 'auth.username': 'api-key', 'auth.password': 'secret' })).toBe('Basic YXBpLWtleTpzZWNyZXQ=')\n+  expect(authorization({ 'auth.username': 'api-key', 'auth.password': '' })).toBe('Basic YXBpLWtleTo=')\n+  expect(authorization({ 'auth.username': '', 'auth.password': 'secret' })).toBe('Basic OnNlY3JldA==')\n+  expect(() => authorization({ 'auth.username': 'api-key' })).toThrow('required')\n+  expect(() => authorization({ 'auth.password': '' })).toThrow('required')\n+  expect(() => buildHttpRequest(config({ authentication: { type: 'bearer' } }), { 'url': 'https://example.test', 'auth.token': '' })).toThrow('required')\n+})\n it('preserves array results, rejects malformed JSON and supports explicit status handling', () => {\n   const headers = new Headers({ 'content-type': 'application/problem+json', 'set-cookie': 'secret' })\n   expect(parseHttpResponse(config(), 200, headers, '[1,2]')).toEqual({ body: [1, 2], statusCode: 200, headers: { 'content-type': 'application/problem+json' } })"
+  },
+  {
+   "filename": "packages/open-flow/src/http/common/httpRequest.ts",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 4,
+   "patch": "@@ -134,9 +134,9 @@ export function buildHttpRequest(config: HttpRequestConfig, input: Readonly<Reco\n     headers.set(name, value)\n   }\n   const auth = config.authentication\n-  const credential = (part: string) => {\n+  const credential = (part: string, allowEmpty = false) => {\n     const value = input[`auth.${part}`]\n-    if (typeof value != 'string' || !value) throw new Error('Authentication source is required.')\n+    if (typeof value != 'string' || (!value && !allowEmpty)) throw new Error('Authentication source is required.')\n     return value\n   }\n   if (auth.type != 'none') {\n@@ -147,9 +147,9 @@ export function buildHttpRequest(config: HttpRequestConfig, input: Readonly<Reco\n     } else {\n       if (headers.has(name)) throw new Error('Authentication conflicts with a header.')\n       if (auth.type == 'basic') {\n-        const username = credential('username')\n+        const username = credential('username', true)\n         if (username.includes(':')) throw new Error('Basic username cannot contain a colon.')\n-        const bytes = new TextEncoder().encode(`${username}:${credential('password')}`)\n+        const bytes = new TextEncoder().encode(`${username}:${credential('password', true)}`)\n         headers.set(name, `Basic ${btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(''))}`)\n       } else headers.set(name, auth.type == 'bearer' ? `Bearer ${credential('token')}` : credential('token'))\n     }"
+  },
+  {
+   "filename": "packages/open-flow/src/openapi/common/openapi.test.ts",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -92,6 +92,12 @@ describe('OpenAPI fixed operations', () => {\n     const request = buildRequest(selected, { 'body': null, 'auth.basic.username': 'user', 'auth.basic.password': 'pass' })\n     expect(request.init.body).toBe('null')\n     expect(new Headers(request.init.headers).get('authorization')).toBe('Basic dXNlcjpwYXNz')\n+    const authorization = (input: Record<string, unknown>) => new Headers(buildRequest(selected, { body: null, ...input }).init.headers).get('authorization')\n+    expect(authorization({ 'auth.basic.username': 'user', 'auth.basic.password': '' })).toBe('Basic dXNlcjo=')\n+    expect(authorization({ 'auth.basic.username': '', 'auth.basic.password': 'pass' })).toBe('Basic OnBhc3M=')\n+    expect(() => authorization({ 'auth.basic.username': 'user' })).toThrow('missing')\n+    const bearer = { ...selected, auth: [{ id: 'bearer', type: 'bearer' as const }] }\n+    expect(() => buildRequest(bearer, { 'body': null, 'auth.bearer.token': '' })).toThrow('missing')\n     expect(() => parseResponse(selected, 401, new Headers(), 'secret')).toThrow('HTTP 401')\n     expect(() => parseResponse(selected, 200, new Headers({ 'content-type': 'application/json' }), '12')).toThrow('schema')\n     expect(parseResponse(config(), 204, new Headers(), '').body).toBe(null)"
+  },
+  {
+   "filename": "packages/open-flow/src/openapi/common/openapi.ts",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 4,
+   "patch": "@@ -415,16 +415,16 @@ export function buildRequest(config: OpenApiExecutor, input: Readonly<Record<str\n   const url = new URL(httpUrl(config.serverUrl).replace(/\\/$/, '') + '/' + path.replace(/^\\//, ''))\n   for (const [key, value] of query) url.searchParams.append(key, value)\n   for (const auth of config.auth) {\n-    const token = (part: string): string => {\n+    const token = (part: string, allowEmpty = false): string => {\n       const value = input[`auth.${auth.id}.${part}`]\n-      if (typeof value != 'string' || !value) throw new Error('Authentication source is missing.')\n+      if (typeof value != 'string' || (!value && !allowEmpty)) throw new Error('Authentication source is missing.')\n       return value\n     }\n     if (auth.type == 'bearer') headers.set('authorization', `Bearer ${token('token')}`)\n     else if (auth.type == 'basic') {\n-      const username = token('username')\n+      const username = token('username', true)\n       if (username.includes(':')) throw new Error('Basic authentication username cannot contain a colon.')\n-      const bytes = new TextEncoder().encode(`${username}:${token('password')}`)\n+      const bytes = new TextEncoder().encode(`${username}:${token('password', true)}`)\n       headers.set('authorization', `Basic ${btoa(Array.from(bytes, (b) => String.fromCharCode(b)).join(''))}`)\n     } else if (auth.in == 'header') headers.set(auth.name!, token('token'))\n     else {"
+  }
+ ],
+ "test_files": [
+  "packages/open-flow/src/http/common/httpRequest.test.ts",
+  "packages/open-flow/src/openapi/common/openapi.test.ts"
+ ]
+}

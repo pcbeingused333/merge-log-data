@@ -1,0 +1,26 @@
+{
+ "repo": "flanksource/canary-checker",
+ "number": 3128,
+ "url": "https://github.com/flanksource/canary-checker/pull/3128",
+ "title": "fix: handle missing Elasticsearch total hits",
+ "merged_at": "2026-11-19T06:44:33Z",
+ "files": [
+  {
+   "filename": "checks/elasticsearch.go",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -87,7 +87,13 @@ func (c *ElasticsearchChecker) Check(ctx *context.Context, extConfig external.Ch\n \t\t)\n \t}\n \n-\tcount := int(r[\"hits\"].(map[string]any)[\"total\"].(map[string]any)[\"value\"].(float64))\n+\thits, _ := r[\"hits\"].(map[string]any)\n+\ttotal, _ := hits[\"total\"].(map[string]any)\n+\tvalue, ok := total[\"value\"].(float64)\n+\tif !ok {\n+\t\treturn results.ErrorMessage(fmt.Errorf(\"elasticsearch response is missing a numeric hits.total.value; ensure track_total_hits is enabled\"))\n+\t}\n+\tcount := int(value)\n \n \tif count == 0 && check.ShouldMarkFailOnEmpty() {\n \t\treturn results.Failf(\"Query has returned empty value\")"
+  },
+  {
+   "filename": "checks/elasticsearch_test.go",
+   "status": "added",
+   "additions": 53,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,53 @@\n+package checks\n+\n+import (\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"strings\"\n+\t\"testing\"\n+\n+\tcheckcontext \"github.com/flanksource/canary-checker/api/context\"\n+\tv1 \"github.com/flanksource/canary-checker/api/v1\"\n+\tdutycontext \"github.com/flanksource/duty/context\"\n+)\n+\n+func TestElasticsearchTotalHits(t *testing.T) {\n+\tfor _, tt := range []struct {\n+\t\tname      string\n+\t\tresponse  string\n+\t\texpected  int\n+\t\twantError bool\n+\t}{\n+\t\t{\"one hit\", `{\"hits\":{\"total\":{\"value\":1},\"hits\":[{}]}}`, 1, false},\n+\t\t{\"zero hits\", `{\"hits\":{\"total\":{\"value\":0},\"hits\":[]}}`, 0, false},\n+\t\t{\"tracking disabled\", `{\"hits\":{\"hits\":[{}]}}`, 0, true},\n+\t\t{\"null total\", `{\"hits\":{\"total\":null,\"hits\":[]}}`, 0, true},\n+\t\t{\"missing hits\", `{}`, 0, true},\n+\t\t{\"missing value\", `{\"hits\":{\"total\":{}}}`, 0, true},\n+\t} {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\t\t\tw.Header().Set(\"X-Elastic-Product\", \"Elasticsearch\")\n+\t\t\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t\t\t_, _ = w.Write([]byte(tt.response))\n+\t\t\t}))\n+\t\t\tdefer server.Close()\n+\t\t\tctx := checkcontext.New(dutycontext.New(), v1.Canary{})\n+\t\t\tcheck := v1.ElasticsearchCheck{\n+\t\t\t\tConnection: v1.Connection{URL: server.URL},\n+\t\t\t\tQuery:      `{\"track_total_hits\":false}`, Results: tt.expected,\n+\t\t\t}\n+\t\t\tresults := (&ElasticsearchChecker{}).Check(ctx, check)\n+\t\t\tif len(results) != 1 {\n+\t\t\t\tt.Fatalf(\"got %d results, want 1\", len(results))\n+\t\t\t}\n+\t\t\tif tt.wantError {\n+\t\t\t\tif results[0].Pass || results[0].ErrorObject == nil || !strings.Contains(results[0].ErrorObject.Error(), \"hits.total.value\") {\n+\t\t\t\t\tt.Fatalf(\"expected explicit missing total error, got %+v\", results[0])\n+\t\t\t\t}\n+\t\t\t} else if !results[0].Pass || results[0].ErrorObject != nil {\n+\t\t\t\tt.Fatalf(\"expected successful count comparison, got %+v\", results[0])\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "checks/elasticsearch_test.go"
+ ]
+}

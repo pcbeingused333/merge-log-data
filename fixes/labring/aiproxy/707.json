@@ -1,0 +1,48 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 707,
+ "url": "https://github.com/labring/aiproxy/pull/707",
+ "title": "fix(gemini): map BLOCKLIST/PROHIBITED_CONTENT/SPII/IMAGE_* finish reasons to refusal",
+ "merged_at": "2026-11-19T06:25:05Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/gemini/claude.go",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 1,
+   "patch": "@@ -475,7 +475,14 @@ func geminiFinishReason2Claude(reason string) string {\n \tswitch reason {\n \tcase relaymodel.GeminiFinishReasonStop:\n \t\treturn relaymodel.ClaudeStopReasonEndTurn\n-\tcase relaymodel.GeminiFinishReasonSafety, relaymodel.GeminiFinishReasonRecitation:\n+\tcase relaymodel.GeminiFinishReasonSafety,\n+\t\trelaymodel.GeminiFinishReasonRecitation,\n+\t\trelaymodel.GeminiFinishReasonBlocklist,\n+\t\trelaymodel.GeminiFinishReasonProhibitedContent,\n+\t\trelaymodel.GeminiFinishReasonSPII,\n+\t\trelaymodel.GeminiFinishReasonImageSafety,\n+\t\trelaymodel.GeminiFinishReasonImageProhibitedContent,\n+\t\trelaymodel.GeminiFinishReasonImageRecitation:\n \t\treturn relaymodel.ClaudeStopReasonRefusal\n \tcase relaymodel.GeminiFinishReasonMaxTokens:\n \t\treturn relaymodel.ClaudeStopReasonMaxTokens"
+  },
+  {
+   "filename": "core/relay/adaptor/gemini/claude_stop_reason_test.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -7,6 +7,12 @@ func TestBlockedFinishReasonToClaude(t *testing.T) {\n \tfor _, tt := range []struct{ input, want string }{\n \t\t{\"SAFETY\", \"refusal\"},\n \t\t{\"RECITATION\", \"refusal\"},\n+\t\t{\"BLOCKLIST\", \"refusal\"},\n+\t\t{\"PROHIBITED_CONTENT\", \"refusal\"},\n+\t\t{\"SPII\", \"refusal\"},\n+\t\t{\"IMAGE_SAFETY\", \"refusal\"},\n+\t\t{\"IMAGE_PROHIBITED_CONTENT\", \"refusal\"},\n+\t\t{\"IMAGE_RECITATION\", \"refusal\"},\n \t\t{\"STOP\", \"end_turn\"},\n \t\t{\"MAX_TOKENS\", \"max_tokens\"},\n \t\t{\"TOOL_CALLS\", \"tool_use\"},"
+  },
+  {
+   "filename": "core/relay/adaptor/gemini/finish_reason_test.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -24,6 +24,12 @@ func TestFinishReasonConversions(t *testing.T) {\n \t\t{\"SAFETY\", \"content_filter\", \"refusal\", false},\n \t\t{\"RECITATION\", \"content_filter\", \"refusal\", false},\n \t\t{\"OTHER\", \"stop\", \"end_turn\", false},\n+\t\t{\"BLOCKLIST\", \"content_filter\", \"refusal\", false},\n+\t\t{\"PROHIBITED_CONTENT\", \"content_filter\", \"refusal\", false},\n+\t\t{\"SPII\", \"content_filter\", \"refusal\", false},\n+\t\t{\"IMAGE_SAFETY\", \"content_filter\", \"refusal\", false},\n+\t\t{\"IMAGE_PROHIBITED_CONTENT\", \"content_filter\", \"refusal\", false},\n+\t\t{\"IMAGE_RECITATION\", \"content_filter\", \"refusal\", false},\n \t\t{\"TOOL_CALLS\", \"tool_calls\", \"tool_use\", false},\n \t\t{\"FUNCTION_CALL\", \"tool_calls\", \"tool_use\", false},\n \t\t{\"STOP\", \"tool_calls\", \"tool_use\", true},"
+  },
+  {
+   "filename": "core/relay/adaptor/gemini/openai.go",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 7,
+   "patch": "@@ -1251,13 +1251,19 @@ func TTSHandler(\n \n // Type aliases for usage-related types to use unified definitions from relaymodel\n var finishReason2OpenAI = map[string]string{\n-\trelaymodel.GeminiFinishReasonStop:         relaymodel.FinishReasonStop,\n-\trelaymodel.GeminiFinishReasonMaxTokens:    relaymodel.FinishReasonLength,\n-\trelaymodel.GeminiFinishReasonSafety:       relaymodel.FinishReasonContentFilter,\n-\trelaymodel.GeminiFinishReasonRecitation:   relaymodel.FinishReasonContentFilter,\n-\trelaymodel.GeminiFinishReasonOther:        relaymodel.FinishReasonStop,\n-\trelaymodel.GeminiFinishReasonToolCalls:    relaymodel.FinishReasonToolCalls,\n-\trelaymodel.GeminiFinishReasonFunctionCall: relaymodel.FinishReasonToolCalls,\n+\trelaymodel.GeminiFinishReasonStop:                   relaymodel.FinishReasonStop,\n+\trelaymodel.GeminiFinishReasonMaxTokens:              relaymodel.FinishReasonLength,\n+\trelaymodel.GeminiFinishReasonSafety:                 relaymodel.FinishReasonContentFilter,\n+\trelaymodel.GeminiFinishReasonRecitation:             relaymodel.FinishReasonContentFilter,\n+\trelaymodel.GeminiFinishReasonOther:                  relaymodel.FinishReasonStop,\n+\trelaymodel.GeminiFinishReasonBlocklist:              relaymodel.FinishReasonContentFilter,\n+\trelaymodel.GeminiFinishReasonProhibitedContent:      relaymodel.FinishReasonContentFilter,\n+\trelaymodel.GeminiFinishReasonSPII:                   relaymodel.FinishReasonContentFilter,\n+\trelaymodel.GeminiFinishReasonImageSafety:            relaymodel.FinishReasonContentFilter,\n+\trelaymodel.GeminiFinishReasonImageProhibitedContent: relaymodel.FinishReasonContentFilter,\n+\trelaymodel.GeminiFinishReasonImageRecitation:        relaymodel.FinishReasonContentFilter,\n+\trelaymodel.GeminiFinishReasonToolCalls:              relaymodel.FinishReasonToolCalls,\n+\trelaymodel.GeminiFinishReasonFunctionCall:           relaymodel.FinishReasonToolCalls,\n }\n \n func FinishReason2OpenAI(reason string) string {"
+  },
+  {
+   "filename": "core/relay/model/gemini.go",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 7,
+   "patch": "@@ -404,13 +404,19 @@ const (\n \n // Gemini Finish Reason constants\n const (\n-\tGeminiFinishReasonStop         = \"STOP\"\n-\tGeminiFinishReasonMaxTokens    = \"MAX_TOKENS\"\n-\tGeminiFinishReasonSafety       = \"SAFETY\"\n-\tGeminiFinishReasonRecitation   = \"RECITATION\"\n-\tGeminiFinishReasonOther        = \"OTHER\"\n-\tGeminiFinishReasonToolCalls    = \"TOOL_CALLS\"\n-\tGeminiFinishReasonFunctionCall = \"FUNCTION_CALL\"\n+\tGeminiFinishReasonStop                   = \"STOP\"\n+\tGeminiFinishReasonMaxTokens              = \"MAX_TOKENS\"\n+\tGeminiFinishReasonSafety                 = \"SAFETY\"\n+\tGeminiFinishReasonRecitation             = \"RECITATION\"\n+\tGeminiFinishReasonOther                  = \"OTHER\"\n+\tGeminiFinishReasonBlocklist              = \"BLOCKLIST\"\n+\tGeminiFinishReasonProhibitedContent      = \"PROHIBITED_CONTENT\"\n+\tGeminiFinishReasonSPII                   = \"SPII\"\n+\tGeminiFinishReasonImageSafety            = \"IMAGE_SAFETY\"\n+\tGeminiFinishReasonImageProhibitedContent = \"IMAGE_PROHIBITED_CONTENT\"\n+\tGeminiFinishReasonImageRecitation        = \"IMAGE_RECITATION\"\n+\tGeminiFinishReasonToolCalls              = \"TOOL_CALLS\"\n+\tGeminiFinishReasonFunctionCall           = \"FUNCTION_CALL\"\n )\n \n // Gemini FunctionCallingConfig Mode constants"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/gemini/claude_stop_reason_test.go",
+  "core/relay/adaptor/gemini/finish_reason_test.go"
+ ]
+}

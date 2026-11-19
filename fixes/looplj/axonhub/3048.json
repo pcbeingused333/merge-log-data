@@ -1,0 +1,26 @@
+{
+ "repo": "looplj/axonhub",
+ "number": 3048,
+ "url": "https://github.com/looplj/axonhub/pull/3048",
+ "title": "fix(gemini): surface mid-stream error chunks from outbound stream",
+ "merged_at": "2026-11-19T05:23:14Z",
+ "files": [
+  {
+   "filename": "llm/transformer/gemini/outbound_stream.go",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -3,6 +3,7 @@ package gemini\n import (\n \t\"context\"\n \t\"encoding/json\"\n+\t\"strconv\"\n \n \t\"github.com/google/uuid\"\n \t\"github.com/samber/lo\"\n@@ -61,6 +62,13 @@ func (t *OutboundTransformer) transformStreamChunkWithState(\n \t\treturn llm.DoneResponse, nil\n \t}\n \n+\t// Gemini may report a mid-stream failure as a {\"error\":{...}} chunk instead of\n+\t// closing the HTTP stream with a non-2xx status. Surface it as an error rather\n+\t// than converting it to an empty response chunk.\n+\tif respErr := parseStreamErrorChunk(event.Data); respErr != nil {\n+\t\treturn nil, respErr\n+\t}\n+\n \t// Parse the Gemini response chunk\n \tvar resp GenerateContentResponse\n \tif err := json.Unmarshal(event.Data, &resp); err != nil {\n@@ -96,6 +104,32 @@ func (t *OutboundTransformer) transformStreamChunkWithState(\n \treturn llmResp, nil\n }\n \n+// parseStreamErrorChunk returns a ResponseError when the chunk is a Gemini error\n+// payload ({\"error\":{\"code\":...,\"message\":...,\"status\":...}}), and nil otherwise.\n+func parseStreamErrorChunk(data []byte) *llm.ResponseError {\n+\tvar chunk GeminiError\n+\tif err := json.Unmarshal(data, &chunk); err != nil {\n+\t\treturn nil\n+\t}\n+\n+\tif chunk.Error.Code == 0 && chunk.Error.Message == \"\" && chunk.Error.Status == \"\" {\n+\t\treturn nil\n+\t}\n+\n+\trespErr := &llm.ResponseError{\n+\t\tStatusCode: chunk.Error.Code,\n+\t\tDetail: llm.ErrorDetail{\n+\t\t\tMessage: chunk.Error.Message,\n+\t\t\tType:    chunk.Error.Status,\n+\t\t},\n+\t}\n+\tif chunk.Error.Code != 0 {\n+\t\trespErr.Detail.Code = strconv.Itoa(chunk.Error.Code)\n+\t}\n+\n+\treturn respErr\n+}\n+\n // AggregateStreamChunks aggregates Gemini streaming response chunks into a complete response.\n func (t *OutboundTransformer) AggregateStreamChunks(\n \tctx context.Context, _ *httpclient.Request,"
+  },
+  {
+   "filename": "llm/transformer/gemini/outbound_stream_test.go",
+   "status": "modified",
+   "additions": 47,
+   "deletions": 0,
+   "patch": "@@ -1168,3 +1168,50 @@ func TestOutboundTransformer_PreservesMultipartThoughts(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestOutboundTransformer_TransformStream_ErrorChunk(t *testing.T) {\n+\ttransformer := &OutboundTransformer{\n+\t\tconfig: Config{\n+\t\t\tBaseURL:    DefaultBaseURL,\n+\t\t\tAPIVersion: DefaultAPIVersion,\n+\t\t},\n+\t}\n+\n+\tevents := []*httpclient.StreamEvent{\n+\t\t{\n+\t\t\tData: mustMarshal(&GenerateContentResponse{\n+\t\t\t\tResponseID: \"resp-stream-err\",\n+\t\t\t\tCandidates: []*Candidate{\n+\t\t\t\t\t{\n+\t\t\t\t\t\tIndex: 0,\n+\t\t\t\t\t\tContent: &Content{\n+\t\t\t\t\t\t\tRole:  \"model\",\n+\t\t\t\t\t\t\tParts: []*Part{{Text: \"Hello\"}},\n+\t\t\t\t\t\t},\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t}),\n+\t\t},\n+\t\t{\n+\t\t\tData: []byte(`{\"error\":{\"code\":503,\"message\":\"The model is overloaded.\",\"status\":\"UNAVAILABLE\"}}`),\n+\t\t},\n+\t}\n+\n+\toutputStream, err := transformer.TransformStream(context.Background(), nil, streams.SliceStream(events))\n+\trequire.NoError(t, err)\n+\n+\tvar results []*llm.Response\n+\tfor outputStream.Next() {\n+\t\tresults = append(results, outputStream.Current())\n+\t}\n+\n+\trequire.Len(t, results, 1)\n+\trequire.Equal(t, \"Hello\", *results[0].Choices[0].Delta.Content.Content)\n+\n+\tvar respErr *llm.ResponseError\n+\trequire.ErrorAs(t, outputStream.Err(), &respErr)\n+\trequire.Equal(t, 503, respErr.StatusCode)\n+\trequire.Equal(t, \"The model is overloaded.\", respErr.Detail.Message)\n+\trequire.Equal(t, \"UNAVAILABLE\", respErr.Detail.Type)\n+\trequire.Equal(t, \"503\", respErr.Detail.Code)\n+}"
+  }
+ ],
+ "test_files": [
+  "llm/transformer/gemini/outbound_stream_test.go"
+ ]
+}

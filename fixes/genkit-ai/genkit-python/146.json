@@ -1,0 +1,34 @@
+{
+ "repo": "genkit-ai/genkit-python",
+ "number": 146,
+ "url": "https://github.com/genkit-ai/genkit-python/pull/146",
+ "title": "fix(py/anthropic): keep every system message in the request",
+ "merged_at": "2026-11-18T23:13:53Z",
+ "files": [
+  {
+   "filename": "packages/genkit-anthropic/src/genkit_anthropic/_models.py",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 7,
+   "patch": "@@ -705,15 +705,18 @@ async def _generate_streaming(\n             return cast(AnthropicMessage, await stream.get_final_message())\n \n     def _extract_system(self, messages: list[Message]) -> str | None:\n-        \"\"\"Extract system prompt from messages.\"\"\"\n+        \"\"\"Extract system prompt from messages.\n+\n+        Text from every system message is kept, in order, joined by blank lines.\n+        System messages with no text are skipped.\n+        \"\"\"\n+        system_texts = []\n         for msg in messages:\n             if msg.role == Role.SYSTEM:\n-                texts = []\n-                for part in msg.content:\n-                    if part.text is not None:\n-                        texts.append(part.text)\n-                return ''.join(texts) if texts else None\n-        return None\n+                text = ''.join(part.text for part in msg.content if part.text is not None)\n+                if text:\n+                    system_texts.append(text)\n+        return '\\n\\n'.join(system_texts) if system_texts else None\n \n     def _to_anthropic_messages(self, messages: list[Message]) -> list[dict[str, Any]]:\n         \"\"\"Convert Genkit messages to Anthropic format."
+  },
+  {
+   "filename": "packages/genkit-anthropic/tests/anthropic_generate_test.py",
+   "status": "modified",
+   "additions": 45,
+   "deletions": 1,
+   "patch": "@@ -28,7 +28,7 @@\n import pytest\n from genkit_anthropic import Anthropic, AnthropicConfig\n \n-from genkit import FinishReason, Genkit, GenkitError\n+from genkit import FinishReason, Genkit, GenkitError, Message, Part, Role\n from genkit.middleware import Middleware\n from genkit.plugin_api import ActionKind\n \n@@ -112,6 +112,50 @@ def _genkit(\n     )\n \n \n+# --- system messages ----------------------------------------------------------\n+\n+\n+@pytest.mark.asyncio\n+async def test_generate_claude_sends_every_system_message_as_system() -> None:\n+    \"\"\"Every non-empty system message lands in `system`; none leak into `messages`.\"\"\"\n+    api = FakeClaudeApi()\n+    ai = _genkit(api)\n+\n+    await ai.generate(\n+        model=MODEL,\n+        messages=[\n+            Message(role=Role.SYSTEM, content=[Part.from_text('You are a sommelier.')]),\n+            Message(role=Role.SYSTEM, content=[Part.from_text('')]),\n+            Message(role=Role.USER, content=[Part.from_text('Pair a wine with salmon.')]),\n+            Message(role=Role.MODEL, content=[Part.from_text('Try a Sancerre.')]),\n+            Message(role=Role.SYSTEM, content=[Part.from_text('Answer in French.')]),\n+        ],\n+        prompt='And with steak?',\n+    )\n+\n+    body = api.body()\n+    assert body['system'] == 'You are a sommelier.\\n\\nAnswer in French.'\n+    assert [m['role'] for m in body['messages']] == ['user', 'assistant', 'user']\n+\n+\n+@pytest.mark.asyncio\n+async def test_generate_claude_omits_system_when_system_messages_are_empty() -> None:\n+    \"\"\"System messages with only empty text don't send a whitespace `system` field.\"\"\"\n+    api = FakeClaudeApi()\n+    ai = _genkit(api)\n+\n+    await ai.generate(\n+        model=MODEL,\n+        messages=[\n+            Message(role=Role.SYSTEM, content=[Part.from_text('')]),\n+            Message(role=Role.SYSTEM, content=[Part.from_text('')]),\n+        ],\n+        prompt='hi',\n+    )\n+\n+    assert 'system' not in api.body()\n+\n+\n # --- config keys --------------------------------------------------------------\n \n "
+  },
+  {
+   "filename": "packages/genkit-anthropic/tests/anthropic_models_test.py",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -220,6 +220,20 @@ def test_extract_system() -> None:\n     assert system == 'You are helpful.'\n \n \n+def test_extract_system_keeps_all_system_messages() -> None:\n+    \"\"\"Every system message is sent, not only the first.\"\"\"\n+    mock_client = MagicMock()\n+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)\n+\n+    messages = [\n+        Message(role=Role.SYSTEM, content=[Part.from_text('You are helpful.')]),\n+        Message(role=Role.USER, content=[Part.from_text('Hello')]),\n+        Message(role=Role.SYSTEM, content=[Part.from_text('Answer in French.')]),\n+    ]\n+\n+    assert model._extract_system(messages) == 'You are helpful.\\n\\nAnswer in French.'\n+\n+\n def test_to_anthropic_messages() -> None:\n     \"\"\"Test message conversion.\"\"\"\n     mock_client = MagicMock()"
+  }
+ ],
+ "test_files": [
+  "packages/genkit-anthropic/tests/anthropic_generate_test.py",
+  "packages/genkit-anthropic/tests/anthropic_models_test.py"
+ ]
+}

@@ -71,6 +71,11 @@
    "role": "author",
    "created_at": "2026-11-18T08:55:12Z",
    "body": "Thanks @niksis02. I added the integration test in the form you described: `PutObject_race_with_parent_object_deletes_nested_dirs` races directory-object PUTs two levels under a parent key, using keys `r/N/b/c/d<w>-<i>/` and accepting only 200, `ObjectParentIsFile` or `ExistingObjectIsDirectory`.\n\nThe posix integration suite passes (43/43) with it. As you noted, the race is rare (about 1 in 70k), so the test does not fail on main either; it guards the behaviour rather than reproducing the original failure.\n\nThis comment and the test were drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-18T21:05:48Z",
+   "body": "Thanks, all of it is addressed in 4764d5c1 and d697b962:\n\n- `mkdir.go`: the comment now gives the real reason for the trailing-separator exception (the ENOTDIR can be about the last element itself, so making the parents again never fixes it and would spend the ~115 ms retry budget), notes that no caller passes such a path and only the `a//b` → `a/` recursion makes one, and the check is computed once before the loop.\n- Tests: the four parallel tests are folded into `TestMkdirAllParentGoneAfterEEXIST`, `TestMkdirAllParentReplacedByFile` and `TestMkdirAllEEXISTRetriesBounded` as Mkdir-errno cases, plus an \"as on macOS\" case in `TestMkdirAllTrailingSeparator` (Mkdir and Lstat ENOTDIR, both the trailing and the doubled separator) that asserts `errors.Is(err, syscall.ENOTDIR)`.\n- The Lstat count now uses a pass-through stub, so \"without calling Lstat\" is actually asserted. The ENOTDIR replaced-by-file case replaces the parent with a file and lets the real Mkdir answer, without the Windows skip.\n- Integration test: dropped, since it cannot reach the path at CI scale.\n\nDisclosure: drafted with Claude Code (AI assistant); not reviewed line by line by a human before posting.\n"
   }
  ]
 }

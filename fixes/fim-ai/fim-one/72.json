@@ -1,0 +1,26 @@
+{
+ "repo": "fim-ai/fim-one",
+ "number": 72,
+ "url": "https://github.com/fim-ai/fim-one/pull/72",
+ "title": "fix(planner): don't re-add carried-over step usage to plan.total_usage on replan",
+ "merged_at": "2026-11-19T02:32:05Z",
+ "files": [
+  {
+   "filename": "src/fim_one/core/planner/executor.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -146,6 +146,9 @@ async def execute(\n         completed_ids: set[str] = {\n             step.id for step in plan.steps if step.status == \"completed\"\n         }\n+        # Carried-over steps already had their usage counted in an earlier\n+        # round's total_usage; only steps run by this call are aggregated.\n+        carried_ids = frozenset(completed_ids)\n         failed_ids: set[str] = set()\n         running_tasks: dict[asyncio.Task[None], str] = {}\n         if completed_ids:\n@@ -321,7 +324,7 @@ async def execute(\n         async with self._usage_lock:\n             step_usage = UsageSummary()\n             for step in plan.steps:\n-                if step.usage is not None:\n+                if step.id not in carried_ids and step.usage is not None:\n                     step_usage += step.usage\n             if step_usage.llm_calls > 0:\n                 if plan.total_usage is not None:"
+  },
+  {
+   "filename": "tests/test_incremental_dag.py",
+   "status": "modified",
+   "additions": 37,
+   "deletions": 2,
+   "patch": "@@ -11,6 +11,7 @@\n from unittest.mock import MagicMock\n \n from fim_one.core.model import ChatMessage, LLMResult\n+from fim_one.core.model.usage import UsageSummary\n from fim_one.core.planner import DAGExecutor, DAGPlanner, ExecutionPlan, PlanStep, StepOutput\n from fim_one.core.planner.checkpoint import DAGCheckpoint\n \n@@ -29,8 +30,9 @@ class _CountingAgent:\n \n     tools = MagicMock()\n \n-    def __init__(self) -> None:\n+    def __init__(self, usage: UsageSummary | None = None) -> None:\n         self.queries: list[str] = []\n+        self._usage = usage\n \n     async def run(\n         self,\n@@ -41,7 +43,7 @@ async def run(\n         from fim_one.core.agent.types import AgentResult\n \n         self.queries.append(query)\n-        return AgentResult(answer=\"step done\", iterations=1)\n+        return AgentResult(answer=\"step done\", iterations=1, usage=self._usage)\n \n \n class TestExecutorSkipsCompleted:\n@@ -67,6 +69,39 @@ async def test_carried_steps_not_reexecuted(self) -> None:\n         # The carried step's result was available as dependency context.\n         assert \"research findings\" in agent.queries[0]\n \n+    async def test_carried_step_usage_not_recounted(self) -> None:\n+        \"\"\"A replan round must not re-add usage already counted for carried steps.\"\"\"\n+        agent = _CountingAgent(\n+            usage=UsageSummary(\n+                prompt_tokens=6, completion_tokens=4, total_tokens=10, llm_calls=1\n+            )\n+        )\n+        executor = DAGExecutor(\n+            agent=agent,\n+            enable_tool_cache=False,\n+            enable_citation_verification=False,\n+        )\n+        done = _completed_step(\"step_1\", \"research topic\", \"research findings\")\n+        done.usage = UsageSummary(\n+            prompt_tokens=60, completion_tokens=40, total_tokens=100, llm_calls=1\n+        )\n+        pending = PlanStep(id=\"step_2\", task=\"write report\", dependencies=[\"step_1\"])\n+        # Totals from the round that ran step_1.\n+        plan = ExecutionPlan(\n+            goal=\"g\",\n+            steps=[done, pending],\n+            total_usage=UsageSummary(\n+                prompt_tokens=60, completion_tokens=40, total_tokens=100, llm_calls=1\n+            ),\n+        )\n+\n+        result = await executor.execute(plan)\n+\n+        assert result.total_usage is not None\n+        # 100 (round 1) + 10 (step_2 only), not 100 + 100 + 10.\n+        assert result.total_usage.total_tokens == 110\n+        assert result.total_usage.llm_calls == 2\n+\n     async def test_all_completed_plan_is_noop(self) -> None:\n         agent = _CountingAgent()\n         executor = DAGExecutor("
+  }
+ ],
+ "test_files": [
+  "tests/test_incremental_dag.py"
+ ]
+}

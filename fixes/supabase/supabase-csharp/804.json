@@ -1,0 +1,33 @@
+{
+ "repo": "supabase/supabase-csharp",
+ "number": 804,
+ "url": "https://github.com/supabase/supabase-csharp/pull/804",
+ "title": "fix(storage): read FileObjectV2.Size as long so objects over 2 GiB deserialize",
+ "merged_at": "2026-11-19T07:04:04Z",
+ "files": [
+  {
+   "filename": "packages/Storage/Storage.Tests/Files/StorageFileApiContractTests.cs",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -95,6 +95,17 @@ public async Task Info_ShouldGetTheInfoPath()\n         }\n     }\n \n+    [TestMethod]\n+    public async Task Info_ShouldReadSizeAboveInt32Range()\n+    {\n+        this.Respond($\"/storage/v1/object/info/{Bucket}/big.bin\", \"GET\", 200, \"{\\\"name\\\":\\\"big.bin\\\",\\\"size\\\":3000000000}\");\n+        var info = await this.client.From(Bucket).Info(\"big.bin\");\n+        info!.SizeInBytes.Should().Be(3000000000L);\n+#pragma warning disable CS0618\n+        info.Size.Should().BeNull();\n+#pragma warning restore CS0618\n+    }\n+\n     [TestMethod]\n     public async Task CreateSignedUrl_ShouldPostToSignPathAndReturnAbsoluteUrl()\n     {"
+  },
+  {
+   "filename": "packages/Storage/Storage/FileObjectV2.cs",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 1,
+   "patch": "@@ -28,8 +28,22 @@ public class FileObjectV2\n     [JsonPropertyName(\"last_accessed_at\")]\n     public DateTime? LastAccessedAt { get; set; }\n \n+    /// <summary>\n+    /// Object size in bytes. Unlike <see cref=\"Size\"/>, this can represent objects larger than 2 GiB.\n+    /// </summary>\n     [JsonPropertyName(\"size\")]\n-    public int? Size { get; set; }\n+    public long? SizeInBytes { get; set; }\n+\n+    /// <summary>\n+    /// Object size in bytes, or null when it exceeds <see cref=\"int.MaxValue\"/>.\n+    /// </summary>\n+    [JsonIgnore]\n+    [Obsolete(\"Use SizeInBytes instead; Size cannot represent objects larger than 2 GiB.\")]\n+    public int? Size\n+    {\n+        get => SizeInBytes is > int.MaxValue ? null : (int?)SizeInBytes;\n+        set => SizeInBytes = value;\n+    }\n \n     [JsonPropertyName(\"cache_control\")]\n     public string? CacheControl { get; set; }"
+  },
+  {
+   "filename": "packages/Storage/Storage/PublicAPI.Unshipped.txt",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -3,3 +3,5 @@ Supabase.Storage.ClientOptions.Logger.get -> Microsoft.Extensions.Logging.ILogge\n Supabase.Storage.ClientOptions.Logger.set -> void\n Supabase.Storage.ClientOptions.TracePropagation.get -> Supabase.Core.Http.TracePropagation\n Supabase.Storage.ClientOptions.TracePropagation.set -> void\n+Supabase.Storage.FileObjectV2.SizeInBytes.get -> long?\n+Supabase.Storage.FileObjectV2.SizeInBytes.set -> void"
+  }
+ ],
+ "test_files": [
+  "packages/Storage/Storage.Tests/Files/StorageFileApiContractTests.cs"
+ ]
+}

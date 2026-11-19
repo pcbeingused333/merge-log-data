@@ -1,0 +1,26 @@
+{
+ "repo": "acronis/go-appkit",
+ "number": 68,
+ "url": "https://github.com/acronis/go-appkit/pull/68",
+ "title": "fix(httpclient): avoid leaking initial request body reader",
+ "merged_at": "2026-11-19T06:48:22Z",
+ "files": [
+  {
+   "filename": "httpclient/retryable_round_tripper.go",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 8,
+   "patch": "@@ -175,15 +175,15 @@ func (rt *RetryableRoundTripper) RoundTrip(req *http.Request) (*http.Response, e\n \tvar resp *http.Response\n \tvar roundTripErr error\n \tfor curRetryAttemptNum := 0; ; curRetryAttemptNum++ {\n-\t\t// Rewind request body.\n-\t\tif rewindErr := rewindReqBody(req); rewindErr != nil {\n-\t\t\tif curRetryAttemptNum == 0 {\n-\t\t\t\treturn nil, &RetryableRoundTripperError{Inner: rewindErr}\n+\t\t// The initial body is already prepared by makeRequestBodyRewindable.\n+\t\t// Rewind only for retries so the initial reader is not replaced without closing it.\n+\t\tif curRetryAttemptNum > 0 {\n+\t\t\tif rewindErr := rewindReqBody(req); rewindErr != nil {\n+\t\t\t\trt.logger(reqCtx).Error(fmt.Sprintf(\n+\t\t\t\t\t\"failed to rewind request body between retry attempts, %d request(s) done\", curRetryAttemptNum+1),\n+\t\t\t\t\tlog.Error(rewindErr))\n+\t\t\t\treturn resp, roundTripErr\n \t\t\t}\n-\t\t\trt.logger(reqCtx).Error(fmt.Sprintf(\n-\t\t\t\t\"failed to rewind request body between retry attempts, %d request(s) done\", curRetryAttemptNum+1),\n-\t\t\t\tlog.Error(rewindErr))\n-\t\t\treturn resp, roundTripErr\n \t\t}\n \n \t\t// Discard and close response body before next retry."
+  },
+  {
+   "filename": "httpclient/retryable_round_tripper_test.go",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 3,
+   "patch": "@@ -210,7 +210,7 @@ func TestRetryableRoundTripper_RoundTrip(t *testing.T) {\n \t\t\tWantReqsNum:       4,\n \t\t\tWantSrvReqInfos:   genReqInfos(http.MethodPost, reqBodyJSON, 4),\n \t\t\tWantFinalRespCode: http.StatusOK,\n-\t\t\tWantSeekOps:       map[seekOp]int{{0, io.SeekCurrent}: 1, {0, io.SeekStart}: 4},\n+\t\t\tWantSeekOps:       map[seekOp]int{{0, io.SeekCurrent}: 1, {0, io.SeekStart}: 3},\n \t\t},\n \t\t{\n \t\t\tName: \"custom exp backoff retry policy, POST method, seeker body with no-zero initial offset\",\n@@ -232,7 +232,7 @@ func TestRetryableRoundTripper_RoundTrip(t *testing.T) {\n \t\t\tWantReqsNum:       4,\n \t\t\tWantSrvReqInfos:   genReqInfos(http.MethodPost, reqBodyJSON[10:], 4),\n \t\t\tWantFinalRespCode: http.StatusOK,\n-\t\t\tWantSeekOps:       map[seekOp]int{{10, io.SeekStart}: 4, {0, io.SeekCurrent}: 1},\n+\t\t\tWantSeekOps:       map[seekOp]int{{10, io.SeekStart}: 3, {0, io.SeekCurrent}: 1},\n \t\t},\n \t\t{\n \t\t\tName: \"custom constant backoff policy, POST method, upload from file directly\",\n@@ -252,7 +252,7 @@ func TestRetryableRoundTripper_RoundTrip(t *testing.T) {\n \t\t\tWantReqsNum:         4,\n \t\t\tWantSrvReqInfos:     genReqInfos(http.MethodPost, reqBodyJSON, 4),\n \t\t\tWantFinalRespCode:   http.StatusOK,\n-\t\t\tWantSeekOps:         map[seekOp]int{{0, io.SeekCurrent}: 1, {0, io.SeekStart}: 4},\n+\t\t\tWantSeekOps:         map[seekOp]int{{0, io.SeekCurrent}: 1, {0, io.SeekStart}: 3},\n \t\t\tWantCloseReqBodyErr: \"file already closed\",\n \t\t},\n \t\t{\n@@ -568,3 +568,38 @@ func TestRetryableRoundTripper_RoundTrip_IdempotentFlag(t *testing.T) {\n \t\t}\n \t})\n }\n+\n+func TestRetryableRoundTripper_GetBodyClosesReaders(t *testing.T) {\n+\tsrv := newTestServerForRetryableRoundTripper()\n+\tdefer srv.Close()\n+\tname := path.Join(t.TempDir(), \"upload\")\n+\trequire.NoError(t, os.WriteFile(name, []byte(\"payload\"), 0600))\n+\toriginal, err := os.Open(name)\n+\trequire.NoError(t, err)\n+\tdefer original.Close()\n+\treq, err := http.NewRequest(http.MethodPost, srv.URL, original)\n+\trequire.NoError(t, err)\n+\tvar opened []*os.File\n+\treq.GetBody = func() (io.ReadCloser, error) {\n+\t\tbody, openErr := os.Open(name)\n+\t\tif openErr == nil {\n+\t\t\topened = append(opened, body)\n+\t\t}\n+\t\treturn body, openErr\n+\t}\n+\tdefer func() {\n+\t\tfor _, body := range opened {\n+\t\t\t_ = body.Close()\n+\t\t}\n+\t}()\n+\trt, err := NewRetryableRoundTripper(http.DefaultTransport)\n+\trequire.NoError(t, err)\n+\tresp, err := rt.RoundTrip(req)\n+\trequire.NoError(t, err)\n+\tdefer resp.Body.Close()\n+\trequire.Equal(t, http.StatusOK, resp.StatusCode)\n+\trequire.NotEmpty(t, opened)\n+\tfor _, body := range opened {\n+\t\trequire.ErrorIs(t, body.Close(), os.ErrClosed, \"GetBody reader must be closed\")\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "httpclient/retryable_round_tripper_test.go"
+ ]
+}

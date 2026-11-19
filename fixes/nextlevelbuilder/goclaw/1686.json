@@ -1,0 +1,26 @@
+{
+ "repo": "nextlevelbuilder/goclaw",
+ "number": 1686,
+ "url": "https://github.com/nextlevelbuilder/goclaw/pull/1686",
+ "title": "fix(providers): keep enum/items/nested schema and []any required in Ollama tools",
+ "merged_at": "2026-11-19T04:10:43Z",
+ "files": [
+  {
+   "filename": "internal/providers/ollama.go",
+   "status": "modified",
+   "additions": 42,
+   "deletions": 9,
+   "patch": "@@ -2,6 +2,7 @@ package providers\n \n import (\n \t\"context\"\n+\t\"encoding/json\"\n \t\"fmt\"\n \t\"log/slog\"\n \t\"net/http\"\n@@ -285,18 +286,11 @@ func (p *OllamaProvider) buildRequest(ctx context.Context, req ChatRequest, stre\n \t\tif params, ok := td.Function.Parameters[\"properties\"].(map[string]any); ok {\n \t\t\tfor propName, propVal := range params {\n \t\t\t\tif propMap, ok2 := propVal.(map[string]any); ok2 {\n-\t\t\t\t\tprop := ollamaapi.ToolProperty{}\n-\t\t\t\t\tif desc, ok3 := propMap[\"description\"].(string); ok3 {\n-\t\t\t\t\t\tprop.Description = desc\n-\t\t\t\t\t}\n-\t\t\t\t\tif typ, ok3 := propMap[\"type\"].(string); ok3 {\n-\t\t\t\t\t\tprop.Type = ollamaapi.PropertyType{typ}\n-\t\t\t\t\t}\n-\t\t\t\t\tprops.Set(propName, prop)\n+\t\t\t\t\tprops.Set(propName, ollamaToolProperty(propMap))\n \t\t\t\t}\n \t\t\t}\n \t\t}\n-\t\trequired, _ := td.Function.Parameters[\"required\"].([]string)\n+\t\trequired := toStringSlice(td.Function.Parameters[\"required\"])\n \t\ttool := ollamaapi.Tool{\n \t\t\tType: \"function\",\n \t\t\tFunction: ollamaapi.ToolFunction{\n@@ -375,3 +369,42 @@ func mapDoneReason(reason string) string {\n \t\treturn \"stop\"\n \t}\n }\n+\n+// ollamaToolProperty converts a JSON-schema property into an Ollama ToolProperty,\n+// keeping enum, items, nested properties and required (not just type/description).\n+// It round-trips through JSON so it follows the same schema as the OpenAI path.\n+func ollamaToolProperty(propMap map[string]any) ollamaapi.ToolProperty {\n+\tvar prop ollamaapi.ToolProperty\n+\tif raw, err := json.Marshal(propMap); err == nil {\n+\t\tif err := json.Unmarshal(raw, &prop); err == nil {\n+\t\t\treturn prop\n+\t\t}\n+\t}\n+\t// Fallback: keep the minimal fields if the schema doesn't fit the Ollama types.\n+\tprop = ollamaapi.ToolProperty{}\n+\tif desc, ok := propMap[\"description\"].(string); ok {\n+\t\tprop.Description = desc\n+\t}\n+\tif typ, ok := propMap[\"type\"].(string); ok {\n+\t\tprop.Type = ollamaapi.PropertyType{typ}\n+\t}\n+\treturn prop\n+}\n+\n+// toStringSlice accepts both []string and []any (as produced by JSON-decoded\n+// schemas, e.g. from MCP servers) and returns the string elements.\n+func toStringSlice(v any) []string {\n+\tswitch r := v.(type) {\n+\tcase []string:\n+\t\treturn r\n+\tcase []any:\n+\t\tout := make([]string, 0, len(r))\n+\t\tfor _, e := range r {\n+\t\t\tif s, ok := e.(string); ok {\n+\t\t\t\tout = append(out, s)\n+\t\t\t}\n+\t\t}\n+\t\treturn out\n+\t}\n+\treturn nil\n+}"
+  },
+  {
+   "filename": "internal/providers/ollama_test.go",
+   "status": "modified",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -134,3 +134,52 @@ func TestOllamaChatStream_ToolCallRepeatedInDoneChunkIsNotDuplicated(t *testing.\n \trequire.NoError(t, err)\n \trequire.Len(t, resp.ToolCalls, 1)\n }\n+\n+// TestOllamaBuildRequest_ToolSchemaPreserved verifies that buildRequest keeps\n+// enum/items/nested properties and accepts a []any \"required\" list (as produced\n+// by JSON-decoded MCP schemas), instead of only copying type and description.\n+func TestOllamaBuildRequest_ToolSchemaPreserved(t *testing.T) {\n+\tp := NewOllamaProvider(\"ollama\", \"http://localhost:11434\", \"llama3.3\", nil, nil)\n+\treq := ChatRequest{\n+\t\tMessages: []Message{{Role: \"user\", Content: \"hi\"}},\n+\t\tTools: []ToolDefinition{{\n+\t\t\tType: \"function\",\n+\t\t\tFunction: &ToolFunctionSchema{\n+\t\t\t\tName: \"t\",\n+\t\t\t\tParameters: map[string]any{\n+\t\t\t\t\t\"type\": \"object\",\n+\t\t\t\t\t\"properties\": map[string]any{\n+\t\t\t\t\t\t\"mode\": map[string]any{\"type\": \"string\", \"enum\": []any{\"a\", \"b\"}},\n+\t\t\t\t\t\t\"tags\": map[string]any{\"type\": \"array\", \"items\": map[string]any{\"type\": \"string\"}},\n+\t\t\t\t\t\t\"opts\": map[string]any{\n+\t\t\t\t\t\t\t\"type\":       \"object\",\n+\t\t\t\t\t\t\t\"properties\": map[string]any{\"x\": map[string]any{\"type\": \"integer\"}},\n+\t\t\t\t\t\t\t\"required\":   []any{\"x\"},\n+\t\t\t\t\t\t},\n+\t\t\t\t\t},\n+\t\t\t\t\t\"required\": []any{\"mode\"},\n+\t\t\t\t},\n+\t\t\t},\n+\t\t}},\n+\t}\n+\tollamaReq := p.buildRequest(context.Background(), req, false)\n+\trequire.Len(t, ollamaReq.Tools, 1)\n+\tparams := ollamaReq.Tools[0].Function.Parameters\n+\n+\tassert.Equal(t, []string{\"mode\"}, params.Required)\n+\n+\tmode, ok := params.Properties.Get(\"mode\")\n+\trequire.True(t, ok)\n+\tassert.Equal(t, []any{\"a\", \"b\"}, mode.Enum)\n+\n+\ttags, ok := params.Properties.Get(\"tags\")\n+\trequire.True(t, ok)\n+\tassert.NotNil(t, tags.Items)\n+\n+\topts, ok := params.Properties.Get(\"opts\")\n+\trequire.True(t, ok)\n+\trequire.NotNil(t, opts.Properties)\n+\t_, ok = opts.Properties.Get(\"x\")\n+\tassert.True(t, ok)\n+\tassert.Equal(t, []string{\"x\"}, opts.Required)\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/providers/ollama_test.go"
+ ]
+}

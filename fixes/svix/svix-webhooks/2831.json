@@ -1,0 +1,33 @@
+{
+ "repo": "svix/svix-webhooks",
+ "number": 2831,
+ "url": "https://github.com/svix/svix-webhooks/pull/2831",
+ "title": "fix(php): retry HTTP 423 Locked like the other SDKs",
+ "merged_at": "2026-11-19T00:11:35Z",
+ "files": [
+  {
+   "filename": "ChangeLog.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -9,6 +9,7 @@ The Svix Bridge changelog has moved to [bridge/ChangeLog.md](./bridge/ChangeLog.\n * Libs/C#: Improve retry logic (retry on HTTP 423)\n * Libs/Go: Improve retry logic (retry on HTTP 423)\n * Libs/Rust: Improve retry logic (retry on HTTP 423)\n+* Libs/PHP: Improve retry logic (retry on HTTP 423)\n * Libs/Ruby, Libs/PHP: Webhook verification now lowercases the header names\n   before looking them up, so header sets like `Svix-Id` (as returned by PHP's\n   `getallheaders()` and by Rack) verify instead of failing with"
+  },
+  {
+   "filename": "php/src/Request/SvixHttpClient.php",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -115,7 +115,7 @@ private function sendInner(SvixRequest $req): array\n                 ];\n \n                 // Check if we should retry based on status code\n-                if ($statusCode >= 500 && $attempt < $maxRetries) {\n+                if (($statusCode >= 500 || $statusCode === 423) && $attempt < $maxRetries) {\n                     $this->sleepFromSchedule($attempt);\n                     $attempt++;\n                     continue;\n@@ -148,7 +148,7 @@ private function sendInner(SvixRequest $req): array\n                     ];\n \n                     // Check if we should retry based on status code\n-                    if ($statusCode >= 500 && $attempt < $maxRetries) {\n+                    if (($statusCode >= 500 || $statusCode === 423) && $attempt < $maxRetries) {\n                         $this->sleepFromSchedule($attempt);\n                         $attempt++;\n                         continue;"
+  },
+  {
+   "filename": "php/tests/MockTest.php",
+   "status": "modified",
+   "additions": 31,
+   "deletions": 0,
+   "patch": "@@ -476,6 +476,37 @@ public function testRetryOn500Response(): void\n         }\n     }\n \n+    public function testHttp423LockedIsRetriedAndLaterSuccessIsReturned(): void\n+    {\n+        $this->mockHandler->append(\n+            new Response(423, [], '{\"code\":\"locked\",\"detail\":\"Locked\"}'),\n+            new Response(200, [], MsgOut)\n+        );\n+\n+        $svx = new \\Svix\\Svix(\"super_secret\", new SvixOptions(debug: true), httpClient: $this->httpClient);\n+        $svx->message->create(\"app_id\", MessageIn::create(\"event-type\", [\"id\" => \"one\"]));\n+\n+        $this->assertCount(2, $this->requestHistory);\n+        $this->assertEquals('1', $this->requestHistory[1]['request']->getHeaderLine('svix-retry-count'));\n+    }\n+\n+    public function testHttp409ConflictIsNotRetried(): void\n+    {\n+        $this->mockHandler->append(\n+            new Response(409, [], '{\"code\":\"conflict\",\"detail\":\"Conflict\"}'),\n+            new Response(200, [], MsgOut)\n+        );\n+\n+        $svx = new \\Svix\\Svix(\"super_secret\", new SvixOptions(debug: true), httpClient: $this->httpClient);\n+        try {\n+            $svx->message->create(\"app_id\", MessageIn::create(\"event-type\", [\"id\" => \"one\"]));\n+            $this->fail('expected ApiException');\n+        } catch (\\Svix\\Exception\\ApiException $e) {\n+            $this->assertEquals(409, $e->getCode());\n+        }\n+        $this->assertCount(1, $this->requestHistory);\n+    }\n+\n     public function testRetryOnConnectionError(): void\n     {\n         // Guzzle raises ConnectException for timeouts, DNS failures, refused connections, etc."
+  }
+ ],
+ "test_files": [
+  "php/tests/MockTest.php"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "looplj/axonhub",
+ "number": 3047,
+ "url": "https://github.com/looplj/axonhub/pull/3047",
+ "title": "fix(xai): strip unsupported penalty/stop params for all grok-4.x reasoning models",
+ "merged_at": "2026-11-19T05:24:02Z",
+ "files": [
+  {
+   "filename": "llm/transformer/xai/outbound.go",
+   "status": "modified",
+   "additions": 26,
+   "deletions": 9,
+   "patch": "@@ -4,6 +4,7 @@ import (\n \t\"context\"\n \t\"errors\"\n \t\"fmt\"\n+\t\"strings\"\n \n \t\"github.com/looplj/axonhub/llm\"\n \t\"github.com/looplj/axonhub/llm/auth\"\n@@ -108,23 +109,39 @@ func (t *OutboundTransformer) TransformRequest(\n \t\treturn nil, fmt.Errorf(\"%w: messages are required\", transformer.ErrInvalidRequest)\n \t}\n \n-\tswitch chatReq.Model {\n-\tcase \"grok-4\":\n+\tswitch {\n+\tcase chatReq.Model == \"grok-4\":\n \t\tchatReq.ReasoningEffort = \"\"\n-\t\tchatReq.PresencePenalty = nil\n-\t\tchatReq.FrequencyPenalty = nil\n-\t\tchatReq.Stop = nil\n-\tcase \"grok-3\", \"grok-3-mini\":\n-\t\tchatReq.PresencePenalty = nil\n-\t\tchatReq.FrequencyPenalty = nil\n-\t\tchatReq.Stop = nil\n+\t\tstripUnsupportedReasoningParams(chatReq)\n+\tcase isReasoningOnlyModel(chatReq.Model):\n+\t\tstripUnsupportedReasoningParams(chatReq)\n \tdefault:\n \t\t// Do nothing\n \t}\n \n \treturn t.Outbound.TransformRequest(ctx, chatReq)\n }\n \n+// isReasoningOnlyModel reports whether the model rejects presence_penalty,\n+// frequency_penalty and stop. It covers grok-3, grok-3-mini and every grok-4.x\n+// variant except the explicit non-reasoning ones.\n+func isReasoningOnlyModel(model string) bool {\n+\tswitch {\n+\tcase model == \"grok-3\", model == \"grok-3-mini\":\n+\t\treturn true\n+\tcase strings.HasPrefix(model, \"grok-4\"):\n+\t\treturn !strings.Contains(model, \"non-reasoning\")\n+\tdefault:\n+\t\treturn false\n+\t}\n+}\n+\n+func stripUnsupportedReasoningParams(chatReq *llm.Request) {\n+\tchatReq.PresencePenalty = nil\n+\tchatReq.FrequencyPenalty = nil\n+\tchatReq.Stop = nil\n+}\n+\n func IsValidResponse(event *llm.Response) bool {\n \t// Always allow the done response\n \tif event.Object == llm.DoneResponse.Object {"
+  },
+  {
+   "filename": "llm/transformer/xai/outbound_test.go",
+   "status": "modified",
+   "additions": 53,
+   "deletions": 0,
+   "patch": "@@ -595,3 +595,56 @@ func (t *OutboundTransformer) applyStreamFilter(ctx context.Context, stream stre\n \t\treturn hasContent\n \t}), nil\n }\n+\n+func TestOutboundTransformer_TransformRequest_StripsUnsupportedReasoningParams(t *testing.T) {\n+\ttests := []struct {\n+\t\tname      string\n+\t\tmodel     string\n+\t\twantStrip bool\n+\t}{\n+\t\t{name: \"grok-4\", model: \"grok-4\", wantStrip: true},\n+\t\t{name: \"grok-4 dated\", model: \"grok-4-0709\", wantStrip: true},\n+\t\t{name: \"grok-4 fast reasoning\", model: \"grok-4-fast-reasoning\", wantStrip: true},\n+\t\t{name: \"grok-4.1 fast reasoning\", model: \"grok-4.1-fast-reasoning\", wantStrip: true},\n+\t\t{name: \"grok-4.20\", model: \"grok-4.20\", wantStrip: true},\n+\t\t{name: \"grok-3\", model: \"grok-3\", wantStrip: true},\n+\t\t{name: \"grok-3-mini\", model: \"grok-3-mini\", wantStrip: true},\n+\t\t{name: \"grok-4 fast non-reasoning keeps params\", model: \"grok-4-fast-non-reasoning\", wantStrip: false},\n+\t\t{name: \"grok-4.1 fast non-reasoning keeps params\", model: \"grok-4.1-fast-non-reasoning\", wantStrip: false},\n+\t\t{name: \"grok-code-fast-1 keeps params\", model: \"grok-code-fast-1\", wantStrip: false},\n+\t}\n+\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\toutbound, err := NewOutboundTransformerWithConfig(&Config{\n+\t\t\t\tBaseURL:        DefaultBaseURL,\n+\t\t\t\tAPIKeyProvider: auth.NewStaticKeyProvider(\"test-key\"),\n+\t\t\t})\n+\t\t\trequire.NoError(t, err)\n+\n+\t\t\treq := &llm.Request{\n+\t\t\t\tModel: tt.model,\n+\t\t\t\tMessages: []llm.Message{\n+\t\t\t\t\t{Role: \"user\", Content: llm.MessageContent{Content: lo.ToPtr(\"hi\")}},\n+\t\t\t\t},\n+\t\t\t\tPresencePenalty:  lo.ToPtr(0.5),\n+\t\t\t\tFrequencyPenalty: lo.ToPtr(0.5),\n+\t\t\t\tStop:             &llm.Stop{Stop: lo.ToPtr(\"END\")},\n+\t\t\t}\n+\n+\t\t\thttpReq, err := outbound.TransformRequest(context.Background(), req)\n+\t\t\trequire.NoError(t, err)\n+\n+\t\t\tvar body map[string]any\n+\t\t\trequire.NoError(t, json.Unmarshal(httpReq.Body, &body))\n+\n+\t\t\tfor _, key := range []string{\"presence_penalty\", \"frequency_penalty\", \"stop\"} {\n+\t\t\t\tif tt.wantStrip {\n+\t\t\t\t\tassert.NotContains(t, body, key)\n+\t\t\t\t} else {\n+\t\t\t\t\tassert.Contains(t, body, key)\n+\t\t\t\t}\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "llm/transformer/xai/outbound_test.go"
+ ]
+}

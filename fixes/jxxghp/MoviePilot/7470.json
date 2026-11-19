@@ -1,0 +1,26 @@
+{
+ "repo": "jxxghp/MoviePilot",
+ "number": 7470,
+ "url": "https://github.com/jxxghp/MoviePilot/pull/7470",
+ "title": "fix(llm): map Gemini 3 Pro minimal thinking level to low",
+ "merged_at": "2026-11-18T23:04:08Z",
+ "files": [
+  {
+   "filename": "app/agent/llm/helper.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -999,7 +999,7 @@ def _build_google_thinking_kwargs(\n         \"\"\"\n         Gemini 3 使用 thinking_level；Gemini 2.5 使用 thinking_budget。\n \n-        Gemini 3.8 Flash 不接受 minimal，也不能完全关闭思考，因此将关闭和最小映射到 low。\n+        Gemini 3.8 Flash 与 Gemini 3 Pro 不接受 minimal，也不能完全关闭思考，因此将关闭和最小映射到 low。\n \n         :param model_name: 已规范化的模型标识\n         :param thinking_level: 用户选择的统一思考级别\n@@ -1041,7 +1041,10 @@ def _build_google_thinking_kwargs(\n             )\n \n         if \"gemini-3\" in model_name:\n-            minimum_level = \"low\" if \"gemini-3.8-flash\" in model_name else \"minimal\"\n+            is_pro = \"-pro\" in model_name\n+            minimum_level = (\n+                \"low\" if \"gemini-3.8-flash\" in model_name or is_pro else \"minimal\"\n+            )\n             level_map = {\n                 \"off\": minimum_level,\n                 \"minimal\": minimum_level,"
+  },
+  {
+   "filename": "tests/test_llm_thinking_options.py",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -167,6 +167,36 @@ def test_google_thinking_payload_respects_model_minimum(monkeypatch, offline_run\n     assert config.include_thoughts is False\n \n \n+@pytest.mark.parametrize(\"model_name,level,expected\", [\n+    (\"gemini-3.1-pro-preview\", \"off\", \"low\"),\n+    (\"gemini-3.1-pro-preview\", \"minimal\", \"low\"),\n+    (\"gemini-3.1-pro-preview\", \"medium\", \"medium\"),\n+    (\"models/gemini-3.1-pro-preview\", \"xhigh\", \"high\"),\n+])\n+def test_google_pro_thinking_payload_uses_supported_levels(\n+    monkeypatch, offline_runtime, model_name, level, expected,\n+) -> None:\n+    \"\"\"\n+    Gemini 3 Pro 的受支持级别不含 minimal，须映射为 low。\n+    \"\"\"\n+    from langchain_google_genai import chat_models\n+\n+    offline_runtime.resolve_runtime.return_value.update(\n+        provider_id=\"google\", runtime=\"google\", model_id=model_name, base_url=None,\n+    )\n+    monkeypatch.setattr(helper, \"_patch_gemini_thought_signature\", lambda: None)\n+    monkeypatch.setattr(chat_models, \"Client\", Mock(return_value=Mock(aio=None)))\n+\n+    model = asyncio.run(LLMHelper.get_llm(\n+        provider=\"google\", model=model_name, api_key=\"offline-key\", use_proxy=False,\n+        web_search_mode=\"disabled\", thinking_level=level, provider_runtime=offline_runtime,\n+    ))\n+    config = model._prepare_params(None).thinking_config\n+\n+    assert config.thinking_level.value.lower() == expected\n+    assert config.include_thoughts is False\n+\n+\n @pytest.mark.parametrize(\"protocol\", [\"chat_completions\", \"responses\"])\n @pytest.mark.parametrize(\"effort\", [\"max\", \"xhigh\"])\n @pytest.mark.parametrize(\"has_catalog\", [False, True])"
+  }
+ ],
+ "test_files": [
+  "tests/test_llm_thinking_options.py"
+ ]
+}

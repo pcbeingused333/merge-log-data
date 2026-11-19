@@ -1,0 +1,33 @@
+{
+ "repo": "activeagents/activeagent",
+ "number": 722,
+ "url": "https://github.com/activeagents/activeagent/pull/722",
+ "title": "Pass tool_choice to RubyLLM",
+ "merged_at": "2026-11-19T03:16:21Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0\n \n ### Fixed\n \n+- **`tool_choice` reaches RubyLLM** (`ruby_llm`). The adapter read\n+  `tool_choice` only to clear it between turns and never sent it, so\n+  `tool_choice: \"required\"` or a named tool was ignored and a generation\n+  could finish without calling a tool. It is now passed as RubyLLM's\n+  `tool_prefs`, and still cleared once the tool has been used.\n - **An evaluation run is executed by one job** (`actionagent`). The run job\n   read a run's status, then the scenario runner wrote `running`, as two\n   steps, so a job delivered twice, or two workers that both loaded the run"
+  },
+  {
+   "filename": "lib/active_agent/providers/ruby_llm_provider.rb",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -62,6 +62,9 @@ def api_prompt_execute(parameters)\n         schema = ruby_llm_schema(parameters[:response_format])\n         kwargs[:schema] = schema if schema\n \n+        tool_prefs = ruby_llm_tool_prefs(tools)\n+        kwargs[:tool_prefs] = tool_prefs if tool_prefs\n+\n         # RubyLLM 2 renamed params: and exposes a provider-neutral token limit.\n         max_tokens = parameters[:max_tokens] || options.max_tokens\n         if max_tokens\n@@ -305,6 +308,23 @@ def process_function_calls(tool_calls)\n \n       private\n \n+      # Maps the request's tool_choice to RubyLLM's tool_prefs. Without it\n+      # the model is free to answer without calling a tool even when the\n+      # caller requires one. Nil once ToolChoiceClearing has cleared it, so\n+      # a follow-up turn is not forced into another call.\n+      #\n+      # @param tools [Hash, nil] RubyLLM tools sent with this request\n+      # @return [Hash, nil]\n+      def ruby_llm_tool_prefs(tools)\n+        return nil if tools.blank?\n+\n+        choice = request.tool_choice\n+        choice = (choice[:name] || choice[\"name\"]) if choice.is_a?(Hash)\n+        return nil if choice.blank?\n+\n+        { choice: choice.to_sym }\n+      end\n+\n       def ruby_llm_v2?\n         Gem.loaded_specs.fetch(\"ruby_llm\").version.segments.first >= 2\n       end"
+  },
+  {
+   "filename": "test/providers/ruby_llm/ruby_llm_provider_test.rb",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -964,6 +964,42 @@ def last_kwargs\n     end\n   end\n \n+  test \"tool_choice required is passed to RubyLLM as tool_prefs\" do\n+    provider = ActiveAgent::Providers::RubyLLMProvider.new(\n+      service: \"RubyLLM\",\n+      model: \"gpt-4o-mini\",\n+      tool_choice: \"required\",\n+      messages: [ { role: \"user\", content: \"weather?\" } ],\n+      tools: [ tool_definition(\"get_weather\") ],\n+      tools_function: ->(_name, **_kwargs) { { temp: 72 } }\n+    )\n+\n+    provider.prompt\n+\n+    assert_equal({ choice: :required }, @fake_provider.last_kwargs[:tool_prefs])\n+  end\n+\n+  test \"tool_choice naming a tool is passed to RubyLLM as that tool\" do\n+    provider = ActiveAgent::Providers::RubyLLMProvider.new(\n+      service: \"RubyLLM\",\n+      model: \"gpt-4o-mini\",\n+      tool_choice: { name: \"get_weather\" },\n+      messages: [ { role: \"user\", content: \"weather?\" } ],\n+      tools: [ tool_definition(\"get_weather\") ],\n+      tools_function: ->(_name, **_kwargs) { { temp: 72 } }\n+    )\n+\n+    provider.prompt\n+\n+    assert_equal({ choice: :get_weather }, @fake_provider.last_kwargs[:tool_prefs])\n+  end\n+\n+  test \"tool_prefs is not passed without a tool_choice\" do\n+    @provider.prompt\n+\n+    assert_nil @fake_provider.last_kwargs[:tool_prefs]\n+  end\n+\n   test \"max_tokens is not passed when not set\" do\n     @provider.prompt\n "
+  }
+ ],
+ "test_files": [
+  "test/providers/ruby_llm/ruby_llm_provider_test.rb"
+ ]
+}

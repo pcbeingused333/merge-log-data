@@ -1,0 +1,41 @@
+{
+ "repo": "looplj/axonhub",
+ "number": 3044,
+ "url": "https://github.com/looplj/axonhub/pull/3044",
+ "title": "fix(prompt-protection): apply rules to tool call arguments",
+ "merged_at": "2026-11-19T05:23:36Z",
+ "files": [
+  {
+   "filename": "internal/server/biz/prompt_protection_request.go",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -246,6 +246,24 @@ func applyPromptProtectionRuleToMessage(msg llm.Message, rule *ent.PromptProtect\n \t\tmatched = true\n \t}\n \n+\tif len(msg.ToolCalls) > 0 {\n+\t\ttoolCalls := slices.Clone(msg.ToolCalls)\n+\n+\t\tfor i, call := range toolCalls {\n+\t\t\tif call.Function.Arguments == \"\" || !MatchPromptProtectionRule(rule.Pattern, call.Function.Arguments) {\n+\t\t\t\tcontinue\n+\t\t\t}\n+\n+\t\t\tif rule.Settings.Action == objects.PromptProtectionActionMask {\n+\t\t\t\ttoolCalls[i].Function.Arguments = ReplacePromptProtectionRule(rule.Pattern, call.Function.Arguments, rule.Settings.Replacement)\n+\t\t\t}\n+\n+\t\t\tmatched = true\n+\t\t}\n+\n+\t\tmsg.ToolCalls = toolCalls\n+\t}\n+\n \treturn msg, matched\n }\n "
+  },
+  {
+   "filename": "internal/server/biz/prompt_protection_request_test.go",
+   "status": "modified",
+   "additions": 73,
+   "deletions": 0,
+   "patch": "@@ -293,3 +293,76 @@ func TestPromptProtectionRuleService_ProtectLoadError(t *testing.T) {\n \trequire.Error(t, err)\n \tassert.Nil(t, result)\n }\n+\n+func toolArgsMaskRule(action objects.PromptProtectionAction) []*ent.PromptProtectionRule {\n+\treturn []*ent.PromptProtectionRule{\n+\t\t{\n+\t\t\tName:    \"secret\",\n+\t\t\tPattern: `secret-[0-9]+`,\n+\t\t\tSettings: &objects.PromptProtectionSettings{\n+\t\t\t\tAction:      action,\n+\t\t\t\tReplacement: \"[MASKED]\",\n+\t\t\t\tScopes:      []objects.PromptProtectionScope{objects.PromptProtectionScopeAssistant},\n+\t\t\t},\n+\t\t},\n+\t}\n+}\n+\n+func TestApplyPromptProtectionRulesMaskContentAndToolCallArguments(t *testing.T) {\n+\tcontent := \"calling with secret-1\"\n+\trequest := &llm.Request{\n+\t\tMessages: []llm.Message{\n+\t\t\t{\n+\t\t\t\tRole:    \"assistant\",\n+\t\t\t\tContent: llm.MessageContent{Content: &content},\n+\t\t\t\tToolCalls: []llm.ToolCall{\n+\t\t\t\t\t{ID: \"call_1\", Type: \"function\", Function: llm.FunctionCall{Name: \"run\", Arguments: `{\"token\":\"secret-2\"}`}},\n+\t\t\t\t},\n+\t\t\t},\n+\t\t},\n+\t}\n+\n+\tresult := ApplyPromptProtectionRules(request, toolArgsMaskRule(objects.PromptProtectionActionMask))\n+\n+\trequire.False(t, result.Rejected)\n+\trequire.Len(t, result.MatchedRules, 1)\n+\tassert.Equal(t, \"calling with [MASKED]\", *result.Request.Messages[0].Content.Content)\n+\tassert.Equal(t, `{\"token\":\"[MASKED]\"}`, result.Request.Messages[0].ToolCalls[0].Function.Arguments)\n+}\n+\n+func TestApplyPromptProtectionRulesMaskToolCallArgumentsOnly(t *testing.T) {\n+\trequest := &llm.Request{\n+\t\tMessages: []llm.Message{\n+\t\t\t{\n+\t\t\t\tRole: \"assistant\",\n+\t\t\t\tToolCalls: []llm.ToolCall{\n+\t\t\t\t\t{ID: \"call_1\", Type: \"function\", Function: llm.FunctionCall{Name: \"run\", Arguments: `{\"token\":\"secret-2\"}`}},\n+\t\t\t\t},\n+\t\t\t},\n+\t\t},\n+\t}\n+\n+\tresult := ApplyPromptProtectionRules(request, toolArgsMaskRule(objects.PromptProtectionActionMask))\n+\n+\trequire.False(t, result.Rejected)\n+\trequire.Len(t, result.MatchedRules, 1)\n+\tassert.Equal(t, `{\"token\":\"[MASKED]\"}`, result.Request.Messages[0].ToolCalls[0].Function.Arguments)\n+}\n+\n+func TestApplyPromptProtectionRulesRejectToolCallArguments(t *testing.T) {\n+\trequest := &llm.Request{\n+\t\tMessages: []llm.Message{\n+\t\t\t{\n+\t\t\t\tRole: \"assistant\",\n+\t\t\t\tToolCalls: []llm.ToolCall{\n+\t\t\t\t\t{ID: \"call_1\", Type: \"function\", Function: llm.FunctionCall{Name: \"run\", Arguments: `{\"token\":\"secret-2\"}`}},\n+\t\t\t\t},\n+\t\t\t},\n+\t\t},\n+\t}\n+\n+\tresult := ApplyPromptProtectionRules(request, toolArgsMaskRule(objects.PromptProtectionActionReject))\n+\n+\trequire.True(t, result.Rejected)\n+\trequire.Len(t, result.MatchedRules, 1)\n+}"
+  },
+  {
+   "filename": "internal/server/orchestrator/pass_through_prompt_protection.go",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -372,6 +372,10 @@ func openAIChatPromptTextFields(body []byte) []rawPromptTextField {\n \t\tmessagePath := fmt.Sprintf(\"messages.%d\", i)\n \t\trole := gjson.GetBytes(body, messagePath+\".role\").String()\n \t\tfields = append(fields, rawContentTextFields(body, messagePath+\".content\", role, \"text\")...)\n+\n+\t\tfor j := range jsonArrayLength(body, messagePath+\".tool_calls\") {\n+\t\t\tfields = append(fields, rawStringField(body, fmt.Sprintf(\"%s.tool_calls.%d.function.arguments\", messagePath, j), role)...)\n+\t\t}\n \t}\n \n \treturn fields"
+  },
+  {
+   "filename": "internal/server/orchestrator/pass_through_prompt_protection_payload_test.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -43,6 +43,11 @@ func TestPromptProtectedPassThroughPayload(t *testing.T) {\n \t\t\tmasked:    []string{\"messages.1.content\", \"messages.2.content.0.text\"},\n \t\t\tunchanged: map[string]string{\"messages.0.content\": \"secret-system\", \"messages.2.content.1.image_url.url\": \"https://example.com/image.png\"},\n \t\t},\n+\t\t{\n+\t\t\tname: \"OpenAI chat assistant tool call arguments\", format: llm.APIFormatOpenAIChatCompletion,\n+\t\t\tbody:   `{\"model\":\"alias\",\"messages\":[{\"role\":\"assistant\",\"content\":\"secret-text\",\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"run\",\"arguments\":\"secret-args\"}}]}],\"provider_option\":{\"keep\":true}}`,\n+\t\t\tmasked: []string{\"messages.0.content\", \"messages.0.tool_calls.0.function.arguments\"},\n+\t\t},\n \t\t{\n \t\t\tname: \"OpenAI Responses string input and instructions\", format: llm.APIFormatOpenAIResponse,\n \t\t\tbody:   `{\"model\":\"alias\",\"instructions\":\"secret-system\",\"input\":\"secret-user\",\"provider_option\":{\"keep\":true}}`,"
+  }
+ ],
+ "test_files": [
+  "internal/server/biz/prompt_protection_request_test.go",
+  "internal/server/orchestrator/pass_through_prompt_protection_payload_test.go"
+ ]
+}

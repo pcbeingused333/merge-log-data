@@ -1,0 +1,26 @@
+{
+ "repo": "cashapp/hermit",
+ "number": 646,
+ "url": "https://github.com/cashapp/hermit/pull/646",
+ "title": "fix(shell): keep fish update hook variables function-local",
+ "merged_at": "2026-11-18T23:17:31Z",
+ "files": [
+  {
+   "filename": "shell/activate_template_test.go",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -167,3 +167,22 @@ func TestFishEscapesBackslashesInValues(t *testing.T) {\n \tassert.Contains(t, out.String(), `set -gx AAA '\\\\'`)\n \tassert.NotContains(t, out.String(), `set -gx AAA '\\'`)\n }\n+\n+func TestFishUpdateHookKeepsHelpersLocal(t *testing.T) {\n+\t// Regression test: update_hermit_env runs on every prompt, and a plain\n+\t// `set` in a fish function overwrites a user's exported variable of the\n+\t// same name instead of creating a function-scoped one.\n+\tvar out bytes.Buffer\n+\terr := (&Fish{}).ActivationScript(&out, ActivationConfig{\n+\t\tRoot:   \"/tmp/env\",\n+\t\tPrompt: \"none\",\n+\t\tEnv:    envars.Envars{\"HERMIT_BIN\": \"/tmp/env/bin\"},\n+\t})\n+\tassert.NoError(t, err)\n+\n+\tscript := out.String()\n+\tassert.Contains(t, script, `set -l CURRENT \"$(`)\n+\tassert.Contains(t, script, `set -l CUR_HERMIT \"$HERMIT_ENV/bin/hermit\"`)\n+\tassert.NotContains(t, script, \"\\n    set CURRENT \")\n+\tassert.NotContains(t, script, \"\\n    set CUR_HERMIT \")\n+}"
+  },
+  {
+   "filename": "shell/files/activate.tmpl.fish",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -55,9 +55,9 @@ set -gx HERMIT_BIN_CHANGE \"$(/bin/date -r \"$HERMIT_ENV/bin\" +\"%s\"):$(/bin/date -\n \n # Function to update Hermit environment\n function update_hermit_env --on-event fish_prompt\n-    set CURRENT \"$(/bin/date -r \"$HERMIT_ENV/bin\" +\"%s\"):$(/bin/date -r \"$HERMIT_ENV/bin/hermit.hcl\" +\"%s\" 2>/dev/null)\"\n+    set -l CURRENT \"$(/bin/date -r \"$HERMIT_ENV/bin\" +\"%s\"):$(/bin/date -r \"$HERMIT_ENV/bin/hermit.hcl\" +\"%s\" 2>/dev/null)\"\n     test \"$CURRENT\" = \"$HERMIT_BIN_CHANGE\"; and return 0\n-    set CUR_HERMIT \"$HERMIT_ENV/bin/hermit\"\n+    set -l CUR_HERMIT \"$HERMIT_ENV/bin/hermit\"\n     \"$ACTIVE_HERMIT/bin/hermit\" env --deactivate-from-ops=\"$HERMIT_ENV_OPS\" | source\n     \"$CUR_HERMIT\" env --activate | source\n     set -gx HERMIT_ENV_OPS \"$(\"$HERMIT_ENV/bin/hermit\" env --ops)\""
+  }
+ ],
+ "test_files": [
+  "shell/activate_template_test.go"
+ ]
+}

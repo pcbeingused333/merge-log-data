@@ -1,0 +1,26 @@
+{
+ "repo": "activeagents/activeagent",
+ "number": 720,
+ "url": "https://github.com/activeagents/activeagent/pull/720",
+ "title": "Implement embeddings for the OpenRouter provider",
+ "merged_at": "2026-11-19T03:16:20Z",
+ "files": [
+  {
+   "filename": "lib/active_agent/providers/open_router_provider.rb",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -31,8 +31,21 @@ def self.prompt_request_type\n         namespace::RequestType.new\n       end\n \n+      # @return [ActiveModel::Type::Value]\n+      def self.embed_request_type\n+        OpenAI::Embedding::RequestType.new\n+      end\n+\n       protected\n \n+      # Executes an embedding request via OpenRouter's OpenAI-compatible API.\n+      #\n+      # @param parameters [Hash]\n+      # @return [Hash] symbolized API response\n+      def api_embed_execute(parameters)\n+        client.embeddings.create(**parameters).as_json.deep_symbolize_keys\n+      end\n+\n       # @see BaseProvider#prepare_prompt_request\n       # @return [Request]\n       def prepare_prompt_request"
+  },
+  {
+   "filename": "test/providers/open_router/embed_test.rb",
+   "status": "added",
+   "additions": 51,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,51 @@\n+# frozen_string_literal: true\n+\n+require \"test_helper\"\n+\n+begin\n+  require \"openai\"\n+rescue LoadError\n+  puts \"OpenAI gem not available, skipping OpenRouter embed tests\"\n+  return\n+end\n+\n+require_relative \"../../../lib/active_agent/providers/open_router_provider\"\n+\n+module Providers\n+  module OpenRouter\n+    class EmbedTest < ActiveSupport::TestCase\n+      include WebMock::API\n+\n+      EMBEDDINGS_ENDPOINT = \"https://openrouter.ai/api/v1/embeddings\"\n+\n+      test \"sends an embedding request to the OpenRouter embeddings endpoint\" do\n+        stub_request(:post, EMBEDDINGS_ENDPOINT).to_return(\n+          status: 200,\n+          headers: { \"Content-Type\" => \"application/json\" },\n+          body: embedding_response.to_json\n+        )\n+\n+        response = ActiveAgent::Providers::OpenRouterProvider.new(\n+          service: \"OpenRouter\",\n+          model: \"openai/text-embedding-3-small\",\n+          input: \"hello\",\n+          api_key: \"or-test\"\n+        ).embed\n+\n+        assert_equal [ 0.1, 0.2 ], response.data.first[:embedding]\n+        assert_requested(:post, EMBEDDINGS_ENDPOINT, headers: { \"Authorization\" => \"Bearer or-test\" })\n+      end\n+\n+      private\n+\n+      def embedding_response\n+        {\n+          object: \"list\",\n+          model: \"openai/text-embedding-3-small\",\n+          data: [ { object: \"embedding\", index: 0, embedding: [ 0.1, 0.2 ] } ],\n+          usage: { prompt_tokens: 2, total_tokens: 2 }\n+        }\n+      end\n+    end\n+  end\n+end"
+  }
+ ],
+ "test_files": [
+  "test/providers/open_router/embed_test.rb"
+ ]
+}

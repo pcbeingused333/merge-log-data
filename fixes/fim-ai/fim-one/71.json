@@ -1,0 +1,26 @@
+{
+ "repo": "fim-ai/fim-one",
+ "number": 71,
+ "url": "https://github.com/fim-ai/fim-one/pull/71",
+ "title": "fix(model): don't replay a partially streamed response on the fallback LLM",
+ "merged_at": "2026-11-19T01:28:25Z",
+ "files": [
+  {
+   "filename": "src/fim_one/core/model/fallback.py",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 22,
+   "patch": "@@ -170,7 +170,14 @@ async def stream_chat(\n         temperature: float | None = None,\n         max_tokens: int | None = None,\n     ) -> AsyncIterator[StreamChunk]:\n-        \"\"\"Send a streaming request, falling back on availability errors.\"\"\"\n+        \"\"\"Send a streaming request, falling back on availability errors.\n+\n+        Fallback only happens before the primary has produced any chunk.  Once\n+        a chunk has been yielded to the caller, restarting the request on the\n+        fallback would replay the response from the beginning and the caller\n+        would receive duplicated text, so mid-stream failures propagate.\n+        \"\"\"\n+        started = False\n         try:\n             iterator = self._primary.stream_chat(\n                 messages,\n@@ -179,36 +186,28 @@ async def stream_chat(\n                 temperature=temperature,\n                 max_tokens=max_tokens,\n             )\n-            # We need to actually start iteration to detect connection errors.\n             # The async generator from stream_chat may raise on the first\n             # __anext__ call (when the HTTP connection is established), not\n-            # at creation time.  We eagerly fetch the first chunk to detect\n-            # such failures before committing to the primary stream.\n-            first_chunk: StreamChunk | None = None\n-            try:\n-                first_chunk = await iterator.__anext__()\n-            except StopAsyncIteration:\n-                # Empty stream from primary -- that's fine, just return.\n-                return\n-\n-            # Primary stream started successfully -- yield all chunks.\n-            yield first_chunk\n+            # at creation time, so iterate inside the try block.\n             async for chunk in iterator:\n+                started = True\n                 yield chunk\n+            return\n \n         except Exception as exc:\n-            if not is_availability_error(exc):\n+            if started or not is_availability_error(exc):\n                 raise\n             logger.warning(\n                 \"Primary model unavailable (stream), falling back to %s: %s\",\n                 self._fallback.model_id or \"fallback\",\n                 exc,\n             )\n-            async for chunk in self._fallback.stream_chat(\n-                messages,\n-                tools=tools,\n-                tool_choice=tool_choice,\n-                temperature=temperature,\n-                max_tokens=max_tokens,\n-            ):\n-                yield chunk\n+\n+        async for chunk in self._fallback.stream_chat(\n+            messages,\n+            tools=tools,\n+            tool_choice=tool_choice,\n+            temperature=temperature,\n+            max_tokens=max_tokens,\n+        ):\n+            yield chunk"
+  },
+  {
+   "filename": "tests/test_fallback.py",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -283,6 +283,28 @@ async def test_no_fallback_stream_on_400(self) -> None:\n         assert exc_info.value is error\n         assert fallback.stream_call_count == 0\n \n+    async def test_no_fallback_after_primary_stream_started(self) -> None:\n+        \"\"\"An availability error after chunks were yielded must not replay on the fallback.\"\"\"\n+        error = _make_status_error(503)\n+\n+        class _MidStreamFailure(FakeLLM):\n+            async def stream_chat(self, messages: Any, **kwargs: Any) -> AsyncIterator[StreamChunk]:\n+                yield StreamChunk(delta_content=\"partial \")\n+                raise error\n+\n+        primary = _MidStreamFailure([chunks([])])\n+        fallback = FakeLLM([chunks([StreamChunk(delta_content=\"partial full answer\")])])\n+        llm = FallbackLLM(primary=primary, fallback=fallback)\n+\n+        collected: list[StreamChunk] = []\n+        with pytest.raises(Exception) as exc_info:\n+            async for c in llm.stream_chat([_msg(\"hi\")]):\n+                collected.append(c)\n+\n+        assert exc_info.value is error\n+        assert [c.delta_content for c in collected] == [\"partial \"]\n+        assert fallback.stream_call_count == 0\n+\n     async def test_empty_primary_stream(self) -> None:\n         \"\"\"Empty stream from primary is fine -- no fallback triggered.\"\"\"\n         primary = FakeLLM([chunks([])])"
+  }
+ ],
+ "test_files": [
+  "tests/test_fallback.py"
+ ]
+}

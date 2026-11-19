@@ -1,0 +1,34 @@
+{
+ "repo": "openai-php/client",
+ "number": 856,
+ "url": "https://github.com/openai-php/client/pull/856",
+ "title": "fix(chat): expose system_fingerprint on streamed chat chunks",
+ "merged_at": "2026-11-19T01:15:34Z",
+ "files": [
+  {
+   "filename": "src/Responses/Chat/CreateStreamedResponse.php",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 3,
+   "patch": "@@ -9,12 +9,12 @@\n use OpenAI\\Testing\\Responses\\Concerns\\FakeableForStreamedResponse;\n \n /**\n- * @implements ResponseContract<array{id?: string, object: string, created: int, model: string, choices: array<int, array{index: int, delta: array{role?: string, content?: string}|array{role?: string, content: null, function_call: array{name?: string, arguments?: string}}, finish_reason: string|null}>, usage?: array{prompt_tokens: int, completion_tokens: int|null, total_tokens: int}}>\n+ * @implements ResponseContract<array{id?: string, object: string, created: int, model: string, system_fingerprint?: string, choices: array<int, array{index: int, delta: array{role?: string, content?: string}|array{role?: string, content: null, function_call: array{name?: string, arguments?: string}}, finish_reason: string|null}>, usage?: array{prompt_tokens: int, completion_tokens: int|null, total_tokens: int}}>\n  */\n final class CreateStreamedResponse implements ResponseContract\n {\n     /**\n-     * @use ArrayAccessible<array{id: string, object: string, created: int, model: string, choices: array<int, array{index: int, delta: array{role?: string, content?: string}|array{role?: string, content: null, function_call: array{name?: string, arguments?: string}}, finish_reason: string|null}>, usage?: array{prompt_tokens: int, completion_tokens: int|null, total_tokens: int}}>\n+     * @use ArrayAccessible<array{id: string, object: string, created: int, model: string, system_fingerprint?: string, choices: array<int, array{index: int, delta: array{role?: string, content?: string}|array{role?: string, content: null, function_call: array{name?: string, arguments?: string}}, finish_reason: string|null}>, usage?: array{prompt_tokens: int, completion_tokens: int|null, total_tokens: int}}>\n      */\n     use ArrayAccessible;\n \n@@ -28,14 +28,15 @@ private function __construct(\n         public readonly string $object,\n         public readonly int $created,\n         public readonly string $model,\n+        public readonly ?string $systemFingerprint,\n         public readonly array $choices,\n         public readonly ?CreateResponseUsage $usage,\n     ) {}\n \n     /**\n      * Acts as static factory, and returns a new Response instance.\n      *\n-     * @param  array{id?: string, object: string, created: int, model: string, choices: array<int, array{index: int, delta: array{role?: string, content?: string}, finish_reason: string|null}>, usage?: array{prompt_tokens: int, completion_tokens: int|null, total_tokens: int}}  $attributes\n+     * @param  array{id?: string, object: string, created: int, model: string, system_fingerprint?: string, choices: array<int, array{index: int, delta: array{role?: string, content?: string}, finish_reason: string|null}>, usage?: array{prompt_tokens: int, completion_tokens: int|null, total_tokens: int}}  $attributes\n      */\n     public static function from(array $attributes): self\n     {\n@@ -48,6 +49,7 @@ public static function from(array $attributes): self\n             $attributes['object'],\n             $attributes['created'],\n             $attributes['model'],\n+            $attributes['system_fingerprint'] ?? null,\n             $choices,\n             isset($attributes['usage']) ? CreateResponseUsage::from($attributes['usage']) : null,\n         );\n@@ -63,6 +65,7 @@ public function toArray(): array\n             'object' => $this->object,\n             'created' => $this->created,\n             'model' => $this->model,\n+            'system_fingerprint' => $this->systemFingerprint,\n             'choices' => array_map(\n                 static fn (CreateStreamedResponseChoice $result): array => $result->toArray(),\n                 $this->choices,"
+  },
+  {
+   "filename": "tests/Fixtures/Chat.php",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -720,6 +720,26 @@ function chatCompletionStreamFirstChunk(): array\n     ];\n }\n \n+function chatCompletionStreamFirstChunkWithSystemFingerprint(): array\n+{\n+    return [\n+        'id' => 'chatcmpl-6wdIE4DsUtqf1srdMTsfkJp0VWZgz',\n+        'object' => 'chat.completion.chunk',\n+        'created' => 1679432086,\n+        'model' => 'gpt-4-0314',\n+        'system_fingerprint' => 'fp_44709d6fcb',\n+        'choices' => [\n+            [\n+                'index' => 0,\n+                'delta' => [\n+                    'role' => 'assistant',\n+                ],\n+                'finish_reason' => null,\n+            ],\n+        ],\n+    ];\n+}\n+\n function chatCompletionStreamFirstChunkWithoutId(): array\n {\n     return ["
+  },
+  {
+   "filename": "tests/Responses/Chat/CreateStreamedResponse.php",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -30,6 +30,21 @@\n         ->choices->each->toBeInstanceOf(CreateStreamedResponseChoice::class);\n });\n \n+test('from with system fingerprint', function () {\n+    $completion = CreateStreamedResponse::from(chatCompletionStreamFirstChunkWithSystemFingerprint());\n+\n+    expect($completion)\n+        ->toBeInstanceOf(CreateStreamedResponse::class)\n+        ->systemFingerprint->toBe('fp_44709d6fcb')\n+        ->and($completion->toArray())->toBe(chatCompletionStreamFirstChunkWithSystemFingerprint());\n+});\n+\n+test('from without system fingerprint', function () {\n+    $completion = CreateStreamedResponse::from(chatCompletionStreamFirstChunk());\n+\n+    expect($completion->systemFingerprint)->toBeNull();\n+});\n+\n test('from usage chunk', function () {\n     $completion = CreateStreamedResponse::from(chatCompletionStreamUsageChunk());\n "
+  }
+ ],
+ "test_files": [
+  "tests/Fixtures/Chat.php",
+  "tests/Responses/Chat/CreateStreamedResponse.php"
+ ]
+}

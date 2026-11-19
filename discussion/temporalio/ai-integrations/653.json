@@ -9,6 +9,18 @@
    "state": "COMMENTED",
    "submitted_at": "2026-11-17T22:23:50Z",
    "body": "I found one edge case in the factory result guard."
+  },
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-18T21:49:08Z",
+   "body": "A direct Activity check confirmed that the patch handles ordinary async factory rejections and that the proxy case below produces a retryable error. The locked test suite could not run because a dependency was unavailable offline and registry access was blocked."
+  },
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-18T23:20:00Z",
+   "body": "Lint and all eight targeted MCP provider tests passed. A direct check reproduced the factory error regression described below."
   }
  ],
  "review_comments": [
@@ -17,7 +29,45 @@
    "path": "typescript/openai-agents/src/worker/mcp-provider.ts",
    "created_at": "2026-11-17T22:23:51Z",
    "body": "**[P2] Limit rejection handling to genuine Promises**\n\n`Promise.resolve(server)` invokes `.then` on a lazy thenable, such as a database query builder, and can start work before the Activity rejects the factory result. A throwing `.then` getter can also bypass the non-retryable `MCPServerFactoryTypeError` and let Temporal retry the Activity. Can we use the same Promise check as the Google ADK factory guard before attaching the rejection handler? [Google ADK factory guard](https://github.com/temporalio/ai-integrations/blob/624a3d017b940a918033a5380d2de5428f44789a/typescript/google-adk/src/activities.ts#L237)"
+  },
+  {
+   "role": "member",
+   "path": "typescript/openai-agents/src/worker/mcp-provider.ts",
+   "created_at": "2026-11-18T21:49:08Z",
+   "body": "**[P2] Check for native Promises before attaching a rejection handler**\n\nA proxy-wrapped Promise passes `instanceof Promise`, but calling `.catch()` on the proxy throws a `TypeError`. Temporal can retry that error, so the Activity loses the documented non-retryable `MCPServerFactoryTypeError`. Could we use `util.types.isPromise()` here? It excludes proxy wrappers and recognizes genuine Promises from another Node realm, whose rejections the current guard leaves unhandled. [Factory error contract](https://github.com/temporalio/ai-integrations/blob/addf2125f2e5499d070bcae271210c5bcd32c72f/typescript/openai-agents/README.md#L472)"
+  },
+  {
+   "role": "member",
+   "path": "typescript/openai-agents/src/worker/mcp-provider.ts",
+   "created_at": "2026-11-18T23:20:00Z",
+   "body": "**[P2] Preserve the non-retryable error for customized Promises**\n\n`types.isPromise` also accepts native Promises with an overridden `catch` or a throwing `then` getter. For those factory results, `server.catch(...)` can throw before the Activity reaches `MCPServerFactoryTypeError`, so Temporal can retry a configuration error that previously failed immediately. Can we attach the rejection handler with `Promise.prototype.then.call(server, undefined, () => undefined)` and guard against synchronous attachment failures so the Activity still returns the documented non-retryable error? [Factory error contract](https://github.com/temporalio/ai-integrations/blob/7f01da8f809f28fecc692d86c1e3a56c6366e97a/typescript/openai-agents/README.md#L472)"
   }
  ],
- "comments": []
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-18T21:43:22Z",
+   "body": "Good catch, thanks. Pushed addf212: the rejection handler is now attached only when the factory result is a genuine `Promise` (`server instanceof Promise`), the same check as the Google ADK factory guard, so a lazy thenable's `then` is never invoked and a throwing `then` getter can no longer bypass the non-retryable `MCPServerFactoryTypeError`. Added a test covering both cases (it fails on the previous code).\n\nThis comment was drafted with Claude Code and posted by the PR author.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-18T22:39:22Z",
+   "body": "Good catch, thanks. Pushed a follow-up commit: the guard now uses `util.types.isPromise()`, so a Proxy-wrapped Promise no longer reaches `.catch()` (it keeps the non-retryable `MCPServerFactoryTypeError`), and a native Promise from another realm gets its rejection handled. Added a Proxy-wrapped Promise case to the existing test; it fails on the previous code and passes now.\n\nThis comment was drafted with Claude Code and posted by the PR author.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-18T23:59:37Z",
+   "body": "Good catch, thanks. Pushed 4709e2d: the rejection handler is now attached with `Promise.prototype.then.call(server, undefined, () => undefined)` inside a try/catch, so an overridden `catch` or a throwing `then` getter on a native Promise can no longer bypass the non-retryable `MCPServerFactoryTypeError`. Added both cases to the existing factory-result test; it fails on the previous code and passes now.\n\nThis comment was drafted with Claude Code and posted by the PR author.\n"
+  },
+  {
+   "role": "member",
+   "created_at": "2026-11-19T00:11:36Z",
+   "body": "I verified that ordinary and cross-realm async factory rejections leave the process running. The eight focused MCP provider tests also passed.\n\n**[P3] Document the remaining Promise subclass edge case.** `Promise.prototype.then` reads `constructor[Symbol.species]` before attaching the rejection handler. I tried a rejecting Promise subclass with a throwing `Symbol.species` getter on Node 24. The Activity returned the expected non-retryable `MCPServerFactoryTypeError`, then Node exited with code 1 because the original rejection was still unhandled. A short note in the factory docs would clarify the limit of the guard. [Promise guard](https://github.com/temporalio/ai-integrations/blob/4709e2d6069ac534be2bc290dd55f9be23e5d3a2/typescript/openai-agents/src/worker/mcp-provider.ts#L37-L42)\n\nPlease also update the squash title to `[typescript/openai-agents] handle a rejecting async MCP server factory`. [PR title conventions](https://github.com/temporalio/ai-integrations/blob/624a3d017b940a918033a5380d2de5428f44789a/AGENTS.md#L251)"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-19T00:38:09Z",
+   "body": "Thanks. Pushed 7f74536: the limit is now documented in the MCP factory section of the README and in a comment on the guard (a rejecting Promise subclass whose `Symbol.species` getter throws still fails the Activity with `MCPServerFactoryTypeError`, but its original rejection stays unhandled and Node may exit). I also updated the PR title to `[typescript/openai-agents] handle a rejecting async MCP server factory`.\n\nThis comment was drafted with Claude Code and posted by the PR author.\n\n"
+  }
+ ]
 }

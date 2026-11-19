@@ -1,0 +1,16 @@
+{
+ "repo": "tailscale/tailscale",
+ "number": 22507,
+ "url": "https://github.com/tailscale/tailscale/pull/22507",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "none",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-19T05:10:21Z",
+   "body": "Read against `main`. A few things I checked that the change depends on, all of which hold:\n\n- **RBAC:** the new watch needs list and watch on Tailnets. The operator's ClusterRole in `deploy/chart/templates/operator-rbac.yaml` already grants `get`, `list`, `watch` and `update` on `tailnets`, so the cache can start the informer without a chart change.\n- **Name-only match:** both CRDs are `scope: Cluster` (`tailscale.com_tailnets.yaml`, `tailscale.com_recorders.yaml`), so comparing `spec.tailnet` with the Tailnet's name, with no namespace, is the whole key, and `client.ObjectKeyFromObject(&tsr)` gives the right request.\n- **Why it was stuck:** the `RecorderTailnetUnavailable` path ends in `setStatusReady(... ConditionFalse ...)`, which returns a nil error with no `RequeueAfter`, so nothing retried. For comparison, PeerRelay's `reportTailnetUnavailable` returns the client error itself, so controller-runtime retries it with backoff and it recovers by itself, just more slowly. The watch is the better fix here, since the Recorder reconciles as soon as the Tailnet changes.\n\nOne small thing: `recordersForTailnet` lists every Recorder on every Tailnet event. That's fine at the number of Recorders a cluster has. If it ever matters, a field index on `spec.tailnet` would let it list only the matching ones.\n\nRead only: I didn't build or run it.\n"
+  }
+ ],
+ "review_comments": [],
+ "comments": []
+}

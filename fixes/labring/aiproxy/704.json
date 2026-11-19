@@ -1,0 +1,26 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 704,
+ "url": "https://github.com/labring/aiproxy/pull/704",
+ "title": "fix(cohere): read text parts when message content is an array",
+ "merged_at": "2026-11-19T02:29:39Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/cohere/main.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -70,7 +70,11 @@ func ConvertRequest(textRequest *relaymodel.GeneralOpenAIRequest) *Request {\n \t}\n \n \tfor i, message := range textRequest.Messages {\n-\t\tmessageContent, _ := message.Content.(string)\n+\t\t// Content may be a plain string or an array of content parts;\n+\t\t// StringContent would prefer ReasoningContent, so clear it first.\n+\t\tmessage.ReasoningContent = \"\"\n+\n+\t\tmessageContent := strings.TrimSuffix(message.StringContent(), \"\\n\")\n \t\tif i == lastUser {\n \t\t\tcohereRequest.Message = messageContent\n \t\t} else {"
+  },
+  {
+   "filename": "core/relay/adaptor/cohere/main_test.go",
+   "status": "modified",
+   "additions": 37,
+   "deletions": 0,
+   "patch": "@@ -131,3 +131,40 @@ func TestConvertRequestKeepsEarlierUserTurnsInHistory(t *testing.T) {\n \t\t}\n \t}\n }\n+\n+func TestConvertRequestArrayContent(t *testing.T) {\n+\tt.Parallel()\n+\n+\tparts := func(texts ...string) []any {\n+\t\tout := make([]any, 0, len(texts))\n+\t\tfor _, s := range texts {\n+\t\t\tout = append(out, map[string]any{\"type\": \"text\", \"text\": s})\n+\t\t}\n+\n+\t\treturn out\n+\t}\n+\n+\treq := ConvertRequest(&relaymodel.GeneralOpenAIRequest{\n+\t\tModel: \"command-r\",\n+\t\tMessages: []relaymodel.Message{\n+\t\t\t{Role: \"system\", Content: parts(\"be brief\")},\n+\t\t\t{Role: \"user\", Content: parts(\"first question\")},\n+\t\t\t{Role: \"assistant\", Content: parts(\"first answer\")},\n+\t\t\t{Role: \"user\", Content: parts(\"Hello, \", \"world\")},\n+\t\t},\n+\t})\n+\n+\tif got, want := req.Message, \"Hello, \\nworld\"; got != want {\n+\t\tt.Fatalf(\"message = %q, want %q\", got, want)\n+\t}\n+\n+\tif len(req.ChatHistory) != 3 {\n+\t\tt.Fatalf(\"chat_history len = %d, want 3\", len(req.ChatHistory))\n+\t}\n+\n+\tfor i, want := range []string{\"be brief\", \"first question\", \"first answer\"} {\n+\t\tif got := req.ChatHistory[i].Message; got != want {\n+\t\t\tt.Fatalf(\"chat_history[%d] = %q, want %q\", i, got, want)\n+\t\t}\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/cohere/main_test.go"
+ ]
+}

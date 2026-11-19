@@ -1,0 +1,26 @@
+{
+ "repo": "CLIUtils/CLI11",
+ "number": 1492,
+ "url": "https://github.com/CLIUtils/CLI11/pull/1492",
+ "title": "fix: detect MSVC RTTI using compiler predefined macros",
+ "merged_at": "2026-11-19T05:21:12Z",
+ "files": [
+  {
+   "filename": "include/CLI/Macros.hpp",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 6,
+   "patch": "@@ -62,15 +62,15 @@\n \n /** detection of rtti */\n #ifndef CLI11_USE_STATIC_RTTI\n-#if (defined(_HAS_STATIC_RTTI) && _HAS_STATIC_RTTI)\n+#if defined(_MSC_VER)\n+#if defined(_CPPRTTI)\n+#define CLI11_USE_STATIC_RTTI 0\n+#else\n #define CLI11_USE_STATIC_RTTI 1\n+#endif\n #elif defined(__cpp_rtti)\n-#if (defined(_CPPRTTI) && _CPPRTTI == 0)\n-#define CLI11_USE_STATIC_RTTI 1\n-#else\n #define CLI11_USE_STATIC_RTTI 0\n-#endif\n-#elif (defined(__GCC_RTTI) && __GXX_RTTI)\n+#elif defined(__GXX_RTTI)\n #define CLI11_USE_STATIC_RTTI 0\n #else\n #define CLI11_USE_STATIC_RTTI 1"
+  },
+  {
+   "filename": "tests/AppTest.cpp",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 0,
+   "patch": "@@ -4,6 +4,11 @@\n //\n // SPDX-License-Identifier: BSD-3-Clause\n \n+// A user override makes the RTTI detection test below meaningless.\n+#ifdef CLI11_USE_STATIC_RTTI\n+#define CLI11_TEST_RTTI_OVERRIDDEN\n+#endif\n+\n #include \"app_helper.hpp\"\n \n #include <array>\n@@ -3315,3 +3320,21 @@ TEST_CASE(\"Ensure UTF-8 called twice\", \"[app]\") {\n         FAIL(\"Executable \" CLI11_ENSURE_UTF8_TWICE_EXE \" failed with an unknown return code\");\n     }\n }\n+\n+#ifndef CLI11_TEST_RTTI_OVERRIDDEN\n+#if defined(_CPPRTTI) || (!defined(_MSC_VER) && (defined(__cpp_rtti) || defined(__GXX_RTTI)))\n+TEST_CASE_METHOD(TApp, \"CustomConfigRTTIDetection\", \"[app]\") {\n+    struct OtherConfig : CLI::Config {\n+        std::string to_config(const CLI::App *, bool, bool, std::string) const override { return {}; }\n+        std::vector<CLI::ConfigItem> from_config(std::istream &) const override { return {}; }\n+    };\n+\n+    // The static cast in get_config_formatter_base is undefined behavior for OtherConfig.\n+    REQUIRE(CLI11_USE_STATIC_RTTI == 0);\n+    app.config_formatter(std::make_shared<OtherConfig>());\n+    CHECK(app.get_config_formatter_base() == nullptr);\n+}\n+#else\n+TEST_CASE(\"StaticRTTIWithoutRTTI\", \"[app]\") { CHECK(CLI11_USE_STATIC_RTTI == 1); }\n+#endif\n+#endif"
+  }
+ ],
+ "test_files": [
+  "tests/AppTest.cpp"
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "svix/svix-webhooks",
+ "number": 2814,
+ "url": "https://github.com/svix/svix-webhooks/pull/2814",
+ "title": "fix(ruby): retry HTTP 423 Locked like the other SDKs",
+ "merged_at": "2026-11-18T23:18:24Z",
+ "files": [
+  {
+   "filename": "ChangeLog.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -6,6 +6,7 @@ The Svix Server changelog has moved to [server/ChangeLog.md](./server/ChangeLog.\n The Svix Bridge changelog has moved to [bridge/ChangeLog.md](./bridge/ChangeLog.md).\n \n ## Unreleased\n+* Libs/Ruby: Retry HTTP 423 Locked responses, like the other SDKs\n * Libs/C#: Improve retry logic (retry on HTTP 423)\n * Libs/Go: Improve retry logic (retry on HTTP 423)\n * Libs/Rust: Improve retry logic (retry on HTTP 423)"
+  },
+  {
+   "filename": "ruby/lib/svix/svix_http_client.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -111,7 +111,7 @@ def execute_request(method, path, **kwargs)\n       [0.05, 0.1, 0.2].each_with_index do |sleep_duration, index|\n         begin\n           res = http.request(request)\n-          return res unless Integer(res.code) >= 500\n+          return res unless Integer(res.code) >= 500 || Integer(res.code) == 423\n         rescue *RETRYABLE_ERRORS\n           # retried below\n         end"
+  },
+  {
+   "filename": "ruby/spec/webmock_tests_spec.rb",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -436,6 +436,19 @@\n     end\n   end\n \n+  it \"retries on status => 423\" do\n+    stub_request(:get, \"#{host}/api/v1/app\")\n+      .to_return(status: 423).then\n+      .to_return(status: 200, body: ListResponseAppOut_JSON)\n+\n+    svx.application.list\n+\n+    expect(WebMock).to(have_requested(:get, \"#{host}/api/v1/app\").twice)\n+    expect(WebMock).to(\n+      have_requested(:get, \"#{host}/api/v1/app\").with(headers: {\"Svix-Retry-Count\" => \"1\"}).once\n+    )\n+  end\n+\n   it \"retries on timeout\" do\n     stub_request(:get, \"#{host}/api/v1/app\")\n       .to_timeout.then"
+  }
+ ],
+ "test_files": [
+  "ruby/spec/webmock_tests_spec.rb"
+ ]
+}
