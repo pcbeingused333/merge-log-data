@@ -1,0 +1,40 @@
+{
+ "repo": "open-mercato/open-mercato",
+ "number": 9882,
+ "url": "https://github.com/open-mercato/open-mercato/pull/9882",
+ "title": "fix(inbox_ops): return 400 for malformed JSON bodies on settings, action edit and categorize routes",
+ "merged_at": "2026-11-19T22:05:07Z",
+ "files": [
+  {
+   "filename": "packages/core/src/modules/inbox_ops/api/__tests__/invalid-json-body.test.ts",
+   "status": "added",
+   "additions": 65,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,65 @@\n+const container = { resolve: jest.fn() }\n+const ctx = {\n+  auth: { sub: 'u', tenantId: 't', orgId: 'o' },\n+  userId: 'u',\n+  tenantId: 't',\n+  organizationId: 'o',\n+  scope: { tenantId: 't', organizationId: 'o' },\n+  em: { flush: jest.fn() },\n+  container,\n+  eventBus: null,\n+}\n+\n+jest.mock('@open-mercato/cache', () => ({\n+  runWithCacheTenant: async (_tenant: string, fn: () => unknown) => fn(),\n+}))\n+\n+jest.mock('../routeHelpers', () => ({\n+  resolveRequestContext: jest.fn(async () => ctx),\n+  resolveProposal: jest.fn(async () => ({ id: 'p' })),\n+  resolveActionAndProposal: jest.fn(async () => ({ action: { id: 'a', status: 'pending' }, proposal: { id: 'p' } })),\n+  handleRouteError: jest.fn((_err: unknown, label: string) => {\n+    const { NextResponse } = require('next/server')\n+    return NextResponse.json({ error: `Failed to ${label}` }, { status: 500 })\n+  }),\n+  isErrorResponse: jest.fn((value: unknown) => {\n+    const { NextResponse } = require('next/server')\n+    return value instanceof NextResponse\n+  }),\n+}))\n+\n+jest.mock('../../lib/ensure-settings', () => ({ ensureInboxSettings: jest.fn() }))\n+jest.mock('../../lib/cache', () => ({\n+  resolveCache: jest.fn(() => ({})),\n+  invalidateCountsCache: jest.fn(),\n+  invalidateSettingsCache: jest.fn(),\n+  createSettingsCacheKey: jest.fn(),\n+  createSettingsCacheTag: jest.fn(),\n+  SETTINGS_CACHE_TTL_MS: 1,\n+}))\n+jest.mock('../../events', () => ({ emitInboxOpsEvent: jest.fn() }))\n+\n+import { PATCH as settingsPatch } from '../settings/route'\n+import { PATCH as actionPatch } from '../proposals/[id]/actions/[actionId]/route'\n+import { POST as categorizePost } from '../proposals/[id]/categorize/route'\n+\n+function badRequest(method: string, body: string): Request {\n+  return new Request('http://localhost/api/inbox_ops/x', {\n+    method,\n+    headers: { 'content-type': 'application/json' },\n+    body,\n+  })\n+}\n+\n+describe('inbox_ops routes reject malformed JSON bodies with 400', () => {\n+  it.each([\n+    ['PATCH /settings', () => settingsPatch(badRequest('PATCH', '{not json'))],\n+    ['PATCH /proposals/[id]/actions/[actionId]', () => actionPatch(badRequest('PATCH', '{not json'))],\n+    ['POST /proposals/[id]/categorize', () => categorizePost(badRequest('POST', '{not json'))],\n+    ['empty body', () => settingsPatch(badRequest('PATCH', ''))],\n+  ])('%s', async (_name, call) => {\n+    const response = await call()\n+    expect(response.status).toBe(400)\n+    expect(await response.json()).toEqual({ error: 'Invalid JSON body' })\n+  })\n+})"
+  },
+  {
+   "filename": "packages/core/src/modules/inbox_ops/api/proposals/[id]/actions/[actionId]/route.ts",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -26,7 +26,13 @@ export const metadata = {\n \n export async function PATCH(req: Request) {\n   try {\n-    const body = await req.json()\n+    let body: unknown\n+    try {\n+      body = await req.json()\n+    } catch {\n+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })\n+    }\n+\n     const parsed = actionEditSchema.safeParse(body)\n     if (!parsed.success) {\n       return NextResponse.json({ error: 'Invalid payload', details: parsed.error.issues }, { status: 400 })"
+  },
+  {
+   "filename": "packages/core/src/modules/inbox_ops/api/proposals/[id]/categorize/route.ts",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -24,7 +24,13 @@ export async function POST(req: Request) {\n     const proposal = await resolveProposal(new URL(req.url), ctx)\n     if (isErrorResponse(proposal)) return proposal\n \n-    const body = await req.json()\n+    let body: unknown\n+    try {\n+      body = await req.json()\n+    } catch {\n+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })\n+    }\n+\n     const parsed = categorizeProposalSchema.safeParse(body)\n     if (!parsed.success) {\n       const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')"
+  },
+  {
+   "filename": "packages/core/src/modules/inbox_ops/api/settings/route.ts",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -71,7 +71,13 @@ export async function PATCH(req: Request) {\n   try {\n     const ctx = await resolveRequestContext(req)\n \n-    const body = await req.json()\n+    let body: unknown\n+    try {\n+      body = await req.json()\n+    } catch {\n+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })\n+    }\n+\n     const parsed = updateSettingsSchema.safeParse(body)\n     if (!parsed.success) {\n       return NextResponse.json({ error: 'Invalid request', details: parsed.error.issues }, { status: 400 })"
+  }
+ ],
+ "test_files": [
+  "packages/core/src/modules/inbox_ops/api/__tests__/invalid-json-body.test.ts"
+ ]
+}

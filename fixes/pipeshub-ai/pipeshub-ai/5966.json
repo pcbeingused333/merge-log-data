@@ -1,0 +1,48 @@
+{
+ "repo": "pipeshub-ai/pipeshub-ai",
+ "number": 5966,
+ "url": "https://github.com/pipeshub-ai/pipeshub-ai/pull/5966",
+ "title": "fix(vector-db): parse HF_HUB_OFFLINE the same way huggingface_hub does",
+ "merged_at": "2026-11-19T21:55:42Z",
+ "files": [
+  {
+   "filename": "backend/python/app/embedding_main.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 7,
+   "patch": "@@ -51,7 +51,7 @@\n from app.edition import check_runtime_settings\n from app.services.resource_governor.probe import effective_cpu_count, effective_cpu_source\n from app.telemetry.setup import setup_telemetry\n-from app.utils.env_utils import bind_host, bind_port, env_positive_int\n+from app.utils.env_utils import bind_host, bind_port, env_positive_int, hf_hub_offline\n from app.utils.logger import create_logger, install_log_redaction\n from app.utils.process_hardening import mark_process_non_dumpable\n from app.utils.time_conversion import get_epoch_timestamp_in_ms\n@@ -1029,12 +1029,7 @@ def _load() -> Any:\n                             model_name, status, self._download_status_lock\n                         )\n                     except Exception as download_exc:\n-                        offline = os.environ.get(\"HF_HUB_OFFLINE\", \"\").strip().lower() in {\n-                            \"1\",\n-                            \"true\",\n-                            \"yes\",\n-                        }\n-                        if offline:\n+                        if hf_hub_offline():\n                             err = RuntimeError(\n                                 \"HuggingFace offline mode is on (HF_HUB_OFFLINE=1), so \"\n                                 f\"'{model_name}' cannot be downloaded. Set HF_HUB_OFFLINE=0 \""
+  },
+  {
+   "filename": "backend/python/app/services/vector_db/sparse_embeddings.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 6,
+   "patch": "@@ -20,21 +20,17 @@\n from __future__ import annotations\n \n import asyncio\n-import os\n from typing import List, Optional\n \n from app.services.vector_db.models import SparseVector, to_generic_sparse_vector\n+from app.utils.env_utils import hf_hub_offline\n from app.utils.logger import create_logger\n \n logger = create_logger(\"sparse_embeddings\")\n \n _MODEL_NAME = \"Qdrant/bm25\"\n \n \n-def _hf_hub_offline_enabled() -> bool:\n-    return os.environ.get(\"HF_HUB_OFFLINE\", \"\").strip().lower() in {\"1\", \"true\", \"yes\"}\n-\n-\n class SparseEmbedder:\n     \"\"\"Thread-safe, lazy-initialised BM25 sparse embedder.\n \n@@ -81,7 +77,7 @@ def _build_model(self):\n         try:\n             return SparseTextEmbedding(model_name=self._model_name, local_files_only=True)\n         except Exception:\n-            if _hf_hub_offline_enabled():\n+            if hf_hub_offline():\n                 raise\n             logger.info(\n                 \"Sparse model '%s' not in local cache; downloading from Hub\","
+  },
+  {
+   "filename": "backend/python/app/utils/env_utils.py",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -17,6 +17,17 @@\n import os\n \n \n+def hf_hub_offline() -> bool:\n+    \"\"\"True iff `huggingface_hub` would run in offline mode.\n+\n+    Mirrors its own parsing: `HF_HUB_OFFLINE`, falling back to\n+    `TRANSFORMERS_OFFLINE` when the former is unset or empty, upper-cased and\n+    compared to `1/ON/YES/TRUE` with no `strip()`.\n+    \"\"\"\n+    value = os.environ.get(\"HF_HUB_OFFLINE\") or os.environ.get(\"TRANSFORMERS_OFFLINE\") or \"\"\n+    return value.upper() in {\"1\", \"ON\", \"YES\", \"TRUE\"}\n+\n+\n def env_bool(name: str, default: bool) -> bool:  # noqa: FBT001\n     \"\"\"True iff the env var `name` is `\"true\"` (case-insensitive).\n "
+  },
+  {
+   "filename": "backend/python/tests/unit/services/vector_db/test_sparse_embeddings.py",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -184,6 +184,31 @@ def test_build_model_does_not_download_when_explicitly_offline(monkeypatch) -> N\n     assert calls == [True]\n \n \n+@pytest.mark.parametrize(\"value\", [\" true\", \"true \", \"1 \", \" yes\"])\n+def test_build_model_downloads_when_hf_hub_offline_is_whitespace_padded(monkeypatch, value) -> None:\n+    \"\"\"huggingface_hub does not strip HF_HUB_OFFLINE, so a padded value means online.\"\"\"\n+    import sys\n+\n+    calls: list[bool] = []\n+    monkeypatch.setenv(\"HF_HUB_OFFLINE\", value)\n+    with patch.dict(sys.modules, {\"fastembed\": _fake_fastembed(calls, cached=False)}):\n+        model = SparseEmbedder()._build_model()\n+    assert calls == [True, False]\n+    assert model.model_name == \"Qdrant/bm25\"\n+\n+\n+@pytest.mark.parametrize(\"value\", [\"on\", \"ON\", \"True\", \"YES\"])\n+def test_build_model_does_not_download_for_every_value_hf_hub_treats_as_offline(monkeypatch, value) -> None:\n+    import sys\n+\n+    calls: list[bool] = []\n+    monkeypatch.setenv(\"HF_HUB_OFFLINE\", value)\n+    with patch.dict(sys.modules, {\"fastembed\": _fake_fastembed(calls, cached=False)}):\n+        with pytest.raises(RuntimeError, match=\"not in cache\"):\n+            SparseEmbedder()._build_model()\n+    assert calls == [True]\n+\n+\n def test_build_model_leaves_hf_hub_offline_alone(monkeypatch) -> None:\n     # huggingface_hub reads HF_HUB_OFFLINE once, at import, so the old runtime toggle did nothing.\n     import os"
+  },
+  {
+   "filename": "backend/python/tests/unit/utils/test_env_utils_accuracy.py",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -48,3 +48,27 @@ def test_reads_the_environment_on_every_call(monkeypatch: pytest.MonkeyPatch) ->\n \n     monkeypatch.setenv(_FEATURE, \"false\")\n     assert accuracy_feature_enabled(_FEATURE) is False\n+\n+\n+@pytest.mark.parametrize(\n+    (\"hf\", \"tf\", \"expected\"),\n+    [\n+        (None, None, False),\n+        (\"1\", None, True),\n+        (\"on\", None, True),\n+        (\" 1 \", None, False),\n+        (None, \"1\", True),\n+        (\"\", \"true\", True),\n+        (\"0\", \"1\", False),\n+        (None, \" 1 \", False),\n+    ],\n+)\n+def test_hf_hub_offline_mirrors_huggingface_hub(monkeypatch, hf, tf, expected) -> None:\n+    from app.utils.env_utils import hf_hub_offline\n+\n+    for name, value in ((\"HF_HUB_OFFLINE\", hf), (\"TRANSFORMERS_OFFLINE\", tf)):\n+        if value is None:\n+            monkeypatch.delenv(name, raising=False)\n+        else:\n+            monkeypatch.setenv(name, value)\n+    assert hf_hub_offline() is expected"
+  }
+ ],
+ "test_files": [
+  "backend/python/tests/unit/services/vector_db/test_sparse_embeddings.py",
+  "backend/python/tests/unit/utils/test_env_utils_accuracy.py"
+ ]
+}

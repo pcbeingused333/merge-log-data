@@ -1,0 +1,40 @@
+{
+ "repo": "aws/aws-advanced-nodejs-wrapper",
+ "number": 719,
+ "url": "https://github.com/aws/aws-advanced-nodejs-wrapper/pull/719",
+ "title": "fix(bluegreen): keep cluster endpoints in hostNames and fix routing isMatch",
+ "merged_at": "2026-11-19T22:53:23Z",
+ "files": [
+  {
+   "filename": "common/lib/plugins/bluegreen/blue_green_status_monitor.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -308,7 +308,8 @@ export class BlueGreenStatusMonitor {\n     const currentTopologyCopy = this.currentTopology;\n \n     if (currentTopologyCopy && this.collectedTopology) {\n-      this.hostNames = new Set(currentTopologyCopy.map((hostSpec) => hostSpec.host));\n+      // Add to the set instead of replacing it: collectStatus() may have already added cluster endpoints.\n+      currentTopologyCopy.forEach((hostSpec) => this.hostNames.add(hostSpec.host));\n     }\n   }\n "
+  },
+  {
+   "filename": "common/lib/plugins/bluegreen/routing/base_connect_routing.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 4,
+   "patch": "@@ -24,10 +24,7 @@ import { PluginService } from \"../../../plugin_service\";\n \n export abstract class BaseConnectRouting extends BaseRouting implements ConnectRouting {\n   isMatch(hostInfo: HostInfo, hostRole: BlueGreenRole): boolean {\n-    return (\n-      (this.hostAndPort === null || this.hostAndPort === (hostInfo ?? hostInfo.hostAndPort.toLowerCase())) &&\n-      (this.role === null || this.role === hostRole)\n-    );\n+    return (this.hostAndPort === null || this.hostAndPort === hostInfo?.hostAndPort?.toLowerCase()) && (this.role === null || this.role === hostRole);\n   }\n \n   abstract apply("
+  },
+  {
+   "filename": "common/lib/plugins/bluegreen/routing/base_execute_routing.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 4,
+   "patch": "@@ -23,10 +23,7 @@ import { ConnectionPlugin } from \"../../../connection_plugin\";\n \n export abstract class BaseExecuteRouting extends BaseRouting implements ExecuteRouting {\n   isMatch(hostInfo: HostInfo, hostRole: BlueGreenRole): boolean {\n-    return (\n-      (this.hostAndPort === null || this.hostAndPort === (hostInfo ?? hostInfo.hostAndPort.toLowerCase())) &&\n-      (this.role === null || this.role === hostRole)\n-    );\n+    return (this.hostAndPort === null || this.hostAndPort === hostInfo?.hostAndPort?.toLowerCase()) && (this.role === null || this.role === hostRole);\n   }\n \n   abstract apply<T>("
+  },
+  {
+   "filename": "tests/unit/blue_green_routing.test.ts",
+   "status": "added",
+   "additions": 73,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,73 @@\n+/*\n+  Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.\n+ \n+  Licensed under the Apache License, Version 2.0 (the \"License\").\n+  You may not use this file except in compliance with the License.\n+  You may obtain a copy of the License at\n+ \n+  http://www.apache.org/licenses/LICENSE-2.0\n+ \n+  Unless required by applicable law or agreed to in writing, software\n+  distributed under the License is distributed on an \"AS IS\" BASIS,\n+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+  See the License for the specific language governing permissions and\n+  limitations under the License.\n+*/\n+\n+import { HostInfoBuilder } from \"../../common/lib\";\n+import { SimpleHostAvailabilityStrategy } from \"../../common/lib/host_availability/simple_host_availability_strategy\";\n+import { BlueGreenRole } from \"../../common/lib/plugins/bluegreen/blue_green_role\";\n+import { BlueGreenStatusMonitor } from \"../../common/lib/plugins/bluegreen/blue_green_status_monitor\";\n+import { SuspendConnectRouting } from \"../../common/lib/plugins/bluegreen/routing/suspend_connect_routing\";\n+import { SuspendExecuteRouting } from \"../../common/lib/plugins/bluegreen/routing/suspend_execute_routing\";\n+\n+const clusterEndpoint = \"my-cluster.cluster-abc123.us-east-1.rds.amazonaws.com\";\n+const instanceEndpoint = \"my-instance.abc123.us-east-1.rds.amazonaws.com\";\n+\n+function hostFor(host: string, port: number) {\n+  return new HostInfoBuilder({ hostAvailabilityStrategy: new SimpleHostAvailabilityStrategy() }).withHost(host).withPort(port).build();\n+}\n+\n+describe(\"blue/green routing isMatch\", () => {\n+  it(\"connect routing matches the same host and port\", () => {\n+    const routing = new SuspendConnectRouting(`${clusterEndpoint}:3306`, BlueGreenRole.SOURCE, \"bgd\");\n+    expect(routing.isMatch(hostFor(clusterEndpoint, 3306), BlueGreenRole.SOURCE)).toBe(true);\n+  });\n+\n+  it(\"connect routing does not match a different host\", () => {\n+    const routing = new SuspendConnectRouting(`${clusterEndpoint}:3306`, BlueGreenRole.SOURCE, \"bgd\");\n+    expect(routing.isMatch(hostFor(instanceEndpoint, 3306), BlueGreenRole.SOURCE)).toBe(false);\n+  });\n+\n+  it(\"connect routing with null host matches any host for the role\", () => {\n+    const routing = new SuspendConnectRouting(null, BlueGreenRole.SOURCE, \"bgd\");\n+    expect(routing.isMatch(hostFor(instanceEndpoint, 3306), BlueGreenRole.SOURCE)).toBe(true);\n+    expect(routing.isMatch(hostFor(instanceEndpoint, 3306), BlueGreenRole.TARGET)).toBe(false);\n+  });\n+\n+  it(\"execute routing matches the same host and port\", () => {\n+    const routing = new SuspendExecuteRouting(`${clusterEndpoint}:3306`, BlueGreenRole.SOURCE, \"bgd\");\n+    expect(routing.isMatch(hostFor(clusterEndpoint, 3306), BlueGreenRole.SOURCE)).toBe(true);\n+  });\n+\n+  it(\"execute routing does not match a different host\", () => {\n+    const routing = new SuspendExecuteRouting(`${clusterEndpoint}:3306`, BlueGreenRole.SOURCE, \"bgd\");\n+    expect(routing.isMatch(hostFor(instanceEndpoint, 3306), BlueGreenRole.SOURCE)).toBe(false);\n+  });\n+});\n+\n+describe(\"blue/green status monitor collectTopology\", () => {\n+  it(\"keeps cluster endpoints already collected from the status table\", async () => {\n+    const monitor: any = Object.create(BlueGreenStatusMonitor.prototype);\n+    monitor.hostListProvider = { forceRefresh: async () => [hostFor(instanceEndpoint, 3306)] };\n+    monitor.collectedTopology = true;\n+    monitor.startTopology = [];\n+    monitor.currentTopology = [];\n+    monitor.hostNames = new Set<string>([clusterEndpoint]);\n+\n+    await monitor.collectTopology();\n+\n+    expect(monitor.hostNames.has(clusterEndpoint)).toBe(true);\n+    expect(monitor.hostNames.has(instanceEndpoint)).toBe(true);\n+  });\n+});"
+  }
+ ],
+ "test_files": [
+  "tests/unit/blue_green_routing.test.ts"
+ ]
+}

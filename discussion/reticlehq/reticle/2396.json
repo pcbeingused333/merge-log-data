@@ -3,13 +3,25 @@
  "number": 2396,
  "url": "https://github.com/reticlehq/reticle/pull/2396",
  "state": "open",
- "reviews": [],
+ "reviews": [
+  {
+   "role": "none",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-20T03:43:24Z",
+   "body": "Read the head (`46c0efb7`), not just the diff. The core of the change holds: a falsy first argument emits `CONSOLE_ERROR` with the `Assertion failed` prefix DevTools prints, a passing assert emits nothing, `level: \"error\"` in the evaluator already accepts `CONSOLE_ERROR` (`engine/src/question/predicate/predicate-console.ts:78,85`), so `reticle_assert({ kind: \"console\", level: \"error\", absent: true })` now sees a failed assertion. The teardown identity assertion is a good addition.\n\nTwo things, neither blocking merge.\n\n**1. `assert` is now a REQUIRED patch, and the failure mode is a half-installed observer.**\n\n`assert` was added to the loop at `adapters/realm/browser/src/observers/console.ts:92`, and every iteration calls `requireCapturedMethod` (`console.ts:116`), which throws when the property is not an own value (`util/captured-method.ts:42-46`). For the five original methods that contract was safe: no page that has a `console` at all is missing `console.error`. The sixth is different, because a page can replace `window.console` with a shim that implements the five and not `assert`, and that is the one shape where the new requirement fails.\n\nThe throw lands on the last iteration, after `log`/`warn`/`error`/`info`/`debug` are already assigned (`console.ts:139`), and before the window listeners are registered (`console.ts:249`). `guard` then catches it and returns an empty teardown (`observers/install-all.ts:44`), so nothing can undo the five wrappers. The page is left emitting `CONSOLE_*` events, with no uncaught-error, rejection or CSP capture, and a `console` that stays patched for the life of the document.\n\nOptions, in the order I would pick them: skip a method whose own value is absent, keeping the five required (the loop already has the descriptor read in hand); or patch `assert` after the loop with a fallback that only emits when the original exists. A test with a five-method console shim and an assertion that the error listener still fires would pin it.\n\n**2. The `gate` job is red for a non-defect reason.** `gate` exited 1 on `a required gate reported 'abandoned'`: the dependency results list contains `abandoned`, which the script treats as fatal. That is a cancelled dependency run rather than a failing check, so a workflow re-run should clear it. Flagging it only so the red row does not look like something in this diff.\n"
+  }
+ ],
  "review_comments": [],
  "comments": [
   {
    "role": "bot",
    "created_at": "2026-11-18T20:25:22Z",
    "body": "Thanks for your first pull request to Reticle! A maintainer aims to review within two days. Before then, `pnpm verify` locally catches most of what CI will, and [CONTRIBUTING.md](https://github.com/reticlehq/reticle/blob/main/CONTRIBUTING.md) explains the rest. If CI does not start, a maintainer needs to approve it for first-time contributors; that is normal."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-20T04:12:45Z",
+   "body": "Thanks for the careful read. Pushed two commits: the first skips `assert` when the console has no own `assert` value (the five original methods stay required), so the observer no longer half-installs on a five-method console shim. The second extends the shim test to dispatch an `ErrorEvent` and check that the uncaught-error listener still fires. With `assert` removed, install does not throw, `console.error` is still captured, and teardown restores the methods. The red `gate` row looks like a cancelled dependency run, as noted; a re-run should clear it.\n\nThis comment was drafted with Claude Code.\n"
   }
  ]
 }

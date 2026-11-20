@@ -1,0 +1,26 @@
+{
+ "repo": "flanksource/canary-checker",
+ "number": 3124,
+ "url": "https://github.com/flanksource/canary-checker/pull/3124",
+ "title": "fix(alertmanager): report status and body on non-2xx responses",
+ "merged_at": "2026-11-20T03:07:09Z",
+ "files": [
+  {
+   "filename": "checks/alertmanager.go",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -3,6 +3,7 @@ package checks\n import (\n \t\"encoding/json\"\n \t\"fmt\"\n+\t\"io\"\n \t\"net/url\"\n \t\"strings\"\n \n@@ -14,6 +15,9 @@ import (\n \talertmanagerAlert \"github.com/prometheus/alertmanager/api/v2/client/alert\"\n )\n \n+// maxErrorBodyBytes caps how much of a non-2xx response body is read into the error message.\n+const maxErrorBodyBytes = 4096\n+\n type AlertManagerChecker struct{}\n \n func (c *AlertManagerChecker) Type() string {\n@@ -66,7 +70,9 @@ func (c *AlertManagerChecker) Check(ctx *context.Context, extConfig external.Che\n \t\treturn results\n \t}\n \tif !resp.IsOK() {\n-\t\tresults.ErrorMessage(fmt.Errorf(\"received non 2xx from alertmanager: %v\", err))\n+\t\tdefer resp.Body.Close()\n+\t\tbody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))\n+\t\tresults.ErrorMessage(fmt.Errorf(\"received non 2xx from alertmanager: %s: %s\", resp.Status, body))\n \t\treturn results\n \t}\n \trespStr, err := resp.AsString()"
+  },
+  {
+   "filename": "checks/alertmanager_test.go",
+   "status": "added",
+   "additions": 72,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,72 @@\n+package checks\n+\n+import (\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"strings\"\n+\t\"testing\"\n+\n+\t\"github.com/flanksource/canary-checker/api/context\"\n+\tv1 \"github.com/flanksource/canary-checker/api/v1\"\n+\tdutyCtx \"github.com/flanksource/duty/context\"\n+)\n+\n+func TestAlertManagerCheckNon2xxMessage(t *testing.T) {\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {\n+\t\tw.WriteHeader(http.StatusUnauthorized)\n+\t\t_, _ = w.Write([]byte(\"Unauthorized: invalid token\"))\n+\t}))\n+\tdefer server.Close()\n+\n+\tctx := &context.Context{\n+\t\tContext:   dutyCtx.New(),\n+\t\tNamespace: \"default\",\n+\t\tCanary:    v1.Canary{},\n+\t}\n+\tcheck := v1.AlertManagerCheck{\n+\t\tConnection: v1.Connection{URL: server.URL},\n+\t}\n+\n+\tresults := (&AlertManagerChecker{}).Check(ctx, check)\n+\tif len(results) != 1 {\n+\t\tt.Fatalf(\"expected 1 result, got %d\", len(results))\n+\t}\n+\n+\tresult := results[0]\n+\tif result.Pass {\n+\t\tt.Fatalf(\"expected the check to fail on a 401 response\")\n+\t}\n+\tif strings.Contains(result.Error, \"<nil>\") {\n+\t\tt.Errorf(\"error should not contain <nil>, got %q\", result.Error)\n+\t}\n+\tfor _, want := range []string{\"401\", \"Unauthorized: invalid token\"} {\n+\t\tif !strings.Contains(result.Error, want) {\n+\t\t\tt.Errorf(\"expected error to contain %q, got %q\", want, result.Error)\n+\t\t}\n+\t}\n+}\n+\n+func TestAlertManagerCheckNon2xxBodyIsBounded(t *testing.T) {\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {\n+\t\tw.WriteHeader(http.StatusInternalServerError)\n+\t\t_, _ = w.Write([]byte(strings.Repeat(\"x\", 1<<20)))\n+\t}))\n+\tdefer server.Close()\n+\n+\tctx := &context.Context{\n+\t\tContext:   dutyCtx.New(),\n+\t\tNamespace: \"default\",\n+\t\tCanary:    v1.Canary{},\n+\t}\n+\tcheck := v1.AlertManagerCheck{\n+\t\tConnection: v1.Connection{URL: server.URL},\n+\t}\n+\n+\tresults := (&AlertManagerChecker{}).Check(ctx, check)\n+\tif len(results) != 1 {\n+\t\tt.Fatalf(\"expected 1 result, got %d\", len(results))\n+\t}\n+\tif got := len(results[0].Error); got > maxErrorBodyBytes+256 {\n+\t\tt.Errorf(\"error message should be bounded, got %d bytes\", got)\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "checks/alertmanager_test.go"
+ ]
+}

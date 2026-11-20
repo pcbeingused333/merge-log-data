@@ -1,0 +1,17 @@
+{
+ "repo": "reacherhq/check-if-email-exists",
+ "number": 1688,
+ "url": "https://github.com/reacherhq/check-if-email-exists/pull/1688",
+ "title": "fix(smtp): recognize Comcast nonexistent and closed mailboxes",
+ "merged_at": "2026-11-19T21:20:03Z",
+ "files": [
+  {
+   "filename": "core/src/smtp/parser.rs",
+   "status": "modified",
+   "additions": 32,
+   "deletions": 0,
+   "patch": "@@ -69,6 +69,10 @@ pub fn is_invalid(e: &str, email: &EmailAddress) -> bool {\n \t|| e.contains(\"no mailbox\")\n \t// 5.2.0 No such mailbox\n \t|| e.contains(\"no such mailbox\")\n+\t// 550 5.1.0 Not our Customer (on @comcast.net)\n+\t|| e.contains(\"not our customer\")\n+\t// 550 5.2.0 <EMAIL> - Account Closed, Please Remove (on @comcast.net)\n+\t|| e.contains(\"account closed\")\n \t// 550 Requested action not taken: mailbox unavailable\n \t|| e.contains(\"mailbox unavailable\")\n \t// 5.5.0 Requested actions not taken as the mailbox is unavailable (on @etu.uca.fr)\n@@ -278,6 +282,34 @@ mod tests {\n \t\tassert!(is_invalid(msg, &email));\n \t}\n \n+\t#[test]\n+\tfn test_is_invalid_comcast() {\n+\t\tlet email = EmailAddress::from_str(\"foo@comcast.net\").unwrap();\n+\n+\t\t// https://github.com/reacherhq/check-if-email-exists/issues/1687\n+\t\tfor msg in [\n+\t\t\t\"550 5.1.0 Not our Customer\",\n+\t\t\t\"permanent: 5.1.0 Not our Customer\",\n+\t\t\t\"550 5.2.0 <foo@comcast.net> - Account Closed, Please Remove\",\n+\t\t\t\"permanent: 5.2.0  - Account Closed, Please Remove\",\n+\t\t] {\n+\t\t\tassert!(is_invalid(&msg.to_lowercase(), &email), \"{}\", msg);\n+\t\t}\n+\t}\n+\n+\t#[test]\n+\tfn test_is_invalid_comcast_controls() {\n+\t\tlet email = EmailAddress::from_str(\"foo@comcast.net\").unwrap();\n+\n+\t\tfor msg in [\n+\t\t\t\"250 2.1.5 <foo@comcast.net> recipient ok\",\n+\t\t\t\"permanent: 5.1.0 address status unknown\",\n+\t\t\t\"permanent: 5.2.0 mailbox status unknown\",\n+\t\t] {\n+\t\t\tassert!(!is_invalid(msg, &email), \"{}\", msg);\n+\t\t}\n+\t}\n+\n \t#[test]\n \tfn test_is_greylisted() {\n \t\tlet email = EmailAddress::from_str(\"foo@bar.baz\").unwrap();"
+  }
+ ],
+ "test_files": []
+}

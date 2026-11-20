@@ -3,13 +3,32 @@
  "number": 102,
  "url": "https://github.com/formkit/tempo/pull/102",
  "state": "open",
- "reviews": [],
- "review_comments": [],
+ "reviews": [
+  {
+   "role": "none",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-20T02:12:53Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "none",
+   "path": "src/hourEnd.ts",
+   "created_at": "2026-11-20T02:12:54Z",
+   "body": "The minutes check misses offset changes that are not on the hour. In `Pacific/Chatham` DST ends at 03:45 (+13:45 → +12:45), so a shift that crosses it still lands on minute 59, but in the previous local hour:\n\n```js\n// TZ=Pacific/Chatham\nhourEnd(new Date(\"2026-04-04T13:18:13.123Z\")) // input 03:03:13 +13:45\n// this PR: 2026-04-04T14:14:59.999Z = 02:59:59.999 +12:45  (hour 2, input is hour 3)\n// main:    2026-04-04T15:14:59.999Z = 03:59:59.999 +12:45\n```\n\nChecking the hour too fixes it and keeps the New York fix:\n\n```ts\nif (shifted.getMinutes() === 59 && shifted.getHours() === d.getHours()) return shifted\n```\n\n(same for `hourStart.ts`, with `=== 0`). I ran all 418 IANA zones, every transition 1990–2035, ±23 h around each: with this PR, `hourStart`/`hourEnd` return a different local hour than the input where main did not in Chatham, St_Johns, Goose_Bay, Moncton and Bishkek (~980 cases; e.g. Goose_Bay 1990-10-28T03:01:13Z → hourStart gives 00:00 on the next local day). With the extra hour check that count is 0, and the New York cases in your tests still pass."
+  }
+ ],
  "comments": [
   {
    "role": "bot",
    "created_at": "2026-11-18T11:05:18Z",
    "body": "@pcbeingused333 is attempting to deploy a commit to the **Formkit** Team on [Vercel](https://vercel.com).\n\nA member of the Team first needs to [authorize it](https://vercel.com/git/authorize?team=Formkit&slug=formkit&teamId=team_USJ9vQpOI6THJsWWFxBS2gQE&type=github&job=%7B%22headInfo%22%3A%7B%22sha%22%3A%22b75159d636aa8fa7cbbe6d4eb4de3ac30d7fec79%22%7D%2C%22id%22%3A%22QmPQrqHiSMfb3Hucs2fDsC3vk2caEnUTMvqsse5NMgBmQH%22%2C%22org%22%3A%22formkit%22%2C%22prId%22%3A102%2C%22repo%22%3A%22tempo%22%7D).\n\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-20T02:34:41Z",
+   "body": "Good catch, thanks. Added the hour check (`shifted.getHours() === d.getHours()`) to `hourStart` and `hourEnd`, plus a Pacific/Chatham regression test (33e905a).\n\nThis comment was drafted with Claude Code.\n"
   }
  ]
 }

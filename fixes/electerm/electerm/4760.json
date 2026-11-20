@@ -1,0 +1,26 @@
+{
+ "repo": "electerm/electerm",
+ "number": 4760,
+ "url": "https://github.com/electerm/electerm/pull/4760",
+ "title": "menu: bind Cmd+, to the settings item on macOS",
+ "merged_at": "2026-11-20T04:40:55Z",
+ "files": [
+  {
+   "filename": "src/app/lib/menu.js",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -67,6 +67,7 @@ function buildMenu () {\n         },\n         {\n           label: e('settings'),\n+          accelerator: process.platform === 'darwin' ? 'Cmd+,' : undefined,\n           click () {\n             globalState.get('win').webContents.send('openSettings', null)\n           }"
+  },
+  {
+   "filename": "src/test/unit-ci/menu-settings-accelerator.spec.js",
+   "status": "added",
+   "additions": 66,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,66 @@\n+/**\n+ * The \"settings\" item of the application menu has to carry the standard\n+ * platform shortcut (Cmd+, on macOS), otherwise the shortcut does nothing.\n+ */\n+\n+const { describe, it, before, after } = require('node:test')\n+const assert = require('node:assert/strict')\n+const Module = require('node:module')\n+\n+const menuPath = require.resolve('../../app/lib/menu')\n+const globalStatePath = require.resolve('../../app/lib/glob-state')\n+\n+describe('application menu settings item', () => {\n+  const originalLoad = Module._load\n+  const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')\n+  let captured\n+\n+  before(() => {\n+    const electronStub = {\n+      app: { name: 'electerm', dock: { setMenu () {} } },\n+      Menu: {\n+        buildFromTemplate (template) {\n+          captured = template\n+          return template\n+        }\n+      },\n+      shell: {}\n+    }\n+    Module._load = function (request, ...rest) {\n+      if (request === 'electron') {\n+        return electronStub\n+      }\n+      if (request === '../common/runtime-constants') {\n+        return { packInfo: { homepage: '' } }\n+      }\n+      return originalLoad.call(this, request, ...rest)\n+    }\n+    require(globalStatePath).set('translate', k => k)\n+    delete require.cache[menuPath]\n+  })\n+\n+  after(() => {\n+    Module._load = originalLoad\n+    Object.defineProperty(process, 'platform', originalPlatform)\n+    delete require.cache[menuPath]\n+  })\n+\n+  function findSettings (template) {\n+    for (const top of template) {\n+      const item = (top.submenu || []).find(d => d.label === 'settings')\n+      if (item) return item\n+    }\n+  }\n+\n+  for (const platform of ['darwin', 'linux', 'win32']) {\n+    it(`settings shortcut on ${platform}`, () => {\n+      Object.defineProperty(process, 'platform', { value: platform })\n+      delete require.cache[menuPath]\n+      require(menuPath)()\n+      const item = findSettings(captured)\n+      assert.ok(item, 'settings item exists')\n+      // Cmd+, is the macOS convention; Ctrl+, is left to the terminal elsewhere\n+      assert.equal(item.accelerator, platform === 'darwin' ? 'Cmd+,' : undefined)\n+    })\n+  }\n+})"
+  }
+ ],
+ "test_files": [
+  "src/test/unit-ci/menu-settings-accelerator.spec.js"
+ ]
+}

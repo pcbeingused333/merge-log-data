@@ -3,7 +3,33 @@
  "number": 396,
  "url": "https://github.com/PostHog/posthog-dotnet/pull/396",
  "state": "open",
- "reviews": [],
- "review_comments": [],
- "comments": []
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-20T01:59:08Z",
+   "body": "The new cases fix ordinary numeric ordering. Two boundary regressions remain: finite `float` and `decimal` overrides can disagree with their JSON values at a threshold, and nonfinite `float` overrides can incorrectly match numeric rules. AI-assisted review."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "src/PostHog/Json/PropertyFilterValue.cs",
+   "created_at": "2026-11-20T01:59:08Z",
+   "body": "### [P1] IMPORTANT — Compare finite `float` and `decimal` overrides using their JSON numeric value\n\n**Introduced · REQUIRED · `src/PostHog/Json/PropertyFilterValue.cs:890–891`, RIGHT**\n\nA locally evaluated `score > \"0.1\"` rule now enables the flag for `PersonProperties = new() { [\"score\"] = 0.1f }`. It should not match: the SDK sends the same value as JSON `0.1`. The inclusive rule `score <= \"0.1\"` flips the other way and no longer matches.\n\nThe merge base’s lexical fallback happened to give the correct result at this boundary. The new cast widens `0.1f` to `0.10000000149011612`, whereas parsing the emitted JSON `0.1` produces the same binary64 value as the condition. The decimal arm has a related issue: on .NET 9.0.8 the SDK emits `1.0000000000000003` for `1.0000000000000003m`, which parses as `1.0000000000000002`, but the direct cast produced `1.0000000000000004`. The [numeric criteria contract](https://github.com/PostHog/sdk-specs/blob/b0ea111a247b1b2b71d33690d3da7ce08282ad4a/openspec/specs/local-feature-flag-evaluator/spec.md#L778-L784) compares the supplied JSON number as binary64, not the original CLR representation.\n\n| Executed comparator case | Merge base → head | Expected and parsed-wire control |\n| --- | --- | --- |\n| `0.1f`, `gt \"0.1\"` | false → true | false |\n| `0.1f`, `lte \"0.1\"` | true → false | true |\n| `1.0000000000000003m`, `lt \"1.0000000000000004\"` | true → false | true |\n| Next `float` above `0.1f`, `gt \"0.1\"` | true → true | true |\n\nA secret-key client calling `EvaluateFlagsAsync` with a loaded, active single-rule flag and the boxed property reaches these arms through `LocalEvaluator.MatchProperty`. Group overrides reach the same code. A resolved local result can change application branching and recorded exposure. The `float` case needs only a common fractional threshold; the decimal case does not imply that typical two-decimal prices fail.\n\nConsider converting the finite `float` and `decimal` values from representations that round the same way as the SDK’s emitted JSON numbers, then comparing as binary64. Add the table rows to `LocalFeatureFlagsLoaderTests.VersionedDefinitionSnapshots`: use `DefinitionsJson` to load a single-rule flag, supply the boxed override through `EvaluateFlagsAsync`, and assert the flag is present, resolved to the expected value, and produced no `/flags` request. Keep the adjacent-`float` control so a fix cannot pass by rounding genuinely larger values down. The comparator and serializer cases above ran; this public-entry test is an unexecuted sketch."
+  },
+  {
+   "role": "contributor",
+   "path": "src/PostHog/Json/PropertyFilterValue.cs",
+   "created_at": "2026-11-20T01:59:08Z",
+   "body": "### [P1] IMPORTANT — Do not let nonfinite `float` overrides satisfy numeric rules\n\n**Introduced for the demonstrated cases · REQUIRED · `src/PostHog/Json/PropertyFilterValue.cs:890`, RIGHT**\n\nA locally evaluated `score < \"0\"` rule now enables the flag when a calculation supplies `PersonProperties = new() { [\"score\"] = float.NaN }`. Likewise, `float.NegativeInfinity` newly matches `score < \"-1\"`. Both should definitively fail the rule. These are valid CLR inputs to the public override dictionary; no malformed JSON or transport failure is needed.\n\nThe base’s lexical fallback did not match either example. The new cast feeds [`Double.CompareTo`](https://learn.microsoft.com/en-us/dotnet/api/system.double.compareto?view=net-9.0), whose sort order places NaN and negative infinity below finite values. `LocalEvaluator.MatchProperty` turns that ordering into a true `lt`. The [numeric criteria contract](https://github.com/PostHog/sdk-specs/blob/b0ea111a247b1b2b71d33690d3da7ce08282ad4a/openspec/specs/local-feature-flag-evaluator/spec.md#L778-L784) requires a definite no-match. The probe also confirmed that the SDK serializes the NaN override as `{\"person_properties\":{\"score\":null}}`; the converter does the same for infinities. A null reaching the backend numeric matcher does not satisfy the comparison.\n\n| Executed comparator case | Merge base → head | Expected |\n| --- | --- | --- |\n| `float.NaN`, `lt \"0\"` | false → true | false |\n| `float.NegativeInfinity`, `lt \"-1\"` | false → true | false |\n| `-1f`, `lt \"0\"` | true → true | true |\n\n`+Infinity > \"-1\"` and `-Infinity < \"1\"` were already incorrectly true on base. The two new matches above resolve locally and can change targeting or exposure without a request to correct the result.\n\nConsider returning a definitive no-match for nonfinite properties with valid numeric conditions in the flag-ordering path. Merely skipping the new cast arm still permits lexical fallback. Add the table rows to the same single-rule `EvaluateFlagsAsync` fixture: assert that both invalid rows are present and disabled, with no unresolved reason or `/flags` request, and that the finite control is enabled. A shared guard should cover NaN and both infinities across all four operators. The comparator cases ran; the public-entry sketch did not."
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-20T03:52:28Z",
+   "body": "Thanks @dustinbyrne, both are in. `float`/`decimal` overrides are now compared via their JSON string value, and non-finite `float`/`double` overrides return false before the operator switch. The rows you asked for are in `LocalFeatureFlagsLoaderTests.VersionedDefinitionSnapshots.NumericOverridesResolveLocallyWithoutRemoteRequests`, going through `DefinitionsJson` + `EvaluateFlagsAsync` and asserting the flag is present, has no unresolved reason and no `/flags` request was made:\n\n| override | rule | result |\n|---|---|---|\n| `0.1f` | `gt 0.1` / `lt 0.1` | false / false |\n| `0.1f` | `lte 0.1` / `gte 0.1` | true / true |\n| `BitIncrement(0.1f)` (control) | `gt 0.1` | true |\n| `1.0000000000000003m` | `lt` / `gt 1.0000000000000004` | true / false |\n| `NaN`, `-Inf` (float, double) | `lt`, `lte` | false |\n| `NaN`, `+Inf` | `gte`, `gt` | false |\n| `-1f` (control) | `lt 0` | true |\n\nRed with the source from the previous commit: 20 failures; green: 0 failures (853 pass). `TheNumericBoundaryOverrides.Evaluate` now returns the tri-state result and uses `Assert.Equal(false/true, ...)`, so an inconclusive `null` no longer passes the negative cases.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
 }

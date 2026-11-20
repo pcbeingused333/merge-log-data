@@ -1,0 +1,26 @@
+{
+ "repo": "OpenCSGs/csghub-server",
+ "number": 1639,
+ "url": "https://github.com/OpenCSGs/csghub-server/pull/1639",
+ "title": "fix(aigateway): feed array embedding input to the token-usage fallback",
+ "merged_at": "2026-11-20T01:56:50Z",
+ "files": [
+  {
+   "filename": "aigateway/handler/embedding_handler.go",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 2,
+   "patch": "@@ -176,8 +176,10 @@ func (h *embeddingPipelineHandler) Execute(c *gin.Context, meta *types.RequestMe\n \t\tProvider: mt.Model.Provider,\n \t})\n \tw := NewResponseWriterWrapperEmbedding(c.Writer, tokenCounter)\n-\tif req.Input.OfString.String() != \"\" {\n-\t\ttokenCounter.Input(req.Input.OfString.Value)\n+\t// PromptText covers both the single-string and array-of-strings forms, so\n+\t// the tokenizer fallback still bills when the upstream returns no usage.\n+\tif text := req.PromptText(); text != \"\" {\n+\t\ttokenCounter.Input(text)\n \t}\n \n \tproxyStartTime := time.Now()"
+  },
+  {
+   "filename": "aigateway/handler/embedding_handler_test.go",
+   "status": "modified",
+   "additions": 58,
+   "deletions": 0,
+   "patch": "@@ -117,3 +117,61 @@ func TestEmbeddingPipelineExecute_ProxiesEndpointPathToUpstream(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+// TestEmbeddingPipelineExecute_ArrayInputFeedsTokenizerFallback guards the\n+// billing fallback: when the upstream response carries no usage (or is too\n+// large to capture), the counter estimates tokens from the text handed to\n+// Input. An array-of-strings request must hand it every string, not nothing.\n+func TestEmbeddingPipelineExecute_ArrayInputFeedsTokenizerFallback(t *testing.T) {\n+\ttester, c, _ := setupTest(t)\n+\ttester.mocks.openAIComp.ExpectedCalls = nil\n+\n+\tupstream := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {\n+\t\trw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\trw.WriteHeader(http.StatusOK)\n+\t\t_, err := rw.Write([]byte(`{\"object\":\"list\",\"data\":[{\"object\":\"embedding\",\"index\":0,\"embedding\":[0.1]},{\"object\":\"embedding\",\"index\":1,\"embedding\":[0.2]}],\"model\":\"provider-model\"}`))\n+\t\trequire.NoError(t, err)\n+\t}))\n+\tdefer upstream.Close()\n+\n+\tmodel := &types.Model{\n+\t\tBaseModel: types.BaseModel{ID: \"test-model\"},\n+\t\tEndpoint:  upstream.URL,\n+\t}\n+\tmodelTarget := &types.ModelTarget{\n+\t\tModel:     model,\n+\t\tUpstream:  commontypes.UpstreamConfig{ID: 1, URL: upstream.URL, Enabled: true},\n+\t\tTarget:    upstream.URL,\n+\t\tModelName: \"provider-model\",\n+\t}\n+\n+\tmockCounter := mocktoken.NewMockEmbeddingTokenCounter(t)\n+\tmockCounter.EXPECT().Input(\"hello\\nworld\").Return().Once()\n+\tmockCounter.EXPECT().Embedding(mock.Anything).Maybe().Return()\n+\tmockCounter.EXPECT().Usage(mock.Anything).Maybe().Return((*token.Usage)(nil), nil)\n+\ttester.mocks.tokenCounterFactory.EXPECT().\n+\t\tNewEmbedding(token.CreateParam{Endpoint: upstream.URL, Model: \"provider-model\"}).\n+\t\tReturn(mockCounter).Once()\n+\ttester.mocks.openAIComp.EXPECT().\n+\t\tRecordUsageFromTokenUsage(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).\n+\t\tMaybe().\n+\t\tReturn(nil)\n+\n+\treq := &types.EmbeddingRequest{}\n+\treq.Model = \"provider-model\"\n+\treq.Input = openai.EmbeddingNewParamsInputUnion{OfArrayOfStrings: []string{\"hello\", \"world\"}}\n+\n+\tc.Request = httptest.NewRequest(http.MethodPost, \"/v1/embeddings\", bytes.NewReader([]byte(`{\"model\":\"test-model\",\"input\":[\"hello\",\"world\"]}`)))\n+\tc.Request.Header.Set(\"Content-Type\", \"application/json\")\n+\n+\tmeta := &types.RequestMetadata{\n+\t\tProtocol:   string(types.ProtocolChat),\n+\t\tTask:       \"embedding\",\n+\t\tModel:      \"test-model\",\n+\t\tTenantID:   \"testuuid\",\n+\t\tUserID:     \"testuser\",\n+\t\tParsedBody: req,\n+\t}\n+\th := &embeddingPipelineHandler{handler: tester.handler}\n+\trequire.NoError(t, h.Execute(c, meta, &types.RequestPlan{ModelTarget: modelTarget}))\n+}"
+  }
+ ],
+ "test_files": [
+  "aigateway/handler/embedding_handler_test.go"
+ ]
+}

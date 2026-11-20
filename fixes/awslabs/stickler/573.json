@@ -1,0 +1,33 @@
+{
+ "repo": "awslabs/stickler",
+ "number": 573,
+ "url": "https://github.com/awslabs/stickler/pull/573",
+ "title": "fix(from_json): do not force first model arm of Union[A, B, None]",
+ "merged_at": "2026-11-19T21:27:54Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -45,6 +45,16 @@ Each release links to full notes on the\n \n ### Fixed\n \n+- `StructuredModel.from_json` no longer forces the first model arm of a\n+  `Union[A, B, None]` field: a dict is now left for pydantic's union validation,\n+  so it resolves to the same arm as `model_validate`\n+  ([#505](https://github.com/awslabs/stickler/issues/505)). Before, data shaped\n+  like `B` was built as `A`, and two different `B` values could score 1.0.\n+  This also fixes a `ValidationError` that `from_json` raised on `dev` when the\n+  first arm had a required field or a `Literal` tag the data did not fit. Scores\n+  can change for pairs whose two sides resolve to different arms, and some go\n+  up, because two `StructuredModel`s of different classes are not yet scored as\n+  a false discovery.\n - **The individual-results JSONL file and the HTML report's embedded document\n   data are now valid JSON when a value is NaN or infinite.** A blank numeric\n   cell from pandas (NaN) was written as a bare `NaN` token, which JavaScript"
+  },
+  {
+   "filename": "src/stickler/structured_object_evaluator/models/configuration_helper.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -107,7 +107,10 @@ def from_json(cls, json_data: Dict[str, Any]):\n                             structured_class = ConfigurationHelper._extract_structured_class_from_optional(\n                                 annotation\n                             )\n-                            if structured_class:\n+                            # With several model arms (Union[A, B, None]) the arm\n+                            # cannot be chosen here; leave the dict for pydantic's\n+                            # own union validation instead of forcing the first arm.\n+                            if structured_class and len(union_args(annotation)) == 1:\n                                 data_copy[field_name] = (\n                                     ConfigurationHelper._process_nested_structured_data(\n                                         structured_class, nested_data"
+  },
+  {
+   "filename": "tests/structured_object_evaluator/test_from_json_union_of_models.py",
+   "status": "added",
+   "additions": 70,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,70 @@\n+\"\"\"from_json must not force the first model arm of Union[A, B, None] (#505).\"\"\"\n+\n+from typing import Annotated, Optional, Union\n+\n+from pydantic import BaseModel\n+\n+from stickler import ComparableField, StructuredModel\n+\n+\n+class Card(StructuredModel):\n+    number: Optional[str] = None\n+\n+\n+class Bank(StructuredModel):\n+    iban: Optional[str] = None\n+\n+\n+class Pay(StructuredModel):\n+    method: Union[Card, Bank, None] = ComparableField(default=None)\n+\n+\n+def test_from_json_keeps_bank_arm_for_bank_data():\n+    assert isinstance(Pay.from_json({\"method\": {\"iban\": \"DE89\"}}).method, Bank)\n+\n+\n+def test_from_json_matches_model_validate_for_union_arms():\n+    for data in ({\"method\": {\"iban\": \"DE89\"}}, {\"method\": {\"number\": \"4111\"}}):\n+        assert type(Pay.from_json(data).method) is type(Pay.model_validate(data).method)\n+\n+\n+def test_different_bank_ibans_do_not_score_one():\n+    gold = Pay.from_json({\"method\": {\"iban\": \"DE89\"}})\n+    pred = Pay.from_json({\"method\": {\"iban\": \"XXXX\"}})\n+    assert gold.compare_with(pred)[\"overall_score\"] == 0.0\n+\n+\n+def test_equal_bank_ibans_score_one():\n+    gold = Pay.from_json({\"method\": {\"iban\": \"DE89\"}})\n+    pred = Pay.from_json({\"method\": {\"iban\": \"DE89\"}})\n+    assert gold.compare_with(pred)[\"overall_score\"] == 1.0\n+\n+\n+class PlainBank(BaseModel):\n+    iban: Optional[str] = None\n+\n+\n+class PayPlain(StructuredModel):\n+    method: Union[Card, PlainBank, None] = ComparableField(default=None)\n+\n+\n+class PayAnnotated(StructuredModel):\n+    method: Union[Card, Annotated[Bank, \"m\"], None] = ComparableField(default=None)\n+\n+\n+class PayPep604(StructuredModel):\n+    method: Card | Bank | None = ComparableField(default=None)\n+\n+\n+def test_from_json_matches_model_validate_for_other_union_spellings():\n+    data = {\"method\": {\"iban\": \"DE89\"}}\n+    for cls in (PayPlain, PayAnnotated, PayPep604):\n+        assert type(cls.from_json(data).method) is type(cls.model_validate(data).method)\n+        assert type(cls.from_json(data).method) is not Card\n+\n+\n+def test_wrong_iban_scores_zero_for_other_union_spellings():\n+    for cls in (PayPlain, PayAnnotated, PayPep604):\n+        gold = cls.from_json({\"method\": {\"iban\": \"DE89\"}})\n+        pred = cls.from_json({\"method\": {\"iban\": \"XXXX\"}})\n+        assert gold.compare_with(pred)[\"overall_score\"] == 0.0"
+  }
+ ],
+ "test_files": [
+  "tests/structured_object_evaluator/test_from_json_union_of_models.py"
+ ]
+}

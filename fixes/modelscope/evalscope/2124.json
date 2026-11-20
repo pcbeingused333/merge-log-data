@@ -1,0 +1,33 @@
+{
+ "repo": "modelscope/evalscope",
+ "number": 2124,
+ "url": "https://github.com/modelscope/evalscope/pull/2124",
+ "title": "fix(bridge): report finish_reason tool_calls when the backend stops a tool-calling turn",
+ "merged_at": "2026-11-20T05:09:25Z",
+ "files": [
+  {
+   "filename": "evalscope/agent/external/bridge/sse_openai.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 4,
+   "patch": "@@ -27,7 +27,7 @@\n from evalscope.api.tool import ToolCall\n \n from ._sse_common import PING_INTERVAL_S, TEXT_CHUNK, TOOL_INPUT_CHUNK, iter_chunks\n-from .translate_openai import _split_text_and_reasoning, map_stop_reason_to_openai, unpack_openai_tool_call\n+from .translate_openai import _split_text_and_reasoning, openai_finish_reason, unpack_openai_tool_call\n \n \n def _sse(data: Dict[str, Any]) -> bytes:\n@@ -116,9 +116,7 @@ async def stream_openai_response(\n \n     # 4. final frame — finish_reason set, optional usage block.\n     final = _base_chunk(chunk_id, model_name)\n-    final['choices'][0]['finish_reason'] = map_stop_reason_to_openai(\n-        output.choices[0].stop_reason if output.choices else 'stop'\n-    )\n+    final['choices'][0]['finish_reason'] = openai_finish_reason(output)\n     if include_usage:\n         usage = output.usage\n         final['usage'] = {"
+  },
+  {
+   "filename": "evalscope/agent/external/bridge/translate_openai.py",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 2,
+   "patch": "@@ -211,8 +211,7 @@ def model_output_to_openai_response(\n         if message.tool_calls:\n             msg_payload['tool_calls'] = [_render_tool_call(tc) for tc in message.tool_calls]\n \n-    stop_reason = output.choices[0].stop_reason if output.choices else 'stop'\n-    finish_reason = map_stop_reason_to_openai(stop_reason)\n+    finish_reason = openai_finish_reason(output)\n     usage = output.usage\n     return {\n         'id': output.id or f'chatcmpl-{uuid.uuid4().hex[:24]}',\n@@ -288,3 +287,20 @@ def _split_text_and_reasoning(message: ChatMessageAssistant) -> Tuple[str, str]:\n def map_stop_reason_to_openai(reason: str) -> str:\n     \"\"\"Translate an EvalScope ``StopReason`` to its OpenAI ``finish_reason``.\"\"\"\n     return _STOP_REASON_MAP.get(reason, 'stop')\n+\n+\n+def openai_finish_reason(output: ModelOutput) -> str:\n+    \"\"\"OpenAI ``finish_reason`` for ``output``.\n+\n+    Some OpenAI-compatible backends (Gemini) finish a tool-calling turn with\n+    ``finish_reason: \"stop\"``. Clients that decide on ``finish_reason`` whether\n+    to run the tool calls would treat the turn as final, so a message that\n+    carries tool calls reports ``tool_calls`` when the original reason is\n+    ``stop``. Truncation and ``content_filter`` are left as mapped.\n+    \"\"\"\n+    if not output.choices:\n+        return map_stop_reason_to_openai('stop')\n+    choice = output.choices[0]\n+    if choice.stop_reason == 'stop' and choice.message.tool_calls:\n+        return 'tool_calls'\n+    return map_stop_reason_to_openai(choice.stop_reason)"
+  },
+  {
+   "filename": "tests/agent/external/test_openai_bridge_finish_reason.py",
+   "status": "added",
+   "additions": 58,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,58 @@\n+import asyncio\n+import json\n+\n+import pytest\n+\n+from evalscope.agent.external.bridge.sse_openai import stream_openai_response\n+from evalscope.agent.external.bridge.translate_openai import model_output_to_openai_response\n+from evalscope.api.model import ModelOutput\n+\n+\n+def _tool_call_output(stop_reason):\n+    output = ModelOutput.for_tool_call('gemini', 'read_file', {'path': 'a.py'})\n+    output.choices[0].stop_reason = stop_reason\n+    return output\n+\n+\n+def test_openai_response_reports_tool_calls_when_backend_stops_with_tool_calls():\n+    response = model_output_to_openai_response(_tool_call_output('stop'), request_model='gpt')\n+\n+    assert response['choices'][0]['message']['tool_calls']\n+    assert response['choices'][0]['finish_reason'] == 'tool_calls'\n+\n+\n+def test_openai_response_keeps_stop_without_tool_calls():\n+    output = ModelOutput.from_content('gemini', 'done')\n+\n+    assert model_output_to_openai_response(output)['choices'][0]['finish_reason'] == 'stop'\n+\n+\n+def test_openai_response_keeps_length_for_a_cut_off_tool_call():\n+    response = model_output_to_openai_response(_tool_call_output('max_tokens'))\n+\n+    assert response['choices'][0]['finish_reason'] == 'length'\n+\n+\n+def _stream_finish_reasons(stop_reason):\n+\n+    async def _go():\n+        task = asyncio.create_task(asyncio.sleep(0, result=_tool_call_output(stop_reason)))\n+        reasons = []\n+        async for chunk in stream_openai_response(task, request_model='gpt'):\n+            text = chunk.decode('utf-8').strip()\n+            if not text.startswith('data: ') or text == 'data: [DONE]':\n+                continue\n+            reason = json.loads(text[len('data: '):])['choices'][0]['finish_reason']\n+            if reason is not None:\n+                reasons.append(reason)\n+        return reasons\n+\n+    return asyncio.run(_go())\n+\n+\n+def test_openai_stream_reports_tool_calls_when_backend_stops_with_tool_calls():\n+    assert _stream_finish_reasons('stop') == ['tool_calls']\n+\n+\n+def test_openai_stream_keeps_length_for_a_cut_off_tool_call():\n+    assert _stream_finish_reasons('max_tokens') == ['length']"
+  }
+ ],
+ "test_files": [
+  "tests/agent/external/test_openai_bridge_finish_reason.py"
+ ]
+}
