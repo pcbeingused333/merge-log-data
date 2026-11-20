@@ -3,8 +3,40 @@
  "number": 22789,
  "url": "https://github.com/shopware/shopware/pull/22789",
  "state": "open",
- "reviews": [],
- "review_comments": [],
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-20T08:19:04Z",
+   "body": "That did it, thanks @pcbeingused333! The fallback template renders again, and `mediaFolder` now loads for both sides of the `??`.\n\nOne more spot I ran into, not blocking: a `for` over a filtered or conditional sequence still glues the paths. After the same fallback set, `{% for t in media.thumbnails|slice(0, 1) %}{{ t.url }}{% endfor %}` adds `cover.media.thumbnails.media.thumbnails`. Resolving the sequence like a set value fixed it when I tried it, and it would also replace the new special branch:\n\n```php\nif ($node instanceof ForNode) {\n    $source = $node->getNode('value_target')->getAttribute('name');\n    $targets = $this->getVariables([$node->getNode('seq')], $aliases);\n\n    $aliases[$source] = \\count($targets) <= 1 ? (string) (reset($targets) ?: '') : array_values($targets);\n}\n```\n\nFine with it as is too, so approving.\n"
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-20T12:50:33Z",
+   "body": "Thanks @pcbeingused333, this is a solid fix with real impact. It removes the glued ternary paths from https://github.com/shopware/shopware/issues/22779 and covers the `??` fallback case that @mkucmus raised. The measurements from Xnaff and mkucmus show byte-identical output and much lower runtime and memory. I have a few small requests before approval, none of them blocking.\n\n**PR description**\nSection 2 still says the alias is dropped when there are several paths. Please update it to describe the final behaviour: all paths are kept, and later accesses and `for` sequences resolve against each one.\n\n**Follow-ups**\n- An optional RELEASE_INFO bugfix line for product export and SEO URL template authors.\n- https://github.com/shopware/shopware/issues/19564 (partial generation) stays out of scope."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "tests/unit/Core/Framework/Adapter/Twig/TwigVariableParserTest.php",
+   "created_at": "2026-11-20T12:50:33Z",
+   "body": "The three new tests only use `assertContains` and `assertNotContains`, so they still pass if the parser emits extra unintended paths. The existing tests in this class compare the full list with `assertSame` after sorting. Please do the same here, for example for the fallback case:\n\n```php\n$expected = [\n    'product.cover.media',\n    'product.cover.media.mediaFolder.name',\n    'product.manufacturer.media',\n    'product.manufacturer.media.mediaFolder.name',\n];\nsort($variables);\nstatic::assertSame($expected, $variables);\n```"
+  },
+  {
+   "role": "contributor",
+   "path": "tests/unit/Core/Framework/Adapter/Twig/TwigVariableParserTest.php",
+   "created_at": "2026-11-20T12:50:33Z",
+   "body": "Please also cover a loop directly over a multi-path variable, such as `{% set items = product.options ?? product.parent.options %}{% for o in items %}{{ o.group.name }}{% endfor %}`. This case goes through the `else` branch and the `$aliases[$in]` fallback, not through the new `GetAttrExpression` branch. It works today and yields `product.options.group.name` and `product.parent.options.group.name`, but nothing guards it."
+  },
+  {
+   "role": "contributor",
+   "path": "src/Core/Framework/Adapter/Twig/TwigVariableParser.php",
+   "created_at": "2026-11-20T12:50:33Z",
+   "body": "In a multi-target set such as `{% set foo, bar = product.cover, product.manufacturer %}{{ foo.media.url }}`, every name gets all paths, so `foo.media.url` also yields `product.manufacturer.media.url`. That is better than trunk, which produced `product.cover.product.manufacturer.media.url`, and it only over-fetches. Mapping names to values by position would be more precise, but this is optional."
+  }
+ ],
  "comments": [
   {
    "role": "none",
@@ -30,6 +62,16 @@
    "role": "author",
    "created_at": "2026-11-18T23:27:16Z",
    "body": "Thanks for trying it, @mkucmus, and for the concrete case. The alias is no longer dropped: a `{% set %}` whose value resolves to several paths now keeps all of them, and later accesses are resolved against each one. `{% set media = product.cover.media ?? product.manufacturer.media %}{{ media.mediaFolder.name }}` now yields both `product.cover.media.mediaFolder.name` and `product.manufacturer.media.mediaFolder.name`, so `mediaFolder` is loaded again, and the bogus glued path from the original issue stays gone. Added unit tests for the fallback case and for a `{% for %}` over such a value (`media.thumbnails`), which previously glued the paths together.\n\n(Disclosure: this change was prepared with the help of an AI assistant (Claude) and submitted by a human contributor.)\n"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-20T09:52:49Z",
+   "body": "<!-- explore-openapi-snapshot-comment -->\n## OpenAPI Snapshot\n\n<!-- project-start:shopware/store-api -->\n### ℹ️ [shopware/store-api](https://explore-openapi.dev/view?project=shopware/store-api) — schema identical to base [trunk](https://explore-openapi.dev/view?project=shopware/store-api&snapshot=trunk)\n<!-- project-end:shopware/store-api -->\n<!-- project-start:shopware/admin-api -->\n### ℹ️ [shopware/admin-api](https://explore-openapi.dev/view?project=shopware/admin-api) — schema identical to base [trunk](https://explore-openapi.dev/view?project=shopware/admin-api&snapshot=trunk)\n<!-- project-end:shopware/admin-api -->"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-20T09:53:58Z",
+   "body": "## [Codecov](https://app.codecov.io/gh/shopware/shopware/pull/22789?dropdown=coverage&src=pr&el=h1&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=shopware) Report\n:white_check_mark: All modified and coverable lines are covered by tests.\n:white_check_mark: Project coverage is 72.77%. Comparing base ([`78b5f84`](https://app.codecov.io/gh/shopware/shopware/commit/78b5f849ba2ab47a68a958c22edbc73b99a09895?dropdown=coverage&el=desc&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=shopware)) to head ([`1e83d60`](https://app.codecov.io/gh/shopware/shopware/commit/1e83d60fdc58cf5717f42f74b9a6c0ae7a424ac3?dropdown=coverage&el=desc&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=shopware)).\n:warning: Report is 192 commits behind head on trunk.\n\n<details><summary>Additional details and impacted files</summary>\n\n\n\n```diff\n@@            Coverage Diff             @@\n##            trunk   #22789      +/-   ##\n==========================================\n+ Coverage   72.65%   72.77%   +0.11%     \n==========================================\n  Files        6019     6026       +7     \n  Lines      221873   222530     +657     \n  Branches    12376    12443      +67     \n==========================================\n+ Hits       161195   161938     +743     \n+ Misses      56832    56728     -104     \n- Partials     3846     3864      +18     \n```\n\n| [Flag](https://app.codecov.io/gh/shopware/shopware/pull/22789/flags?src=pr&el=flags&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=shopware) | Coverage Δ | |\n|---|---|---|\n| [jest-admin](https://app.codecov.io/gh/shopware/shopware/pull/22789/flags?src=pr&el=flag&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=shopware) | `69.73% <ø> (+0.36%)` | :arrow_up: |\n| [jest-storefront](https://app.codecov.io/gh/shopware/shopware/pull/22789/flags?src=pr&el=flag&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=shopware) | `76.84% <ø> (ø)` | |\n| [vitest-storefront-components](https://app.codecov.io/gh/shopware/shopware/pull/22789/flags?src=pr&el=flag&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=shopware) | `62.47% <ø> (ø)` | |\n\nFlags with carried forward coverage won't be shown. [Click here](https://docs.codecov.io/docs/carryforward-flags?utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=shopware#carryforward-flags-in-the-pull-request-comment) to find out more.\n</details>\n\n[:umbrella: View full report in Codecov by Harness](https://app.codecov.io/gh/shopware/shopware/pull/22789?dropdown=coverage&src=pr&el=continue&utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=shopware).   \n:loudspeaker: Have feedback on the report? [Share it here](https://about.codecov.io/codecov-pr-comment-feedback/?utm_medium=referral&utm_source=github&utm_content=comment&utm_campaign=pr+comments&utm_term=shopware).\n<details><summary> :rocket: New features to boost your workflow: </summary>\n\n- :package: [JS Bundle Analysis](https://docs.codecov.com/docs/javascript-bundle-analysis): Save yourself from yourself by tracking and limiting bundle sizes in JS merges.\n</details>"
   }
  ]
 }

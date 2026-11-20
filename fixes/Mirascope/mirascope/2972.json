@@ -1,0 +1,26 @@
+{
+ "repo": "Mirascope/mirascope",
+ "number": 2972,
+ "url": "https://github.com/Mirascope/mirascope/pull/2972",
+ "title": "fix(llm): map httpx transport errors from google-genai to Mirascope errors",
+ "merged_at": "2026-11-20T20:02:17Z",
+ "files": [
+  {
+   "filename": "python/mirascope/llm/providers/google/_utils/errors.py",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -1,5 +1,6 @@\n \"\"\"Google error handling utilities.\"\"\"\n \n+import httpx\n from google.genai.errors import (\n     ClientError as GoogleClientError,\n     ServerError as GoogleServerError,\n@@ -9,11 +10,13 @@\n     APIError,\n     AuthenticationError,\n     BadRequestError,\n+    ConnectionError,\n     NotFoundError,\n     PermissionError,\n     ProviderError,\n     RateLimitError,\n     ServerError,\n+    TimeoutError,\n )\n from ...base import ProviderErrorMap\n \n@@ -47,4 +50,7 @@ def map_google_error(e: Exception) -> type[ProviderError]:\n GOOGLE_ERROR_MAP: ProviderErrorMap = {\n     GoogleClientError: map_google_error,\n     GoogleServerError: map_google_error,\n+    # google-genai re-raises httpx transport errors once its own retries are spent\n+    httpx.TimeoutException: TimeoutError,\n+    httpx.NetworkError: ConnectionError,\n }"
+  },
+  {
+   "filename": "python/tests/llm/providers/google/test_google_provider.py",
+   "status": "modified",
+   "additions": 55,
+   "deletions": 0,
+   "patch": "@@ -4,6 +4,7 @@\n from typing import get_args\n from unittest.mock import MagicMock, patch\n \n+import httpx\n import pytest\n from google.genai import types as genai_types\n from google.genai.errors import (\n@@ -148,6 +149,60 @@ async def test_async_call_rate_limit_error() -> None:\n         assert isinstance(exc_info.value.__cause__, GoogleServerError)\n \n \n+@pytest.mark.parametrize(\n+    (\"httpx_error\", \"expected\"),\n+    [\n+        (httpx.ConnectError(\"connection refused\"), llm.ConnectionError),\n+        (httpx.ReadError(\"connection reset\"), llm.ConnectionError),\n+        (httpx.ConnectTimeout(\"connect timed out\"), llm.TimeoutError),\n+        (httpx.ReadTimeout(\"read timed out\"), llm.TimeoutError),\n+    ],\n+)\n+def test_call_httpx_transport_error(\n+    httpx_error: Exception, expected: type[llm.ProviderError]\n+) -> None:\n+    \"\"\"Test that httpx transport errors re-raised by google-genai are wrapped.\"\"\"\n+    model = llm.Model(\"google/gemini-2.0-flash\")\n+    provider = model.provider\n+    assert isinstance(provider, GoogleProvider)\n+\n+    with (\n+        patch.object(\n+            provider.client.models, \"generate_content\", side_effect=httpx_error\n+        ),\n+        pytest.raises(expected) as exc_info,\n+    ):\n+        model.call(\"test\")\n+\n+    assert exc_info.value.__cause__ is httpx_error\n+\n+\n+@pytest.mark.asyncio\n+@pytest.mark.parametrize(\n+    (\"httpx_error\", \"expected\"),\n+    [\n+        (httpx.ConnectError(\"connection refused\"), llm.ConnectionError),\n+        (httpx.ReadError(\"connection reset\"), llm.ConnectionError),\n+        (httpx.ReadTimeout(\"read timed out\"), llm.TimeoutError),\n+    ],\n+)\n+async def test_async_call_httpx_transport_error(\n+    httpx_error: Exception, expected: type[llm.ProviderError]\n+) -> None:\n+    \"\"\"Test that httpx transport errors are wrapped during async calls.\"\"\"\n+    model = llm.Model(\"google/gemini-2.0-flash\")\n+    provider = model.provider\n+    assert isinstance(provider, GoogleProvider)\n+\n+    with (\n+        patch.object(\n+            provider.client.aio.models, \"generate_content\", side_effect=httpx_error\n+        ),\n+        pytest.raises(expected),\n+    ):\n+        await model.call_async(\"test\")\n+\n+\n def test_map_google_error_not_google_error() -> None:\n     \"\"\"Test that non-Google errors return ProviderError.\"\"\"\n     result = map_google_error(Exception(\"test\"))"
+  }
+ ],
+ "test_files": [
+  "python/tests/llm/providers/google/test_google_provider.py"
+ ]
+}

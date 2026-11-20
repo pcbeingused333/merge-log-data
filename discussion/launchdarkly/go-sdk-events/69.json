@@ -5,5 +5,11 @@
  "state": "open",
  "reviews": [],
  "review_comments": [],
- "comments": []
+ "comments": [
+  {
+   "role": "member",
+   "created_at": "2026-11-20T15:54:03Z",
+   "body": "Thanks for this, and for the matching Ruby fix in launchdarkly/ruby-server-sdk#498. Dropping the whole event instead of only the metric is the right call, and the test is thorough.\n\nOne suggestion on where the check lives. Could it move to the point where the metric is supplied, `TrackMetric` and `TrackMetricCtx` in go-server-sdk (`ldclient.go`), instead of the output formatter? Those methods already reject an invalid context with a warning, and `metricValue` is a `float64`, so the same `math.IsNaN || math.IsInf` check fits there. Checking at that point has a few advantages over checking in `makeOutputEvents`:\n\n- `trackWithHooks` passes the metric to `hookRunner.RunTrack` before the event is recorded. With the check in the formatter, track hooks still see the NaN and treat the call as tracked, but the event is dropped later.\n- The formatter drops the event silently. At `TrackMetric` we can log a warning with the event name, so the application knows a measurement was rejected. The Ruby PR does this.\n- The event never enters the processor, so a context whose only event was dropped does not get an index event.\n\nThat makes this a change in go-server-sdk rather than here. If you would rather not take that on, let us know and we can make the move ourselves after this merges.\n"
+  }
+ ]
 }

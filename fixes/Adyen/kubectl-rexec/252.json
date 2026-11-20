@@ -1,0 +1,40 @@
+{
+ "repo": "Adyen/kubectl-rexec",
+ "number": 252,
+ "url": "https://github.com/Adyen/kubectl-rexec/pull/252",
+ "title": "fix(cp): allow current directory copies to new destinations",
+ "merged_at": "2026-11-20T09:16:00Z",
+ "files": [
+  {
+   "filename": "TESTING.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -26,6 +26,7 @@ The contract suite validates:\n - command, keystroke, lifecycle, user, pod, container, namespace, and client-IP audit fields\n - user and group impersonation, upstream RBAC enforcement, and direct-exec denial\n - missing and completed targets, plus pod-running timeout behavior\n+- `cp` downloads of a single file and of a directory's contents (`pod:dir/.`) into a new local destination, plus upload rejection\n \n ## Unit Tests\n "
+  },
+  {
+   "filename": "plugin/cp.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 2,
+   "patch": "@@ -545,8 +545,9 @@ func computeSafeTarget(name, destPath, baseAbs, srcBase string, destIsDir bool)\n \t\t// by `tar cf - -C <dir> -- <srcBase>`, so every legitimate entry is\n \t\t// exactly srcBase or lives under it. Anything else (e.g. \"foobar\" or\n \t\t// \"foo2/evil\", which filepath.Rel would map to \"../...\") is a crafted\n-\t\t// stream trying to write siblings of the requested file.\n-\t\tif cleanName != srcBase && !strings.HasPrefix(cleanName, srcBase+\"/\") {\n+\t\t// stream trying to write siblings of the requested file. For \".\",\n+\t\t// every relative entry is a child; path.Clean removes its \"./\" prefix.\n+\t\tif srcBase != \".\" && cleanName != srcBase && !strings.HasPrefix(cleanName, srcBase+\"/\") {\n \t\t\treturn \"\", fmt.Errorf(errPathTraversal, name)\n \t\t}\n \t\trel, err := filepath.Rel(srcBase, cleanName)"
+  },
+  {
+   "filename": "plugin/cp_test.go",
+   "status": "modified",
+   "additions": 32,
+   "deletions": 0,
+   "patch": "@@ -204,6 +204,38 @@ func TestExtractTarDirectory(t *testing.T) {\n \t})\n }\n \n+func TestExtractTarCurrentDirectoryToNewDestination(t *testing.T) {\n+\trunExtractTarScenarioCase(t, extractTarScenario{\n+\t\tname:       \"current directory\",\n+\t\tfiles:      map[string]string{\"./report.txt\": content1Str, \"./subdir/data.txt\": content2Str},\n+\t\tsrcBase:    \".\",\n+\t\trenameDest: \"downloaded\",\n+\t\tassertions: func(t *testing.T, tmpDir string, destPath string) {\n+\t\t\tfor name, want := range map[string]string{\"report.txt\": content1Str, \"subdir/data.txt\": content2Str} {\n+\t\t\t\tcontent, err := os.ReadFile(filepath.Join(destPath, name))\n+\t\t\t\tif err != nil {\n+\t\t\t\t\tt.Fatalf(\"failed to read extracted file %q: %v\", name, err)\n+\t\t\t\t}\n+\t\t\t\tif string(content) != want {\n+\t\t\t\t\tt.Errorf(\"content of %q = %q, want %q\", name, content, want)\n+\t\t\t\t}\n+\t\t\t}\n+\t\t},\n+\t})\n+}\n+\n+func TestExtractTarCurrentDirectoryRejectsTraversal(t *testing.T) {\n+\tfor _, name := range []string{\"../escape\", \"./../../escape\", \"/escape\", \"..\"} {\n+\t\tt.Run(name, func(t *testing.T) {\n+\t\t\tdest := filepath.Join(t.TempDir(), \"downloaded\")\n+\t\t\terr := newDefaultCopyOptions().extractTar(createTestTar(t, map[string]string{name: contentStr}), dest, \".\")\n+\t\t\tif err == nil || !strings.Contains(err.Error(), traversalErrorMsg) {\n+\t\t\t\tt.Fatalf(\"expected path traversal error for %q, got %v\", name, err)\n+\t\t\t}\n+\t\t})\n+\t}\n+}\n+\n func TestExtractTarRenameDirectory(t *testing.T) {\n \trunExtractTarScenarioCase(t, extractTarScenario{\n \t\tname:       \"rename directory\","
+  },
+  {
+   "filename": "scripts/e2e.sh",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -157,6 +157,19 @@ if ! grep -q \"${token}\" \"${TMP_COPY_DIR}/$(basename \"${remote_file}\")\"; then\n   exit 1\n fi\n \n+echo \"checking rexec cp download of a directory's contents (pod:dir/.)...\"\n+remote_dir=\"/tmp/rexec-cp-dir-${token}\"\n+kubectl rexec --context \"${KUBE_CONTEXT}\" exec \"${POD}\" -n \"${NAMESPACE}\" -c primary -- \\\n+  sh -c \"mkdir -p '${remote_dir}/subdir' && printf '%s' '${token}' > '${remote_dir}/report.txt' && printf '%s' '${token}' > '${remote_dir}/subdir/data.txt'\"\n+dot_dest=\"${TMP_COPY_DIR}/dot-dest\"\n+kubectl rexec --context \"${KUBE_CONTEXT}\" cp \"${POD}:${remote_dir}/.\" \"${dot_dest}\" -n \"${NAMESPACE}\" -c primary\n+for copied in \"${dot_dest}/report.txt\" \"${dot_dest}/subdir/data.txt\"; do\n+  if ! grep -q \"${token}\" \"${copied}\"; then\n+    echo \"error: ${copied} missing or does not contain expected token\" >&2\n+    exit 1\n+  fi\n+done\n+\n echo \"checking rexec cp upload rejection...\"\n upload_file=\"${TMP_COPY_DIR}/upload-${token}\"\n printf '%s' \"${token}\" > \"${upload_file}\""
+  }
+ ],
+ "test_files": [
+  "plugin/cp_test.go"
+ ]
+}

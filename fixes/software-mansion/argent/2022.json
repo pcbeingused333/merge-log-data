@@ -1,0 +1,26 @@
+{
+ "repo": "software-mansion/argent",
+ "number": 2022,
+ "url": "https://github.com/software-mansion/argent/pull/2022",
+ "title": "fix(installer): remove dangling links at bundled rule/agent paths on uninstall",
+ "merged_at": "2026-11-20T10:24:34Z",
+ "files": [
+  {
+   "filename": "packages/argent-installer/src/uninstall.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -124,8 +124,11 @@ export function removeBundledContent(sourceDir: string, targetDir: string): Bund\n   for (const relativePath of files) {\n     const targetPath = path.join(targetDir, relativePath);\n     try {\n-      if (!fs.existsSync(targetPath)) continue;\n-      if (fs.lstatSync(targetPath).isDirectory()) continue;\n+      // lstat, not existsSync: a link to another managed target (e.g.\n+      // .opencode/agents/x.md -> ../../.claude/agents/x.md) dangles once that\n+      // target is cleaned first, and existsSync would report it missing.\n+      const entry = fs.lstatSync(targetPath, { throwIfNoEntry: false });\n+      if (!entry || entry.isDirectory()) continue;\n       removePath(targetPath);\n       removedPaths.push(relativePath);\n     } catch {"
+  },
+  {
+   "filename": "packages/argent-installer/test/uninstall.test.ts",
+   "status": "modified",
+   "additions": 26,
+   "deletions": 0,
+   "patch": "@@ -562,6 +562,32 @@ describe(\"uninstall — prune bundled content\", () => {\n     expect(fs.readdirSync(linkedDir)).toEqual([\"notes.md\"]);\n   });\n \n+  it(\"removes a bundled file link left dangling by an earlier target's cleanup\", () => {\n+    // .opencode/agents/<file> links to the Claude copy, which uninstall removes\n+    // first, so by the time opencode is cleaned the link is dangling.\n+    const bundledDir = path.join(tmpDir, \"bundled\");\n+    const claudeDir = path.join(tmpDir, \".claude\", \"agents\");\n+    const opencodeDir = path.join(tmpDir, \".opencode\", \"agents\");\n+\n+    writeFile(path.join(bundledDir, \"argent-agent.md\"));\n+    writeFile(path.join(claudeDir, \"argent-agent.md\"), \"argent\");\n+    fs.mkdirSync(opencodeDir, { recursive: true });\n+    fs.symlinkSync(\n+      path.join(\"..\", \"..\", \".claude\", \"agents\", \"argent-agent.md\"),\n+      path.join(opencodeDir, \"argent-agent.md\")\n+    );\n+\n+    expect(removeBundledContent(bundledDir, claudeDir).removedPaths).toEqual([\"argent-agent.md\"]);\n+    // Dangling now: gone for existsSync, present for lstat.\n+    expect(fs.existsSync(path.join(opencodeDir, \"argent-agent.md\"))).toBe(false);\n+\n+    const result = removeBundledContent(bundledDir, opencodeDir);\n+\n+    expect(result).toEqual({ removedPaths: [\"argent-agent.md\"], removedRoot: true });\n+    expect(fs.existsSync(opencodeDir)).toBe(false);\n+    expect(fs.existsSync(path.join(tmpDir, \".opencode\"))).toBe(false);\n+  });\n+\n   it(\"handles missing source or target directories gracefully\", () => {\n     const result = removeBundledContent(path.join(tmpDir, \"missing\"), path.join(tmpDir, \"target\"));\n     expect(result).toEqual({ removedPaths: [], removedRoot: false });"
+  }
+ ],
+ "test_files": [
+  "packages/argent-installer/test/uninstall.test.ts"
+ ]
+}

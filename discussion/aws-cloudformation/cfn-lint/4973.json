@@ -5,5 +5,11 @@
  "state": "open",
  "reviews": [],
  "review_comments": [],
- "comments": []
+ "comments": [
+  {
+   "role": "contributor",
+   "created_at": "2026-11-20T19:20:53Z",
+   "body": "The data here is right. Every region in the enum matches `describe-orderable-db-instance-options`, and what you've added lines up exactly: `x2iezn` in us-east-1 and us-west-2 only, and `x2iedn` filling the last gap in ap-southeast-1. Changing the generator alongside the JSON was the right call — without it the next `update_specs_from_pricing.py` run would have quietly wiped the file back. Running your generator against the Pricing API reproduces the committed JSON byte-for-byte, and the per-region map avoids the false negatives a global `default=` would have created.\n\nTwo things before this goes in.\n\nAdd a test that these classes still *fire* in a region that doesn't offer them — `db.x2iezn.2xlarge` in `eu-west-1` should give 1 error. Right now every new case asserts silence, so if someone later replaces the per-region map with a global default nothing in the suite complains, and that's the exact mistake this fix exists to avoid.\n\nAdd a test for the generator change too. `test/unit/module/maintenance/test_update_specs_from_pricing.py::test_main_adds_serverless_to_docdb` is the pattern — mock `get_paginator` and `write_output`, call `main()`, assert `x2iezn` lands in us-east-1 and us-west-2 and nowhere else.\n\nOne note for the description rather than the code: both `x2iezn` and the ap-southeast-1 `x2iedn` are only orderable on engine `1.1.2.0`, and E3635 has no engine-version dimension, so on a current engine these will now pass lint and still fail to deploy. That's the trade we want — we'd rather miss than block a valid template — but it's worth writing down. Also worth correcting the \"same approach as #4761\" line, since that one seeds every region and this one deliberately doesn't.\n"
+  }
+ ]
 }

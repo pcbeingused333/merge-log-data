@@ -1,0 +1,41 @@
+{
+ "repo": "fleetdm/fleet",
+ "number": 58594,
+ "url": "https://github.com/fleetdm/fleet/pull/58594",
+ "title": "fix: report stored labels and configuration in edited_app_store_app activity",
+ "merged_at": "2026-11-20T12:05:23Z",
+ "files": [
+  {
+   "filename": "changes/58486-edited-app-store-app-activity-stored-settings",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+- Fixed a bug where editing an App Store app version through the API with only some fields logged an activity without the version's labels or configuration."
+  },
+  {
+   "filename": "ee/server/service/vpp.go",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 2,
+   "patch": "@@ -2046,7 +2046,24 @@ func (svc *Service) UpdateAppStoreApp(ctx context.Context, titleID uint, teamID\n \t\t}\n \t}\n \n-\tactLabelsInclAny, actLabelsExclAny, actLabelsInclAll := activitySoftwareLabelsFromValidatedLabels(validatedLabels)\n+\t// Build the activity's labels and configuration from the pre-update read and the request, not from\n+\t// the re-read above (which can hit a lagging replica): a partial edit keeps the stored values.\n+\tactLabelsInclAny, actLabelsExclAny, actLabelsInclAll := activitySoftwareLabelsFromSoftwareScopeLabels(meta.LabelsIncludeAny, meta.LabelsExcludeAny, meta.LabelsIncludeAll)\n+\tif validatedLabels != nil {\n+\t\tactLabelsInclAny, actLabelsExclAny, actLabelsInclAll = activitySoftwareLabelsFromValidatedLabels(validatedLabels)\n+\t}\n+\tactConfiguration := payload.Configuration\n+\tif actConfiguration == nil && len(meta.Configuration) > 0 {\n+\t\tactConfiguration = meta.Configuration\n+\t\tswitch meta.Platform {\n+\t\tcase fleet.IOSPlatform, fleet.IPadOSPlatform:\n+\t\t\twrapped, err := json.Marshal(string(meta.Configuration))\n+\t\t\tif err != nil {\n+\t\t\t\treturn nil, nil, ctxerr.Wrap(ctx, err, \"wrapping configuration for activity\")\n+\t\t\t}\n+\t\t\tactConfiguration = wrapped\n+\t\t}\n+\t}\n \n \tact := fleet.ActivityEditedAppStoreApp{\n \t\tVPPToken:            actVPPToken,\n@@ -2062,7 +2079,7 @@ func (svc *Service) UpdateAppStoreApp(ctx context.Context, titleID uint, teamID\n \t\tLabelsIncludeAll:    actLabelsInclAll,\n \t\tSoftwareIconURL:     meta.IconURL,\n \t\tSoftwareDisplayName: updatedAppMeta.DisplayName,\n-\t\tConfiguration:       payload.Configuration,\n+\t\tConfiguration:       actConfiguration,\n \t}\n \n \tact.VersionName = updatedAppMeta.VersionName"
+  },
+  {
+   "filename": "ee/server/service/vpp_test.go",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -1550,6 +1550,35 @@ func TestUpdateAppStoreAppActivityToken(t *testing.T) {\n \t})\n }\n \n+func TestUpdateAppStoreAppActivityKeepsStoredSettings(t *testing.T) {\n+\tt.Parallel()\n+\tctx := viewer.NewContext(t.Context(), viewer.Viewer{User: &fleet.User{GlobalRole: new(fleet.RoleAdmin)}})\n+\n+\tds := new(mock.Store)\n+\tsvc := newTestService(t, ds)\n+\tcalls := 0\n+\tds.GetAppStoreAppVersionsByTeamAndTitleIDFunc = func(context.Context, uint, uint) ([]*fleet.VPPAppStoreApp, error) {\n+\t\tcalls++\n+\t\tapp := &fleet.VPPAppStoreApp{AdamID: \"100\", Platform: fleet.IOSPlatform, Name: \"Canva\", VPPAppsTeamsID: 1}\n+\t\tif calls == 1 {\n+\t\t\tapp.Configuration = json.RawMessage(`<dict></dict>`)\n+\t\t\tapp.LabelsIncludeAny = []fleet.SoftwareScopeLabel{{LabelID: 3, LabelName: \"Staging\"}}\n+\t\t}\n+\t\t// later reads simulate a lagging replica that still shows no labels or configuration\n+\t\treturn []*fleet.VPPAppStoreApp{app}, nil\n+\t}\n+\tds.InsertVPPAppWithTeamFunc = func(_ context.Context, app *fleet.VPPApp, _ *uint, _ *uint) (*fleet.VPPApp, error) {\n+\t\treturn &fleet.VPPApp{AppTeamID: 1}, nil\n+\t}\n+\tds.GetVPPTokenFunc = func(context.Context, uint) (*fleet.VPPTokenDB, error) { return nil, nil }\n+\n+\t// A partial edit (no labels, no configuration) still reports the stored ones, taken from the pre-update read.\n+\t_, act, err := svc.UpdateAppStoreApp(ctx, 5, nil, fleet.AppStoreAppUpdatePayload{SelfService: new(true)})\n+\trequire.NoError(t, err)\n+\trequire.Equal(t, []fleet.ActivitySoftwareLabel{{ID: 3, Name: \"Staging\"}}, act.LabelsIncludeAny)\n+\trequire.JSONEq(t, `\"<dict></dict>\"`, string(act.Configuration))\n+}\n+\n const batchVPPTeamName = \"📱 Mobile\"\n \n // batchVPPFixture wires BatchAssociateVPPApps for fleet 7 with fake Apple VPP"
+  },
+  {
+   "filename": "server/service/integration_software_titles_test.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -255,6 +255,7 @@ func (s *integrationMDMTestSuite) TestSoftwareTitleDisplayNames() {\n \t}, http.StatusOK, &clr)\n \n \tlbl1Name := clr.Label.Name\n+\tlbl1ID := clr.Label.ID\n \n \tclr = fleet.CreateLabelResponse{}\n \ts.DoJSON(\"POST\", \"/api/latest/fleet/labels\", fleet.CreateLabelRequest{\n@@ -264,6 +265,7 @@ func (s *integrationMDMTestSuite) TestSoftwareTitleDisplayNames() {\n \t}, http.StatusOK, &clr)\n \n \tlbl2Name := clr.Label.Name\n+\tlbl2ID := clr.Label.ID\n \n \tvar addAppResp addAppStoreAppResponse\n \taddAppReq := &addAppStoreAppRequest{\n@@ -324,9 +326,10 @@ func (s *integrationMDMTestSuite) TestSoftwareTitleDisplayNames() {\n \t    \"fleet_id\": %d,\n \t\t\"self_service\": false,\n \t\t\"software_title_id\": %d,\n-\t\t\"software_display_name\": \"%s\"\n+\t\t\"software_display_name\": \"%s\",\n+\t\t\"labels_include_any\": [{\"id\": %d, \"name\": \"%s\"}, {\"id\": %d, \"name\": \"%s\"}]\n \t}`,\n-\t\tmacOSApp.AdamID, stResp.SoftwareTitle.Name, macOSApp.IconURL, string(macOSApp.Platform), team.Name, team.ID, stResp.SoftwareTitle.ID, *updateAppReq.DisplayName)\n+\t\tmacOSApp.AdamID, stResp.SoftwareTitle.Name, macOSApp.IconURL, string(macOSApp.Platform), team.Name, team.ID, stResp.SoftwareTitle.ID, *updateAppReq.DisplayName, lbl1ID, lbl1Name, lbl2ID, lbl2Name)\n \ts.lastActivityMatches(fleet.ActivityEditedAppStoreApp{}.ActivityName(), withVPPToken(t, activityData, tok), 0)\n \n \tupdateAppReq = &updateAppStoreAppRequest{TeamID: &team.ID, SelfService: ptr.Bool(false), DisplayName: ptr.String(\"MacOSAppStoreAppUpdated2\")}"
+  }
+ ],
+ "test_files": [
+  "ee/server/service/vpp_test.go",
+  "server/service/integration_software_titles_test.go"
+ ]
+}

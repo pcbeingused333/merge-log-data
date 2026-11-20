@@ -1,0 +1,26 @@
+{
+ "repo": "aws-cloudformation/cfn-lint",
+ "number": 4969,
+ "url": "https://github.com/aws-cloudformation/cfn-lint/pull/4969",
+ "title": "fix(W1040): report resolved Fn::ToJsonString errors under W1040",
+ "merged_at": "2026-11-20T18:56:16Z",
+ "files": [
+  {
+   "filename": "src/cfnlint/rules/functions/ToJsonString.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -40,6 +40,9 @@ def fn_tojsonstring(\n             )\n             return\n \n+        resolved_rule = self.child_rules[self.resolved_rule]\n         for err in super().validate(validator, s, instance, schema):\n-            err.rule = self\n+            # keep resolved-value errors under the W1040 child rule\n+            if resolved_rule is None or err.rule is not resolved_rule:\n+                err.rule = self\n             yield err"
+  },
+  {
+   "filename": "test/unit/rules/functions/test_tojsonstring.py",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -3,10 +3,12 @@\n SPDX-License-Identifier: MIT-0\n \"\"\"\n \n+import json\n from collections import deque\n \n import pytest\n \n+from cfnlint.api import lint\n from cfnlint.context.context import Transforms\n from cfnlint.jsonschema import CfnTemplateValidator, ValidationError\n from cfnlint.rules.functions.Ref import Ref\n@@ -154,3 +156,20 @@ def test_validate(name, instance, schema, context_evolve, expected, rule, contex\n     )(context=context, cfn=cfn)\n     errs = list(rule.fn_tojsonstring(validator, schema, instance, {}))\n     assert errs == expected, f\"Test {name!r} got {errs!r}\"\n+\n+\n+def test_resolved_errors_use_w1040():\n+    template = {\n+        \"AWSTemplateFormatVersion\": \"2010-09-09\",\n+        \"Transform\": \"AWS::LanguageExtensions\",\n+        \"Resources\": {\n+            \"Queue\": {\n+                \"Type\": \"AWS::SQS::Queue\",\n+                \"Properties\": {\n+                    \"VisibilityTimeout\": {\"Fn::ToJsonString\": [1, 2]},\n+                },\n+            },\n+        },\n+    }\n+    matches = lint(json.dumps(template), regions=[\"us-east-1\"])\n+    assert [m.rule.id for m in matches] == [\"W1040\"]"
+  }
+ ],
+ "test_files": [
+  "test/unit/rules/functions/test_tojsonstring.py"
+ ]
+}

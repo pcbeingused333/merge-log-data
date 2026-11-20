@@ -3,8 +3,34 @@
  "number": 663,
  "url": "https://github.com/grafana/ai-sdk/pull/663",
  "state": "open",
- "reviews": [],
- "review_comments": [],
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-20T17:30:24Z",
+   "body": "Hey @pcbeingused333! Thanks for the contribution. Would you mind signing the CLA? I left a couple notes, but it looks good"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "collaborator",
+   "path": "providers/openai/normalize_json_schema.go",
+   "created_at": "2026-11-20T17:30:24Z",
+   "body": "optional: upstream checks `propertyNames.type != null`, so `{\"type\": null}` is stripped with the warning there but still rejected here. Checking the value instead of key presence matches it exactly (a nil map index already returns nil):\n\n```suggestion\n\t\t\tif typeValue := namedSchema[\"type\"]; !isSchema || (typeValue != nil && typeValue != \"string\") {\n```"
+  },
+  {
+   "role": "collaborator",
+   "path": "providers/openai/normalize_json_schema_compatibility_test.go",
+   "created_at": "2026-11-20T17:30:24Z",
+   "body": "optional: `NotContains` would still pass if neighbouring keywords were dropped. A struct table with the expected output (plus upstream's `minLength` case, and `type: null` if you take the suggestion above) pins that down:\n\n```suggestion\nfunc TestNormalizeOpenAIJSONSchema_UntypedPropertyNamesAreRemovedWithWarning(t *testing.T) {\n\tfor _, tc := range []struct {\n\t\tname, schema, want string\n\t}{\n\t\t{\"enum\", `{\"type\":\"object\",\"propertyNames\":{\"enum\":[\"a\",\"b\"]}}`, `{\"type\":\"object\"}`},\n\t\t{\"pattern\", `{\"type\":\"object\",\"propertyNames\":{\"pattern\":\"^[a-z]+$\"}}`, `{\"type\":\"object\"}`},\n\t\t{\"min length\", `{\"type\":\"object\",\"propertyNames\":{\"minLength\":1},\"additionalProperties\":{\"type\":\"number\"}}`, `{\"type\":\"object\",\"additionalProperties\":{\"type\":\"number\"}}`},\n\t\t{\"null type\", `{\"type\":\"object\",\"propertyNames\":{\"type\":null}}`, `{\"type\":\"object\"}`},\n\t\t{\"nested pattern\", `{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"object\",\"propertyNames\":{\"pattern\":\"^[a-z]+$\"}}}}`, `{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"object\"}}}`},\n\t} {\n\t\tt.Run(tc.name, func(t *testing.T) {\n\t\t\tgot, warnings, err := normalizeOpenAIJSONSchema(json.RawMessage(tc.schema))\n\t\t\trequire.NoError(t, err)\n\t\t\tencoded, err := json.Marshal(got)\n\t\t\trequire.NoError(t, err)\n\t\t\tassert.JSONEq(t, tc.want, string(encoded))\n\t\t\trequire.Len(t, warnings, 1)\n\t\t\tassert.Equal(t, \"JSON Schema propertyNames\", warnings[0].Feature)\n\t\t})\n\t}\n}\n```"
+  },
+  {
+   "role": "collaborator",
+   "path": "providers/openai/normalize_json_schema.go",
+   "created_at": "2026-11-20T17:30:24Z",
+   "body": "optional: the \"OpenAI Responses schema normalization\" requirement in `openspec/specs/openai-responses-provider/spec.md` only talks about \"string-schema\" `propertyNames`, so it could use a scenario for this rule, e.g. after \"Null property names are removed without warning\":\n\n```markdown\n#### Scenario: Untyped property names are treated as string schemas\n- **WHEN** a JSON response or function-tool schema contains an object `propertyNames` schema without a `type`, including in a nested schema\n- **THEN** the request omits that `propertyNames` keyword and returns the single `compatibility` warning for that schema\n```"
+  }
+ ],
  "comments": [
   {
    "role": "bot",

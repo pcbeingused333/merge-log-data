@@ -1,0 +1,26 @@
+{
+ "repo": "recurly/recurly-js",
+ "number": 1013,
+ "url": "https://github.com/recurly/recurly-js/pull/1013",
+ "title": "fix(google-pay): isolate shared payment callbacks",
+ "merged_at": "2026-11-20T17:38:25Z",
+ "files": [
+  {
+   "filename": "lib/recurly/google-pay/pay-with-google.js",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 3,
+   "patch": "@@ -39,9 +39,8 @@ function createButton (\n }\n \n const payWithGoogle = ({ paymentOptions, isReadyToPayRequest, paymentDataRequest, buttonOptions }) => {\n-  const { paymentDataCallbacks } = paymentOptions;\n-\n-  if (paymentDataCallbacks) {\n+  if (paymentOptions.paymentDataCallbacks) {\n+    const paymentDataCallbacks = paymentOptions.paymentDataCallbacks = { ...paymentOptions.paymentDataCallbacks };\n     const { onPaymentAuthorized, onPaymentDataChanged } = paymentDataCallbacks;\n     const callbackIntents = paymentDataRequest.callbackIntents = [];\n "
+  },
+  {
+   "filename": "test/unit/google-pay/google-pay.test.js",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 2,
+   "patch": "@@ -553,7 +553,7 @@ function googlePayTest (integrationType) {\n           });\n \n           nextTick(() => assertDone(done, () => {\n-            assert.equal(window.google.payments.api.PaymentsClient.getCall(0).args[0].paymentDataCallbacks, callbacks);\n+            assert.deepEqual(window.google.payments.api.PaymentsClient.getCall(0).args[0].paymentDataCallbacks, callbacks);\n             const { callbackIntents } = window.google.payments.api.PaymentsClient.prototype.prefetchPaymentData.getCall(0).args[0];\n             assert.deepEqual(callbackIntents, ['SHIPPING_ADDRESS']);\n           }));\n@@ -571,7 +571,7 @@ function googlePayTest (integrationType) {\n           });\n \n           nextTick(() => assertDone(done, () => {\n-            assert.equal(window.google.payments.api.PaymentsClient.getCall(0).args[0].paymentDataCallbacks, callbacks);\n+            assert.deepEqual(window.google.payments.api.PaymentsClient.getCall(0).args[0].paymentDataCallbacks, callbacks);\n             const { callbackIntents } = window.google.payments.api.PaymentsClient.prototype.prefetchPaymentData.getCall(0).args[0];\n             assert.deepEqual(callbackIntents, ['SHIPPING_OPTION']);\n           }));\n@@ -590,6 +590,40 @@ function googlePayTest (integrationType) {\n             };\n           });\n \n+          it('does not mutate the supplied callbacks', async function () {\n+            const onPaymentAuthorized = this.sandbox.stub().returns({});\n+            const callbacks = { onPaymentAuthorized };\n+            const emitter = this.recurly.GooglePay({ ...this.googlePayOpts, callbacks });\n+            await new Promise(resolve => emitter.on('ready', resolve));\n+\n+            assert.equal(callbacks.onPaymentAuthorized, onPaymentAuthorized);\n+          });\n+\n+          it('only tokenizes the active instance when callbacks are shared', async function () {\n+            const onPaymentAuthorized = this.sandbox.stub().returns({});\n+            const callbacks = { onPaymentAuthorized };\n+            const firstToken = this.sandbox.spy();\n+            const secondToken = this.sandbox.spy();\n+            const first = this.recurly.GooglePay({ ...this.googlePayOpts, callbacks });\n+            first.on('token', firstToken);\n+            await new Promise(resolve => first.on('ready', resolve));\n+            const second = this.recurly.GooglePay({ ...this.googlePayOpts, callbacks, gatewayCode: 'SECOND_GATEWAY' });\n+            second.on('token', secondToken);\n+            await new Promise(resolve => second.on('ready', resolve));\n+\n+            const client = window.google.payments.api.PaymentsClient;\n+            const paymentData = await client.prototype.loadPaymentData();\n+            const result = await client.getCall(1).args[0].paymentDataCallbacks.onPaymentAuthorized(paymentData);\n+\n+            assert.equal(result.transactionState, 'SUCCESS');\n+            assert.equal(this.recurly.request.post.callCount, 1);\n+            assert.equal(this.recurly.request.post.firstCall.args[0].route, '/google_pay/token');\n+            assert.equal(firstToken.callCount, 0);\n+            assert.equal(secondToken.callCount, 1);\n+            assert.equal(onPaymentAuthorized.callCount, 1);\n+            assert.equal(onPaymentAuthorized.firstCall.args[0].recurlyToken.id, 'TOKEN_123');\n+          });\n+\n           it('handles the payment authorized intent', function (done) {\n             const callbacks = { onPaymentAuthorized: () => {} };\n             this.recurly.GooglePay({"
+  }
+ ],
+ "test_files": [
+  "test/unit/google-pay/google-pay.test.js"
+ ]
+}

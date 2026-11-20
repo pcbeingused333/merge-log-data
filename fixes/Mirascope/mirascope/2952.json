@@ -1,0 +1,26 @@
+{
+ "repo": "Mirascope/mirascope",
+ "number": 2952,
+ "url": "https://github.com/Mirascope/mirascope/pull/2952",
+ "title": "fix(llm): look up OpenAI Responses model capabilities by base model name",
+ "merged_at": "2026-11-20T20:06:34Z",
+ "files": [
+  {
+   "filename": "python/mirascope/llm/providers/openai/responses/_utils/encode.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 2,
+   "patch": "@@ -399,7 +399,7 @@ def encode_request(\n \n     openai_tools = [_convert_tool_to_tool_param(tool) for tool in tools.tools]\n \n-    model_supports_strict = model_id not in MODELS_WITHOUT_JSON_SCHEMA_SUPPORT\n+    model_supports_strict = base_model_name not in MODELS_WITHOUT_JSON_SCHEMA_SUPPORT\n     default_mode = \"strict\" if model_supports_strict else \"tool\"\n \n     format = resolve_format(format, default_mode=default_mode)\n@@ -429,7 +429,8 @@ def encode_request(\n                     name=FORMAT_TOOL_NAME,\n                 )\n         elif (\n-            format.mode == \"json\" and model_id not in MODELS_WITHOUT_JSON_OBJECT_SUPPORT\n+            format.mode == \"json\"\n+            and base_model_name not in MODELS_WITHOUT_JSON_OBJECT_SUPPORT\n         ):\n             kwargs[\"text\"] = {\"format\": ResponseFormatJSONObject(type=\"json_object\")}\n "
+  },
+  {
+   "filename": "python/tests/llm/providers/openai/test_responses_encoding.py",
+   "status": "modified",
+   "additions": 47,
+   "deletions": 0,
+   "patch": "@@ -312,6 +312,53 @@ class Book(BaseModel):\n     assert format.schema == schema_before\n \n \n+@pytest.mark.parametrize(\n+    \"model_id\",\n+    [\n+        \"openai/gpt-4-turbo:responses\",\n+        \"openai/gpt-4:responses\",\n+        \"openai/gpt-3.5-turbo:responses\",\n+        \"openai/chatgpt-4o-latest:responses\",\n+    ],\n+)\n+def test_default_format_mode_is_tool_for_models_without_json_schema(\n+    model_id: str,\n+) -> None:\n+    \"\"\"The `:responses` suffix must not hide a model from the capability sets.\"\"\"\n+\n+    class Book(BaseModel):\n+        title: str\n+\n+    _, _, kwargs = encode_request(\n+        model_id=cast(Any, model_id),\n+        messages=[llm.messages.user(\"Recommend a book\")],\n+        format=Book,\n+        tools=Toolkit(None),\n+        params={},\n+    )\n+\n+    assert \"text\" not in kwargs\n+    assert cast(dict[str, Any], kwargs)[\"tool_choice\"][\"type\"] == \"function\"\n+\n+\n+def test_json_format_omits_json_object_for_models_without_it() -> None:\n+    class Book(BaseModel):\n+        title: str\n+\n+    format = llm.format(Book, mode=\"json\")\n+    assert format is not None\n+\n+    _, _, kwargs = encode_request(\n+        model_id=\"openai/gpt-4:responses\",\n+        messages=[llm.messages.user(\"Recommend a book\")],\n+        format=format,\n+        tools=Toolkit(None),\n+        params={},\n+    )\n+\n+    assert \"text\" not in kwargs\n+\n+\n def test_reasoning_model_skips_sampling_params(\n     caplog: pytest.LogCaptureFixture,\n ) -> None:"
+  }
+ ],
+ "test_files": [
+  "python/tests/llm/providers/openai/test_responses_encoding.py"
+ ]
+}

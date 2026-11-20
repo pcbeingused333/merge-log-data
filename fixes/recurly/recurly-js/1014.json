@@ -1,0 +1,26 @@
+{
+ "repo": "recurly/recurly-js",
+ "number": 1014,
+ "url": "https://github.com/recurly/recurly-js/pull/1014",
+ "title": "fix(paypal): return billing token approval promise",
+ "merged_at": "2026-11-20T17:39:04Z",
+ "files": [
+  {
+   "filename": "lib/recurly/paypal/strategy/complete.js",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -108,7 +108,7 @@ export class CompleteStrategy extends PayPalStrategy {\n             const data = { approval_token_id: vaultSetupToken };\n             if (this.config.gatewayCode) data.gateway_code = this.config.gatewayCode;\n \n-            this.recurly.request.post({\n+            return this.recurly.request.post({\n               route: PATHS.BILLING_TOKENS,\n               data\n             }).then(token => this.emit('token', token));"
+  },
+  {
+   "filename": "test/unit/paypal/strategy/complete.test.js",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -524,6 +524,33 @@ describe('CompleteStrategy', function () {\n     });\n   });\n \n+  it('returns billing token failures to the SDK error handler', async function () {\n+    const paypal = this.initPaypal();\n+    await this.paypalInitialized();\n+\n+    const expected = new Error('billing token request failed');\n+    const errorSpy = sinon.spy();\n+    const tokenSpy = sinon.spy();\n+    paypal.on('error', errorSpy);\n+    paypal.on('token', tokenSpy);\n+\n+    let rejectRequest;\n+    this.sandbox.stub(this.recurly.request, 'post').returns(new Promise((resolve, reject) => {\n+      rejectRequest = reject;\n+    }));\n+    const { onApprove, onError } = this.paypalSdkStub.Buttons.getCall(0).firstArg;\n+    const approval = onApprove({ vaultSetupToken: 'approved-setup-token' });\n+\n+    assert(approval && typeof approval.then === 'function', 'onApprove must return the tokenization promise');\n+    // The SDK forwards rejected approval callbacks to onError.\n+    const handled = approval.catch(onError);\n+    rejectRequest(expected);\n+    await handled;\n+\n+    assert(errorSpy.calledOnceWithExactly(expected));\n+    assert(tokenSpy.notCalled);\n+  });\n+\n   it('passes gatewayCode to the billing token request', function (done) {\n     const { target } = this;\n     const gatewayCode = 'test-gateway-code';"
+  }
+ ],
+ "test_files": [
+  "test/unit/paypal/strategy/complete.test.js"
+ ]
+}

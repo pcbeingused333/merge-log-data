@@ -1,0 +1,41 @@
+{
+ "repo": "Mirascope/mirascope",
+ "number": 2954,
+ "url": "https://github.com/Mirascope/mirascope/pull/2954",
+ "title": "fix(openai): skip temperature and top_p for reasoning models on the Responses API",
+ "merged_at": "2026-11-20T19:56:20Z",
+ "files": [
+  {
+   "filename": "python/mirascope/llm/providers/openai/responses/_utils/encode.py",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 3,
+   "patch": "@@ -362,17 +362,23 @@ def encode_request(\n         }\n     )\n     encode_thoughts = False\n+    is_reasoning_model = base_model_name not in NON_REASONING_MODELS\n \n     with _base_utils.ensure_all_params_accessed(\n         params=params,\n         provider_id=\"openai\",\n-        unsupported_params=[\"top_k\", \"seed\", \"stop_sequences\"],\n+        unsupported_params=[\n+            \"top_k\",\n+            \"seed\",\n+            \"stop_sequences\",\n+            *([\"temperature\", \"top_p\"] if is_reasoning_model else []),\n+        ],\n     ) as param_accessor:\n-        if param_accessor.temperature is not None:\n+        if not is_reasoning_model and param_accessor.temperature is not None:\n             kwargs[\"temperature\"] = param_accessor.temperature\n         if param_accessor.max_tokens is not None:\n             kwargs[\"max_output_tokens\"] = param_accessor.max_tokens\n-        if param_accessor.top_p is not None:\n+        if not is_reasoning_model and param_accessor.top_p is not None:\n             kwargs[\"top_p\"] = param_accessor.top_p\n         if param_accessor.thinking is not None:\n             thinking_config = param_accessor.thinking"
+  },
+  {
+   "filename": "python/tests/llm/providers/openai/test_responses_encoding.py",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -4,6 +4,7 @@\n import copy\n from typing import Any, cast\n \n+import pytest\n from inline_snapshot import snapshot\n from pydantic import BaseModel\n \n@@ -309,3 +310,36 @@ class Book(BaseModel):\n     assert text[\"format\"][\"schema\"][\"additionalProperties\"] is False\n     assert \"additionalProperties\" not in format.schema\n     assert format.schema == schema_before\n+\n+\n+def test_reasoning_model_skips_sampling_params(\n+    caplog: pytest.LogCaptureFixture,\n+) -> None:\n+    \"\"\"Reasoning models reject temperature/top_p on the Responses API.\"\"\"\n+    with caplog.at_level(\"WARNING\"):\n+        _, _, kwargs = encode_request(\n+            model_id=\"openai/o4-mini\",\n+            messages=[llm.messages.user(\"Hello\")],\n+            format=None,\n+            tools=Toolkit(None),\n+            params={\"temperature\": 0.7, \"top_p\": 0.9, \"max_tokens\": 100},\n+        )\n+\n+    assert \"temperature\" not in kwargs\n+    assert \"top_p\" not in kwargs\n+    assert kwargs.get(\"max_output_tokens\") == 100\n+    assert \"Skipping unsupported parameter: temperature=0.7\" in caplog.text\n+    assert \"Skipping unsupported parameter: top_p=0.9\" in caplog.text\n+\n+\n+def test_non_reasoning_model_keeps_sampling_params() -> None:\n+    _, _, kwargs = encode_request(\n+        model_id=\"openai/gpt-4o\",\n+        messages=[llm.messages.user(\"Hello\")],\n+        format=None,\n+        tools=Toolkit(None),\n+        params={\"temperature\": 0.7, \"top_p\": 0.9},\n+    )\n+\n+    assert kwargs.get(\"temperature\") == 0.7\n+    assert kwargs.get(\"top_p\") == 0.9"
+  },
+  {
+   "filename": "typescript/src/llm/providers/openai/responses/_utils.test.ts",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 1,
+   "patch": "@@ -7,7 +7,7 @@\n \n import type { Response as OpenAIResponse } from \"openai/resources/responses/responses\";\n \n-import { describe, it, expect } from \"vitest\";\n+import { describe, it, expect, vi } from \"vitest\";\n \n import type { AssistantMessage } from \"@/llm/messages\";\n \n@@ -153,6 +153,43 @@ describe(\"audio encoding\", () => {\n   });\n });\n \n+describe(\"buildRequestParams sampling params\", () => {\n+  it(\"omits temperature and topP for reasoning models and warns\", () => {\n+    const consoleSpy = vi.spyOn(console, \"warn\").mockImplementation(() => {});\n+\n+    const params = buildRequestParams(\n+      \"openai/o4-mini:responses\",\n+      [user(\"Hello\")],\n+      undefined,\n+      undefined,\n+      { temperature: 0.7, topP: 0.9, maxTokens: 100 },\n+    );\n+\n+    expect(params.temperature).toBeUndefined();\n+    expect(params.top_p).toBeUndefined();\n+    expect(params.max_output_tokens).toBe(100);\n+    expect(consoleSpy).toHaveBeenCalledWith(\n+      expect.stringContaining(\"temperature\"),\n+    );\n+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining(\"topP\"));\n+\n+    consoleSpy.mockRestore();\n+  });\n+\n+  it(\"keeps temperature and topP for non-reasoning models\", () => {\n+    const params = buildRequestParams(\n+      \"openai/gpt-4o:responses\",\n+      [user(\"Hello\")],\n+      undefined,\n+      undefined,\n+      { temperature: 0.7, topP: 0.9 },\n+    );\n+\n+    expect(params.temperature).toBe(0.7);\n+    expect(params.top_p).toBe(0.9);\n+  });\n+});\n+\n describe(\"document encoding\", () => {\n   it(\"encodes base64 document source as input_file\", () => {\n     const doc: Document = {"
+  },
+  {
+   "filename": "typescript/src/llm/providers/openai/responses/_utils.ts",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 2,
+   "patch": "@@ -35,6 +35,7 @@ import type { ToolSchema, Tools } from \"@/llm/tools\";\n import { FeatureNotSupportedError } from \"@/llm/exceptions\";\n import { ParamHandler } from \"@/llm/providers/base\";\n import { modelName } from \"@/llm/providers/openai/model-id\";\n+import { NON_REASONING_MODELS } from \"@/llm/providers/openai/model-info\";\n import { FinishReason } from \"@/llm/responses/finish-reason\";\n import { createUsage } from \"@/llm/responses/usage\";\n import { ProviderTool, isProviderTool, isWebSearchTool } from \"@/llm/tools\";\n@@ -470,14 +471,33 @@ export function buildRequestParams(\n       requestParams.max_output_tokens = maxTokens;\n     }\n \n+    // Reasoning models reject temperature/top_p on the Responses API\n+    const isReasoningModel = !NON_REASONING_MODELS.has(\n+      modelName(modelId, null),\n+    );\n+\n     const temperature = p.get(\"temperature\");\n     if (temperature !== undefined) {\n-      requestParams.temperature = temperature;\n+      if (isReasoningModel) {\n+        p.warnUnsupported(\n+          \"temperature\",\n+          \"Reasoning models do not support the temperature parameter\",\n+        );\n+      } else {\n+        requestParams.temperature = temperature;\n+      }\n     }\n \n     const topP = p.get(\"topP\");\n     if (topP !== undefined) {\n-      requestParams.top_p = topP;\n+      if (isReasoningModel) {\n+        p.warnUnsupported(\n+          \"topP\",\n+          \"Reasoning models do not support the top_p parameter\",\n+        );\n+      } else {\n+        requestParams.top_p = topP;\n+      }\n     }\n \n     // OpenAI Responses API doesn't support these params"
+  }
+ ],
+ "test_files": [
+  "python/tests/llm/providers/openai/test_responses_encoding.py",
+  "typescript/src/llm/providers/openai/responses/_utils.test.ts"
+ ]
+}

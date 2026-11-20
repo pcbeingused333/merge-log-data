@@ -1,0 +1,26 @@
+{
+ "repo": "Mirascope/mirascope",
+ "number": 2970,
+ "url": "https://github.com/Mirascope/mirascope/pull/2970",
+ "title": "fix(google): treat a blocked prompt as a refusal",
+ "merged_at": "2026-11-20T19:57:29Z",
+ "files": [
+  {
+   "filename": "python/mirascope/llm/providers/google/_utils/decode.py",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -144,6 +144,11 @@ def _decode_content_part(part: genai_types.Part) -> AssistantContentPart | None:\n         return None\n \n \n+def _is_prompt_blocked(response: genai_types.GenerateContentResponse) -> bool:\n+    \"\"\"Whether Gemini rejected the prompt itself (no candidate is generated).\"\"\"\n+    return bool(response.prompt_feedback and response.prompt_feedback.block_reason)\n+\n+\n def _decode_candidate_content(\n     candidate: genai_types.Candidate,\n ) -> Sequence[AssistantContentPart]:\n@@ -175,6 +180,8 @@ def decode_response(\n         candidate_content = candidate.content\n         if candidate.finish_reason:\n             finish_reason = GOOGLE_FINISH_REASON_MAP.get(candidate.finish_reason)\n+    elif _is_prompt_blocked(response):\n+        finish_reason = FinishReason.REFUSAL\n \n     candidate_content = candidate_content or genai_types.Content()\n \n@@ -302,6 +309,9 @@ def process_chunk(\n             if finish_reason is not None:\n                 yield FinishReasonChunk(finish_reason=finish_reason)\n \n+        elif not candidate and _is_prompt_blocked(chunk):\n+            yield FinishReasonChunk(finish_reason=FinishReason.REFUSAL)\n+\n         # Emit usage delta if usage metadata is present\n         if chunk.usage_metadata:\n             usage_metadata = chunk.usage_metadata"
+  },
+  {
+   "filename": "python/tests/llm/providers/google/test_google_prompt_feedback.py",
+   "status": "added",
+   "additions": 52,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,52 @@\n+\"\"\"Tests that a prompt blocked by Gemini decodes as a refusal.\"\"\"\n+\n+from google.genai import types as genai_types\n+\n+from mirascope.llm.providers.google._utils.decode import decode_response, decode_stream\n+from mirascope.llm.responses import FinishReason, FinishReasonChunk\n+\n+\n+def _blocked_response() -> genai_types.GenerateContentResponse:\n+    # When Gemini rejects the prompt it returns no candidates at all and\n+    # explains why in `prompt_feedback`.\n+    return genai_types.GenerateContentResponse(\n+        candidates=None,\n+        prompt_feedback=genai_types.GenerateContentResponsePromptFeedback(\n+            block_reason=genai_types.BlockedReason.PROHIBITED_CONTENT,\n+        ),\n+    )\n+\n+\n+def test_decode_response_blocked_prompt_is_refusal() -> None:\n+    message, finish_reason, _ = decode_response(\n+        _blocked_response(), \"google/gemini-2.5-flash\", include_thoughts=False\n+    )\n+\n+    assert message.content == []\n+    assert finish_reason == FinishReason.REFUSAL\n+\n+\n+def test_decode_response_without_block_reason_has_no_finish_reason() -> None:\n+    _, finish_reason, _ = decode_response(\n+        genai_types.GenerateContentResponse(\n+            candidates=[\n+                genai_types.Candidate(\n+                    content=genai_types.Content(\n+                        role=\"model\", parts=[genai_types.Part(text=\"hi\")]\n+                    )\n+                )\n+            ],\n+            prompt_feedback=genai_types.GenerateContentResponsePromptFeedback(),\n+        ),\n+        \"google/gemini-2.5-flash\",\n+        include_thoughts=False,\n+    )\n+\n+    assert finish_reason is None\n+\n+\n+def test_decode_stream_blocked_prompt_is_refusal() -> None:\n+    chunks = list(decode_stream(iter([_blocked_response()]), include_thoughts=False))\n+\n+    finish = [c for c in chunks if isinstance(c, FinishReasonChunk)]\n+    assert [c.finish_reason for c in finish] == [FinishReason.REFUSAL]"
+  }
+ ],
+ "test_files": [
+  "python/tests/llm/providers/google/test_google_prompt_feedback.py"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "rapidsai/jupyterlab-nvdashboard",
+ "number": 323,
+ "url": "https://github.com/rapidsai/jupyterlab-nvdashboard/pull/323",
+ "title": "fix(charts): keep latest processData in useWebSocket so disk/network charts populate",
+ "merged_at": "2026-11-20T15:59:17Z",
+ "files": [
+  {
+   "filename": "src/assets/__tests__/hooks.test.tsx",
+   "status": "added",
+   "additions": 56,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,56 @@\n+/*\n+ * SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.\n+ * SPDX-License-Identifier: BSD-3-Clause\n+ */\n+\n+import { renderHook } from '@testing-library/react';\n+import { useWebSocket } from '../hooks';\n+\n+jest.mock('../../handler', () => ({\n+  connectToWebSocket: jest.fn()\n+}));\n+\n+import { connectToWebSocket } from '../../handler';\n+\n+describe('useWebSocket', () => {\n+  let ws: any;\n+\n+  beforeEach(() => {\n+    jest.clearAllMocks();\n+    ws = { send: jest.fn(), close: jest.fn(), readyState: 1 };\n+    (connectToWebSocket as jest.Mock).mockReturnValue(ws);\n+  });\n+\n+  it('calls the latest processData for messages received after a re-render', () => {\n+    const first = jest.fn();\n+    const second = jest.fn();\n+\n+    const { rerender } = renderHook(\n+      ({ cb }) => useWebSocket<any>('endpoint', false, 1000, cb, true),\n+      { initialProps: { cb: first } }\n+    );\n+\n+    rerender({ cb: second });\n+    ws.onmessage({ data: JSON.stringify({ value: 1 }) });\n+\n+    expect(first).not.toHaveBeenCalled();\n+    expect(second).toHaveBeenCalledWith({ value: 1 }, false);\n+    // The connection is not re-created on re-render.\n+    expect(connectToWebSocket).toHaveBeenCalledTimes(1);\n+  });\n+\n+  it('passes the latest isPaused to processData after a re-render', () => {\n+    const cb = jest.fn();\n+\n+    const { rerender } = renderHook(\n+      ({ paused }) => useWebSocket<any>('endpoint', paused, 1000, cb, true),\n+      { initialProps: { paused: false } }\n+    );\n+\n+    rerender({ paused: true });\n+    ws.onmessage({ data: JSON.stringify({ value: 1 }) });\n+\n+    expect(cb).toHaveBeenCalledWith({ value: 1 }, true);\n+    expect(connectToWebSocket).toHaveBeenCalledTimes(1);\n+  });\n+});"
+  },
+  {
+   "filename": "src/assets/hooks.ts",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 1,
+   "patch": "@@ -69,6 +69,13 @@ export const useWebSocket = <T>(\n   isSettingsLoaded: boolean\n ) => {\n   const wsRef = useRef<WebSocket | null>(null);\n+  // Keep the latest callback: the socket is only created once, so a callback\n+  // captured at that time would see stale state (e.g. empty history). The same\n+  // applies to isPaused.\n+  const processDataRef = useRef(processData);\n+  processDataRef.current = processData;\n+  const isPausedRef = useRef(isPaused);\n+  isPausedRef.current = isPaused;\n \n   useEffect(() => {\n     if (!isSettingsLoaded) {\n@@ -85,7 +92,7 @@ export const useWebSocket = <T>(\n     ws.onmessage = event => {\n       const response = JSON.parse(event.data);\n       if (response.status !== 'connected') {\n-        processData(response, isPaused);\n+        processDataRef.current(response, isPausedRef.current);\n       } else {\n         ws.send(JSON.stringify({ updateFrequency, isPaused }));\n       }"
+  }
+ ],
+ "test_files": [
+  "src/assets/__tests__/hooks.test.tsx"
+ ]
+}

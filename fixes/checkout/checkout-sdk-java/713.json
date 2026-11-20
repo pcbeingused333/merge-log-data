@@ -1,0 +1,26 @@
+{
+ "repo": "checkout/checkout-sdk-java",
+ "number": 713,
+ "url": "https://github.com/checkout/checkout-sdk-java/pull/713",
+ "title": "fix(transport): keep first value when a response repeats a header",
+ "merged_at": "2026-11-20T13:10:42Z",
+ "files": [
+  {
+   "filename": "src/main/java/com/checkout/ApacheHttpClientTransport.java",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -274,7 +274,7 @@ private Response performCall(final SdkAuthorization authorization,\n \n             final int statusCode = response.getStatusLine().getStatusCode();\n             final Map<String, String> headers = Arrays.stream(response.getAllHeaders())\n-                    .collect(Collectors.toMap(Header::getName, Header::getValue));\n+                    .collect(Collectors.toMap(Header::getName, Header::getValue, (first, ignored) -> first));\n \n             if (statusCode != HttpStatus.SC_NOT_FOUND && response.getEntity() != null && response.getEntity().getContent() != null) {\n                 return Response.builder()"
+  },
+  {
+   "filename": "src/test/java/com/checkout/ApacheHttpClientTransportDuplicateHeadersTest.java",
+   "status": "added",
+   "additions": 82,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,82 @@\n+package com.checkout;\n+\n+import static org.junit.jupiter.api.Assertions.assertEquals;\n+import static org.mockito.Mockito.mock;\n+\n+import java.io.IOException;\n+import java.io.OutputStream;\n+import java.net.InetSocketAddress;\n+import java.net.URI;\n+import java.nio.charset.StandardCharsets;\n+import java.util.Collections;\n+import java.util.concurrent.ExecutorService;\n+import java.util.concurrent.Executors;\n+\n+import org.apache.http.impl.client.HttpClientBuilder;\n+import org.junit.jupiter.api.AfterEach;\n+import org.junit.jupiter.api.BeforeEach;\n+import org.junit.jupiter.api.Test;\n+\n+import com.sun.net.httpserver.HttpServer;\n+\n+class ApacheHttpClientTransportDuplicateHeadersTest {\n+\n+    private static final String BODY = \"{\\\"id\\\":\\\"pay_123\\\"}\";\n+\n+    private final SdkAuthorization authorization = new SdkAuthorization(PlatformType.DEFAULT, \"sk_test\");\n+    private HttpServer server;\n+    private ExecutorService executor;\n+\n+    @BeforeEach\n+    void startServer() throws IOException {\n+        server = HttpServer.create(new InetSocketAddress(\"127.0.0.1\", 0), 0);\n+        server.createContext(\"/\", exchange -> {\n+            final byte[] body = BODY.getBytes(StandardCharsets.UTF_8);\n+            exchange.getResponseHeaders().add(\"Content-Type\", \"application/json\");\n+            exchange.getResponseHeaders().add(\"Set-Cookie\", \"a=1\");\n+            exchange.getResponseHeaders().add(\"Set-Cookie\", \"b=2\");\n+            exchange.sendResponseHeaders(200, body.length);\n+            try (OutputStream out = exchange.getResponseBody()) {\n+                out.write(body);\n+            }\n+        });\n+        server.start();\n+        executor = Executors.newSingleThreadExecutor();\n+    }\n+\n+    @AfterEach\n+    void stop() {\n+        server.stop(0);\n+        executor.shutdownNow();\n+    }\n+\n+    private ApacheHttpClientTransport transport() {\n+        return new ApacheHttpClientTransport(URI.create(\"http://127.0.0.1:\" + server.getAddress().getPort() + \"/\"),\n+                \"checkoutApi\", HttpClientBuilder.create(), executor,\n+                new DefaultTransportConfiguration(), mock(CheckoutConfiguration.class));\n+    }\n+\n+    /** The JDK test server normalises header-name casing, so look the header up case-insensitively. */\n+    private static String setCookie(final Response response) {\n+        return response.getHeaders().entrySet().stream()\n+                .filter(e -> \"set-cookie\".equalsIgnoreCase(e.getKey()))\n+                .map(java.util.Map.Entry::getValue)\n+                .findFirst().orElse(null);\n+    }\n+\n+    @Test\n+    void shouldReturnResponseWhenServerSendsRepeatedHeadersSync() {\n+        final Response response = transport().invokeSync(ClientOperation.GET, \"payments/pay_123\", authorization, null, null, Collections.emptyMap());\n+        assertEquals(200, response.getStatusCode());\n+        assertEquals(BODY, response.getBody());\n+        assertEquals(\"a=1\", setCookie(response));\n+    }\n+\n+    @Test\n+    void shouldReturnResponseWhenServerSendsRepeatedHeadersAsync() throws Exception {\n+        final Response response = transport().invoke(ClientOperation.GET, \"payments/pay_123\", authorization, null, null, Collections.emptyMap()).get();\n+        assertEquals(200, response.getStatusCode());\n+        assertEquals(BODY, response.getBody());\n+        assertEquals(\"a=1\", setCookie(response));\n+    }\n+}"
+  }
+ ],
+ "test_files": [
+  "src/test/java/com/checkout/ApacheHttpClientTransportDuplicateHeadersTest.java"
+ ]
+}

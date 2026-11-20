@@ -1,0 +1,33 @@
+{
+ "repo": "armitage-labs/creem",
+ "number": 310,
+ "url": "https://github.com/armitage-labs/creem/pull/310",
+ "title": "fix(better-auth): isolate subscription webhook fallback",
+ "merged_at": "2026-11-20T10:16:40Z",
+ "files": [
+  {
+   "filename": ".changeset/quiet-subscription-isolation.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+\"@creem_io/better-auth\": patch\n+---\n+\n+Prevent subscription webhooks from updating another product's subscription or a row already linked to a different Creem subscription."
+  },
+  {
+   "filename": "packages/integrations/better-auth/src/__tests__/hooks.test.ts",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -270,6 +270,44 @@ describe(\"updateSubscriptionFromEvent (via subscription hooks)\", () => {\n     );\n   });\n \n+  it.each([\n+    { productId: \"prod_other\", creemSubscriptionId: \"sub_other\" },\n+    { productId: \"prod_test_456\", creemSubscriptionId: \"sub_other\" },\n+    { productId: \"prod_other\", creemSubscriptionId: null },\n+  ])(\"does not cancel an unrelated fallback row: %j\", async (unrelated) => {\n+    const adapter = createMockAdapter();\n+    adapter.findOne.mockResolvedValueOnce(null);\n+    adapter.findMany.mockResolvedValueOnce([{ ...mockDbSubscription, ...unrelated }]);\n+\n+    const ctx = createMockContext({ adapter });\n+    await onSubscriptionCanceled(ctx, mockSubscriptionCanceledEvent, defaultOptions);\n+\n+    expect(adapter.update).not.toHaveBeenCalled();\n+  });\n+\n+  it(\"links an unbound row for the matching product among multiple subscriptions\", async () => {\n+    const adapter = createMockAdapter();\n+    adapter.findOne.mockResolvedValueOnce(null);\n+    adapter.findMany.mockResolvedValueOnce([\n+      { ...mockDbSubscription, id: \"other\", productId: \"prod_other\" },\n+      { ...mockDbSubscription, id: \"bound\", creemSubscriptionId: \"sub_other\" },\n+      { ...mockDbSubscription, creemSubscriptionId: null },\n+    ]);\n+\n+    const ctx = createMockContext({ adapter });\n+    await onSubscriptionCanceled(ctx, mockSubscriptionCanceledEvent, defaultOptions);\n+\n+    expect(adapter.update).toHaveBeenCalledWith(\n+      expect.objectContaining({\n+        where: [{ field: \"id\", value: mockDbSubscription.id }],\n+        update: expect.objectContaining({\n+          status: \"canceled\",\n+          creemSubscriptionId: mockSubscriptionCanceledEvent.object.id,\n+        }),\n+      }),\n+    );\n+  });\n+\n   it(\"logs warning when subscription not found\", async () => {\n     const { logger } = await import(\"better-auth\");\n     const adapter = createMockAdapter();"
+  },
+  {
+   "filename": "packages/integrations/better-auth/src/hooks.ts",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 16,
+   "patch": "@@ -362,30 +362,20 @@ async function updateSubscriptionFromEvent(\n         where: [{ field: \"creemCustomerId\", value: customerId }],\n       });\n \n-      // Find the subscription for this specific product\n+      // Only link this product's row if it is not bound to another subscription.\n       subscription =\n-        subscriptions.find((sub: SubscriptionRecord) => sub.productId === productId) ||\n-        subscriptions[0];\n+        subscriptions.find(\n+          (sub: SubscriptionRecord) =>\n+            sub.productId === productId &&\n+            (!sub.creemSubscriptionId || sub.creemSubscriptionId === subscriptionData.id),\n+        ) ?? null;\n     }\n \n     if (!subscription) {\n       logger.warn(`[creem] Subscription not found for creemSubscriptionId: ${subscriptionData.id}`);\n       return;\n     }\n \n-    // A customer fallback may belong to a different subscription. Leave that row alone,\n-    // but still deliver the event-specific callback as with any missing local record.\n-    if (\n-      status === \"scheduled_cancel\" &&\n-      subscription.creemSubscriptionId &&\n-      subscription.creemSubscriptionId !== subscriptionData.id\n-    ) {\n-      logger.warn(\n-        `[creem] No matching local subscription for scheduled cancellation: ${subscriptionData.id}`,\n-      );\n-      return;\n-    }\n-\n     // A delayed scheduled-cancellation event must not reopen a terminated subscription.\n     if (\n       status === \"scheduled_cancel\" &&"
+  }
+ ],
+ "test_files": [
+  "packages/integrations/better-auth/src/__tests__/hooks.test.ts"
+ ]
+}

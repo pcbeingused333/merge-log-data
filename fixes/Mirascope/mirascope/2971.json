@@ -1,0 +1,26 @@
+{
+ "repo": "Mirascope/mirascope",
+ "number": 2971,
+ "url": "https://github.com/Mirascope/mirascope/pull/2971",
+ "title": "fix(llm): strip 'together/' prefix from model id for Together provider",
+ "merged_at": "2026-11-20T20:02:27Z",
+ "files": [
+  {
+   "filename": "python/mirascope/llm/providers/together/provider.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -36,5 +36,5 @@ def my_prompt():\n     provider_name: ClassVar[str | None] = \"Together\"\n \n     def _model_name(self, model_id: str) -> str:\n-        \"\"\"Return the model ID as-is for Together API.\"\"\"\n-        return model_id\n+        \"\"\"Strip 'together/' prefix from model ID for Together API.\"\"\"\n+        return model_id.removeprefix(\"together/\")"
+  },
+  {
+   "filename": "python/tests/llm/providers/test_together_provider.py",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -1,9 +1,11 @@\n \"\"\"Tests for TogetherProvider.\"\"\"\n \n import os\n+from unittest.mock import patch\n \n import pytest\n \n+from mirascope import llm\n from mirascope.llm.providers.together.provider import TogetherProvider\n \n \n@@ -47,3 +49,31 @@ def test_together_provider_custom_base_url() -> None:\n         api_key=\"test-key\", base_url=\"https://custom.together.xyz/v1\"\n     )\n     assert provider.id == \"together\"\n+\n+\n+@pytest.mark.parametrize(\n+    \"model_id\",\n+    [\n+        \"together/meta-llama/Llama-3.3-70B-Instruct-Turbo\",\n+        \"meta-llama/Llama-3.3-70B-Instruct-Turbo\",\n+    ],\n+)\n+def test_together_provider_model_name(model_id: str) -> None:\n+    \"\"\"The public call sends the model name without Mirascope's prefix.\"\"\"\n+    provider = TogetherProvider(api_key=\"test-key\")\n+    with (\n+        patch.object(\n+            provider.client.chat.completions,\n+            \"create\",\n+            side_effect=RuntimeError(\"request captured\"),\n+        ) as create,\n+        pytest.raises(RuntimeError, match=\"request captured\"),\n+    ):\n+        provider.call(\n+            model_id=model_id,\n+            messages=[llm.messages.user(\"Hello\")],\n+            toolkit=llm.Toolkit([]),\n+        )\n+    assert create.call_args.kwargs[\"model\"] == (\n+        \"meta-llama/Llama-3.3-70B-Instruct-Turbo\"\n+    )"
+  }
+ ],
+ "test_files": [
+  "python/tests/llm/providers/test_together_provider.py"
+ ]
+}
