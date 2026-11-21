@@ -2,7 +2,7 @@
  "repo": "callstack/agent-device",
  "number": 4682,
  "url": "https://github.com/callstack/agent-device/pull/4682",
- "state": "open",
+ "state": "merged",
  "reviews": [],
  "review_comments": [],
  "comments": [
@@ -125,6 +125,61 @@
    "role": "member",
    "created_at": "2026-11-20T17:04:17Z",
    "body": "Thanks for the update. At af8197c the mixed-build warning is scoped to macOS and BSD and names the records that store a start time, as the last review suggested. CI is green and there are no conflicts. Review has nothing blocking left; the remaining item is the maintainer sign-off on the mixed-build trade-off.\n\nTwo notes for a follow-up, not for this PR:\n- The help in [cli-help.ts](https://github.com/callstack/agent-device/blob/af8197c/src/commands/schema/cli-help.ts#L423) and `commands.md` say older Linux registrations stop normally. That does not hold in one fallback case: when agent-device cannot read the daemon's `/proc` birth identity (for example an unreadable `boot_id`) and falls back to `ps`, an older build stored raw `lstart` and this build reads `posix:<epochMs>`, so the mixed-build limits apply there too. Limiting the compatibility sentence to Linux `/proc` tokens and Windows CIM tokens would be exact.\n- host-kit could own one C-locale `lstart` field parser, shared by `host-process.ts` and `simulator-boot.ts`.\n\nNot verified here: the change touches only help text and a docs page, so no tests were run and the code outside the change was not re-reviewed.\n"
+  },
+  {
+   "role": "member",
+   "created_at": "2026-11-21T07:16:46Z",
+   "body": "Both follow-up notes are handled:\n\n- **Linux `ps` fallback:** fixed in 6938e4d19f. The help line and `commands.md` now say that only registrations with a Linux `/proc` or Windows start-time token still stop normally. A Linux registration read through the `ps` fallback (for example with an unreadable `boot_id`) has the same limits as macOS and BSD.\n- **Shared `lstart` parser:** tracked in #4875, to do after this PR merges. It touches simulator boot observation in platform-apple, which is outside this change.\n\nThe remaining item is the maintainer's sign-off on the trade-off."
+  },
+  {
+   "role": "member",
+   "created_at": "2026-11-21T07:58:06Z",
+   "body": "Thanks for the update.\n\nOne defect remains at 6938e4d. The POSIX token classifier at https://github.com/callstack/agent-device/blob/6938e4d/packages/host-kit/src/internal/host-process.ts#L268 accepts any nonnegative whole-second safe integer, including `posix:8640000000001000`. That value is outside the four-digit year range the producer can emit and outside JavaScript's Date range. An in-memory run of `stopDaemonProcess` at this commit against a live macOS PID with that recorded token returned exited/already-exited, because `waitForDaemonExit` treats the malformed token as comparable to the real token and reads the difference as exit proof. A corrupted start-time token in `daemon.json` can therefore make daemon stop report a live daemon as already exited, and retirement can then remove registration metadata when the startup lock is free. The rule the code must satisfy: a POSIX token is valid only inside the UTC range the producer can emit, through 9999-12-31T23:59:59Z. Please bound the classifier to that range and add an out-of-range whole-second safe integer to the malformed-token stop regression.\n\nCould host-kit own one C-form `lstart` field decoder for process identity and Simulator boot observation, with each caller keeping its current UTC or local-time interpretation?\n\nThe earlier evidence request is now satisfied. CI is green, and the body rules check now passes at this commit. The change since the earlier review touches only a help string and a docs line, and the other 15 checks passed. No conflicts are known. Not verified here: a fresh test run, since the delta is text only. After the fix, the remaining step before merge is maintainer sign-off on the mixed-build trade-off, which this review does not re-raise.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-21T09:22:24Z",
+   "body": "Bounded the POSIX token classifier to the UTC range the producer can emit, through 9999-12-31T23:59:59Z (`253402300799000` ms), in `startTimeTokenSource` (`host-process.ts`). A whole-second safe integer past that, such as `posix:8640000000001000`, is now malformed, so `waitForDaemonExit` no longer reads it as exit proof and `stopDaemonProcess` retains the daemon. The malformed-token stop regression in `daemon-exit-wait.test.ts` now includes `posix:8640000000001000` and `posix:253402300800000` (the first instant past the bound). Both fail without the change and pass with it; the host-kit unit tests pass.\n\nThe shared C-form `lstart` decoder stays in #4875, as agreed.\n\nDisclosure: this change was prepared with an AI coding assistant (Claude), and the diff and test results were not reviewed by a human before posting.\n"
+  },
+  {
+   "role": "member",
+   "created_at": "2026-11-21T09:58:29Z",
+   "body": "Thanks for the update. The earlier findings from the first review (https://github.com/callstack/agent-device/pull/4682#issuecomment-7059597939) are fixed at a8c4bbf, and one new problem remains.\n\n[`host-process.ts` is now 1003 lines](https://github.com/callstack/agent-device/blob/a8c4bbf/packages/host-kit/src/internal/host-process.ts#L1003), over the 1000-line oxlint `max-lines` limit, so the required Lint, Typecheck & Package check fails. The three lines added in this update (`POSIX_TOKEN_MAX_EPOCH_MS` and its comment) crossed the limit. Please split the file at its owner instead of adding a waiver or disable comment. The host CPU architecture block (around lines 935-1003: `pendingHostCpuArch`, `settledHostCpuArch`, `readHostCpuArch`, `readHostCpuArchSync`, `settleHostCpuArch`, `resolveHostCpuArch`, `hostCpuArchName`, `isAppleSiliconMac`, `isAppleSiliconMacSync`, plus the `APPLE_SILICON_SYSCTL` and `SYSCTL_TIMEOUT_MS` constants) shares no state with process identity. It can move to `packages/host-kit/src/internal/host-cpu-arch.ts`, which needs only `runCmd` and `runCmdSync` from exec. Update the importers, move any Fallow baseline entry with the symbols, and keep the CPU-arch tests beside the new module. That frees about 65 lines.\n\nThe failing check is in a file this PR edits, so it is likely related to this change. The other 14 checks pass, including typecheck and format. No conflicts are known.\n\nNot verified here: the host-kit and daemon-exit-wait tests were not run locally, and no live macOS run was done. The `ps lstart` read is covered only by mocked reads in tests. Once the file is split and Lint, Typecheck & Package is green, this is ready for another look.\n"
+  },
+  {
+   "role": "member",
+   "created_at": "2026-11-21T10:28:06Z",
+   "body": "The `max-lines` failure is fixed in b11ff89cae. As suggested, the host CPU architecture block moved to `packages/host-kit/src/internal/host-cpu-arch.ts`. That module imports only `runCmd` and `runCmdSync` from exec. Its tests moved with it to `host-cpu-arch.test.ts`, and `process.ts` re-exports both readers from the new module, so no importer changes. `host-process.ts` is now 930 lines. No Fallow baseline entry named these symbols. Locally, the host-kit lint, typecheck, and the CPU-arch and host-process tests pass. CI owns the rest."
+  },
+  {
+   "role": "member",
+   "created_at": "2026-11-21T10:37:48Z",
+   "body": "The suggested split failed the eager-closure gate in Coverage. At b11ff89cae, `host-cpu-arch.ts` was a new module that every entry evaluates through `host-kit/process`. Since this PR also adds statements compared with main, the gate does not count that as a pure split (`src/cli.ts` 275 → 276 modules, +7 statements, and 25 more entries). The modules the closure already loads can't hold it either: `owner-identity.ts` imports `host-process.ts`, and `exec.ts` does not own CPU architecture.\n\n1ce8933f82 reverts the split and keeps the reader in `host-process.ts`. Its two `sysctl` calls now share one `SYSCTL_OPTIONS` object, which brings the file to 997 lines, with no waiver or new module. Locally, the host-kit lint, typecheck, the CPU-arch and host-process tests, and `eager-closure-budgets.test.ts` pass. CI owns the rest."
+  },
+  {
+   "role": "member",
+   "created_at": "2026-11-21T12:02:36Z",
+   "body": "Thanks for the update.\n\nThe findings from the earlier review are now fixed at 1ce8933, and the code shows no new problems. Checks are green: the cancelled body-rules run is superseded by a passing run at this head. No conflicts. The change still waits on maintainer sign-off for the mixed-build trade-off, so it is not ready to merge yet.\n\nCould the follow-up in #4875 put the shared C-locale lstart field decoder in host-kit, keep the UTC token in host process identity, and keep the local-time conversion in Simulator boot observation? The production posix: checks would stay inside host-kit, and the generic envOverrides option would be applied at the exec spawn sites.\n\nNot verified here: the tests and the eager-closure and coverage gate were not re-run locally; the result relies on the CI checks.\n"
+  },
+  {
+   "role": "member",
+   "created_at": "2026-11-21T14:38:00Z",
+   "body": "On the #4875 follow-up: we don't plan to build it. A shared decoder removes about 15 duplicated lines and changes no behavior. Against that:\n\n- `host-process.ts` is at 997 of 1000 lines. A new host-kit module grows every entry's eager closure, as this PR showed, so the exported decoder would have to live in that file and would likely push it over the limit again.\n- Simulator boot observation in platform-apple would depend on host-kit's process-identity module for a 12-line field parser.\n- Simulator boot observation is device-facing, so the change would need an iOS simulator run.\n- The local-time read there is correct: `ps` renders and the code parses in the same process's time zone, so the two parsers differ only in style.\n\nThe `envOverrides` option is already applied at the exec spawn sites (`hostPsOptions` passes it to `runCmd` and `runCmdSync`). #4875 stays open and is closed after this PR merges, unless a maintainer wants it."
+  },
+  {
+   "role": "member",
+   "created_at": "2026-11-21T14:54:03Z",
+   "body": "The reasons in https://github.com/callstack/agent-device/pull/4682#issuecomment-7064235236 settle the design question from the review at 1ce8933: the shared decoder would grow the eager closure or push host-process.ts over its limit, and it would add a device-facing change for about 15 lines. Nothing from review blocks this head. The remaining item is the maintainer sign-off on the mixed-build trade-off.\n"
+  },
+  {
+   "role": "member",
+   "created_at": "2026-11-21T17:13:29Z",
+   "body": "Maintainer sign-off: the mixed-build trade-off is accepted as stated in the help text and `commands.md`. On macOS and BSD, an older and a newer build must not share one host. No further compatibility work is planned for this PR."
+  },
+  {
+   "role": "member",
+   "created_at": "2026-11-21T17:15:15Z",
+   "body": "With the maintainer sign-off on the mixed-build trade-off (https://github.com/callstack/agent-device/pull/4682#issuecomment-7066310466) and the design question settled, nothing from review blocks 1ce8933. CI is green and there are no conflicts.\n"
   }
  ]
 }

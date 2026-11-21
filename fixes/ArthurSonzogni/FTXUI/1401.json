@@ -1,0 +1,33 @@
+{
+ "repo": "ArthurSonzogni/FTXUI",
+ "number": 1401,
+ "url": "https://github.com/ArthurSonzogni/FTXUI/pull/1401",
+ "title": "fix(input): Ctrl+Right stops at end of word from its last letter",
+ "merged_at": "2026-11-21T07:33:32Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -54,6 +54,9 @@ Next\n - Bugfix: Restore the terminal's default cursor shape on exit when it doesn't\n   report its current one, instead of forcing a blinking block. Thanks\n   @aaron-michaux. See #904.\n+- Bugfix: Ctrl+Right in `Input` now stops at the end of the current word when\n+  the cursor is on its last letter, instead of skipping an extra word. Thanks\n+  @pcbeingused333. See #1401.\n \n ### Dom\n - Bugfix: `LinearGradient` stops without an explicit position are now spread"
+  },
+  {
+   "filename": "src/ftxui/component/input.cpp",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -587,13 +587,13 @@ class InputBase : public ComponentBase, public InputOption {\n       return false;\n     }\n \n-    // Move right, until entering a word.\n+    // Move right, as long as the cursor is not on a word character.\n     while (cursor_position() < (int)content().size()) {\n-      cursor_position() =\n-          static_cast<int>(GlyphNext(content(), cursor_position()));\n       if (IsWordCharacter(content(), cursor_position())) {\n         break;\n       }\n+      cursor_position() =\n+          static_cast<int>(GlyphNext(content(), cursor_position()));\n     }\n     // Move right, as long as right is a word character:\n     while (cursor_position() < (int)content().size()) {"
+  },
+  {
+   "filename": "src/ftxui/component/input_test.cpp",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -537,6 +537,40 @@ TEST(InputTest, CtrlArrowRight) {\n   EXPECT_EQ(cursor_position, 49);\n }\n \n+TEST(InputTest, CtrlArrowRightFromLastLetterOfWord) {\n+  std::string content = \"abc def\";\n+  int cursor_position = 0;\n+  auto input = Input(&content, {.cursor_position = &cursor_position});\n+\n+  // From the start of a word, or from inside it: stop at the end of the word.\n+  EXPECT_TRUE(input->OnEvent(Event::ArrowRightCtrl));\n+  EXPECT_EQ(cursor_position, 3);\n+\n+  cursor_position = 1;\n+  EXPECT_TRUE(input->OnEvent(Event::ArrowRightCtrl));\n+  EXPECT_EQ(cursor_position, 3);\n+\n+  // From the last letter of a word: stop at the end of that same word.\n+  cursor_position = 2;\n+  EXPECT_TRUE(input->OnEvent(Event::ArrowRightCtrl));\n+  EXPECT_EQ(cursor_position, 3);\n+\n+  // From the end of a word: jump to the end of the next one.\n+  EXPECT_TRUE(input->OnEvent(Event::ArrowRightCtrl));\n+  EXPECT_EQ(cursor_position, 7);\n+}\n+\n+TEST(InputTest, CtrlArrowRightSingleLetterWords) {\n+  std::string content = \"a b\";\n+  int cursor_position = 0;\n+  auto input = Input(&content, {.cursor_position = &cursor_position});\n+\n+  EXPECT_TRUE(input->OnEvent(Event::ArrowRightCtrl));\n+  EXPECT_EQ(cursor_position, 1);\n+  EXPECT_TRUE(input->OnEvent(Event::ArrowRightCtrl));\n+  EXPECT_EQ(cursor_position, 3);\n+}\n+\n TEST(InputTest, CtrlArrowRight2) {\n   std::string content = \"   word  word  测ord  wo测d  word   \";\n   int cursor_position = 0;"
+  }
+ ],
+ "test_files": [
+  "src/ftxui/component/input_test.cpp"
+ ]
+}

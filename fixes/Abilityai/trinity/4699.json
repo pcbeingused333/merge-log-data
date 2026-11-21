@@ -1,0 +1,34 @@
+{
+ "repo": "Abilityai/trinity",
+ "number": 4699,
+ "url": "https://github.com/Abilityai/trinity/pull/4699",
+ "title": "fix(monitoring): report measured 0% uptime and 0 ms latency instead of null",
+ "merged_at": "2026-11-21T13:01:19Z",
+ "files": [
+  {
+   "filename": "src/backend/routers/monitoring.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -507,8 +507,8 @@ async def get_agent_health(\n         business=business,\n         issues=issues,\n         recent_alerts=[],  # TODO: Fetch from notifications\n-        uptime_percent_24h=round(uptime, 2) if uptime else None,\n-        avg_latency_24h_ms=round(avg_latency, 2) if avg_latency else None,\n+        uptime_percent_24h=round(uptime, 2) if uptime is not None else None,\n+        avg_latency_24h_ms=round(avg_latency, 2) if avg_latency is not None else None,\n         circuit_breaker=circuit_breaker,\n     )\n     detail.metrics = _declared_metrics_block(agent_name)"
+  },
+  {
+   "filename": "tests/registry.json",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -8027,6 +8027,18 @@\n       ],\n       \"description\": \"Self-test for scripts/ci/check_sqlite_upgrade_parity.py, the schema-parity CI step that builds an install with the PR's merge-base code, upgrades it with the checkout's lifecycle, and requires every schema.py table, column, index and trigger to arrive with migration_health at (n, n, None). Drives the comparison core over synthetic two-file backends (db/schema.py + db/migrations.py in tmp_path, no git, no backend deps): a registered migration passes; a migration written but not registered, and a schema.py column with no migration at all, are each a gap naming t.b (the existing-install shape no fresh-install comparison sees, because init_schema creates the table with the column on a fresh DB); a brand-new init_schema-only table is no false red; an unbuildable base fails closed (exit 2, never a pass). Also: a head lifecycle raising on the upgraded install (an index on a column no migration adds); an index, trigger or table a migration drops after init_schema; a registered migration left unrecorded, a renamed migration and a duplicate registration are gaps. The restated lifecycle is pinned (migrations before init_schema, the second pass, a sqlite3.Row connection as production opens it). A head that does not import, a usage error, no base/head, no repository and an unresolvable merge-base fail closed (exit 2); main() end to end over a throwaway git repository. A broken merge-base (a broken dev) is walked back over first-parent ancestors to the newest that builds, with a warning naming the skipped commit, so the PR that repairs dev passes; a gap over that longer range is still a gap; the walk is bounded by MAX_BASE_WALKBACK and exits 2 when exhausted, as does a broken root with no ancestor. A PR branched inside the broken range is told, on an exhausted walk, to merge the repaired base branch in, and passes once it has.\"\n     },\n+    {\n+      \"file\": \"unit/test_4685_health_measured_zero.py\",\n+      \"feature\": \"#4685\",\n+      \"added\": \"2026-11-21\",\n+      \"categories\": [\n+        \"backend\",\n+        \"unit\",\n+        \"monitoring\",\n+        \"api\"\n+      ],\n+      \"description\": \"GET /api/monitoring/agents/{name} reports a measured 0.0 uptime_percent_24h and 0.0 avg_latency_24h_ms as 0.0, not null (#4685); real DB via db_harness, handler called directly. An agent with only unreachable aggregate checks in the window reads uptime 0.0, a measured 0 ms network latency reads 0.0, and an agent with no checks in the 24h window still reads None for both.\"\n+    },\n     {\n       \"file\": \"unit/test_3950_fleet_health_current.py\",\n       \"feature\": \"#3950\","
+  },
+  {
+   "filename": "tests/unit/test_4685_health_measured_zero.py",
+   "status": "added",
+   "additions": 71,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,71 @@\n+\"\"\"A measured 0% uptime / 0 ms latency is reported, not \"never measured\" (#4685).\n+\n+`GET /api/monitoring/agents/{name}` built its 24h figures with a truthiness\n+test, so a measured `0.0` (an agent unreachable for the whole window) came back\n+as `null`, which consumers render as \"no reading\". The handler is called\n+directly against a real DB (the #3950 harness).\n+\"\"\"\n+\n+from __future__ import annotations\n+\n+import asyncio\n+import importlib\n+from datetime import datetime, timedelta, timezone\n+from types import SimpleNamespace\n+\n+import pytest\n+\n+from db_harness import db_backend, run as _hrun  # noqa: F401\n+\n+pytestmark = pytest.mark.unit\n+\n+\n+@pytest.fixture\n+def db(db_backend):  # noqa: F811\n+    from database import db as database\n+\n+    return database\n+\n+\n+def _agent(monkeypatch, db, name):\n+    mon = importlib.import_module(\"routers.monitoring\")\n+    view = importlib.import_module(\"services.circuit_breaker_view\")\n+    monkeypatch.setattr(mon, \"db\", db)\n+    monkeypatch.setattr(\n+        mon,\n+        \"get_monitoring_service\",\n+        lambda: SimpleNamespace(\n+            is_running=True, config=SimpleNamespace(docker_check_interval=30)\n+        ),\n+    )\n+    monkeypatch.setattr(mon, \"_declared_metrics_block\", lambda n: None)\n+    monkeypatch.setattr(view, \"build_circuit_breaker_block\", lambda n: None)\n+    return asyncio.run(mon.get_agent_health(name))\n+\n+\n+def test_zero_uptime_and_zero_latency_are_reported_as_zero(db, monkeypatch):\n+    db.create_health_check(\"z-down\", \"aggregate\", \"unhealthy\", error_message=\"unreachable\")\n+    db.create_health_check(\"z-down\", \"network\", \"unhealthy\", network_metrics={\"reachable\": True, \"latency_ms\": 0.0})\n+\n+    body = _agent(monkeypatch, db, \"z-down\")\n+\n+    assert body.uptime_percent_24h == 0.0\n+    assert body.uptime_percent_24h is not None\n+    assert body.avg_latency_24h_ms == 0.0\n+    assert body.avg_latency_24h_ms is not None\n+\n+\n+def test_no_checks_in_the_window_still_reads_none(db, monkeypatch):\n+    # A latest aggregate row outside the 24h window: the handler is reached\n+    # (a row exists) but the windowed figures have nothing to average.\n+    db.create_health_check(\"z-old\", \"aggregate\", \"healthy\")\n+    _hrun(\n+        \"UPDATE agent_health_checks SET checked_at = :t WHERE agent_name = :n\",\n+        t=(datetime.now(timezone.utc) - timedelta(days=3)).strftime(\"%Y-%m-%dT%H:%M:%S.%fZ\"),\n+        n=\"z-old\",\n+    )\n+\n+    body = _agent(monkeypatch, db, \"z-old\")\n+\n+    assert body.uptime_percent_24h is None\n+    assert body.avg_latency_24h_ms is None"
+  }
+ ],
+ "test_files": [
+  "tests/registry.json",
+  "tests/unit/test_4685_health_measured_zero.py"
+ ]
+}

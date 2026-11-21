@@ -1,0 +1,26 @@
+{
+ "repo": "tstack/lnav",
+ "number": 1768,
+ "url": "https://github.com/tstack/lnav/pull/1768",
+ "title": "fix: validate numeric timezone offsets",
+ "merged_at": "2026-11-21T17:33:44Z",
+ "files": [
+  {
+   "filename": "src/ptimec.hh",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -1344,6 +1344,20 @@ ptime_z(struct exttm* dst, const char* str, off_t& off_inout, ssize_t len)\n             return false;\n         }\n \n+        for (const auto index : {1, 2, 3 + skip_colon, 4 + skip_colon}) {\n+            if (str[off_inout + index] < '0'\n+                || str[off_inout + index] > '9')\n+            {\n+                return false;\n+            }\n+        }\n+        if (str[off_inout + 1] > '2'\n+            || (str[off_inout + 1] == '2' && str[off_inout + 2] > '3')\n+            || str[off_inout + skip_colon + 3] > '5')\n+        {\n+            return false;\n+        }\n+\n         hours\n             = ((str[off_inout + 1] - '0') * 10 + (str[off_inout + 2] - '0') * 1)\n             * 60 * 60;"
+  },
+  {
+   "filename": "test/test_date_time_scanner.cc",
+   "status": "modified",
+   "additions": 52,
+   "deletions": 0,
+   "patch": "@@ -68,6 +68,58 @@ static const char* BAD_TIMES[] = {\n     \"@4000000043\",\n };\n \n+TEST_CASE(\"numeric timezone offsets\")\n+{\n+    for (const auto* zone : {\"-root-INFO\", \"-RedisUtils-INFO\", \"+0a00\",\n+                             \"+01b0\", \"+010c\", \"+a100\", \"+24:00\",\n+                             \"+0060\", \"-00:60\", \"+010\", \"+01:0\"})\n+    {\n+        exttm tm{};\n+        off_t off = 0;\n+        CAPTURE(doctest::String(zone));\n+        CHECK_FALSE(ptime_z(&tm, zone, off, strlen(zone)));\n+        CHECK(off == 0);\n+        CHECK((tm.et_flags & ETF_ZONE_SET) == 0);\n+    }\n+\n+    for (const auto* zone : {\"+0100\", \"+01:00\", \"-0500\", \"-05:00\",\n+                             \"+2359\", \"-23:59\", \"Z\"})\n+    {\n+        exttm tm{};\n+        off_t off = 0;\n+        CAPTURE(doctest::String(zone));\n+        REQUIRE(ptime_z(&tm, zone, off, strlen(zone)));\n+        CHECK(off == strlen(zone));\n+        const auto expected = zone[0] == 'Z' ? 0\n+            : zone[1] == '2' ? 86340\n+            : zone[0] == '+' ? 3600 : 18000;\n+        CHECK(tm.et_gmtoff == (zone[0] == '-' ? -expected : expected));\n+        CHECK((tm.et_flags & ETF_ZONE_SET) != 0);\n+    }\n+}\n+\n+TEST_CASE(\"logger names after milliseconds are not timezone offsets\")\n+{\n+    setenv(\"TZ\", \"UTC\", 1);\n+    lnav_config.lc_log_date_time.c_zoned_to_local = false;\n+    for (const auto* ts : {\n+             \"2026-10-22 05:17:14,750-root-INFO request_process_1\",\n+             \"2026-10-22 05:17:14,958-RedisUtils-INFO feedback_process_1\"})\n+    {\n+        date_time_scanner dts;\n+        exttm tm{};\n+        timeval tv{};\n+        CAPTURE(doctest::String(ts));\n+        const auto* end = dts.scan(ts, strlen(ts), nullptr, &tm, tv);\n+        REQUIRE(end != nullptr);\n+        CHECK(end == ts + strlen(\"2026-10-22 05:17:14,750\"));\n+        CHECK((tm.et_flags & ETF_ZONE_SET) == 0);\n+        CHECK(tm.et_tm.tm_hour == 5);\n+        CHECK(tm.et_tm.tm_min == 17);\n+        CHECK(tm.et_tm.tm_sec == 14);\n+    }\n+}\n+\n TEST_CASE(\"date_time_scanner\")\n {\n     setenv(\"TZ\", \"UTC\", 1);"
+  }
+ ],
+ "test_files": [
+  "test/test_date_time_scanner.cc"
+ ]
+}
