@@ -1,0 +1,33 @@
+{
+ "repo": "TanStack/ai",
+ "number": 2175,
+ "url": "https://github.com/TanStack/ai/pull/2175",
+ "title": "fix(ai-harness): clear the snapshot timer when the log is released",
+ "merged_at": "2026-11-21T03:34:24Z",
+ "files": [
+  {
+   "filename": ".changeset/harness-release-stops-snapshot-timer.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@tanstack/ai-harness': patch\n+---\n+\n+A log that gives its ownership back when its sessions have no work now also clears its pending snapshot timer, so the timer no longer stays armed for a snapshot this host cannot write."
+  },
+  {
+   "filename": "packages/ai-harness/src/log.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -2190,6 +2190,9 @@ export class SharedLog<TState = unknown> {\n     const isBusy = [...this.views.values()].some((view) => view.hooks.isBusy())\n     if (epoch === undefined || isBusy || this.pending.length > 0) return\n     this.epoch = undefined\n+    // No owner, so no snapshot to write: the timer would only wait for a\n+    // limit that no snapshot of this host can meet.\n+    this.stopSnapshotTimer()\n     await this.ownership.release(this.logId, epoch)\n   }\n "
+  },
+  {
+   "filename": "packages/ai-harness/tests/log.test.ts",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -1320,6 +1320,24 @@ describe('snapshots', () => {\n     }\n   })\n \n+  it('leaves no snapshot timer armed once the host gave the log back', async () => {\n+    vi.useFakeTimers()\n+    try {\n+      const store = memoryLogStore()\n+      const writer = newWriter(store, {\n+        snapshot: { bytes: 1_000_000, ms: 1_000 },\n+      })\n+\n+      await writer.append([tick(1)])\n+      await writer.rest()\n+\n+      expect(vi.getTimerCount()).toBe(0)\n+      writer.close()\n+    } finally {\n+      vi.useRealTimers()\n+    }\n+  })\n+\n   it('never writes a snapshot on a host that only reads the log', async () => {\n     const inner = memoryLogStore()\n     const snapshots: Array<number> = []"
+  }
+ ],
+ "test_files": [
+  "packages/ai-harness/tests/log.test.ts"
+ ]
+}

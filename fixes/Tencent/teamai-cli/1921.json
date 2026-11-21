@@ -1,0 +1,40 @@
+{
+ "repo": "Tencent/teamai-cli",
+ "number": 1921,
+ "url": "https://github.com/Tencent/teamai-cli/pull/1921",
+ "title": "fix(skills): track Qoder Markdown skill mentions",
+ "merged_at": "2026-11-21T06:09:41Z",
+ "files": [
+  {
+   "filename": "packages/tool-core/src/definition.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -29,7 +29,7 @@ export type SkillCall = { readonly name: string; readonly evidence: Evidence };\n  * Codex resolves, the `<skill>` block Pi expands `/skill:name` into, the\n  * `@command://name` the CodeBuddy plugin sends, or the `/name` most tools take.\n  */\n-export type PromptForm = '$name' | 'skill-block' | 'command-uri' | '/name';\n+export type PromptForm = '$name' | 'skill-block' | 'command-uri' | 'markdown-mention' | '/name';\n \n export type SkillLoad =\n   | { readonly calls: readonly SkillCall[]; readonly promptForm?: PromptForm | readonly PromptForm[] }"
+  },
+  {
+   "filename": "packages/tool-qoder/src/definitions.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -4,7 +4,7 @@ import { UNKNOWN_READS, type ToolDescriptor } from '@teamai/tool-core/definition\n export const tools = {\n   qoder: {\n     home: { dir: '.qoder', moves: { by: [{ kind: 'qoder-home', evidence: 'source' }] } },\n-    skillLoad: { calls: [{ name: 'Skill', evidence: 'source' }] },\n+    skillLoad: { calls: [{ name: 'Skill', evidence: 'source' }], promptForm: ['/name', 'markdown-mention'] },\n     skills: UNKNOWN_READS,\n     installedBy: 'home-edition',\n     rules: {\n@@ -49,7 +49,7 @@ export const tools = {\n   },\n   'qoder-cn': {\n     home: { dir: '.qoder-cn', moves: { by: [{ kind: 'qoder-cn-home', evidence: 'source' }] } },\n-    skillLoad: { calls: [{ name: 'Skill', evidence: 'source' }] },\n+    skillLoad: { calls: [{ name: 'Skill', evidence: 'source' }], promptForm: ['/name', 'markdown-mention'] },\n     skills: UNKNOWN_READS,\n     installedBy: 'home-edition',\n     rules: {"
+  },
+  {
+   "filename": "src/__tests__/skill-use.test.ts",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -363,6 +363,25 @@ describe('skill use from a prompt mention (#1221)', () => {\n     expect(await credits()).toEqual([{ skill: SKILL, tool: 'codex' }]);\n   });\n \n+  it.each(['qoder', 'qoder-cn'])('credits %s Markdown skill mentions and keeps slash commands', async (tool) => {\n+    install(`.${tool}/skills`);\n+    for (const text of [\n+      'Use [@missing](skill://missing)',\n+      `Use [@${SKILL}](https://example.test/${SKILL})`,\n+      `Use [@${SKILL}](skill://different-skill)`,\n+    ]) {\n+      await prompt({ session_id: 'ignored', cwd, prompt: text }, tool);\n+    }\n+    expect(await credits()).toEqual([]);\n+    for (const [index, text] of [\n+      `Use [@${SKILL}](skill://${SKILL}) for this task`,\n+      `/${SKILL} go`,\n+    ].entries()) {\n+      await prompt({ session_id: `qoder-${index}`, cwd, prompt: text }, tool);\n+    }\n+    expect(await credits()).toEqual([{ skill: SKILL, tool }, { skill: SKILL, tool }]);\n+  });\n+\n   it('gates Codex mentions on Codex installations', async () => {\n     install('.pi/agent/skills', { skill: 'pi-only' });\n     const payload = { session_id: 'own-roots', turn_id: 'T1', prompt: '$pi-only', cwd };"
+  },
+  {
+   "filename": "src/skill-use.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -199,6 +199,9 @@ function promptCandidates(prompt: string, tool: string): SkillCandidate[] {\n         // conversation is not a skill use.\n         pattern = new RegExp(`^@command://(${NAME})(?=\\\\s|$)`, 'g');\n         break;\n+      case 'markdown-mention':\n+        pattern = new RegExp(`\\\\[@(${NAME})\\\\]\\\\(skill://\\\\1\\\\)`, 'g');\n+        break;\n       case '/name':\n         // A whole token at the start, so a prompt beginning with an absolute path is not a skill use.\n         pattern = new RegExp(`^/(${NAME})(?=\\\\s|$)`, 'g');"
+  }
+ ],
+ "test_files": [
+  "src/__tests__/skill-use.test.ts"
+ ]
+}

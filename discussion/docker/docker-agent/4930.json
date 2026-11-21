@@ -3,7 +3,33 @@
  "number": 4930,
  "url": "https://github.com/docker/docker-agent/pull/4930",
  "state": "open",
- "reviews": [],
- "review_comments": [],
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-21T06:41:23Z",
+   "body": "Spawned tabs now leave the active-session list without deleting the stored session, but the fix does not yet cover the full lifecycle in #4909. #4931 addresses the same issue and is a useful comparison for the detach wiring.\n\nValidation: On this commit, the server, TUI, supervisor, and root command package tests passed. Server and supervisor race tests and targeted `go vet` also passed. Two focused regression tests reproduced the server findings below. The initial-tab finding was verified by tracing the cleanup callbacks, not by an interactive TUI run.\n\nPrior threads: No reviews or review threads; there is no prior human-reviewed commit to compare against."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "collaborator",
+   "path": "cmd/root/run.go",
+   "created_at": "2026-11-21T06:41:23Z",
+   "body": "[blocking] This only detaches tabs created by `createSessionSpawner`. The initial tab is attached separately by `startSessionCoordinator` (`run_listen.go:75–80`), but `runOrExec` still passes the backend's cleanup directly to the TUI (`run.go:559–616`). Open a second tab under `--listen` and close the initial one: the supervisor removes the tab, but its runtime and follow-up injector remain registered and `/api/sessions` still lists it as active. Wire detachment into the initial tab's cleanup too, and cover both paths with a tab-close regression test."
+  },
+  {
+   "role": "collaborator",
+   "path": "pkg/server/session_manager.go",
+   "created_at": "2026-11-21T06:41:23Z",
+   "body": "[blocking] Removing the runtime from the manager does not undo the recall handler installed by `AttachRuntime` (`session_manager.go:459–460`). An embedder that keeps the detached runtime still holds a callback into this manager; an idle recall is routed back to the detached session and rejected instead of falling back to the runtime's steer queue (`runtime.go:1492–1514`). A focused test with a runtime that implements `SetRecallHandler` confirmed the handler remains set after detach. Clear the handler installed for that attachment."
+  },
+  {
+   "role": "collaborator",
+   "path": "pkg/server/session_manager.go",
+   "created_at": "2026-11-21T06:41:23Z",
+   "body": "[blocking] `dropEventLog` permanently tombstones the session ID (`session_manager.go:329–341`). The stored session survives, but reattaching that same ID succeeds while `RegisterEventSource` silently refuses to register its new source (`session_manager.go:256–261`), so `/api/sessions/:id/events` returns 404. A focused attach → detach → reload → reattach test reproduced the rejected registration. Tear down the attachment's event log without marking the session deleted, and add a same-ID reattachment test."
+  }
+ ],
  "comments": []
 }

@@ -1,0 +1,40 @@
+{
+ "repo": "svix/svix-webhooks",
+ "number": 2833,
+ "url": "https://github.com/svix/svix-webhooks/pull/2833",
+ "title": "fix(kotlin): reject empty webhook secret in Webhook constructors",
+ "merged_at": "2026-11-20T22:00:37Z",
+ "files": [
+  {
+   "filename": "ChangeLog.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -6,6 +6,7 @@ The Svix Server changelog has moved to [server/ChangeLog.md](./server/ChangeLog.\n The Svix Bridge changelog has moved to [bridge/ChangeLog.md](./bridge/ChangeLog.md).\n \n ## Unreleased\n+* Libs/Kotlin: `Webhook` constructors now throw `EmptyWebhookSecretException` for an empty secret, like the Java SDK\n * Libs/Ruby: Retry HTTP 423 Locked responses, like the other SDKs\n * Libs/C#: Improve retry logic (retry on HTTP 423)\n * Libs/Go: Improve retry logic (retry on HTTP 423)"
+  },
+  {
+   "filename": "kotlin/lib/src/main/kotlin/Webhook.kt",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -1,5 +1,6 @@\n package com.svix.kotlin\n \n+import com.svix.kotlin.exceptions.EmptyWebhookSecretException\n import com.svix.kotlin.exceptions.WebhookSigningException\n import com.svix.kotlin.exceptions.WebhookVerificationException\n import java.net.http.HttpHeaders\n@@ -102,15 +103,23 @@ class Webhook {\n         }\n     }\n \n+    @Throws(EmptyWebhookSecretException::class)\n     constructor(secret: String) {\n         var sec = secret\n         if (sec.startsWith(SECRET_PREFIX)) {\n             sec = sec.substring(SECRET_PREFIX.length)\n         }\n         key = Base64.getDecoder().decode(sec)\n+        if (key.isEmpty()) {\n+            throw EmptyWebhookSecretException(\"Webhook secret should not be empty\")\n+        }\n     }\n \n+    @Throws(EmptyWebhookSecretException::class)\n     constructor(secret: ByteArray) {\n+        if (secret.isEmpty()) {\n+            throw EmptyWebhookSecretException(\"Webhook secret should not be empty\")\n+        }\n         key = secret\n     }\n }"
+  },
+  {
+   "filename": "kotlin/lib/src/main/kotlin/exceptions/EmptyWebhookSecretException.kt",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+package com.svix.kotlin.exceptions\n+\n+class EmptyWebhookSecretException(message: String) : Exception(message)"
+  },
+  {
+   "filename": "kotlin/lib/src/test/com/svix/kotlin/WebhookTest.kt",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -1,5 +1,6 @@\n package com.svix.kotlin\n \n+import com.svix.kotlin.exceptions.EmptyWebhookSecretException\n import com.svix.kotlin.exceptions.WebhookVerificationException\n import java.net.http.HttpHeaders\n import java.nio.charset.StandardCharsets\n@@ -46,6 +47,17 @@ class WebhookTest {\n         webhook.verify(testPayload.payload, testPayload.headers())\n     }\n \n+    @Test\n+    fun emptyStringSecretThrowsException() {\n+        assertFailsWith<EmptyWebhookSecretException> { Webhook(\"\") }\n+        assertFailsWith<EmptyWebhookSecretException> { Webhook(\"whsec_\") }\n+    }\n+\n+    @Test\n+    fun emptyByteArraySecretThrowsException() {\n+        assertFailsWith<EmptyWebhookSecretException> { Webhook(ByteArray(0)) }\n+    }\n+\n     @Test\n     fun verifyMissingIdThrowsException() {\n         val testPayload = TestPayload(System.currentTimeMillis())"
+  }
+ ],
+ "test_files": [
+  "kotlin/lib/src/test/com/svix/kotlin/WebhookTest.kt"
+ ]
+}
