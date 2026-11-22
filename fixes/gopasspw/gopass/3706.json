@@ -1,0 +1,26 @@
+{
+ "repo": "gopasspw/gopass",
+ "number": 3706,
+ "url": "https://github.com/gopasspw/gopass/pull/3706",
+ "title": "fix(fscopy): respect store directory boundaries",
+ "merged_at": "2026-11-22T06:58:26Z",
+ "files": [
+  {
+   "filename": "internal/action/binary.go",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 6,
+   "patch": "@@ -162,22 +162,38 @@ func (s *binaryHandler) isInStore(fn string) bool {\n \tif err != nil {\n \t\treturn false\n \t}\n-\tif strings.HasPrefix(fp, s.Store.Path()) {\n+\tif isSubpath(s.Store.Path(), fp) {\n \t\treturn true\n \t}\n \tfor _, mp := range s.Store.Mounts() {\n-\t\tmp, err := filepath.Abs(mp)\n-\t\tif err != nil {\n-\t\t\tcontinue\n-\t\t}\n-\t\tif strings.HasPrefix(fp, mp) {\n+\t\tif isSubpath(mp, fp) {\n \t\t\treturn true\n \t\t}\n \t}\n \n \treturn false\n }\n \n+// isSubpath returns true if target is base itself or located below it.\n+// Only whole path elements are compared, so \"/a/b-backup\" is not below \"/a/b\".\n+func isSubpath(base, target string) bool {\n+\tif base == \"\" {\n+\t\treturn false\n+\t}\n+\tabsBase, err := filepath.Abs(base)\n+\tif err != nil {\n+\t\treturn false\n+\t}\n+\tif target == absBase {\n+\t\treturn true\n+\t}\n+\tif !strings.HasSuffix(absBase, string(filepath.Separator)) {\n+\t\tabsBase += string(filepath.Separator)\n+\t}\n+\n+\treturn strings.HasPrefix(target, absBase)\n+}\n+\n // binaryCopy implements the control flow for copy and move. We support two\n // workflows:.\n // 1. From the filesystem to the store."
+  },
+  {
+   "filename": "internal/action/binary_test.go",
+   "status": "modified",
+   "additions": 54,
+   "deletions": 0,
+   "patch": "@@ -348,3 +348,57 @@ func writeBinfile(t *testing.T, fn string, size int) {\n \tassert.Equal(t, size, n)\n \trequire.NoError(t, os.WriteFile(fn, buf, 0o644))\n }\n+\n+func TestBinaryCopyStorePathBoundaries(t *testing.T) {\n+\tu := gptest.NewUnitTester(t)\n+\n+\tbuf := &bytes.Buffer{}\n+\tout.Stdout = buf\n+\tdefer func() {\n+\t\tout.Stdout = os.Stdout\n+\t}()\n+\n+\tctx := ctxutil.WithHidden(ctxutil.WithAlwaysYes(config.NewContextInMemory(), true), true)\n+\tact, err := newMock(ctx, u.StoreDir(\"\"))\n+\trequire.NoError(t, err)\n+\tctx = act.cfg.WithConfig(ctx)\n+\trequire.NoError(t, u.InitStore(\"mount\"))\n+\tmountPath := filepath.Join(t.TempDir(), \"mounted\")\n+\trequire.NoError(t, os.Rename(u.StoreDir(\"mount\"), mountPath))\n+\trequire.NoError(t, act.Store.AddMount(ctx, \"mount\", mountPath))\n+\n+\tfor _, storePath := range []string{u.StoreDir(\"\"), mountPath} {\n+\t\tt.Run(filepath.Base(storePath), func(t *testing.T) {\n+\t\t\trequire.True(t, act.binary.isInStore(storePath))\n+\t\t\trequire.True(t, act.binary.isInStore(filepath.Join(storePath, \"child.txt\")))\n+\t\t\trequire.True(t, act.binary.isInStore(filepath.Join(storePath, \"..hidden\")))\n+\t\t\trequire.False(t, act.binary.isInStore(filepath.Dir(storePath)))\n+\t\t\tsibling := storePath + \"-backup\"\n+\t\t\trequire.NoError(t, os.MkdirAll(sibling, 0o700))\n+\t\t\tfor _, tc := range []struct {\n+\t\t\t\tname string\n+\t\t\t\tmove bool\n+\t\t\t}{{\"copy\", false}, {\"move\", true}} {\n+\t\t\t\tmove := tc.move\n+\t\t\t\tt.Run(tc.name, func(t *testing.T) {\n+\t\t\t\t\tsecret := filepath.Base(storePath) + \"/\" + t.Name()\n+\t\t\t\t\tinfile := filepath.Join(sibling, \"input.txt\")\n+\t\t\t\t\toutfile := filepath.Join(sibling, \"output.txt\")\n+\t\t\t\t\trequire.NoError(t, os.WriteFile(infile, []byte(\"boundary regression\\n\"), 0o600))\n+\t\t\t\t\trequire.False(t, act.binary.isInStore(infile))\n+\t\t\t\t\trequire.NoError(t, act.binaryCopy(ctx, gptest.CliCtx(ctx, t), infile, secret, move))\n+\t\t\t\t\trequire.NoError(t, act.binaryCopy(ctx, gptest.CliCtx(ctx, t), secret, outfile, move))\n+\t\t\t\t\tgot, err := os.ReadFile(outfile)\n+\t\t\t\t\trequire.NoError(t, err)\n+\t\t\t\t\trequire.Equal(t, \"boundary regression\\n\", string(got))\n+\t\t\t\t})\n+\t\t\t}\n+\t\t\tchild := filepath.Join(storePath, \"child.txt\")\n+\t\t\trequire.NoError(t, os.WriteFile(child, []byte(\"protected\\n\"), 0o600))\n+\t\t\trequire.ErrorContains(t, act.binaryCopy(ctx, gptest.CliCtx(ctx, t), child, \"protected\", false), \"Source is in the store\")\n+\t\t\trequire.NoError(t, os.WriteFile(filepath.Join(sibling, \"input.txt\"), []byte(\"boundary regression\\n\"), 0o600))\n+\t\t\trequire.NoError(t, act.binaryCopy(ctx, gptest.CliCtx(ctx, t), filepath.Join(sibling, \"input.txt\"), filepath.Base(storePath)+\"-protected\", false))\n+\t\t\trequire.ErrorContains(t, act.binaryCopy(ctx, gptest.CliCtx(ctx, t), filepath.Base(storePath)+\"-protected\", child, false), \"Destination is in the store\")\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/action/binary_test.go"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "dagucloud/dagu",
+ "number": 4017,
+ "url": "https://github.com/dagucloud/dagu/pull/4017",
+ "title": "fix(wait): neutral wording for http errors and strip nested local addresses",
+ "merged_at": "2026-11-22T07:07:16Z",
+ "files": [
+  {
+   "filename": "internal/runtime/builtin/wait/wait.go",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 5,
+   "patch": "@@ -318,10 +318,7 @@ func (e *executorImpl) waitHTTP(ctx context.Context) error {\n // line). So only errors whose text holds at most a host and port are printed.\n func requestError(err error) string {\n \tif opErr, ok := errors.AsType[*net.OpError](err); ok {\n-\t\t// The local address holds an ephemeral port that changes on every poll.\n-\t\top := *opErr\n-\t\top.Source = nil\n-\t\treturn op.Error()\n+\t\treturn withoutSource(opErr).Error()\n \t}\n \tif tlsErr, ok := errors.AsType[*tls.CertificateVerificationError](err); ok {\n \t\treturn tlsErr.Error()\n@@ -334,7 +331,20 @@ func requestError(err error) string {\n \t\t\treturn known.Error()\n \t\t}\n \t}\n-\treturn \"details left out, they may quote the server's response\"\n+\treturn \"details left out, they may contain the URL or response text\"\n+}\n+\n+// withoutSource returns a copy of opErr, and of each *net.OpError it wraps\n+// directly, with the local address cleared. That address holds an ephemeral\n+// port that changes on every poll, and behind an https:// proxy the failing\n+// error sits inside a proxyconnect one.\n+func withoutSource(opErr *net.OpError) *net.OpError {\n+\top := *opErr\n+\top.Source = nil\n+\tif inner, ok := op.Err.(*net.OpError); ok {\n+\t\top.Err = withoutSource(inner)\n+\t}\n+\treturn &op\n }\n \n // viaProxy names the proxy req goes through, if any, without its credentials."
+  },
+  {
+   "filename": "internal/runtime/builtin/wait/wait_test.go",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 1,
+   "patch": "@@ -7,6 +7,7 @@ import (\n \t\"bytes\"\n \t\"context\"\n \t\"encoding/json\"\n+\t\"errors\"\n \t\"io\"\n \t\"log\"\n \t\"net\"\n@@ -285,6 +286,8 @@ func requireOneLine(t *testing.T, stderr, prefix string) {\n \trequire.NotContains(t, stderr, \"secret\")\n }\n \n+const detailsLeftOutLine = \"wait: http GET request failed: details left out, they may contain the URL or response text\\n\"\n+\n // net/http quotes text from the server in these errors, and that text may\n // carry a token, so the error text is replaced.\n func TestHTTPServerTextLeftOutOfStderr(t *testing.T) {\n@@ -321,7 +324,7 @@ func TestHTTPServerTextLeftOutOfStderr(t *testing.T) {\n \t\t\tdefer server.Close()\n \n \t\t\tstderr := runHTTPUntilLogged(t, newHTTPWait(t, map[string]any{\"url\": server.URL + \"/ready\"}))\n-\t\t\trequire.Equal(t, \"wait: http GET request failed: details left out, they may quote the server's response\\n\", stderr)\n+\t\t\trequire.Equal(t, detailsLeftOutLine, stderr)\n \t\t})\n \t}\n }\n@@ -741,3 +744,37 @@ func TestExecutorRunStopsWhenContextIsCanceled(t *testing.T) {\n \n \trequire.ErrorIs(t, exec.Run(ctx), context.Canceled)\n }\n+\n+func TestRequestErrorClearsNestedLocalAddress(t *testing.T) {\n+\tt.Parallel()\n+\n+\tnewErr := func(port int) error {\n+\t\tinner := &net.OpError{\n+\t\t\tOp:     \"read\",\n+\t\t\tNet:    \"tcp\",\n+\t\t\tSource: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port},\n+\t\t\tAddr:   &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 61431},\n+\t\t\tErr:    errors.New(\"connection reset by peer\"),\n+\t\t}\n+\t\treturn &net.OpError{Op: \"proxyconnect\", Net: \"tcp\", Err: inner}\n+\t}\n+\n+\tfirst, second := requestError(newErr(61432)), requestError(newErr(61433))\n+\trequire.Equal(t, first, second)\n+\trequire.NotContains(t, first, \"61432\")\n+}\n+\n+// A header value with a trailing newline, such as a token read from a file,\n+// fails before the request is sent, so the line must not blame the server.\n+func TestHTTPClientSideErrorNotBlamedOnServer(t *testing.T) {\n+\tt.Parallel()\n+\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))\n+\tdefer server.Close()\n+\n+\tstderr := runHTTPUntilLogged(t, newHTTPWait(t, map[string]any{\n+\t\t\"url\":     server.URL,\n+\t\t\"headers\": map[string]any{\"Authorization\": \"Bearer abc\\n\"},\n+\t}))\n+\trequire.Equal(t, detailsLeftOutLine, stderr)\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/runtime/builtin/wait/wait_test.go"
+ ]
+}

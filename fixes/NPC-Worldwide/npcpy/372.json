@@ -1,0 +1,26 @@
+{
+ "repo": "NPC-Worldwide/npcpy",
+ "number": 372,
+ "url": "https://github.com/NPC-Worldwide/npcpy/pull/372",
+ "title": "fix(llamacpp): record the user turn in returned messages without mutating caller's list",
+ "merged_at": "2026-11-22T19:10:10Z",
+ "files": [
+  {
+   "filename": "npcpy/gen/response.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 5,
+   "patch": "@@ -1313,12 +1313,11 @@ def get_llamacpp_response(\n     }\n \n     if prompt:\n-        if messages and messages[-1][\"role\"] == \"user\":\n-            messages[-1][\"content\"] = prompt\n+        if result[\"messages\"] and result[\"messages\"][-1][\"role\"] == \"user\":\n+            result[\"messages\"][-1][\"content\"] = prompt\n         else:\n-            if not messages:\n-                messages = []\n-            messages.append({\"role\": \"user\", \"content\": prompt})\n+            result[\"messages\"].append({\"role\": \"user\", \"content\": prompt})\n+    messages = result[\"messages\"]\n \n     try:\n         n_ctx = kwargs.get(\"n_ctx\", 32768)"
+  },
+  {
+   "filename": "tests/test_llamacpp_params.py",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -107,3 +107,21 @@ def test_tool_call_without_content(response_module, completion, auto_process, wi\n         assistant = result[\"messages\"][-1]\n     assert assistant[\"tool_calls\"] == tool_calls\n     assert assistant[\"content\"] is None\n+\n+\n+def test_user_turn_recorded_without_mutating_caller(response_module, completion):\n+    completion.return_value = {\"choices\": [{\"message\": {\n+        \"role\": \"assistant\", \"content\": \"Hi there\",\n+    }}]}\n+    history = [{\"role\": \"system\", \"content\": \"Be brief.\"}]\n+    result = response_module.get_llamacpp_response(\n+        prompt=\"Hello\", model=\"test.gguf\", messages=history,\n+    )\n+    assert result[\"messages\"] == [\n+        {\"role\": \"system\", \"content\": \"Be brief.\"},\n+        {\"role\": \"user\", \"content\": \"Hello\"},\n+        {\"role\": \"assistant\", \"content\": \"Hi there\"},\n+    ]\n+    assert history == [{\"role\": \"system\", \"content\": \"Be brief.\"}]\n+    # the model saw the user turn (the list is later extended with the reply)\n+    assert {\"role\": \"user\", \"content\": \"Hello\"} in completion.call_args.kwargs[\"messages\"]"
+  }
+ ],
+ "test_files": [
+  "tests/test_llamacpp_params.py"
+ ]
+}

@@ -1,0 +1,48 @@
+{
+ "repo": "open-multi-agent/open-multi-agent",
+ "number": 682,
+ "url": "https://github.com/open-multi-agent/open-multi-agent/pull/682",
+ "title": "fix(core): send max_completion_tokens to OpenAI GPT-5 and o-series models",
+ "merged_at": "2026-11-22T09:34:14Z",
+ "files": [
+  {
+   "filename": "packages/core/src/llm/azure-openai.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 2,
+   "patch": "@@ -61,6 +61,7 @@ import {\n   fromOpenAICompletion,\n   normalizeFinishReason,\n   buildOpenAIMessageList,\n+  openAIMaxTokensParam,\n   toOpenAISdkReasoningEffort,\n   createToolCallSlotResolver,\n } from './openai-common.js'\n@@ -153,7 +154,7 @@ export class AzureOpenAIAdapter implements LLMAdapter {\n         // cannot accidentally clobber them via extraBody.\n         // `top_k` / `min_p` deliberately omitted — vLLM-only, not accepted\n         // by Azure OpenAI's hosted endpoint.\n-        max_tokens: options.maxTokens,\n+        ...openAIMaxTokensParam(options.model, options.maxTokens),\n         temperature: options.temperature,\n         frequency_penalty: options.frequencyPenalty,\n         presence_penalty: options.presencePenalty,\n@@ -201,7 +202,7 @@ export class AzureOpenAIAdapter implements LLMAdapter {\n       {\n         // See chat() above for the field-ordering rationale and the\n         // `top_k` / `min_p` exclusion.\n-        max_tokens: options.maxTokens,\n+        ...openAIMaxTokensParam(options.model, options.maxTokens),\n         temperature: options.temperature,\n         frequency_penalty: options.frequencyPenalty,\n         presence_penalty: options.presencePenalty,"
+  },
+  {
+   "filename": "packages/core/src/llm/openai-common.ts",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -48,6 +48,23 @@ export function toOpenAISdkReasoningEffort(\n   return effort === 'max' ? undefined : effort\n }\n \n+/**\n+ * Build the output-token-limit field for a Chat Completions request.\n+ *\n+ * OpenAI's GPT-5 and o-series reasoning models reject `max_tokens` and require\n+ * `max_completion_tokens`. Every other model keeps `max_tokens`, which is what\n+ * OpenAI-compatible servers (vLLM, llama-server, ...) expect.\n+ */\n+export function openAIMaxTokensParam(\n+  model: string,\n+  maxTokens: number | undefined,\n+): { max_tokens?: number; max_completion_tokens?: number } {\n+  const usesCompletionTokens = /^(gpt-5|o[134])(?![a-z0-9])/i.test(model.trim())\n+  return usesCompletionTokens\n+    ? { max_completion_tokens: maxTokens }\n+    : { max_tokens: maxTokens }\n+}\n+\n /**\n  * Convert a framework {@link LLMToolDef} to an OpenAI {@link ChatCompletionTool}.\n  */"
+  },
+  {
+   "filename": "packages/core/src/llm/openai.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 2,
+   "patch": "@@ -60,6 +60,7 @@ import {\n   buildOpenAIMessageList,\n   getOpenAIReasoningText,\n   repairToolArgs,\n+  openAIMaxTokensParam,\n   toOpenAISdkReasoningEffort,\n   createToolCallSlotResolver,\n } from './openai-common.js'\n@@ -182,7 +183,7 @@ export class OpenAIAdapter implements LLMAdapter {\n         // Sampling params first so extraBody can override them. Structural\n         // fields (model/messages/tools/stream) come after extraBody so users\n         // cannot accidentally clobber them via extraBody.\n-        max_tokens: options.maxTokens,\n+        ...openAIMaxTokensParam(options.model, options.maxTokens),\n         temperature: options.temperature,\n         frequency_penalty: options.frequencyPenalty,\n         presence_penalty: options.presencePenalty,\n@@ -234,7 +235,7 @@ export class OpenAIAdapter implements LLMAdapter {\n     const streamResponse = await this.#client.chat.completions.create(\n       {\n         // See chat() above for the rationale behind this field ordering.\n-        max_tokens: options.maxTokens,\n+        ...openAIMaxTokensParam(options.model, options.maxTokens),\n         temperature: options.temperature,\n         frequency_penalty: options.frequencyPenalty,\n         presence_penalty: options.presencePenalty,"
+  },
+  {
+   "filename": "packages/core/tests/azure-openai-adapter.test.ts",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -344,6 +344,22 @@ describe('AzureOpenAIAdapter', () => {\n     }\n   })\n \n+  it('sends max_completion_tokens for GPT-5 / o-series deployments (chat and stream)', async () => {\n+    const adapter = new AzureOpenAIAdapter('k', 'https://test.openai.azure.com')\n+\n+    createCompletionMock.mockResolvedValue(makeCompletion())\n+    await adapter.chat([textMsg('user', 'Hi')], chatOpts({ model: 'gpt-5', maxTokens: 321 }))\n+    const chatArgs = createCompletionMock.mock.calls[0][0]\n+    expect(chatArgs.max_completion_tokens).toBe(321)\n+    expect(chatArgs).not.toHaveProperty('max_tokens')\n+\n+    createCompletionMock.mockResolvedValue(makeChunks([textChunk('Hi', 'stop')]))\n+    await collectEvents(adapter.stream([textMsg('user', 'Hi')], chatOpts({ model: 'o3-mini', maxTokens: 321 })))\n+    const streamArgs = createCompletionMock.mock.calls[1][0]\n+    expect(streamArgs.max_completion_tokens).toBe(321)\n+    expect(streamArgs).not.toHaveProperty('max_tokens')\n+  })\n+\n   it('stream() sends stream options and emits done usage', async () => {\n     createCompletionMock.mockResolvedValue(makeChunks([\n       textChunk('Hi', 'stop'),"
+  },
+  {
+   "filename": "packages/core/tests/openai-adapter.test.ts",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -520,6 +520,42 @@ describe('OpenAIAdapter', () => {\n     })\n   })\n \n+  // =========================================================================\n+  // output token limit parameter\n+  // =========================================================================\n+\n+  describe('output token limit parameter', () => {\n+    it.each(['gpt-5', 'gpt-5.4-mini', 'o1', 'o3-mini', 'o4-mini'])(\n+      'sends max_completion_tokens instead of max_tokens for %s (chat and stream)',\n+      async (model) => {\n+        mockCreate.mockResolvedValue(makeCompletion())\n+        await adapter.chat([textMsg('user', 'Hi')], chatOpts({ model, maxTokens: 321 }))\n+        const chatArgs = mockCreate.mock.calls[0][0]\n+        expect(chatArgs.max_completion_tokens).toBe(321)\n+        expect(chatArgs).not.toHaveProperty('max_tokens')\n+\n+        mockCreate.mockResolvedValue(makeChunks([\n+          textChunk('Hi', 'stop', { prompt_tokens: 5, completion_tokens: 2 }),\n+        ]))\n+        await collectEvents(adapter.stream([textMsg('user', 'Hi')], chatOpts({ model, maxTokens: 321 })))\n+        const streamArgs = mockCreate.mock.calls[1][0]\n+        expect(streamArgs.max_completion_tokens).toBe(321)\n+        expect(streamArgs).not.toHaveProperty('max_tokens')\n+      },\n+    )\n+\n+    it.each(['gpt-4o', 'gpt-4.1', 'llama-3-70b', 'my-o1-finetune'])(\n+      'keeps max_tokens for %s',\n+      async (model) => {\n+        mockCreate.mockResolvedValue(makeCompletion())\n+        await adapter.chat([textMsg('user', 'Hi')], chatOpts({ model, maxTokens: 321 }))\n+        const args = mockCreate.mock.calls[0][0]\n+        expect(args.max_tokens).toBe(321)\n+        expect(args).not.toHaveProperty('max_completion_tokens')\n+      },\n+    )\n+  })\n+\n   // =========================================================================\n   // reasoning_effort forwarding (RFC #200 follow-up)\n   // ========================================================================="
+  }
+ ],
+ "test_files": [
+  "packages/core/tests/azure-openai-adapter.test.ts",
+  "packages/core/tests/openai-adapter.test.ts"
+ ]
+}

@@ -2,7 +2,7 @@
  "repo": "EverMind-AI/Raven",
  "number": 1361,
  "url": "https://github.com/EverMind-AI/Raven/pull/1361",
- "state": "open",
+ "state": "closed",
  "reviews": [],
  "review_comments": [],
  "comments": [
@@ -15,6 +15,11 @@
    "role": "member",
    "created_at": "2026-11-20T23:03:16Z",
    "body": "## Windows compatibility review\n\nScope: full base-to-head diff at `ccb5218b4f68f9c2c04b5700f426166c4264e53c` (base now `fc0a30f768`; head is a merge of `origin/main` into the branch). The effective PR diff is 2 files: `raven/security/redact.py` (+4/-1) and `tests/test_acp_redact.py` (+5). After the merge the PR's own change is the HF token pattern `(?<![A-Za-z0-9_])(hf_[A-Za-z0-9]{20,})`, the Cookie/Set-Cookie value pattern, and `hf_` added to the truncated-tail patterns.\n\nResult: **no Windows compatibility issue.** Both patterns are pure text regexes with no path, subprocess, or filesystem surface. The Cookie pattern explicitly excludes `\\r\\n` from the value class, so a CRLF header on Windows is cut at the line end rather than swallowing the next line; verified by the tests and by reading the class.\n\nChecks on this native Windows host, from the head tree (tarball checkout):\n\n```\npython -S runner.py tests/test_acp_redact.py -q\n-> 62 passed   (57 at the base tree: the 5 new cases pass)\n```\n\n`tests/test_trajectory_redact.py` in the same run: 3 failed, 87 passed; the identical three IDs fail at the base tree (3 failed, 82 passed):\n`test_residual_finding_carries_token_and_occurrences`, `test_binary_file_excluded_and_recorded`, `test_end_to_end_report_with_real_tracer`. All three compare `artifacts\\tool.output.json` against `artifacts/tool.output.json` (and one keys a report by an OS-separator path) — inherited Windows separator assumptions in the trajectory scanner's tests, not this PR's patterns.\n\nGaps: tarball checkout; the merge was not re-verified against every mainline file beyond the effective diff.\n\n<!-- raven-windows-review:pr=1361;head=ccb5218b4f68f9c2c04b5700f426166c4264e53c;reviewer=LivXue -->\n"
+  },
+  {
+   "role": "member",
+   "created_at": "2026-11-22T08:21:13Z",
+   "body": "Closing this in favour of a smaller surface.\n\nWe have settled on keeping the redaction table at the scale Codex uses: four well-known patterns, rather than one rule per vendor. Under that direction a Hugging Face prefix rule and a Cookie header rule are outside what this module is meant to enumerate, however correct the underlying observations were.\n\nTwo notes for the record. The `hf_` half was sound: the left boundary avoids the false positives the rest of the table pays for on short opaque words, and the review found no rewritten ordinary text. It simply is not a rule class we are keeping. The Cookie half had a real problem in both directions: it rewrote ordinary source such as `cookie: Optional[str] = None` (an in-repo instance is `raven/rpc/serve_control.py`), while quoted values like `Cookie: \"session=abc\"` and the structured `{\"Cookie\": \"...\"}` shape on rawInput were not redacted at all.\n\nThanks for the careful write-up; the `read_file` and `rawInput` reasoning in the description is what made the comparison decidable.\n"
   }
  ]
 }

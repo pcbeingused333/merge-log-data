@@ -1,0 +1,26 @@
+{
+ "repo": "open-multi-agent/open-multi-agent",
+ "number": 683,
+ "url": "https://github.com/open-multi-agent/open-multi-agent/pull/683",
+ "title": "fix(core): surface OpenAI chat refusal instead of returning an empty response",
+ "merged_at": "2026-11-22T09:41:08Z",
+ "files": [
+  {
+   "filename": "packages/core/src/llm/openai-common.ts",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 1,
+   "patch": "@@ -493,6 +493,7 @@ export function fromOpenAICompletion(\n \n   const content: ContentBlock[] = []\n   const message = choice.message\n+  let refused = false\n \n   const reasoningText = getOpenAIReasoningText(message)\n   if (reasoningText.length > 0) {\n@@ -505,6 +506,11 @@ export function fromOpenAICompletion(\n   if (message.content !== null && message.content !== undefined) {\n     const textBlock: TextBlock = { type: 'text', text: message.content }\n     content.push(textBlock)\n+  } else if (typeof message.refusal === 'string' && message.refusal.length > 0) {\n+    // Structured-output refusals arrive in `refusal` with `content: null`;\n+    // surface them instead of returning an empty response.\n+    refused = true\n+    content.push({ type: 'text', text: message.refusal })\n   }\n \n   for (const toolCall of message.tool_calls ?? []) {\n@@ -558,9 +564,12 @@ export function fromOpenAICompletion(\n   const rawStopReason = choice.finish_reason ?? 'stop'\n   // If we extracted tool calls from text but the finish_reason was 'stop',\n   // correct it to 'tool_use' so the agent runner continues the loop.\n+  // An explicit refusal is a safety stop, normalized like other providers'.\n   const stopReason = hasToolUseBlocks && rawStopReason === 'stop'\n     ? 'tool_use'\n-    : normalizeFinishReason(rawStopReason)\n+    : refused && !hasToolUseBlocks && rawStopReason === 'stop'\n+      ? 'content_filter'\n+      : normalizeFinishReason(rawStopReason)\n \n   return {\n     id: completion.id,"
+  },
+  {
+   "filename": "packages/core/tests/openai-common.test.ts",
+   "status": "modified",
+   "additions": 33,
+   "deletions": 1,
+   "patch": "@@ -1,5 +1,5 @@\n import { describe, expect, it } from 'vitest'\n-import { toOpenAIMessages } from '../src/llm/openai-common.js'\n+import { fromOpenAICompletion, toOpenAIMessages } from '../src/llm/openai-common.js'\n import type { LLMMessage } from '../src/types.js'\n \n type OutboundOpts = {\n@@ -184,3 +184,35 @@ describe('toOpenAIMessages reasoning fallback', () => {\n     }\n   })\n })\n+\n+describe('fromOpenAICompletion refusal', () => {\n+  const base = { id: 'c1', object: 'chat.completion', created: 0, model: 'gpt-4o' } as const\n+\n+  it('surfaces an explicit model refusal as text', () => {\n+    const res = fromOpenAICompletion({\n+      ...base,\n+      choices: [{\n+        index: 0,\n+        finish_reason: 'stop',\n+        logprobs: null,\n+        message: { role: 'assistant', content: null, refusal: \"I can't help with that.\" },\n+      }],\n+    } as never)\n+    expect(res.content).toEqual([{ type: 'text', text: \"I can't help with that.\" }])\n+    expect(res.stop_reason).toBe('content_filter')\n+  })\n+\n+  it('keeps normal content untouched', () => {\n+    const res = fromOpenAICompletion({\n+      ...base,\n+      choices: [{\n+        index: 0,\n+        finish_reason: 'stop',\n+        logprobs: null,\n+        message: { role: 'assistant', content: 'hi', refusal: null },\n+      }],\n+    } as never)\n+    expect(res.content).toEqual([{ type: 'text', text: 'hi' }])\n+    expect(res.stop_reason).toBe('end_turn')\n+  })\n+})"
+  }
+ ],
+ "test_files": [
+  "packages/core/tests/openai-common.test.ts"
+ ]
+}

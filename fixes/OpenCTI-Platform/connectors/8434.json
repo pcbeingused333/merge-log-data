@@ -1,0 +1,26 @@
+{
+ "repo": "OpenCTI-Platform/connectors",
+ "number": 8434,
+ "url": "https://github.com/OpenCTI-Platform/connectors/pull/8434",
+ "title": "fix(scanmalware-enrichment): format submission TLP ceiling (#7956)",
+ "merged_at": "2026-11-22T15:34:44Z",
+ "files": [
+  {
+   "filename": "internal-enrichment/scanmalware-enrichment/src/connector/connector.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -137,7 +137,7 @@ def _resolve_scan_id(self, value: str) -> str | None:\n         # publication, not a lookup. `connector.max_tlp` governs what this connector may\n         # read; what it may publish needs its own, stricter ceiling.\n         if not self.helper.check_max_tlp(\n-            self.tlp, settings.max_tlp_level_for_submission\n+            self.tlp, f\"TLP:{settings.max_tlp_level_for_submission.upper()}\"\n         ):\n             self.helper.connector_logger.info(\n                 \"[CONNECTOR] Not submitting a scan: the observable is marked above \""
+  },
+  {
+   "filename": "internal-enrichment/scanmalware-enrichment/tests/tests_connector/test_connector.py",
+   "status": "modified",
+   "additions": 33,
+   "deletions": 2,
+   "patch": "@@ -4,6 +4,7 @@\n \n import pytest\n from connector import ConnectorSettings, ScanMalwareEnrichmentConnector\n+from pycti import OpenCTIConnectorHelper\n \n URL_ID = \"url--1f0e3dad-9992-4a10-9c4d-1f0e3dad9992\"\n IP_ID = \"ipv4-addr--2b1e4cad-8871-4b20-8d5e-2b1e4cad8871\"\n@@ -435,8 +436,7 @@ def test_an_amber_observable_is_never_published_to_the_archive():\n     \"\"\"\n     strict = _connector({\"max_tlp_level_for_submission\": \"clear\"})\n     strict.client.get_domain_scans.return_value = []\n-    # The read gate allows it; the submission gate must not.\n-    strict.helper.check_max_tlp.side_effect = lambda tlp, maximum: maximum != \"clear\"\n+    strict.helper.check_max_tlp = OpenCTIConnectorHelper.check_max_tlp\n     strict.tlp = \"TLP:AMBER\"\n \n     assert strict._resolve_scan_id(\"https://example.com/\") is None\n@@ -507,3 +507,34 @@ def test_the_bundle_is_sent_in_update_mode(connector):\n     _, kwargs = connector.helper.send_stix2_bundle.call_args\n     assert kwargs[\"update\"] is True\n     assert kwargs[\"cleanup_inconsistent_bundle\"] is True\n+\n+\n+@pytest.mark.parametrize(\n+    (\"maximum\", \"tlp\", \"allowed\"),\n+    [\n+        (\"clear\", \"TLP:CLEAR\", True),\n+        (\"clear\", \"TLP:GREEN\", False),\n+        (\"amber+strict\", \"TLP:AMBER+STRICT\", True),\n+        (\"amber+strict\", \"TLP:RED\", False),\n+    ],\n+)\n+def test_submission_respects_the_configured_tlp_ceiling(maximum, tlp, allowed):\n+    connector = _connector({\"max_tlp_level_for_submission\": maximum})\n+    connector.helper.check_max_tlp = OpenCTIConnectorHelper.check_max_tlp\n+    connector.tlp = tlp\n+    connector.client.get_domain_scans.return_value = []\n+    connector.client.submit_scan.return_value = \"fresh\"\n+    connector.client.wait_for_scan.return_value = True\n+\n+    scan_id = connector._resolve_scan_id(\"https://example.com/\")\n+\n+    if allowed:\n+        assert scan_id == \"fresh\"\n+        connector.client.submit_scan.assert_called_once_with(\n+            \"https://example.com/\", scan_type=\"public\"\n+        )\n+        connector.client.wait_for_scan.assert_called_once()\n+    else:\n+        assert scan_id is None\n+        connector.client.submit_scan.assert_not_called()\n+        connector.client.wait_for_scan.assert_not_called()"
+  }
+ ],
+ "test_files": [
+  "internal-enrichment/scanmalware-enrichment/tests/tests_connector/test_connector.py"
+ ]
+}

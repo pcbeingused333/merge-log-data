@@ -1,0 +1,71 @@
+{
+ "repo": "formkit/tempo",
+ "number": 102,
+ "url": "https://github.com/formkit/tempo/pull/102",
+ "title": "fix: keep the repeated-hour occurrence in hour/minute start and end",
+ "merged_at": "2026-11-22T12:07:16Z",
+ "files": [
+  {
+   "filename": "src/__tests__/hourEnd.spec.ts",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -11,4 +11,34 @@ describe(\"hourEnd\", () => {\n     compare.setMinutes(59, 59, 999)\n     expect(hourEnd()).toEqual(compare)\n   })\n+\n+  it(\"keeps the second occurrence of a repeated hour (DST fall-back)\", () => {\n+    // 2026-11-01 01:30 America/New_York happens twice; 06:30Z is the second (EST)\n+    expect(hourEnd(\"2026-11-01T06:30:15.123Z\").toISOString()).toBe(\"2026-11-01T06:59:59.999Z\")\n+  })\n+\n+  it(\"handles a 30-minute DST fall-back (Lord_Howe)\", () => {\n+    const tz = process.env.TZ\n+    process.env.TZ = \"Australia/Lord_Howe\"\n+    try {\n+      const r = hourEnd(\"2026-04-04T14:45:15.123Z\")\n+      expect(r.getMinutes()).toBe(59)\n+      expect(r.getSeconds()).toBe(59)\n+    } finally {\n+      process.env.TZ = tz\n+    }\n+  })\n+\n+  it(\"stays in the input's local hour across a non-hourly offset change (Chatham)\", () => {\n+    const tz = process.env.TZ\n+    process.env.TZ = \"Pacific/Chatham\"\n+    try {\n+      const input = new Date(\"2026-04-04T13:18:13.123Z\") // 03:03:13 +13:45\n+      const r = hourEnd(input)\n+      expect(r.getHours()).toBe(input.getHours())\n+      expect(r.getMinutes()).toBe(59)\n+    } finally {\n+      process.env.TZ = tz\n+    }\n+  })\n })"
+  },
+  {
+   "filename": "src/__tests__/hourStart.spec.ts",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -14,4 +14,34 @@ describe(\"hourStart\", () => {\n     compare.setMinutes(0, 0, 0)\n     expect(hourStart()).toEqual(compare)\n   })\n+\n+  it(\"keeps the second occurrence of a repeated hour (DST fall-back)\", () => {\n+    // 2026-11-01 01:30 America/New_York happens twice; 06:30Z is the second (EST)\n+    expect(hourStart(\"2026-11-01T06:30:15.123Z\").toISOString()).toBe(\"2026-11-01T06:00:00.000Z\")\n+  })\n+\n+  it(\"handles a 30-minute DST fall-back (Lord_Howe)\", () => {\n+    const tz = process.env.TZ\n+    process.env.TZ = \"Australia/Lord_Howe\"\n+    try {\n+      const r = hourStart(\"2026-04-04T15:15:15.123Z\")\n+      expect(r.getMinutes()).toBe(0)\n+      expect(r.getSeconds()).toBe(0)\n+    } finally {\n+      process.env.TZ = tz\n+    }\n+  })\n+\n+  it(\"stays in the input's local hour across a non-hourly offset change (Chatham)\", () => {\n+    const tz = process.env.TZ\n+    process.env.TZ = \"Pacific/Chatham\"\n+    try {\n+      const input = new Date(\"2026-04-04T13:18:13.123Z\") // 03:03:13 +13:45\n+      const r = hourStart(input)\n+      expect(r.getHours()).toBe(input.getHours())\n+      expect(r.getMinutes()).toBe(0)\n+    } finally {\n+      process.env.TZ = tz\n+    }\n+  })\n })"
+  },
+  {
+   "filename": "src/__tests__/minuteEnd.spec.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -14,4 +14,9 @@ describe(\"minuteEnd\", () => {\n     compare.setSeconds(59, 999)\n     expect(minuteEnd()).toEqual(compare)\n   })\n+\n+  it(\"keeps the second occurrence of a repeated hour (DST fall-back)\", () => {\n+    // 2026-11-01 01:30 America/New_York happens twice; 06:30Z is the second (EST)\n+    expect(minuteEnd(\"2026-11-01T06:30:15.123Z\").toISOString()).toBe(\"2026-11-01T06:30:59.999Z\")\n+  })\n })"
+  },
+  {
+   "filename": "src/__tests__/minuteStart.spec.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -14,4 +14,9 @@ describe(\"minuteStart\", () => {\n     compare.setSeconds(0, 0)\n     expect(minuteStart()).toEqual(compare)\n   })\n+\n+  it(\"keeps the second occurrence of a repeated hour (DST fall-back)\", () => {\n+    // 2026-11-01 01:30 America/New_York happens twice; 06:30Z is the second (EST)\n+    expect(minuteStart(\"2026-11-01T06:30:15.123Z\").toISOString()).toBe(\"2026-11-01T06:30:00.000Z\")\n+  })\n })"
+  },
+  {
+   "filename": "src/hourEnd.ts",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -7,6 +7,16 @@ import type { MaybeDateInput } from \"./types\"\n  */\n export function hourEnd(inputDate?: MaybeDateInput): Date {\n   const d = date(inputDate)\n+  // Shift the timestamp instead of using local setters, which pick the first\n+  // occurrence of a repeated hour (DST fall-back).\n+  const shifted = new Date(\n+    d.getTime() +\n+      ((59 - d.getMinutes()) * 60 + (59 - d.getSeconds())) * 1000 +\n+      (999 - d.getMilliseconds())\n+  )\n+  // A sub-hour offset change (e.g. 30 min in Lord_Howe) breaks the shift.\n+  if (shifted.getMinutes() === 59 && shifted.getHours() === d.getHours())\n+    return shifted\n   d.setMinutes(59, 59, 999)\n   return d\n }"
+  },
+  {
+   "filename": "src/hourStart.ts",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -7,6 +7,15 @@ import type { MaybeDateInput } from \"./types\"\n  */\n export function hourStart(inputDate?: MaybeDateInput): Date {\n   const d = date(inputDate)\n+  // Shift the timestamp instead of using local setters, which pick the first\n+  // occurrence of a repeated hour (DST fall-back).\n+  const shifted = new Date(\n+    d.getTime() -\n+      (d.getMinutes() * 60 + d.getSeconds()) * 1000 -\n+      d.getMilliseconds()\n+  )\n+  // A sub-hour offset change (e.g. 30 min in Lord_Howe) breaks the shift.\n+  if (shifted.getMinutes() === 0 && shifted.getHours() === d.getHours()) return shifted\n   d.setMinutes(0, 0, 0)\n   return d\n }"
+  },
+  {
+   "filename": "src/minuteEnd.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -7,6 +7,10 @@ import type { MaybeDateInput } from \"./types\"\n  */\n export function minuteEnd(inputDate?: MaybeDateInput): Date {\n   const d = date(inputDate)\n-  d.setSeconds(59, 999)\n+  // Shift the timestamp instead of using local setters, which pick the first\n+  // occurrence of a repeated hour (DST fall-back).\n+  d.setTime(\n+    d.getTime() + (59 - d.getSeconds()) * 1000 + (999 - d.getMilliseconds())\n+  )\n   return d\n }"
+  },
+  {
+   "filename": "src/minuteStart.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -7,6 +7,8 @@ import type { MaybeDateInput } from \"./types\"\n  */\n export function minuteStart(inputDate?: MaybeDateInput): Date {\n   const d = date(inputDate)\n-  d.setSeconds(0, 0)\n+  // Shift the timestamp instead of using local setters, which pick the first\n+  // occurrence of a repeated hour (DST fall-back).\n+  d.setTime(d.getTime() - d.getSeconds() * 1000 - d.getMilliseconds())\n   return d\n }"
+  }
+ ],
+ "test_files": [
+  "src/__tests__/hourEnd.spec.ts",
+  "src/__tests__/hourStart.spec.ts",
+  "src/__tests__/minuteEnd.spec.ts",
+  "src/__tests__/minuteStart.spec.ts"
+ ]
+}

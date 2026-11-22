@@ -1,0 +1,26 @@
+{
+ "repo": "NPC-Worldwide/npcpy",
+ "number": 369,
+ "url": "https://github.com/NPC-Worldwide/npcpy/pull/369",
+ "title": "fix(response): keep reasoning on the stored assistant tool-call turn",
+ "merged_at": "2026-11-22T19:08:02Z",
+ "files": [
+  {
+   "filename": "npcpy/gen/response.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -3029,6 +3029,13 @@ def _usage_aware_stream():\n             if hasattr(resp.choices[0].message, 'tool_calls') and resp.choices[0].message.tool_calls:\n                 raw_tcs = resp.choices[0].message.tool_calls\n                 result[\"tool_calls\"] = raw_tcs\n+                # Providers with thinking mode (DeepSeek, Anthropic) require the\n+                # reasoning to be sent back with the tool-call turn; plain\n+                # answers keep the history unchanged.\n+                for _key in (\"reasoning_content\", \"thinking_blocks\"):\n+                    _val = getattr(resp.choices[0].message, _key, None)\n+                    if _val:\n+                        assistant_msg[_key] = _val\n                 tc_dicts = []\n                 for tc in raw_tcs:\n                     if isinstance(tc, dict):"
+  },
+  {
+   "filename": "tests/test_litellm_reasoning_kept.py",
+   "status": "added",
+   "additions": 57,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,57 @@\n+from types import SimpleNamespace\n+from unittest.mock import patch\n+\n+from npcpy.gen.response import get_litellm_response\n+\n+\n+def _response(with_tool_call=True, **message_fields):\n+    tool_calls = None\n+    if with_tool_call:\n+        tool_calls = [SimpleNamespace(\n+            id=\"call_1\",\n+            type=\"function\",\n+            function=SimpleNamespace(name=\"add\", arguments=\"{}\"),\n+        )]\n+    message = SimpleNamespace(\n+        content=None if with_tool_call else \"4\", tool_calls=tool_calls, **message_fields\n+    )\n+    usage = SimpleNamespace(prompt_tokens=1, completion_tokens=1)\n+    return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=usage)\n+\n+\n+def _run(resp):\n+    with patch(\"npcpy.gen.response.completion\", return_value=resp):\n+        return get_litellm_response(\n+            prompt=\"add\",\n+            model=\"deepseek-v4-pro\",\n+            provider=\"deepseek\",\n+            api_key=\"sk-test\",\n+            messages=[],\n+        )\n+\n+\n+def test_reasoning_content_is_kept_on_assistant_turn():\n+    result = _run(_response(reasoning_content=\"thinking...\"))\n+    assistant = result[\"messages\"][-1]\n+    assert assistant[\"role\"] == \"assistant\"\n+    assert assistant[\"reasoning_content\"] == \"thinking...\"\n+    assert assistant[\"tool_calls\"][0][\"id\"] == \"call_1\"\n+\n+\n+def test_thinking_blocks_are_kept_on_assistant_turn():\n+    blocks = [{\"type\": \"thinking\", \"thinking\": \"hmm\", \"signature\": \"sig\"}]\n+    result = _run(_response(thinking_blocks=blocks))\n+    assert result[\"messages\"][-1][\"thinking_blocks\"] == blocks\n+\n+\n+def test_no_reasoning_keys_when_absent():\n+    result = _run(_response())\n+    assert \"reasoning_content\" not in result[\"messages\"][-1]\n+    assert \"thinking_blocks\" not in result[\"messages\"][-1]\n+\n+\n+def test_reasoning_not_stored_on_plain_answer():\n+    result = _run(_response(with_tool_call=False, reasoning_content=\"thinking...\"))\n+    assistant = result[\"messages\"][-1]\n+    assert assistant[\"content\"] == \"4\"\n+    assert \"reasoning_content\" not in assistant"
+  }
+ ],
+ "test_files": [
+  "tests/test_litellm_reasoning_kept.py"
+ ]
+}

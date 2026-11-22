@@ -1,0 +1,33 @@
+{
+ "repo": "open-multi-agent/open-multi-agent",
+ "number": 690,
+ "url": "https://github.com/open-multi-agent/open-multi-agent/pull/690",
+ "title": "fix(core): honor baseURL for the gemini provider",
+ "merged_at": "2026-11-22T09:50:37Z",
+ "files": [
+  {
+   "filename": "packages/core/src/llm/adapter.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -188,7 +188,7 @@ export async function createAdapter(\n     }\n     case 'gemini': {\n       const { GeminiAdapter } = await import('./gemini.js')\n-      return new GeminiAdapter(apiKey)\n+      return new GeminiAdapter(apiKey, policyBaseURL)\n     }\n     case 'openai': {\n       const { OpenAIAdapter } = await import('./openai.js')"
+  },
+  {
+   "filename": "packages/core/src/llm/gemini.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -466,9 +466,10 @@ export class GeminiAdapter implements LLMAdapter {\n \n   readonly #client: GoogleGenAI\n \n-  constructor(apiKey?: string) {\n+  constructor(apiKey?: string, baseURL?: string) {\n     this.#client = new GoogleGenAI({\n       apiKey: apiKey ?? process.env['GEMINI_API_KEY'] ?? process.env['GOOGLE_API_KEY'],\n+      ...(baseURL ? { httpOptions: { baseUrl: baseURL } } : {}),\n     })\n   }\n "
+  },
+  {
+   "filename": "packages/core/tests/gemini-adapter.test.ts",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -27,6 +27,21 @@ describe('GeminiAdapter', () => {\n     expect(adapter.name).toBe('gemini')\n   })\n \n+  it('passes baseURL to GoogleGenAI as httpOptions.baseUrl', async () => {\n+    await createAdapter('gemini', 'test-key', 'https://proxy.example.com')\n+    expect(GoogleGenAIMock).toHaveBeenCalledWith(\n+      expect.objectContaining({\n+        apiKey: 'test-key',\n+        httpOptions: { baseUrl: 'https://proxy.example.com' },\n+      }),\n+    )\n+  })\n+\n+  it('does not set httpOptions when baseURL is omitted', () => {\n+    new GeminiAdapter('test-key')\n+    expect(GoogleGenAIMock.mock.calls[0]![0]).not.toHaveProperty('httpOptions')\n+  })\n+\n   it('uses GEMINI_API_KEY by default', () => {\n     const originalGemini = process.env['GEMINI_API_KEY']\n     const originalGoogle = process.env['GOOGLE_API_KEY']"
+  }
+ ],
+ "test_files": [
+  "packages/core/tests/gemini-adapter.test.ts"
+ ]
+}

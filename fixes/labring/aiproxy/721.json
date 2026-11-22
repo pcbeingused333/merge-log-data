@@ -1,0 +1,33 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 721,
+ "url": "https://github.com/labring/aiproxy/pull/721",
+ "title": "fix(anthropic,coze): don't send reasoning_content in place of message content",
+ "merged_at": "2026-11-22T07:14:11Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/anthropic/openai.go",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -206,6 +206,10 @@ func openAIConvertRequest(\n \thasToolCalls := false\n \n \tfor _, message := range textRequest.Messages {\n+\t\t// StringContent would prefer ReasoningContent over Content, so clear it\n+\t\t// on this copy: reasoning must not replace the visible message text.\n+\t\tmessage.ReasoningContent = \"\"\n+\n \t\tif message.Role == relaymodel.RoleSystem {\n \t\t\tclaudeRequest.System = append(claudeRequest.System, relaymodel.ClaudeContent{\n \t\t\t\tType:         relaymodel.ClaudeContentTypeText,"
+  },
+  {
+   "filename": "core/relay/adaptor/anthropic/openai_test.go",
+   "status": "modified",
+   "additions": 39,
+   "deletions": 0,
+   "patch": "@@ -683,3 +683,42 @@ func TestStreamResponse2OpenAIUsageMerge(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestOpenAIConvertRequest_AssistantReasoningDoesNotReplaceContent(t *testing.T) {\n+\tm := meta.NewMeta(\n+\t\t&model.Channel{},\n+\t\tmode.ChatCompletions,\n+\t\t\"claude-sonnet-4-20250514\",\n+\t\tmodel.ModelConfig{},\n+\t)\n+\n+\treqBody := relaymodel.GeneralOpenAIRequest{\n+\t\tModel: \"claude-sonnet-4-20250514\",\n+\t\tMessages: []relaymodel.Message{\n+\t\t\t{Role: \"user\", Content: \"hi\"},\n+\t\t\t{\n+\t\t\t\tRole:             \"assistant\",\n+\t\t\t\tContent:          \"final answer\",\n+\t\t\t\tReasoningContent: \"private chain of thought\",\n+\t\t\t},\n+\t\t\t{Role: \"user\", Content: \"thanks\"},\n+\t\t},\n+\t}\n+\n+\tdata, err := sonic.Marshal(reqBody)\n+\trequire.NoError(t, err)\n+\n+\treq, err := http.NewRequestWithContext(\n+\t\tt.Context(),\n+\t\thttp.MethodPost,\n+\t\t\"http://localhost/v1/chat/completions\",\n+\t\tbytes.NewBuffer(data),\n+\t)\n+\trequire.NoError(t, err)\n+\n+\tclaudeReq, err := anthropic.OpenAIConvertRequest(m, req)\n+\trequire.NoError(t, err)\n+\trequire.Len(t, claudeReq.Messages, 3)\n+\trequire.Len(t, claudeReq.Messages[1].Content, 1)\n+\trequire.Equal(t, \"final answer\", claudeReq.Messages[1].Content[0].Text)\n+}"
+  },
+  {
+   "filename": "core/relay/adaptor/coze/adaptor.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -96,6 +96,9 @@ func (a *Adaptor) ConvertRequest(\n \t\tBotID:  strings.TrimPrefix(meta.ActualModel, \"bot-\"),\n \t}\n \tfor i, message := range request.Messages {\n+\t\t// StringContent would prefer ReasoningContent, so clear it first.\n+\t\tmessage.ReasoningContent = \"\"\n+\n \t\tif i == len(request.Messages)-1 {\n \t\t\tcozeRequest.Query = message.StringContent()\n \t\t\tcontinue"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/anthropic/openai_test.go"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 722,
+ "url": "https://github.com/labring/aiproxy/pull/722",
+ "title": "fix(cohere): map OpenAI stop to stop_sequences",
+ "merged_at": "2026-11-22T07:14:15Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/cohere/main.go",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -61,6 +61,8 @@ func ConvertRequest(textRequest *relaymodel.GeneralOpenAIRequest) *Request {\n \t\tcohereRequest.Connectors = append(cohereRequest.Connectors, WebSearchConnector)\n \t}\n \n+\tcohereRequest.StopSequences = stopSequences(textRequest.Stop)\n+\n \tlastUser := -1\n \n \tfor i, message := range textRequest.Messages {\n@@ -98,6 +100,39 @@ func ConvertRequest(textRequest *relaymodel.GeneralOpenAIRequest) *Request {\n \treturn &cohereRequest\n }\n \n+// stopSequences maps the OpenAI stop field onto Cohere stop_sequences.\n+// OpenAI accepts a string or an array; non-strings inside an array are ignored.\n+func stopSequences(stop any) []string {\n+\tswitch v := stop.(type) {\n+\tcase string:\n+\t\treturn []string{v}\n+\tcase []string:\n+\t\tif len(v) == 0 {\n+\t\t\treturn nil\n+\t\t}\n+\n+\t\treturn v\n+\tcase []any:\n+\t\tout := make([]string, 0, len(v))\n+\t\tfor _, item := range v {\n+\t\t\ts, ok := item.(string)\n+\t\t\tif !ok {\n+\t\t\t\tcontinue\n+\t\t\t}\n+\n+\t\t\tout = append(out, s)\n+\t\t}\n+\n+\t\tif len(out) == 0 {\n+\t\t\treturn nil\n+\t\t}\n+\n+\t\treturn out\n+\tdefault:\n+\t\treturn nil\n+\t}\n+}\n+\n func StreamResponse2OpenAI(\n \tmeta *meta.Meta,\n \tcohereResponse *StreamResponse,"
+  },
+  {
+   "filename": "core/relay/adaptor/cohere/main_test.go",
+   "status": "modified",
+   "additions": 70,
+   "deletions": 0,
+   "patch": "@@ -168,3 +168,73 @@ func TestConvertRequestArrayContent(t *testing.T) {\n \t\t}\n \t}\n }\n+\n+func TestConvertRequestStopSequences(t *testing.T) {\n+\tt.Parallel()\n+\n+\tconvert := func(stop any) *Request {\n+\t\treturn ConvertRequest(&relaymodel.GeneralOpenAIRequest{\n+\t\t\tModel: \"command-r\",\n+\t\t\tMessages: []relaymodel.Message{\n+\t\t\t\t{Role: \"user\", Content: \"hi\"},\n+\t\t\t},\n+\t\t\tStop: stop,\n+\t\t})\n+\t}\n+\n+\tassertStop := func(t *testing.T, got []string, want ...string) {\n+\t\tt.Helper()\n+\n+\t\tif len(got) != len(want) {\n+\t\t\tt.Fatalf(\"StopSequences = %#v, want %#v\", got, want)\n+\t\t}\n+\n+\t\tfor i := range want {\n+\t\t\tif got[i] != want[i] {\n+\t\t\t\tt.Fatalf(\"StopSequences = %#v, want %#v\", got, want)\n+\t\t\t}\n+\t\t}\n+\t}\n+\n+\tt.Run(\"string\", func(t *testing.T) {\n+\t\tt.Parallel()\n+\n+\t\tgot := convert(\"END\")\n+\t\tif got.Message != \"hi\" {\n+\t\t\tt.Fatalf(\"Message = %q, want %q\", got.Message, \"hi\")\n+\t\t}\n+\n+\t\tassertStop(t, got.StopSequences, \"END\")\n+\t})\n+\n+\tt.Run(\"array\", func(t *testing.T) {\n+\t\tt.Parallel()\n+\t\tassertStop(t, convert([]any{\"END\", \"STOP\"}).StopSequences, \"END\", \"STOP\")\n+\t})\n+\n+\tt.Run(\"string slice\", func(t *testing.T) {\n+\t\tt.Parallel()\n+\t\tassertStop(t, convert([]string{\"END\", \"STOP\"}).StopSequences, \"END\", \"STOP\")\n+\t})\n+\n+\tt.Run(\"skip non-strings\", func(t *testing.T) {\n+\t\tt.Parallel()\n+\t\tassertStop(t, convert([]any{\"END\", 3, \"STOP\"}).StopSequences, \"END\", \"STOP\")\n+\t})\n+\n+\tt.Run(\"absent\", func(t *testing.T) {\n+\t\tt.Parallel()\n+\n+\t\tif got := convert(nil).StopSequences; got != nil {\n+\t\t\tt.Fatalf(\"StopSequences = %#v, want nil\", got)\n+\t\t}\n+\n+\t\tif got := convert([]any{}).StopSequences; got != nil {\n+\t\t\tt.Fatalf(\"StopSequences = %#v, want nil\", got)\n+\t\t}\n+\n+\t\tif got := convert([]any{1, true}).StopSequences; got != nil {\n+\t\t\tt.Fatalf(\"StopSequences = %#v, want nil\", got)\n+\t\t}\n+\t})\n+}"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/cohere/main_test.go"
+ ]
+}

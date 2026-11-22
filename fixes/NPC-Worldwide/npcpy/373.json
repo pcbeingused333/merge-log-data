@@ -1,0 +1,26 @@
+{
+ "repo": "NPC-Worldwide/npcpy",
+ "number": 373,
+ "url": "https://github.com/NPC-Worldwide/npcpy/pull/373",
+ "title": "fix(image): send every reference image on OpenAI edits",
+ "merged_at": "2026-11-22T19:10:38Z",
+ "files": [
+  {
+   "filename": "npcpy/gen/image_gen.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -180,9 +180,11 @@ def openai_image_gen(\n                 processed_images.append(img_byte_arr)\n         \n         try:\n+            # One file stays a single upload. Two or more are the array images.edit accepts.\n+            image = processed_images if len(processed_images) > 1 else processed_images[0]\n             result = client.images.edit(\n                 model=model,\n-                image=processed_images[0],\n+                image=image,\n                 prompt=prompt,\n                 n=n_images,\n                 size=size_str,"
+  },
+  {
+   "filename": "tests/test_image_gen_defaults.py",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -47,3 +47,41 @@ def test_edit_image_openai_default_model_is_not_retired(sent_models, tmp_path):\n def test_openai_image_gen_default_model_is_not_retired(sent_models):\n     image_gen.openai_image_gen(\"a cat\")\n     assert sent_models and sent_models[0] not in RETIRED\n+\n+\n+@pytest.fixture\n+def sent_edits(monkeypatch):\n+    sent = []\n+    buf = io.BytesIO()\n+    Image.new(\"RGB\", (4, 4)).save(buf, format=\"PNG\")\n+    b64 = base64.b64encode(buf.getvalue()).decode()\n+\n+    def edit(**kwargs):\n+        image = kwargs[\"image\"]\n+        handles = list(image) if isinstance(image, (list, tuple)) else [image]\n+        blobs = []\n+        for handle in handles:\n+            handle.seek(0)\n+            blobs.append(handle.read())\n+        sent.append(blobs)\n+        item = types.SimpleNamespace(b64_json=b64, url=None)\n+        return types.SimpleNamespace(data=[item])\n+\n+    class FakeOpenAI:\n+        def __init__(self, *args, **kwargs):\n+            self.images = types.SimpleNamespace(edit=edit, generate=edit)\n+\n+    monkeypatch.setitem(sys.modules, \"openai\", types.SimpleNamespace(OpenAI=FakeOpenAI))\n+    return sent\n+\n+\n+def test_openai_image_gen_edit_sends_every_reference(sent_edits, tmp_path):\n+    first = tmp_path / \"first.png\"\n+    second = tmp_path / \"second.png\"\n+    Image.new(\"RGB\", (4, 4), \"red\").save(first)\n+    Image.new(\"RGB\", (4, 4), \"blue\").save(second)\n+    image_gen.openai_image_gen(\n+        \"combine both\",\n+        attachments=[str(first), str(second)],\n+    )\n+    assert sent_edits == [[first.read_bytes(), second.read_bytes()]]"
+  }
+ ],
+ "test_files": [
+  "tests/test_image_gen_defaults.py"
+ ]
+}

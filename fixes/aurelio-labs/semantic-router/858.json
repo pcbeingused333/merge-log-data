@@ -1,0 +1,26 @@
+{
+ "repo": "aurelio-labs/semantic-router",
+ "number": 858,
+ "url": "https://github.com/aurelio-labs/semantic-router/pull/858",
+ "title": "fix(pinecone): adelete raises when the delete request fails",
+ "merged_at": "2026-11-22T09:17:11Z",
+ "files": [
+  {
+   "filename": "semantic_router/index/pinecone.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -1102,6 +1102,11 @@ async def _async_delete(self, ids: list[str], namespace: str = \"\"):\n                 json=params,\n                 headers=self.headers,\n             ) as response:\n+                if response.status != 200:\n+                    error_message = await response.text()\n+                    raise Exception(\n+                        f\"Failed to delete vectors: {response.status} : {error_message}\"\n+                    )\n                 return await response.json(content_type=None)\n \n     async def _async_describe_index(self, name: str):"
+  },
+  {
+   "filename": "tests/unit/test_pinecone_index.py",
+   "status": "added",
+   "additions": 68,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,68 @@\n+\"\"\"Unit tests for PineconeIndex async delete — uses a local HTTP server.\"\"\"\n+\n+from unittest.mock import AsyncMock, patch\n+\n+import pytest\n+from aiohttp import web\n+\n+from semantic_router.index.pinecone import PineconeIndex\n+\n+\n+async def _serve(status: int, body: str):\n+    async def handler(request):\n+        return web.Response(status=status, text=body)\n+\n+    app = web.Application()\n+    app.router.add_post(\"/vectors/delete\", handler)\n+    runner = web.AppRunner(app)\n+    await runner.setup()\n+    site = web.TCPSite(runner, \"127.0.0.1\", 0)\n+    await site.start()\n+    port = runner.addresses[0][1]\n+    return runner, f\"http://127.0.0.1:{port}\"\n+\n+\n+def _index(host: str) -> PineconeIndex:\n+    idx = PineconeIndex.model_construct(\n+        host=host,\n+        base_url=\"https://api.pinecone.io\",\n+        headers={},\n+        namespace=\"\",\n+    )\n+    return idx\n+\n+\n+def _patched():\n+    return (\n+        patch.object(PineconeIndex, \"ais_ready\", AsyncMock(return_value=True)),\n+        patch.object(\n+            PineconeIndex,\n+            \"_async_get_route_ids\",\n+            AsyncMock(return_value=[\"r#1\", \"r#2\"]),\n+        ),\n+    )\n+\n+\n+@pytest.mark.asyncio\n+async def test_adelete_raises_when_the_delete_request_fails():\n+    runner, host = await _serve(503, \"service unavailable\")\n+    try:\n+        idx = _index(host)\n+        p1, p2 = _patched()\n+        with p1, p2:\n+            with pytest.raises(Exception, match=\"Failed to delete vectors: 503\"):\n+                await idx.adelete(\"r\")\n+    finally:\n+        await runner.cleanup()\n+\n+\n+@pytest.mark.asyncio\n+async def test_adelete_returns_ids_on_success():\n+    runner, host = await _serve(200, \"{}\")\n+    try:\n+        idx = _index(host)\n+        p1, p2 = _patched()\n+        with p1, p2:\n+            assert await idx.adelete(\"r\") == [\"r#1\", \"r#2\"]\n+    finally:\n+        await runner.cleanup()"
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_pinecone_index.py"
+ ]
+}

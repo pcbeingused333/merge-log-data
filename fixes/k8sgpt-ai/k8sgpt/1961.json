@@ -1,0 +1,26 @@
+{
+ "repo": "k8sgpt-ai/k8sgpt",
+ "number": 1961,
+ "url": "https://github.com/k8sgpt-ai/k8sgpt/pull/1961",
+ "title": "fix: only report missing Service/StorageClass on NotFound in the StatefulSet analyzer",
+ "merged_at": "2026-11-22T07:08:22Z",
+ "files": [
+  {
+   "filename": "pkg/analyzer/statefulset.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -57,7 +57,7 @@ func (StatefulSetAnalyzer) Analyze(a common.Analyzer) ([]common.Result, error) {\n \t\tserviceName := sts.Spec.ServiceName\n \t\tif serviceName != \"\" {\n \t\t\t_, err := a.Client.GetClient().CoreV1().Services(sts.Namespace).Get(a.Context, serviceName, metav1.GetOptions{})\n-\t\t\tif err != nil {\n+\t\t\tif err != nil && errors.IsNotFound(err) {\n \t\t\t\tdoc := apiDoc.GetApiDocV2(\"spec.serviceName\")\n \n \t\t\t\tfailures = append(failures, common.Failure{\n@@ -86,7 +86,7 @@ func (StatefulSetAnalyzer) Analyze(a common.Analyzer) ([]common.Result, error) {\n \t\t\t\t// no StorageClass to look up.\n \t\t\t\tif volumeClaimTemplate.Spec.StorageClassName != nil && *volumeClaimTemplate.Spec.StorageClassName != \"\" {\n \t\t\t\t\t_, err := a.Client.GetClient().StorageV1().StorageClasses().Get(a.Context, *volumeClaimTemplate.Spec.StorageClassName, metav1.GetOptions{})\n-\t\t\t\t\tif err != nil {\n+\t\t\t\t\tif err != nil && errors.IsNotFound(err) {\n \t\t\t\t\t\tfailures = append(failures, common.Failure{\n \t\t\t\t\t\t\tText: fmt.Sprintf(\"StatefulSet uses the storage class %s which does not exist.\", *volumeClaimTemplate.Spec.StorageClassName),\n \t\t\t\t\t\t\tSensitive: []common.Sensitive{"
+  },
+  {
+   "filename": "pkg/analyzer/statefulset_test.go",
+   "status": "modified",
+   "additions": 47,
+   "deletions": 0,
+   "patch": "@@ -24,9 +24,13 @@ import (\n \t\"github.com/magiconair/properties/assert\"\n \tappsv1 \"k8s.io/api/apps/v1\"\n \tcorev1 \"k8s.io/api/core/v1\"\n+\t\"k8s.io/apimachinery/pkg/api/errors\"\n \t\"k8s.io/apimachinery/pkg/api/resource\"\n \tmetav1 \"k8s.io/apimachinery/pkg/apis/meta/v1\"\n+\t\"k8s.io/apimachinery/pkg/runtime\"\n+\t\"k8s.io/apimachinery/pkg/runtime/schema\"\n \t\"k8s.io/client-go/kubernetes/fake\"\n+\tk8stesting \"k8s.io/client-go/testing\"\n )\n \n // spec.serviceName is optional, so a StatefulSet without one has no\n@@ -548,3 +552,46 @@ func TestStatefulSetAnalyzerNotRunningPodSensitiveMasking(t *testing.T) {\n \t\tt.Errorf(\"pod namespace leaked after masking: %q still contains %q\", masked, \"namespace default\")\n \t}\n }\n+\n+// A failed lookup that is not NotFound (e.g. Forbidden) must not be\n+// reported as the Service or StorageClass not existing.\n+func TestStatefulSetAnalyzerLookupErrorIsNotMissing(t *testing.T) {\n+\tstorageClassName := \"fast\"\n+\tclientset := fake.NewSimpleClientset(\n+\t\t&appsv1.StatefulSet{\n+\t\t\tObjectMeta: metav1.ObjectMeta{\n+\t\t\t\tName:      \"example\",\n+\t\t\t\tNamespace: \"default\",\n+\t\t\t},\n+\t\t\tSpec: appsv1.StatefulSetSpec{\n+\t\t\t\tServiceName: \"example-svc\",\n+\t\t\t\tVolumeClaimTemplates: []corev1.PersistentVolumeClaim{\n+\t\t\t\t\t{\n+\t\t\t\t\t\tObjectMeta: metav1.ObjectMeta{Name: \"pvc-example\"},\n+\t\t\t\t\t\tSpec: corev1.PersistentVolumeClaimSpec{\n+\t\t\t\t\t\t\tStorageClassName: &storageClassName,\n+\t\t\t\t\t\t},\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t},\n+\t\t})\n+\tfor _, resource := range []string{\"services\", \"storageclasses\"} {\n+\t\tclientset.PrependReactor(\"get\", resource, func(action k8stesting.Action) (bool, runtime.Object, error) {\n+\t\t\treturn true, nil, errors.NewForbidden(schema.GroupResource{Resource: resource}, \"x\", nil)\n+\t\t})\n+\t}\n+\tconfig := common.Analyzer{\n+\t\tClient:    &kubernetes.Client{Client: clientset},\n+\t\tContext:   context.Background(),\n+\t\tNamespace: \"default\",\n+\t}\n+\tanalysisResults, err := StatefulSetAnalyzer{}.Analyze(config)\n+\tif err != nil {\n+\t\tt.Error(err)\n+\t}\n+\tfor _, analysis := range analysisResults {\n+\t\tfor _, got := range analysis.Error {\n+\t\t\tt.Errorf(\"unexpected failure for %s: %s\", analysis.Name, got.Text)\n+\t\t}\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "pkg/analyzer/statefulset_test.go"
+ ]
+}

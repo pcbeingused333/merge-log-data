@@ -1,0 +1,15 @@
+{
+ "repo": "i-am-bee/beeai-framework",
+ "number": 1998,
+ "url": "https://github.com/i-am-bee/beeai-framework/pull/1998",
+ "state": "open",
+ "reviews": [],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "contributor",
+   "created_at": "2026-11-22T15:56:20Z",
+   "body": "Thanks for picking up the Bedrock and Vertex part. One case I ran into while looking at the same adapters, in case it's useful:\n\n`_avoid_forced_tool_choice` only registers `supports_output_config` when the model is missing from `litellm.model_cost`:\n\n```python\nif name not in litellm.model_cost and f\"{self._litellm_provider_id}/{name}\" not in litellm.model_cost:\n    litellm.register_model(...)\n```\n\nSo if LiteLLM already lists the model without that capability, nothing is registered. That can happen with LiteLLM's remote model map, which LiteLLM fetches at import unless `LITELLM_LOCAL_MODEL_COST_MAP=True` is set. With 1.100.4, the remote map I got (7,099 entries, versus 3,410 bundled) lists `us.anthropic.claude-opus-5-5` as a `bedrock_converse` entry with `supports_native_structured_output: False`. A test module, or an application, that imports `litellm` before `beeai_framework` therefore gets the remote map. In that case `output_config` may be dropped again and the forced `json_tool_call` returns. The unit tests wouldn't notice, because offline runs use the bundled map.\n\nTwo small changes would cover it:\n- register when the entry lacks the capability, not only when it is missing, by merging the flag into the existing entry so its pricing fields are kept: `litellm.register_model({key: {**litellm.model_cost[key], \"supports_output_config\": True}})`;\n- pin `litellm.model_cost` to a copy of the bundled map in the new tests (`GetModelCostMap.load_local_model_cost_map()`), and add one case that pre-seeds an affected id without the capability.\n\nI haven't run this branch, so please treat it as something to check rather than a confirmed failure. The same \"skip if listed\" guard was already in the Anthropic adapter from #1979.\n"
+  }
+ ]
+}
