@@ -1,0 +1,26 @@
+{
+ "repo": "slingdata-io/sling-cli",
+ "number": 847,
+ "url": "https://github.com/slingdata-io/sling-cli/pull/847",
+ "title": "fix(excel): read sheet names with GetSheetList so deleted sheets don't leave gaps",
+ "merged_at": "2026-11-22T00:57:27Z",
+ "files": [
+  {
+   "filename": "core/dbio/iop/sheet_excel.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 10,
+   "patch": "@@ -244,11 +244,8 @@ func NewExcelFromReader(reader io.Reader, opts ...excelize.Options) (xls *Excel,\n \t\treturn\n \t}\n \n-\tsheetMap := f.GetSheetMap()\n-\tsheets := make([]string, len(sheetMap))\n-\tfor i := range sheets {\n-\t\tsheets[i] = sheetMap[i+1]\n-\t}\n+\t// GetSheetMap is keyed by sheetId, which has gaps once a sheet is deleted\n+\tsheets := f.GetSheetList()\n \n \txls = &Excel{\n \t\tFile:    f,\n@@ -263,12 +260,11 @@ func NewExcelFromReader(reader io.Reader, opts ...excelize.Options) (xls *Excel,\n // RefreshSheets refresh sheet index data\n func (xls *Excel) RefreshSheets() (err error) {\n \n-\tsheetMap := xls.File.GetSheetMap()\n-\tsheets := make([]string, len(sheetMap))\n+\t// GetSheetMap is keyed by sheetId, which has gaps once a sheet is deleted\n+\tsheets := xls.File.GetSheetList()\n \tsheetIndex := map[string]int{}\n-\tfor i := range sheets {\n-\t\tsheets[i] = sheetMap[i+1]\n-\t\tsheetIndex[sheetMap[i+1]] = i\n+\tfor i, name := range sheets {\n+\t\tsheetIndex[name] = i\n \t}\n \txls.Sheets = sheets\n \txls.sheetIndex = sheetIndex"
+  },
+  {
+   "filename": "core/dbio/iop/sheet_excel_test.go",
+   "status": "modified",
+   "additions": 62,
+   "deletions": 0,
+   "patch": "@@ -447,3 +447,65 @@ func BenchmarkExcelReadRows(b *testing.B) {\n \t\t}\n \t})\n }\n+\n+func TestNewExcelFromReaderDeletedSheet(t *testing.T) {\n+\t// deleting a sheet leaves a gap in the sheetIds (1, 3), so the sheet names\n+\t// must not be looked up by position-derived sheetId.\n+\tf := excelize.NewFile()\n+\tf.NewSheet(\"Sheet2\")\n+\tf.NewSheet(\"Sheet3\")\n+\tf.SetCellValue(\"Sheet3\", \"A1\", \"id\")\n+\tf.SetCellValue(\"Sheet3\", \"A2\", 1)\n+\tif err := f.DeleteSheet(\"Sheet2\"); err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tbuf, err := f.WriteToBuffer()\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\n+\txls, err := NewExcelFromReader(bytes.NewReader(buf.Bytes()))\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\twant := []string{\"Sheet1\", \"Sheet3\"}\n+\tif len(xls.Sheets) != len(want) {\n+\t\tt.Fatalf(\"expected sheets %v, got %v\", want, xls.Sheets)\n+\t}\n+\tfor i := range want {\n+\t\tif xls.Sheets[i] != want[i] {\n+\t\t\tt.Fatalf(\"expected sheets %v, got %v\", want, xls.Sheets)\n+\t\t}\n+\t}\n+\n+\tif err = xls.RefreshSheets(); err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tif len(xls.Sheets) != 2 || xls.Sheets[1] != \"Sheet3\" || xls.sheetIndex[\"Sheet3\"] != 1 {\n+\t\tt.Fatalf(\"RefreshSheets: got sheets %v, index %v\", xls.Sheets, xls.sheetIndex)\n+\t}\n+}\n+\n+func TestNewExcelDatasetDeletedFirstSheet(t *testing.T) {\n+\t// deleting the first sheet leaves sheetIds (2, 3): the default sheet must be\n+\t// the first tab, not an empty name.\n+\tf := excelize.NewFile()\n+\tf.NewSheet(\"Sheet2\")\n+\tf.SetCellValue(\"Sheet2\", \"A1\", \"id\")\n+\tf.SetCellValue(\"Sheet2\", \"A2\", 1)\n+\tif err := f.DeleteSheet(\"Sheet1\"); err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tbuf, err := f.WriteToBuffer()\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\n+\tdata, err := NewExcelDataset(bytes.NewReader(buf.Bytes()), map[string]string{})\n+\tif err != nil {\n+\t\tt.Fatalf(\"unexpected error: %v\", err)\n+\t}\n+\tif len(data.Rows) != 2 {\n+\t\tt.Fatalf(\"expected 2 rows (header + 1) from the first remaining sheet, got %d\", len(data.Rows))\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "core/dbio/iop/sheet_excel_test.go"
+ ]
+}

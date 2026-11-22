@@ -1,0 +1,26 @@
+{
+ "repo": "jxxghp/MoviePilot",
+ "number": 7529,
+ "url": "https://github.com/jxxghp/MoviePilot/pull/7529",
+ "title": "fix(wechat): fall back to a non-empty title for news messages",
+ "merged_at": "2026-11-22T01:43:32Z",
+ "files": [
+  {
+   "filename": "app/modules/wechat/wechat.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -265,6 +265,9 @@ def __send_image_message(self, title: Optional[str], text: Optional[str], image_\n         \"\"\"\n         if text:\n             text = text.replace(\"\\n\\n\", \"\\n\")\n+        if not title:\n+            # 企业微信图文消息要求标题非空，缺省时取正文首行，仍为空则用应用名\n+            title = next((line.strip() for line in (text or \"\").splitlines() if line.strip()), \"MoviePilot\")\n         if not userid:\n             userid = \"@all\"\n         req_json = {"
+  },
+  {
+   "filename": "tests/test_wechat_notification_image.py",
+   "status": "modified",
+   "additions": 37,
+   "deletions": 0,
+   "patch": "@@ -140,3 +140,40 @@ def test_wechat_news_payload_uses_signed_douban_proxy(\n     image_url = captured[\"news\"][\"articles\"][0][\"picurl\"]\n     signed_source = parse_qs(urlparse(image_url).query)[\"url\"][0]\n     assert image_urls.verify_wechat_image_url(signed_source) == source_url\n+\n+\n+@pytest.mark.parametrize(\n+    (\"title\", \"text\", \"expected\"),\n+    [\n+        (None, \"已添加订阅\\n详情\", \"已添加订阅\"),\n+        (\"\", \"\\n第二行\", \"第二行\"),\n+        (None, None, \"MoviePilot\"),\n+        (\"奥德赛\", \"已添加订阅\", \"奥德赛\"),\n+    ],\n+)\n+def test_wechat_news_payload_title_fallback(\n+    monkeypatch: pytest.MonkeyPatch,\n+    title: Any,\n+    text: Any,\n+    expected: str,\n+) -> None:\n+    \"\"\"\n+    图文消息没有标题时不应发送空标题，企业微信会拒收该消息。\n+    \"\"\"\n+    monkeypatch.setattr(image_urls, \"get_runtime_setting\", _settings_with_domain)\n+    captured: dict[str, Any] = {}\n+    client = WeChat.__new__(WeChat)\n+    client._appid = \"1\"\n+    monkeypatch.setattr(\n+        client,\n+        \"_WeChat__post_request\",\n+        lambda url, payload: captured.update(payload) or True,\n+    )\n+\n+    assert client._WeChat__send_image_message(\n+        title=title,\n+        text=text,\n+        image_url=\"https://image.tmdb.org/poster.jpg\",\n+    ) is True\n+\n+    assert captured[\"news\"][\"articles\"][0][\"title\"] == expected"
+  }
+ ],
+ "test_files": [
+  "tests/test_wechat_notification_image.py"
+ ]
+}

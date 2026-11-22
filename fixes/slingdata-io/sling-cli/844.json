@@ -1,0 +1,33 @@
+{
+ "repo": "slingdata-io/sling-cli",
+ "number": 844,
+ "url": "https://github.com/slingdata-io/sling-cli/pull/844",
+ "title": "fix(excel): return an error when rows exceed the Excel sheet limit",
+ "merged_at": "2026-11-22T00:57:41Z",
+ "files": [
+  {
+   "filename": "core/dbio/iop/datastream.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -3733,6 +3733,7 @@ func (ds *Datastream) NewExcelReaderChnl(sc StreamConfig) (readerChn chan *Batch\n \terr := xls.WriteSheet(sc.Sheet, ds, \"overwrite\")\n \tif err != nil {\n \t\tds.Context.CaptureErr(g.Error(err, \"error writing sheet\"))\n+\t\tclose(readerChn) // nothing will be sent, do not leave the consumer waiting\n \t\treturn\n \t}\n "
+  },
+  {
+   "filename": "core/dbio/iop/sheet_excel.go",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 2,
+   "patch": "@@ -581,13 +581,20 @@ func (xls *Excel) WriteSheet(shtName string, ds *Datastream, mode string) (err e\n \t\tfor _, field := range ds.GetFields(false, true) {\n \t\t\theader = append(header, field)\n \t\t}\n-\t\txls.File.SetSheetRow(shtName, cellRange, &header)\n+\t\terr = xls.File.SetSheetRow(shtName, cellRange, &header)\n+\t\tif err != nil {\n+\t\t\treturn g.Error(err, \"could not write header to sheet %s\", shtName)\n+\t\t}\n \t\ti++\n \t}\n \n \tfor row := range ds.Rows() {\n \t\tcellRange = g.F(\"%s%d\", col, i)\n-\t\txls.File.SetSheetRow(shtName, cellRange, &row)\n+\t\terr = xls.File.SetSheetRow(shtName, cellRange, &row)\n+\t\tif err != nil {\n+\t\t\t// excel sheets are limited to excelize.TotalRows rows, header included\n+\t\t\treturn g.Error(err, \"could not write row %d to sheet %s\", i, shtName)\n+\t\t}\n \t\ti++\n \t}\n "
+  },
+  {
+   "filename": "core/dbio/iop/sheet_excel_test.go",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -2,6 +2,7 @@ package iop\n \n import (\n \t\"bytes\"\n+\t\"context\"\n \t\"fmt\"\n \t\"os\"\n \t\"path/filepath\"\n@@ -172,6 +173,35 @@ func TestNewExcelDatasetMissingSheet(t *testing.T) {\n \t}\n }\n \n+// Excel sheets hold at most excelize.TotalRows (1,048,576) rows, header\n+// included. Rows past that were silently dropped and the write reported success.\n+func TestExcelWriteSheetRowLimit(t *testing.T) {\n+\tnewDs := func(dataRows int) *Datastream {\n+\t\tn := 0\n+\t\tds := NewDatastreamIt(context.Background(), NewColumnsFromFields(\"id\"), func(it *Iterator) bool {\n+\t\t\tif n >= dataRows {\n+\t\t\t\treturn false\n+\t\t\t}\n+\t\t\tn++\n+\t\t\tit.Row[0] = int64(n)\n+\t\t\treturn true\n+\t\t})\n+\t\tif err := ds.Start(); err != nil {\n+\t\t\tt.Fatal(err)\n+\t\t}\n+\t\treturn ds\n+\t}\n+\n+\t// header + (TotalRows-1) data rows fills the sheet exactly: allowed\n+\tif err := NewExcel().WriteSheet(\"Sheet1\", newDs(excelize.TotalRows-1), \"overwrite\"); err != nil {\n+\t\tt.Fatalf(\"a sheet filled to the limit should be written, got: %v\", err)\n+\t}\n+\n+\t// one more row cannot be stored: must be an error, not a silent drop\n+\tif err := NewExcel().WriteSheet(\"Sheet1\", newDs(excelize.TotalRows), \"overwrite\"); err == nil {\n+\t\tt.Fatal(\"expected an error when rows exceed the Excel limit, got nil\")\n+\t}\n+}\n func TestExcelNumFmtKind(t *testing.T) {\n \ttests := []struct {\n \t\tid   int"
+  }
+ ],
+ "test_files": [
+  "core/dbio/iop/sheet_excel_test.go"
+ ]
+}

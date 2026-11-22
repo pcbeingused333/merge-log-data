@@ -1,0 +1,26 @@
+{
+ "repo": "donetick/donetick",
+ "number": 907,
+ "url": "https://github.com/donetick/donetick/pull/907",
+ "title": "fix(chore): clear the due date when an edit sends nextDueDate: null",
+ "merged_at": "2026-11-22T06:00:37Z",
+ "files": [
+  {
+   "filename": "internal/chore/handler.go",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -349,6 +349,25 @@ type ChoreReq struct {\n \tSectionID    *int                 `json:\"sectionId\" binding:\"omitempty\"`\n \tThingTrigger *tModel.ThingTrigger `json:\"thingTrigger\"`\n \tDraftId      *string              `json:\"draftId,omitempty\"`\n+\n+\t// nextDueDateSet is true when the request has a nextDueDate key, so an\n+\t// explicit null (remove the due date) can be told apart from an absent field.\n+\tnextDueDateSet bool\n+}\n+\n+func (r *ChoreReq) UnmarshalJSON(data []byte) error {\n+\ttype choreReqFields ChoreReq\n+\tif err := json.Unmarshal(data, (*choreReqFields)(r)); err != nil {\n+\t\treturn err\n+\t}\n+\tvar present struct {\n+\t\tNextDueDate json.RawMessage `json:\"nextDueDate\"`\n+\t}\n+\tif err := json.Unmarshal(data, &present); err != nil {\n+\t\treturn err\n+\t}\n+\tr.nextDueDateSet = present.NextDueDate != nil\n+\treturn nil\n }\n \n type ActionOptions struct {\n@@ -957,6 +976,9 @@ func (h *Handler) EditChore(c *gin.Context) {\n \tif choreReq.NextDueDate != nil {\n \t\tutcDate := choreReq.NextDueDate.UTC()\n \t\tdueDate = &utcDate\n+\t} else if choreReq.nextDueDateSet && !choreReq.IsRolling {\n+\t\t// An explicit null removes the due date; leaving the field out keeps it.\n+\t\tdueDate = nil\n \t} else {\n \t\tdueDate = oldChore.NextDueDate\n \t}"
+  },
+  {
+   "filename": "internal/chore/handler_test.go",
+   "status": "modified",
+   "additions": 52,
+   "deletions": 0,
+   "patch": "@@ -257,6 +257,58 @@ func TestEditChoreWithoutLabelsV2KeepsLabels(t *testing.T) {\n \trequire.Zero(t, labelCount(), \"an empty labelsV2 still removes the labels\")\n }\n \n+// The edit form sends \"nextDueDate\": null when the due date is removed, while\n+// older apps and API scripts may leave the field out altogether.\n+func TestEditChoreNextDueDateNullClearsAbsentKeeps(t *testing.T) {\n+\trouter, db := newEditChoreTestRouter(t)\n+\tdue := time.Date(2026, time.November, 2, 9, 0, 0, 0, time.UTC)\n+\tnewChore := func(isRolling bool) chModel.Chore {\n+\t\tt.Helper()\n+\t\tchore := chModel.Chore{Name: \"file taxes\", FrequencyType: chModel.FrequencyTypeOnce, NextDueDate: &due,\n+\t\t\tIsRolling: isRolling, AssignStrategy: chModel.AssignmentStrategyRandom, CircleID: 1, CreatedBy: 1, IsActive: true}\n+\t\tif isRolling {\n+\t\t\tchore.FrequencyType = chModel.FrequencyTypeDaily\n+\t\t\tchore.Frequency = 1\n+\t\t}\n+\t\trequire.NoError(t, db.Create(&chore).Error)\n+\t\treturn chore\n+\t}\n+\tedit := func(chore chModel.Chore, extra map[string]any) *chModel.Chore {\n+\t\tt.Helper()\n+\t\tbody := map[string]any{\n+\t\t\t\"id\":             chore.ID,\n+\t\t\t\"name\":           chore.Name,\n+\t\t\t\"frequencyType\":  chore.FrequencyType,\n+\t\t\t\"isRolling\":      chore.IsRolling,\n+\t\t\t\"assignStrategy\": chModel.AssignmentStrategyRandom,\n+\t\t}\n+\t\tfor key, value := range extra {\n+\t\t\tbody[key] = value\n+\t\t}\n+\t\traw, err := json.Marshal(body)\n+\t\trequire.NoError(t, err)\n+\t\trecorder := httptest.NewRecorder()\n+\t\trouter.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, \"/chores\", bytes.NewReader(raw)))\n+\t\trequire.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())\n+\t\tvar updated chModel.Chore\n+\t\trequire.NoError(t, db.First(&updated, chore.ID).Error)\n+\t\treturn &updated\n+\t}\n+\n+\tchore := newChore(false)\n+\tupdated := edit(chore, nil)\n+\trequire.NotNil(t, updated.NextDueDate, \"an edit without nextDueDate keeps the due date\")\n+\trequire.True(t, due.Equal(*updated.NextDueDate))\n+\n+\tupdated = edit(chore, map[string]any{\"nextDueDate\": nil})\n+\trequire.Nil(t, updated.NextDueDate, \"an explicit null removes the due date\")\n+\n+\trolling := newChore(true)\n+\tupdated = edit(rolling, map[string]any{\"nextDueDate\": nil})\n+\trequire.NotNil(t, updated.NextDueDate, \"a rolling chore keeps its due date\")\n+\trequire.True(t, due.Equal(*updated.NextDueDate))\n+}\n+\n // Clients send Number Thing thresholds as JSON numbers, including 0.\n func TestCreateChoreAcceptsThingTriggerState(t *testing.T) {\n \ttests := []struct {"
+  }
+ ],
+ "test_files": [
+  "internal/chore/handler_test.go"
+ ]
+}

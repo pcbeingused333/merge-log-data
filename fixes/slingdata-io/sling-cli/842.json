@@ -1,0 +1,40 @@
+{
+ "repo": "slingdata-io/sling-cli",
+ "number": 842,
+ "url": "https://github.com/slingdata-io/sling-cli/pull/842",
+ "title": "fix(clickhouse): map Int128, Int256, UInt128 and UInt256 native types",
+ "merged_at": "2026-11-22T00:56:17Z",
+ "files": [
+  {
+   "filename": "core/dbio/iop/datatype_test.go",
+   "status": "modified",
+   "additions": 47,
+   "deletions": 0,
+   "patch": "@@ -2,6 +2,7 @@ package iop\n \n import (\n \t\"encoding/base64\"\n+\t\"math/big\"\n \t\"testing\"\n \t\"time\"\n \n@@ -1511,3 +1512,49 @@ func TestNativeTypeToGeneralOracleBinaryFloatAndLocalTZ(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestNativeTypeToGeneralClickHouseWideIntegers(t *testing.T) {\n+\t// ClickHouse and Proton report 128/256-bit integers as Int128, Int256,\n+\t// UInt128 and UInt256, optionally wrapped in Nullable(...)\n+\tcases := map[string]ColumnType{\n+\t\t\"Int128\":            ColumnType(\"decimal(38,0)\"),\n+\t\t\"Int256\":            DecimalType,\n+\t\t\"UInt128\":           ColumnType(\"decimal(38,0)\"),\n+\t\t\"UInt256\":           DecimalType,\n+\t\t\"Nullable(Int128)\":  ColumnType(\"decimal(38,0)\"),\n+\t\t\"Nullable(UInt256)\": DecimalType,\n+\t\t\"Int64\":             BigIntType,\n+\t}\n+\tfor _, connType := range []dbio.Type{dbio.TypeDbClickhouse, dbio.TypeDbProton} {\n+\t\tfor nativeType, expected := range cases {\n+\t\t\tt.Run(connType.String()+\"/\"+nativeType, func(t *testing.T) {\n+\t\t\t\tcolType := NativeTypeToGeneral(\"col\", nativeType, connType)\n+\t\t\t\tassert.Equal(t, expected, colType)\n+\t\t\t})\n+\t\t}\n+\t}\n+}\n+\n+func TestCastValBigIntOutsideInt64(t *testing.T) {\n+\tsp := NewStreamProcessor()\n+\tcol := &Column{Name: \"col\", Type: DecimalType, Sourced: true}\n+\n+\tmaxU128, _ := new(big.Int).SetString(\"340282366920938463463374607431768211455\", 10)\n+\tassert.Equal(t, \"340282366920938463463374607431768211455\", cast.ToString(sp.CastVal(0, maxU128, col)))\n+\tassert.Equal(t, \"340282366920938463463374607431768211455\", cast.ToString(sp.CastVal(0, *maxU128, col)))\n+\tassert.Equal(t, \"-42\", cast.ToString(sp.CastVal(0, big.NewInt(-42), col)))\n+}\n+\n+func TestNativeTypeToGeneralProtonDate32(t *testing.T) {\n+\tcases := map[string]ColumnType{\n+\t\t\"date\":             DateType,\n+\t\t\"date32\":           DateType,\n+\t\t\"nullable(date32)\": DateType,\n+\t}\n+\tfor nativeType, expected := range cases {\n+\t\tt.Run(nativeType, func(t *testing.T) {\n+\t\t\tcolType := NativeTypeToGeneral(\"col\", nativeType, dbio.TypeDbProton)\n+\t\t\tassert.Equal(t, expected, colType)\n+\t\t})\n+\t}\n+}"
+  },
+  {
+   "filename": "core/dbio/iop/stream_processor.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -707,10 +707,10 @@ func (sp *StreamProcessor) CastVal(i int, val any, col *Column) any {\n \t}\n \n \tswitch v := val.(type) {\n-\tcase big.Int:\n-\t\tval = v.Int64()\n+\tcase big.Int: // keep all digits of values outside int64 (e.g. Int128)\n+\t\tval = lo.Ternary[any](v.IsInt64(), v.Int64(), v.String())\n \tcase *big.Int:\n-\t\tval = v.Int64()\n+\t\tval = lo.Ternary[any](v.IsInt64(), v.Int64(), v.String())\n \tcase big.Rat:\n \t\tdecCount := lo.Ternary(col.DbScale > 0, col.DbScale, maxDec)\n \t\tval = v.FloatString(decCount)"
+  },
+  {
+   "filename": "core/dbio/templates/clickhouse.yaml",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -434,7 +434,9 @@ native_type_map:\n   fixedstring: text\n   float32: float\n   float64: float\n+  int128: \"decimal(38,0)\"\n   int16: smallint\n+  int256: decimal\n   int32: integer\n   int64: bigint\n   int8: smallint\n@@ -445,7 +447,9 @@ native_type_map:\n   simpleaggregatefunction: text\n   string: text\n   tuple: string\n+  uint128: \"decimal(38,0)\"\n   uint16: integer\n+  uint256: decimal\n   uint32: bigint\n   uint64: \"decimal(28,0)\"\n   uint8: integer"
+  },
+  {
+   "filename": "core/dbio/templates/proton.yaml",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -282,6 +282,7 @@ variable:\n native_type_map:\n   array: json\n   date: date\n+  date32: date\n   datetime: datetime\n   datetime64: datetime\n   decimal: decimal\n@@ -290,7 +291,9 @@ native_type_map:\n   fixedstring: text\n   float32: float\n   float64: float\n+  int128: \"decimal(38,0)\"\n   int16: smallint\n+  int256: decimal\n   int32: bigint\n   int64: bigint\n   int8: integer\n@@ -300,7 +303,9 @@ native_type_map:\n   map: json\n   string: text\n   tuple: string\n+  uint128: \"decimal(38,0)\"\n   uint16: integer\n+  uint256: decimal\n   uint32: bigint\n   uint64: \"decimal(28,0)\"\n   uint8: integer"
+  }
+ ],
+ "test_files": [
+  "core/dbio/iop/datatype_test.go"
+ ]
+}

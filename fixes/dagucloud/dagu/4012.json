@@ -1,0 +1,26 @@
+{
+ "repo": "dagucloud/dagu",
+ "number": 4012,
+ "url": "https://github.com/dagucloud/dagu/pull/4012",
+ "title": "fix(agent): resolve value references in working_dir for file secret lookup",
+ "merged_at": "2026-11-22T04:14:10Z",
+ "files": [
+  {
+   "filename": "internal/runtime/agent/agent.go",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 3,
+   "patch": "@@ -2373,7 +2373,7 @@ func (a *Agent) resolveSecrets(ctx context.Context, profileValues resolvedProfil\n \tenvScope := a.buildEnvScopeForSecrets(profileValues)\n \tsecretCtx := cmnvalue.WithEnvScope(ctx, envScope)\n \n-\tbaseDirs := a.buildSecretBaseDirs(envScope)\n+\tbaseDirs := a.buildSecretBaseDirs(ctx, envScope)\n \tsecretRegistry := providers.NewRegistryWithReferenceResolver(a.secretReferenceResolver, baseDirs...)\n \tdefer func() {\n \t\tif err := secretRegistry.Close(); err != nil {\n@@ -2439,8 +2439,16 @@ func (a *Agent) buildEnvScopeForSecrets(profileValues resolvedProfileValues) *cm\n }\n \n // buildSecretBaseDirs returns base directories for file-based secret resolution.\n-func (a *Agent) buildSecretBaseDirs(envScope *cmnvalue.EnvScope) []string {\n-\tbaseDirs := []string{envScope.ExpandPath(a.dag.WorkingDir)}\n+func (a *Agent) buildSecretBaseDirs(ctx context.Context, envScope *cmnvalue.EnvScope) []string {\n+\tworkingDir := envScope.ExpandPath(a.dag.WorkingDir)\n+\t// Secrets resolve before the run context exists, so resolve value\n+\t// references such as ${params.*} the same way steps do.\n+\tif resolved, err := runtime.ResolveDAGWorkingDir(\n+\t\truntime.WithDAGContext(ctx, runtime.Context{DAG: a.dag, EnvScope: envScope}), a.dag,\n+\t); err == nil && resolved != \"\" {\n+\t\tworkingDir = resolved\n+\t}\n+\tbaseDirs := []string{workingDir}\n \tif a.dag.Location != \"\" {\n \t\tbaseDirs = append(baseDirs, filepath.Dir(a.dag.Location))\n \t}"
+  },
+  {
+   "filename": "internal/runtime/agent/agent_test.go",
+   "status": "modified",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -2027,6 +2027,39 @@ steps:\n \trequire.Contains(t, outputs[\"response\"], \"*******\", \"masked placeholder expected\")\n }\n \n+// A relative file secret is searched in the DAG working_dir first, including\n+// when working_dir is written with a value reference such as ${params.*}.\n+func TestAgent_FileSecretWorkingDirParamReference(t *testing.T) {\n+\tif runtime.GOOS == \"windows\" {\n+\t\tt.Skip(\"fixture uses POSIX shell commands\")\n+\t}\n+\tth := test.Setup(t)\n+\n+\tcheckoutDir := t.TempDir()\n+\trequire.NoError(t, os.WriteFile(filepath.Join(checkoutDir, \"token.txt\"), []byte(\"from-checkout\"), 0o600))\n+\n+\tlaunchDir := t.TempDir()\n+\torigWD, err := os.Getwd()\n+\trequire.NoError(t, err)\n+\trequire.NoError(t, os.Chdir(launchDir))\n+\tt.Cleanup(func() {\n+\t\t_ = os.Chdir(origWD)\n+\t})\n+\n+\tdag := th.DAG(t, `working_dir: ${params.workspace}\n+params:\n+  workspace: `+checkoutDir+`\n+secrets:\n+  - name: TOKEN\n+    provider: file\n+    key: token.txt\n+steps:\n+  - name: check\n+    run: test \"$TOKEN\" = from-checkout\n+`)\n+\tdag.Agent().RunSuccess(t)\n+}\n+\n // A later step of the same run reads a published output with the secret\n // intact, while stored run status keeps only the mask.\n func TestAgent_StepOutputSecretMasking(t *testing.T) {"
+  }
+ ],
+ "test_files": [
+  "internal/runtime/agent/agent_test.go"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "slingdata-io/sling-cli",
+ "number": 845,
+ "url": "https://github.com/slingdata-io/sling-cli/pull/845",
+ "title": "Keep \"Nan\"/\"Inf\"/\"Infinity\" and single-letter t/f XML text as strings",
+ "merged_at": "2026-11-22T00:54:41Z",
+ "files": [
+  {
+   "filename": "core/dbio/iop/xml.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 2,
+   "patch": "@@ -3,6 +3,7 @@ package iop\n import (\n \t\"encoding/xml\"\n \t\"io\"\n+\t\"math\"\n \t\"strconv\"\n \t\"strings\"\n \n@@ -163,9 +164,12 @@ func (xd *xmlDecoder) parseRecord(start *xml.StartElement) (map[string]interface\n \t\t\t}\n \n \t\t\t// Type conversion like mxj: try float64, then bool, else string.\n-\t\t\tif f, err := strconv.ParseFloat(text, 64); err == nil {\n+\t\t\t// Text such as \"Nan\", \"Inf\" or \"Infinity\" (names, codes) and single\n+\t\t\t// letters such as \"F\" or \"t\" must stay strings, so only finite\n+\t\t\t// numbers and true/false literals are converted.\n+\t\t\tif f, err := strconv.ParseFloat(text, 64); err == nil && !math.IsNaN(f) && !math.IsInf(f, 0) {\n \t\t\t\tm[childKey] = f\n-\t\t\t} else if b, err := strconv.ParseBool(text); err == nil {\n+\t\t\t} else if b, err := strconv.ParseBool(text); err == nil && len(text) > 1 {\n \t\t\t\tm[childKey] = b\n \t\t\t} else {\n \t\t\t\tm[childKey] = text"
+  },
+  {
+   "filename": "core/dbio/iop/xml_test.go",
+   "status": "added",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,35 @@\n+package iop\n+\n+import (\n+\t\"strings\"\n+\t\"testing\"\n+)\n+\n+func TestXMLDecoderTextValuesStayStrings(t *testing.T) {\n+\txmlData := `<root><row><name>Nan</name><code>Inf</code><label>Infinity</label><grade>F</grade><flag>t</flag><price>1.5</price><ok>true</ok><off>false</off></row></root>`\n+\txd := NewXMLDecoder(strings.NewReader(xmlData))\n+\n+\tvar obj interface{}\n+\tif err := xd.Decode(&obj); err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\trec := obj.(map[string]interface{})\n+\n+\tfor _, k := range []string{\"name\", \"code\", \"label\", \"grade\", \"flag\"} {\n+\t\tif _, ok := rec[k].(string); !ok {\n+\t\t\tt.Errorf(\"%s: expected string, got %T (%v)\", k, rec[k], rec[k])\n+\t\t}\n+\t}\n+\tif rec[\"name\"] != \"Nan\" || rec[\"code\"] != \"Inf\" || rec[\"label\"] != \"Infinity\" {\n+\t\tt.Errorf(\"text values were altered: %v\", rec)\n+\t}\n+\tif f, ok := rec[\"price\"].(float64); !ok || f != 1.5 {\n+\t\tt.Errorf(\"price: expected float64 1.5, got %T (%v)\", rec[\"price\"], rec[\"price\"])\n+\t}\n+\tif b, ok := rec[\"ok\"].(bool); !ok || !b {\n+\t\tt.Errorf(\"ok: expected bool true, got %T (%v)\", rec[\"ok\"], rec[\"ok\"])\n+\t}\n+\tif b, ok := rec[\"off\"].(bool); !ok || b {\n+\t\tt.Errorf(\"off: expected bool false, got %T (%v)\", rec[\"off\"], rec[\"off\"])\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "core/dbio/iop/xml_test.go"
+ ]
+}

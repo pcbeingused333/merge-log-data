@@ -1,0 +1,33 @@
+{
+ "repo": "generaltranslation/paraglide-js",
+ "number": 910,
+ "url": "https://github.com/generaltranslation/paraglide-js/pull/910",
+ "title": "fix(virtual-modules): rewrite messages read in destructuring default values",
+ "merged_at": "2026-11-22T03:41:27Z",
+ "files": [
+  {
+   "filename": ".changeset/rewrite-message-in-default-value.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+\"@inlang/paraglide-js\": patch\n+---\n+\n+Keep the virtual-modules optimization when a message is read in a destructuring default value, such as `let { text = m.hello() } = $props()` in Svelte 5 server output. Before, any `m.key` below an `AssignmentPattern` made the file fall back to importing the whole message barrel."
+  },
+  {
+   "filename": "src/bundler-plugins/virtual-message-imports.test.ts",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -58,6 +58,8 @@ test.each([\n   \"const [first]=m\",\n   \"m[`hel${suffix}`]()\",\n   \"let hello; use(({hello}=m))\",\n+  \"({x:m.hello=1}=other)\",\n+  \"[m.hello=1]=other\",\n ])(\n   \"ambiguous or mutable namespace usage keeps the barrel: %s\",\n   (expression) => {\n@@ -131,6 +133,29 @@ export const output = [hello(), greet(), renamed(), read(), m[\\`class\\`]()];`,\n   ]);\n });\n \n+test(\"messages read in default values are rewritten without the barrel\", async () => {\n+  const { original, rewritten } = await runBoth(\n+    `import {m} from \"./messages.js\";\n+const fromParam = ({text = m.hello()} = {}) => text;\n+const {a = m.hello()} = {};\n+const [b = m[\"greeting.hello\"]()] = [];\n+let c;\n+({c = m.class()} = {});\n+export const output = [fromParam(), fromParam({text: \"x\"}), a, b, c];`,\n+    [\"hello\", \"greeting.hello\", \"class\"]\n+  );\n+  expect(rewritten).toEqual(original);\n+  expect(original).toEqual([\"hello\", \"x\", \"hello\", \"greeting.hello\", \"class\"]);\n+});\n+\n+test(\"a message in a default value keeps the barrel only when another read is unsafe\", () => {\n+  expect(\n+    rewrite(\n+      `import {m} from './messages.js'; const f = ({t = m.hello()} = {}) => t; ({x: m.hello = 1} = o);`\n+    )\n+  ).toBeNull();\n+});\n+\n test(\"a destructured __proto__ message reads the message twice\", async () => {\n   const { original, rewritten } = await runBoth(\n     `import {m} from \"./messages.js\";"
+  },
+  {
+   "filename": "src/bundler-plugins/virtual-message-imports.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -255,7 +255,11 @@ export function rewriteVirtualMessageImports(args: {\n         }\n         // Destructuring writes may nest the target below a pattern node.\n         let ancestor: Node | undefined = member;\n+        let child: Node | undefined;\n         while (ancestor && ancestor !== statement) {\n+          // A default value is an ordinary read, never a write target.\n+          if (ancestor.type === \"AssignmentPattern\" && child === ancestor.right)\n+            break;\n           if (\n             ancestor.type === \"AssignmentPattern\" ||\n             ancestor.type === \"ArrayPattern\" ||\n@@ -264,6 +268,7 @@ export function rewriteVirtualMessageImports(args: {\n             unsafe = true;\n             return;\n           }\n+          child = ancestor;\n           ancestor = parents.get(ancestor);\n         }\n         references.push({ node: member, name });"
+  }
+ ],
+ "test_files": [
+  "src/bundler-plugins/virtual-message-imports.test.ts"
+ ]
+}

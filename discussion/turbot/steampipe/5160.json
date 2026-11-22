@@ -3,13 +3,30 @@
  "number": 5160,
  "url": "https://github.com/turbot/steampipe/pull/5160",
  "state": "open",
- "reviews": [],
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-21T20:01:47Z",
+   "body": "Thanks for this. The zombie and reused-pid cases are real, and both now report not running. Two things need changing before it can merge.\n\n**1. A live service whose command line isn't matched is treated as dead, and its files are deleted.**\n\n`GetState` (`pkg/db/db_local/service.go`) now decides the recorded pid is not the database whenever the command-line match fails. It then removes `steampipe.json`, and on the next call `postmaster.pid`. Postgres notices its lock file is gone and shuts down. Before this PR, state was never removed for a live pid.\n\nThe match fails on a live, healthy service in at least two cases:\n- On macOS, gopsutil v3.21.11 reads a command line by splitting `ps -o command` output on spaces. With `--install-dir \"/Users/me/My Stuff\"`, `cmdline[0]` is `/Users/me/My`, so the `postgres` check fails.\n- A command-line read that returns an error takes the same path.\n\nSo a user with a space in their install path gets `service is not running` from `query`, port-in-use from `start`, and then a stopped service.\n\nWhen the pid is alive but can't be confirmed, please keep the state and report it as running, as before. Treat it as not running only when you *know* it isn't the database: a zombie, or a readable command line that is clearly some other program. Please also add a test that a live database keeps its state files when its command line can't be matched.\n\n**2. Please reuse `findSteampipePostgresInstances` instead of a second copy of its retry loop.**\n\n`service.go` re-implements the empty-command-line retry from `findSteampipePostgresInstances` (`start_services.go`). Calling that function with a one-process list does the same job and keeps one matcher. Any fix to the macOS split then lands in both places.\n\n**Also needed: a `Changelog:` line** in the PR body. The `shipyard/changelog-line` check fails without one. A suggestion:\n\n> Changelog: `steampipe service status` now reports the service as not running when the database process has exited but is still a zombie, or when its recorded PID now belongs to a different process.\n\nCI is approved to run, so the Linux zombie test gets its first run.\n"
+  }
+ ],
  "review_comments": [],
  "comments": [
   {
    "role": "none",
    "created_at": "2026-11-15T19:24:52Z",
    "body": "[![CLA assistant check](https://cla-assistant.io/pull/badge/not_signed)](https://cla-assistant.io/turbot/steampipe?pullRequest=5160) <br/>Thank you for your submission! We really appreciate it. Like many open source projects, we ask that you sign our [Contributor License Agreement](https://cla-assistant.io/turbot/steampipe?pullRequest=5160) before we can accept your contribution.<br/><sub>You have signed the CLA already but the status is still pending? Let us [recheck](https://cla-assistant.io/check/turbot/steampipe?pullRequest=5160) it.</sub>"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-22T01:14:54Z",
+   "body": "Thanks, both points are addressed. (1) The state is kept when the pid is alive but the command line cannot be read, and it is dropped only for a zombie or when the readable command line is not the steampipe database. A space in the install path is handled in `isSteampipePostgresProcess`: a `postgres` or `postgres.exe` basename in a later argument, together with `application_name=steampipe`, is still this service, so start and stop use the same match as status. A different postgres without that argument is not. (2) `GetState` calls `findSteampipePostgresInstances` for the recorded pid instead of keeping its own retry loop. The PR body now has the Changelog line for the shipyard check.\n\nThe nilerr lint (Test Linting, service.go) is fixed without changing that behavior. A failed or empty command-line read is stored in a bool and still reports the pid as running; the nil error is returned outside the `err != nil` branch, so nilerr is quiet. `golangci-lint run ./pkg/db/db_local/` now reports only the preexisting G703 in `running_info.go`.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-22T04:07:50Z",
+   "body": "Merged the latest `develop` into this branch to resolve the conflict; no other changes."
   }
  ]
 }

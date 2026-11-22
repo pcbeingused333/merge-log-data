@@ -1,0 +1,33 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 718,
+ "url": "https://github.com/labring/aiproxy/pull/718",
+ "title": "fix(ollama): forward reasoning_effort as think in chat requests",
+ "merged_at": "2026-11-22T03:35:20Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/ollama/main.go",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 0,
+   "patch": "@@ -55,6 +55,8 @@ func ConvertRequest(meta *meta.Meta, req *http.Request) (adaptor.ConvertResult,\n \t\t}\n \t}\n \n+\tollamaRequest.Think = convertThink(request.ReasoningEffort)\n+\n \tfor _, message := range request.Messages {\n \t\topenaiContent := message.ParseContent()\n \n@@ -126,6 +128,27 @@ func ConvertRequest(meta *meta.Meta, req *http.Request) (adaptor.ConvertResult,\n \t}, nil\n }\n \n+// convertThink maps OpenAI reasoning_effort to Ollama's think parameter.\n+// It returns nil (field omitted) when no effort is requested or it is unknown.\n+func convertThink(effort *string) any {\n+\tif effort == nil {\n+\t\treturn nil\n+\t}\n+\n+\tswitch relaymodel.NormalizeReasoningEffort(*effort) {\n+\tcase relaymodel.ReasoningEffortNone:\n+\t\treturn false\n+\tcase relaymodel.ReasoningEffortMinimal, relaymodel.ReasoningEffortLow:\n+\t\treturn \"low\"\n+\tcase relaymodel.ReasoningEffortMedium:\n+\t\treturn \"medium\"\n+\tcase relaymodel.ReasoningEffortHigh, relaymodel.ReasoningEffortXHigh:\n+\t\treturn \"high\"\n+\tdefault:\n+\t\treturn nil\n+\t}\n+}\n+\n // getToolCalls converts Ollama tool calls to OpenAI ones. indexOffset is the\n // number of tool calls already emitted earlier in the same stream, so that\n // every call gets a distinct index."
+  },
+  {
+   "filename": "core/relay/adaptor/ollama/main_test.go",
+   "status": "modified",
+   "additions": 50,
+   "deletions": 0,
+   "patch": "@@ -156,3 +156,53 @@ func TestStreamHandler_ToolCallIndexes(t *testing.T) {\n \n \tassert.Equal(t, map[string]int{\"a\": 0, \"b\": 1, \"c\": 2}, got)\n }\n+\n+func TestConvertRequest_ReasoningEffortToThink(t *testing.T) {\n+\tcases := []struct {\n+\t\teffort string\n+\t\twant   any\n+\t}{\n+\t\t{\"low\", \"low\"},\n+\t\t{\"medium\", \"medium\"},\n+\t\t{\"high\", \"high\"},\n+\t\t{\"none\", false},\n+\t\t{\"bogus\", nil},\n+\t}\n+\tfor _, tc := range cases {\n+\t\tt.Run(tc.effort, func(t *testing.T) {\n+\t\t\tm := meta.NewMeta(\n+\t\t\t\t&model.Channel{Type: model.ChannelTypeOllama},\n+\t\t\t\t0,\n+\t\t\t\t\"gpt-oss:20b\",\n+\t\t\t\tmodel.ModelConfig{},\n+\t\t\t)\n+\t\t\teffort := tc.effort\n+\t\t\tdata, _ := sonic.Marshal(relaymodel.GeneralOpenAIRequest{\n+\t\t\t\tModel:           \"gpt-oss:20b\",\n+\t\t\t\tMessages:        []relaymodel.Message{{Role: \"user\", Content: \"hi\"}},\n+\t\t\t\tReasoningEffort: &effort,\n+\t\t\t})\n+\t\t\treq, _ := http.NewRequestWithContext(\n+\t\t\t\tt.Context(), http.MethodPost, \"http://localhost:11434/api/chat\",\n+\t\t\t\tbytes.NewBuffer(data),\n+\t\t\t)\n+\n+\t\t\tresult, err := ollama.ConvertRequest(m, req)\n+\t\t\tassert.NoError(t, err)\n+\n+\t\t\tbody, _ := io.ReadAll(result.Body)\n+\n+\t\t\tvar got map[string]any\n+\n+\t\t\tassert.NoError(t, json.Unmarshal(body, &got))\n+\n+\t\t\tthink, ok := got[\"think\"]\n+\t\t\tif tc.want == nil {\n+\t\t\t\tassert.False(t, ok)\n+\t\t\t\treturn\n+\t\t\t}\n+\n+\t\t\tassert.Equal(t, tc.want, think)\n+\t\t})\n+\t}\n+}"
+  },
+  {
+   "filename": "core/relay/adaptor/ollama/model.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -42,6 +42,8 @@ type ChatRequest struct {\n \tStream   bool      `json:\"stream\"`\n \tFormat   any       `json:\"format,omitempty\"`\n \tTools    []*Tool   `json:\"tools,omitempty\"`\n+\t// Think is a bool, or \"low\"/\"medium\"/\"high\" for models such as gpt-oss.\n+\tThink any `json:\"think,omitempty\"`\n }\n \n type ChatResponse struct {"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/ollama/main_test.go"
+ ]
+}

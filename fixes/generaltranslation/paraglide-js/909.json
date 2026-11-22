@@ -1,0 +1,33 @@
+{
+ "repo": "generaltranslation/paraglide-js",
+ "number": 909,
+ "url": "https://github.com/generaltranslation/paraglide-js/pull/909",
+ "title": "fix(runtime): apply trailingSlash to localizeUrl/deLocalizeUrl fast path",
+ "merged_at": "2026-11-22T03:48:08Z",
+ "files": [
+  {
+   "filename": ".changeset/fix-trailing-slash-fast-path.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+\"@inlang/paraglide-js\": patch\n+---\n+\n+Apply the configured `trailingSlash` policy to the catch-all fast path of `localizeUrl` and `deLocalizeUrl`. Previously `localizeHref(\"/\", { locale: \"en\" })` returned `/en/` with `trailingSlash: \"never\"` because the fast path returned before normalization."
+  },
+  {
+   "filename": "src/compiler/runtime/localize-url.js",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -90,7 +90,7 @@ export function localizeUrl(url, options) {\n       element\n     );\n     if (fastPathLocalized !== undefined) {\n-      return fastPathLocalized;\n+      return normalizeTrailingSlash(fastPathLocalized);\n     }\n \n     // match localized patterns\n@@ -238,7 +238,7 @@ export function deLocalizeUrl(url) {\n   for (const element of getUrlPatternCandidates(urlObj)) {\n     const fastPathDeLocalized = deLocalizeUrlFastPath(urlObj, element);\n     if (fastPathDeLocalized !== undefined) {\n-      return fastPathDeLocalized;\n+      return normalizeTrailingSlash(fastPathDeLocalized);\n     }\n \n     // Iterate over localized versions"
+  },
+  {
+   "filename": "src/compiler/runtime/localize-url.test.ts",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -1131,3 +1131,41 @@ test(\"correctly handles port numbers as pattern parameters\", async () => {\n     \"http://localhost:5173/about\"\n   );\n });\n+\n+test.each([\"never\", \"always\"] as const)(\n+  \"applies trailingSlash %s to catch-all fast path results\",\n+  async (trailingSlash) => {\n+    const runtime = await createParaglide({\n+      blob: await newProject({\n+        settings: { baseLocale: \"ja\", locales: [\"en\", \"ja\"] },\n+      }),\n+      strategy: [\"url\"],\n+      trailingSlash,\n+      urlPatterns: [\n+        {\n+          pattern: \"/:path(.*)?\",\n+          localized: [\n+            [\"en\", \"/en/:path(.*)?\"],\n+            [\"ja\", \"/:path(.*)?\"],\n+          ],\n+        },\n+      ],\n+    });\n+\n+    const enRoot = trailingSlash === \"never\" ? \"/en\" : \"/en/\";\n+    const enAbout = trailingSlash === \"never\" ? \"/en/about\" : \"/en/about/\";\n+    const jaAbout = trailingSlash === \"never\" ? \"/about\" : \"/about/\";\n+\n+    const localize = (path: string) =>\n+      runtime.localizeUrl(`https://example.com${path}`, { locale: \"en\" })\n+        .pathname;\n+    const deLocalize = (path: string) =>\n+      runtime.deLocalizeUrl(`https://example.com${path}`).pathname;\n+\n+    expect(localize(\"/\")).toBe(enRoot);\n+    expect(localize(\"/about\")).toBe(enAbout);\n+    expect(localize(\"/about/\")).toBe(enAbout);\n+    expect(deLocalize(\"/en/about/\")).toBe(jaAbout);\n+    expect(deLocalize(\"/en/about\")).toBe(jaAbout);\n+  }\n+);"
+  }
+ ],
+ "test_files": [
+  "src/compiler/runtime/localize-url.test.ts"
+ ]
+}

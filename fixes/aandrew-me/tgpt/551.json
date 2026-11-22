@@ -1,0 +1,26 @@
+{
+ "repo": "aandrew-me/tgpt",
+ "number": 551,
+ "url": "https://github.com/aandrew-me/tgpt/pull/551",
+ "title": "fix(fx): forward --temperature and --top_p to the gateway",
+ "merged_at": "2026-11-22T06:44:04Z",
+ "files": [
+  {
+   "filename": "src/providers/fx/fx.go",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -30,6 +30,8 @@ type PromptMessage struct {\n type RequestBody struct {\n \tPrompt          []PromptMessage `json:\"prompt\"`\n \tMaxOutputTokens int             `json:\"maxOutputTokens,omitempty\"`\n+\tTemperature     *float64        `json:\"temperature,omitempty\"`\n+\tTopP            *float64        `json:\"topP,omitempty\"`\n \tProviderOptions map[string]any  `json:\"providerOptions,omitempty\"`\n \tHeaders         map[string]any  `json:\"headers,omitempty\"`\n }\n@@ -163,6 +165,8 @@ func NewRequest(input string, params structs.Params) (*http.Response, error) {\n \t\t},\n \t}\n \n+\treqBody.Temperature, reqBody.TopP = params.SamplingOptions()\n+\n \tjsonRequest, err := json.Marshal(reqBody)\n \tif err != nil {\n \t\tlog.Fatal(\"Failed to build user request\")"
+  },
+  {
+   "filename": "src/providers/fx/fx_test.go",
+   "status": "modified",
+   "additions": 41,
+   "deletions": 0,
+   "patch": "@@ -2,6 +2,9 @@ package fx\n \n import (\n \t\"encoding/json\"\n+\t\"io\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n \t\"strings\"\n \t\"testing\"\n \n@@ -241,3 +244,41 @@ message: {\"type\":\"text-end\",\"id\":\"txt-0\"}`\n \t}\n }\n \n+func captureRequestBody(t *testing.T, params structs.Params) map[string]any {\n+\tt.Helper()\n+\tvar got map[string]any\n+\tsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\traw, _ := io.ReadAll(r.Body)\n+\t\tif err := json.Unmarshal(raw, &got); err != nil {\n+\t\t\tt.Errorf(\"invalid request body: %v\", err)\n+\t\t}\n+\t}))\n+\tdefer srv.Close()\n+\n+\tparams.Url = srv.URL\n+\tresp, err := NewRequest(\"hi\", params)\n+\tif err != nil {\n+\t\tt.Fatalf(\"NewRequest: %v\", err)\n+\t}\n+\tresp.Body.Close()\n+\treturn got\n+}\n+\n+func TestRequestBodySamplingOptions(t *testing.T) {\n+\tbody := captureRequestBody(t, structs.Params{Temperature: \"0.2\", Top_p: \"0.9\"})\n+\tif body[\"temperature\"] != 0.2 {\n+\t\tt.Errorf(\"temperature = %v, want 0.2\", body[\"temperature\"])\n+\t}\n+\tif body[\"topP\"] != 0.9 {\n+\t\tt.Errorf(\"topP = %v, want 0.9\", body[\"topP\"])\n+\t}\n+}\n+\n+func TestRequestBodyOmitsUnsetSamplingOptions(t *testing.T) {\n+\tbody := captureRequestBody(t, structs.Params{})\n+\tfor _, key := range []string{\"temperature\", \"topP\"} {\n+\t\tif _, ok := body[key]; ok {\n+\t\t\tt.Errorf(\"%s should be omitted when unset\", key)\n+\t\t}\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "src/providers/fx/fx_test.go"
+ ]
+}

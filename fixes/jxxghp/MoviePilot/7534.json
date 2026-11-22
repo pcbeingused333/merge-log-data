@@ -1,0 +1,26 @@
+{
+ "repo": "jxxghp/MoviePilot",
+ "number": 7534,
+ "url": "https://github.com/jxxghp/MoviePilot/pull/7534",
+ "title": "fix(plugin): normalize nested history values from third-party market indexes",
+ "merged_at": "2026-11-22T05:37:33Z",
+ "files": [
+  {
+   "filename": "app/runtime/extensions/plugin/metadata.py",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 1,
+   "patch": "@@ -107,7 +107,7 @@ def map(\n             ),\n             None,\n         )\n-        plugin.history = info.get(\"history\") or {}\n+        plugin.history = self.normalize_history(info.get(\"history\"))\n         plugin.release = bool(info.get(\"release\"))\n         plugin.repo_url = market\n         plugin.package_version = package_version\n@@ -128,6 +128,29 @@ def _state(self, plugin_id: str, instance: Optional[Any]) -> bool:\n             self._logger.error(f\"获取插件 {plugin_id} 状态出错：{error}\")\n             return False\n \n+    @staticmethod\n+    def normalize_history(history: Any) -> dict[str, str]:\n+        \"\"\"\n+        把市场索引的更新记录归一化为版本到文本的映射。\n+\n+        第三方索引可能把版本说明写成含 ``content`` 的嵌套对象，这里取其正文拼接为文本，\n+        无法得到正文的条目直接丢弃，避免错误类型进入响应模型。\n+\n+        :param history: 索引中的原始 history 字段\n+        :return: 仅包含字符串值的更新记录\n+        \"\"\"\n+        if not isinstance(history, dict):\n+            return {}\n+        normalized: dict[str, str] = {}\n+        for version, note in history.items():\n+            if isinstance(note, dict):\n+                note = note.get(\"content\")\n+                if isinstance(note, list):\n+                    note = \"\\n\".join(str(item) for item in note)\n+            if isinstance(note, str):\n+                normalized[str(version)] = note\n+        return normalized\n+\n     @staticmethod\n     def normalize_label(labels: Any) -> Optional[str]:\n         \"\"\""
+  },
+  {
+   "filename": "tests/test_plugin_documentation.py",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -3,6 +3,7 @@\n \"\"\"\n \n import asyncio\n+import warnings\n from contextlib import asynccontextmanager\n from types import SimpleNamespace\n from typing import Optional\n@@ -364,3 +365,24 @@ async def stream(**kwargs):\n         assert len(calls) == 2\n     finally:\n         await transport.async_get_plugin_readme_url.cache_clear()\n+\n+\n+def test_nested_history_is_normalized_to_text() -> None:\n+    \"\"\"\n+    第三方索引把 history 值写成嵌套对象时，应归一化为字符串且不触发序列化警告。\n+    \"\"\"\n+    info = {\n+        \"name\": \"Demo\",\n+        \"version\": \"1.7.3\",\n+        \"history\": {\n+            \"v1.7.3\": {\"version\": \"1.7.3\", \"date\": \"2026-01-01\", \"content\": [\"修复A\", \"修复B\"]},\n+            \"v1.18.4\": {\"version\": \"1.18.4\"},\n+            \"v1.0.0\": \"初始版本\",\n+        },\n+    }\n+    plugin = _mapper().map(\"Demo\", info, REPO, [], 0, \"v3\")\n+    assert plugin is not None\n+    assert plugin.history == {\"v1.7.3\": \"修复A\\n修复B\", \"v1.0.0\": \"初始版本\"}\n+    with warnings.catch_warnings():\n+        warnings.simplefilter(\"error\")\n+        plugin.model_dump_json()"
+  }
+ ],
+ "test_files": [
+  "tests/test_plugin_documentation.py"
+ ]
+}

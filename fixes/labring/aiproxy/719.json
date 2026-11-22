@@ -1,0 +1,26 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 719,
+ "url": "https://github.com/labring/aiproxy/pull/719",
+ "title": "fix(openai): map Responses incomplete_details to Gemini finish reason",
+ "merged_at": "2026-11-22T03:41:17Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/openai/gemini.go",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 10,
+   "patch": "@@ -1048,14 +1048,7 @@ func ConvertResponsesToGeminiResponse(\n \t\t// Only add candidate if it has content\n \t\tif len(candidate.Content.Parts) > 0 {\n \t\t\t// Set finish reason\n-\t\t\tswitch responsesResp.Status {\n-\t\t\tcase relaymodel.ResponseStatusCompleted:\n-\t\t\t\tcandidate.FinishReason = relaymodel.GeminiFinishReasonStop\n-\t\t\tcase relaymodel.ResponseStatusIncomplete:\n-\t\t\t\tcandidate.FinishReason = relaymodel.GeminiFinishReasonMaxTokens\n-\t\t\tdefault:\n-\t\t\t\tcandidate.FinishReason = relaymodel.GeminiFinishReasonStop\n-\t\t\t}\n+\t\t\tcandidate.FinishReason = responseToGeminiFinishReason(&responsesResp)\n \n \t\t\tgeminiResp.Candidates = append(geminiResp.Candidates, candidate)\n \t\t}\n@@ -1177,7 +1170,9 @@ func ConvertResponsesToGeminiStreamResponse(\n \t\t\tif state.handleFunctionCallArgumentsDone(&event) {\n \t\t\t\twroteStream = true\n \t\t\t}\n-\t\tcase relaymodel.EventResponseCompleted, relaymodel.EventResponseDone:\n+\t\tcase relaymodel.EventResponseCompleted,\n+\t\t\trelaymodel.EventResponseDone,\n+\t\t\trelaymodel.EventResponseIncomplete:\n \t\t\tif state.handleResponseCompleted(&event) {\n \t\t\t\twroteStream = true\n \t\t\t}\n@@ -1307,7 +1302,7 @@ func (s *geminiStreamState) handleResponseCompleted(event *relaymodel.ResponseSt\n \t\tCandidates: []*relaymodel.GeminiChatCandidate{\n \t\t\t{\n \t\t\t\tIndex:        0,\n-\t\t\t\tFinishReason: relaymodel.GeminiFinishReasonStop,\n+\t\t\t\tFinishReason: responseToGeminiFinishReason(event.Response),\n \t\t\t\tContent: relaymodel.GeminiChatContent{\n \t\t\t\t\tRole:  relaymodel.GeminiRoleModel,\n \t\t\t\t\tParts: []*relaymodel.GeminiPart{},\n@@ -1320,3 +1315,16 @@ func (s *geminiStreamState) handleResponseCompleted(event *relaymodel.ResponseSt\n \n \treturn true\n }\n+\n+// responseToGeminiFinishReason maps a Responses API result to a Gemini finish reason,\n+// honoring incomplete_details.reason like responseToChatFinishReason does.\n+func responseToGeminiFinishReason(response *relaymodel.Response) string {\n+\tswitch responseToChatFinishReason(response) {\n+\tcase relaymodel.FinishReasonLength:\n+\t\treturn relaymodel.GeminiFinishReasonMaxTokens\n+\tcase relaymodel.FinishReasonContentFilter:\n+\t\treturn relaymodel.GeminiFinishReasonSafety\n+\tdefault:\n+\t\treturn relaymodel.GeminiFinishReasonStop\n+\t}\n+}"
+  },
+  {
+   "filename": "core/relay/adaptor/openai/gemini_to_responses_test.go",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -417,6 +417,42 @@ func TestConvertResponsesToGeminiResponse(t *testing.T) {\n \t\t\texpectedFinish:  \"STOP\",\n \t\t\thasReasoning:    false,\n \t\t},\n+\t\t{\n+\t\t\tname: \"incomplete max_output_tokens maps to MAX_TOKENS\",\n+\t\t\tresponsesResp: relaymodel.Response{\n+\t\t\t\tID:                \"resp_inc_len\",\n+\t\t\t\tModel:             \"gpt-5-codex\",\n+\t\t\t\tStatus:            relaymodel.ResponseStatusIncomplete,\n+\t\t\t\tIncompleteDetails: &relaymodel.IncompleteDetails{Reason: \"max_output_tokens\"},\n+\t\t\t\tOutput: []relaymodel.OutputItem{{\n+\t\t\t\t\tRole: \"assistant\",\n+\t\t\t\t\tContent: []relaymodel.OutputContent{{\n+\t\t\t\t\t\tType: \"text\", Text: \"cut\",\n+\t\t\t\t\t}},\n+\t\t\t\t}},\n+\t\t\t\tUsage: &relaymodel.ResponseUsage{InputTokens: 1, OutputTokens: 1, TotalTokens: 2},\n+\t\t\t},\n+\t\t\texpectedContent: \"cut\",\n+\t\t\texpectedFinish:  \"MAX_TOKENS\",\n+\t\t},\n+\t\t{\n+\t\t\tname: \"incomplete content_filter maps to SAFETY\",\n+\t\t\tresponsesResp: relaymodel.Response{\n+\t\t\t\tID:                \"resp_inc_cf\",\n+\t\t\t\tModel:             \"gpt-5-codex\",\n+\t\t\t\tStatus:            relaymodel.ResponseStatusIncomplete,\n+\t\t\t\tIncompleteDetails: &relaymodel.IncompleteDetails{Reason: \"content_filter\"},\n+\t\t\t\tOutput: []relaymodel.OutputItem{{\n+\t\t\t\t\tRole: \"assistant\",\n+\t\t\t\t\tContent: []relaymodel.OutputContent{{\n+\t\t\t\t\t\tType: \"text\", Text: \"part\",\n+\t\t\t\t\t}},\n+\t\t\t\t}},\n+\t\t\t\tUsage: &relaymodel.ResponseUsage{InputTokens: 1, OutputTokens: 1, TotalTokens: 2},\n+\t\t\t},\n+\t\t\texpectedContent: \"part\",\n+\t\t\texpectedFinish:  \"SAFETY\",\n+\t\t},\n \t\t{\n \t\t\tname: \"gemini response with reasoning\",\n \t\t\tresponsesResp: relaymodel.Response{"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/openai/gemini_to_responses_test.go"
+ ]
+}

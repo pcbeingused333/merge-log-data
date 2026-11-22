@@ -1,0 +1,26 @@
+{
+ "repo": "slingdata-io/sling-cli",
+ "number": 843,
+ "url": "https://github.com/slingdata-io/sling-cli/pull/843",
+ "title": "fix(starrocks): map the largeint native type to decimal(38,0)",
+ "merged_at": "2026-11-22T00:56:41Z",
+ "files": [
+  {
+   "filename": "core/dbio/iop/datatype_test.go",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -1558,3 +1558,33 @@ func TestNativeTypeToGeneralProtonDate32(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestNativeTypeToGeneralStarRocksLargeInt(t *testing.T) {\n+\t// StarRocks reports its signed 128-bit integer as LARGEINT. bigint is 64-bit,\n+\t// so the map uses decimal(38,0), the same precision DuckDB pins for hugeint.\n+\tcases := []struct {\n+\t\tnative   string\n+\t\texpected ColumnType\n+\t}{\n+\t\t{\"largeint\", ColumnType(\"decimal(38,0)\")},\n+\t\t{\"LARGEINT\", ColumnType(\"decimal(38,0)\")},\n+\t\t{\"bigint\", BigIntType},\n+\t\t{\"int\", IntegerType},\n+\t\t{\"decimal\", DecimalType},\n+\t}\n+\tfor _, tc := range cases {\n+\t\tt.Run(tc.native, func(t *testing.T) {\n+\t\t\tcolType := NativeTypeToGeneral(\"col\", tc.native, dbio.TypeDbStarRocks)\n+\t\t\tassert.Equal(t, tc.expected, colType)\n+\t\t})\n+\t}\n+\n+\tt.Run(\"precision\", func(t *testing.T) {\n+\t\tcol := Column{Name: \"id\", Type: NativeTypeToGeneral(\"id\", \"largeint\", dbio.TypeDbStarRocks)}\n+\t\tcol.SetLengthPrecisionScale()\n+\t\tassert.Equal(t, DecimalType, col.Type)\n+\t\tassert.Equal(t, 38, col.DbPrecision)\n+\t\tassert.Equal(t, 0, col.DbScale)\n+\t\tassert.True(t, col.Sourced)\n+\t})\n+}"
+  },
+  {
+   "filename": "core/dbio/templates/starrocks.yaml",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -550,6 +550,7 @@ native_type_map:\n   geometrycollection: string\n   int: integer\n   json: json\n+  largeint: \"decimal(38,0)\"\n   linestring: string\n   longblob: text\n   longtext: text"
+  }
+ ],
+ "test_files": [
+  "core/dbio/iop/datatype_test.go"
+ ]
+}
