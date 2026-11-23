@@ -1,0 +1,26 @@
+{
+ "repo": "SQLMesh/sqlmesh",
+ "number": 6190,
+ "url": "https://github.com/SQLMesh/sqlmesh/pull/6190",
+ "title": "fix(clickhouse): respect user-provided insert_quorum in cluster mode",
+ "merged_at": "2026-11-22T23:51:52Z",
+ "files": [
+  {
+   "filename": "sqlmesh/core/config/connection.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 2,
+   "patch": "@@ -2424,7 +2424,7 @@ def _static_connection_kwargs(self) -> t.Dict[str, t.Any]:\n         # https://clickhouse.com/docs/en/operations/settings/settings\n         # - below are set to align with dbt-clickhouse\n         # - https://github.com/ClickHouse/dbt-clickhouse/blob/44d26308ea6a3c8ead25c280164aa88191f05f47/dbt/adapters/clickhouse/dbclient.py#L77\n-        settings = self.connection_settings or {}\n+        settings = dict(self.connection_settings or {})\n         #  mutations_sync = 2: \"The query waits for all mutations [ALTER statements] to complete on all replicas (if they exist)\"\n         settings[\"mutations_sync\"] = \"2\"\n         #  insert_distributed_sync = 1: \"INSERT operation succeeds only after all the data is saved on all shards\"\n@@ -2438,7 +2438,8 @@ def _static_connection_kwargs(self) -> t.Dict[str, t.Any]:\n             #   - \"INSERT succeeds only when ClickHouse manages to correctly write data to the insert_quorum of replicas during\n             #       the insert_quorum_timeout\"\n             #   - \"use majority number (number_of_replicas / 2 + 1) as quorum number\"\n-            settings[\"insert_quorum\"] = \"auto\"\n+            #   - a value set by the user in connection_settings takes precedence\n+            settings.setdefault(\"insert_quorum\", \"auto\")\n \n         return {\n             \"compress\": compress,"
+  },
+  {
+   "filename": "tests/core/test_connection_config.py",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -1288,6 +1288,33 @@ def test_clickhouse(make_config):\n     assert not config3._static_connection_kwargs[\"compress\"]\n \n \n+def test_clickhouse_insert_quorum_user_setting(make_config):\n+    user_settings = {\"insert_quorum\": \"0\"}\n+    config = make_config(\n+        type=\"clickhouse\",\n+        host=\"localhost\",\n+        username=\"default\",\n+        password=\"default\",\n+        cluster=\"default\",\n+        connection_settings=user_settings,\n+    )\n+\n+    # A user-provided insert_quorum is respected in cluster mode\n+    assert config._static_connection_kwargs[\"insert_quorum\"] == \"0\"\n+    # Building the connection kwargs does not write SQLMesh's settings back into the config\n+    assert config.connection_settings == {\"insert_quorum\": \"0\"}\n+\n+    # Without a user value, cluster mode still defaults to \"auto\"\n+    config_default = make_config(\n+        type=\"clickhouse\",\n+        host=\"localhost\",\n+        username=\"default\",\n+        password=\"default\",\n+        cluster=\"default\",\n+    )\n+    assert config_default._static_connection_kwargs[\"insert_quorum\"] == \"auto\"\n+\n+\n def test_athena(make_config):\n     config = make_config(type=\"athena\", work_group=\"primary\")\n     assert isinstance(config, AthenaConnectionConfig)"
+  }
+ ],
+ "test_files": [
+  "tests/core/test_connection_config.py"
+ ]
+}

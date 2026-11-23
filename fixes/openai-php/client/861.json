@@ -1,0 +1,57 @@
+{
+ "repo": "openai-php/client",
+ "number": 861,
+ "url": "https://github.com/openai-php/client/pull/861",
+ "title": "fix(OpenAI): keep logprobs on streamed Responses output text events",
+ "merged_at": "2026-11-22T23:51:38Z",
+ "files": [
+  {
+   "filename": "src/Responses/Responses/Streaming/OutputTextDelta.php",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 2,
+   "patch": "@@ -12,7 +12,7 @@\n use OpenAI\\Testing\\Responses\\Concerns\\Fakeable;\n \n /**\n- * @phpstan-type OutputTextType array{type: string, content_index: int, delta: string, item_id: string, output_index: int, sequence_number: int}\n+ * @phpstan-type OutputTextType array{type: string, content_index: int, delta: string, item_id: string, output_index: int, sequence_number: int, logprobs?: array<int, array{token: string, logprob: float, top_logprobs?: array<int, array{token: string, logprob: float}>}>}\n  *\n  * @implements ResponseContract<OutputTextType>\n  */\n@@ -26,13 +26,17 @@ final class OutputTextDelta implements ResponseContract, ResponseHasMetaInformat\n     use Fakeable;\n     use HasMetaInformation;\n \n+    /**\n+     * @param  array<int, array{token: string, logprob: float, top_logprobs?: array<int, array{token: string, logprob: float}>}>|null  $logprobs\n+     */\n     private function __construct(\n         public readonly string $type,\n         public readonly int $contentIndex,\n         public readonly string $delta,\n         public readonly string $itemId,\n         public readonly int $outputIndex,\n         public readonly int $sequenceNumber,\n+        public readonly ?array $logprobs,\n         private readonly MetaInformation $meta,\n     ) {}\n \n@@ -48,6 +52,7 @@ public static function from(array $attributes, MetaInformation $meta): self\n             itemId: $attributes['item_id'],\n             outputIndex: $attributes['output_index'],\n             sequenceNumber: $attributes['sequence_number'],\n+            logprobs: $attributes['logprobs'] ?? null,\n             meta: $meta,\n         );\n     }\n@@ -57,13 +62,19 @@ public static function from(array $attributes, MetaInformation $meta): self\n      */\n     public function toArray(): array\n     {\n-        return [\n+        $attributes = [\n             'type' => $this->type,\n             'content_index' => $this->contentIndex,\n             'delta' => $this->delta,\n             'item_id' => $this->itemId,\n             'output_index' => $this->outputIndex,\n             'sequence_number' => $this->sequenceNumber,\n         ];\n+\n+        if ($this->logprobs !== null) {\n+            $attributes['logprobs'] = $this->logprobs;\n+        }\n+\n+        return $attributes;\n     }\n }"
+  },
+  {
+   "filename": "src/Responses/Responses/Streaming/OutputTextDone.php",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 2,
+   "patch": "@@ -12,7 +12,7 @@\n use OpenAI\\Testing\\Responses\\Concerns\\Fakeable;\n \n /**\n- * @phpstan-type OutputTextDoneType array{type: string, content_index: int, item_id: string, output_index: int, sequence_number: int, text: string}\n+ * @phpstan-type OutputTextDoneType array{type: string, content_index: int, item_id: string, output_index: int, sequence_number: int, text: string, logprobs?: array<int, array{token: string, logprob: float, top_logprobs?: array<int, array{token: string, logprob: float}>}>}\n  *\n  * @implements ResponseContract<OutputTextDoneType>\n  */\n@@ -26,13 +26,17 @@ final class OutputTextDone implements ResponseContract, ResponseHasMetaInformati\n     use Fakeable;\n     use HasMetaInformation;\n \n+    /**\n+     * @param  array<int, array{token: string, logprob: float, top_logprobs?: array<int, array{token: string, logprob: float}>}>|null  $logprobs\n+     */\n     private function __construct(\n         public readonly string $type,\n         public readonly int $contentIndex,\n         public readonly string $itemId,\n         public readonly int $outputIndex,\n         public readonly int $sequenceNumber,\n         public readonly string $text,\n+        public readonly ?array $logprobs,\n         private readonly MetaInformation $meta,\n     ) {}\n \n@@ -48,6 +52,7 @@ public static function from(array $attributes, MetaInformation $meta): self\n             outputIndex: $attributes['output_index'],\n             sequenceNumber: $attributes['sequence_number'],\n             text: $attributes['text'],\n+            logprobs: $attributes['logprobs'] ?? null,\n             meta: $meta,\n         );\n     }\n@@ -57,13 +62,19 @@ public static function from(array $attributes, MetaInformation $meta): self\n      */\n     public function toArray(): array\n     {\n-        return [\n+        $attributes = [\n             'type' => $this->type,\n             'content_index' => $this->contentIndex,\n             'item_id' => $this->itemId,\n             'output_index' => $this->outputIndex,\n             'sequence_number' => $this->sequenceNumber,\n             'text' => $this->text,\n         ];\n+\n+        if ($this->logprobs !== null) {\n+            $attributes['logprobs'] = $this->logprobs;\n+        }\n+\n+        return $attributes;\n     }\n }"
+  },
+  {
+   "filename": "tests/Fixtures/Responses.php",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -1281,6 +1281,16 @@ function responseCompletionSteamCreatedEvent()\n     return fopen(__DIR__.'/Streams/ResponseCreatedResponse.txt', 'r');\n }\n \n+function responseOutputTextDeltaLogprobsEvent()\n+{\n+    return fopen(__DIR__.'/Streams/ResponseOutputTextDeltaLogprobs.txt', 'r');\n+}\n+\n+function responseOutputTextDoneLogprobsEvent()\n+{\n+    return fopen(__DIR__.'/Streams/ResponseOutputTextDoneLogprobs.txt', 'r');\n+}\n+\n function responseReasoningTextDeltaEvent()\n {\n     return fopen(__DIR__.'/Streams/ResponseReasoningTextDelta.txt', 'r');"
+  },
+  {
+   "filename": "tests/Fixtures/Streams/ResponseOutputTextDeltaLogprobs.txt",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+event: response.output_text.delta\n+data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hi\",\"logprobs\":[{\"token\":\"Hi\",\"logprob\":-0.1,\"top_logprobs\":[{\"token\":\"Hi\",\"logprob\":-0.1},{\"token\":\"Hello\",\"logprob\":-2.5}]}],\"sequence_number\":4}\n+"
+  },
+  {
+   "filename": "tests/Fixtures/Streams/ResponseOutputTextDoneLogprobs.txt",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+event: response.output_text.done\n+data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"text\":\"Hi\",\"logprobs\":[{\"token\":\"Hi\",\"logprob\":-0.1,\"top_logprobs\":[{\"token\":\"Hi\",\"logprob\":-0.1},{\"token\":\"Hello\",\"logprob\":-2.5}]}],\"sequence_number\":5}\n+"
+  },
+  {
+   "filename": "tests/Responses/Responses/CreateStreamedResponse.php",
+   "status": "modified",
+   "additions": 41,
+   "deletions": 0,
+   "patch": "@@ -23,6 +23,8 @@\n use OpenAI\\Responses\\Responses\\Streaming\\CustomToolCallInputDelta;\n use OpenAI\\Responses\\Responses\\Streaming\\CustomToolCallInputDone;\n use OpenAI\\Responses\\Responses\\Streaming\\OutputItem;\n+use OpenAI\\Responses\\Responses\\Streaming\\OutputTextDelta;\n+use OpenAI\\Responses\\Responses\\Streaming\\OutputTextDone;\n use OpenAI\\Responses\\Responses\\Streaming\\RateLimits;\n use OpenAI\\Responses\\Responses\\Streaming\\ReasoningTextDelta;\n use OpenAI\\Responses\\Responses\\Streaming\\ReasoningTextDone;\n@@ -53,6 +55,45 @@\n         ->response->response->id->toBe('resp_67ccf18ef5fc8190b16dbee19bc54e5f087bb177ab789d5c');\n });\n \n+test('output text delta event keeps logprobs', function () {\n+    $response = CreateStreamedResponse::fake(responseOutputTextDeltaLogprobsEvent());\n+\n+    $event = $response->getIterator()->current();\n+\n+    expect($event)\n+        ->event->toBe('response.output_text.delta')\n+        ->response->toBeInstanceOf(OutputTextDelta::class)\n+        ->response->delta->toBe('Hi')\n+        ->response->logprobs->toBe([\n+            ['token' => 'Hi', 'logprob' => -0.1, 'top_logprobs' => [\n+                ['token' => 'Hi', 'logprob' => -0.1],\n+                ['token' => 'Hello', 'logprob' => -2.5],\n+            ]],\n+        ])\n+        ->and($event->response->toArray())->toHaveKey('logprobs');\n+});\n+\n+test('output text done event keeps logprobs', function () {\n+    $response = CreateStreamedResponse::fake(responseOutputTextDoneLogprobsEvent());\n+\n+    $event = $response->getIterator()->current();\n+\n+    expect($event)\n+        ->event->toBe('response.output_text.done')\n+        ->response->toBeInstanceOf(OutputTextDone::class)\n+        ->response->text->toBe('Hi')\n+        ->response->logprobs->toHaveCount(1)\n+        ->and($event->response->toArray())->toHaveKey('logprobs');\n+});\n+\n+test('output text events without logprobs', function () {\n+    $response = CreateStreamedResponse::fake(responseCompletionSteamCreatedEvent());\n+\n+    expect(OutputTextDelta::from(['type' => 'x', 'content_index' => 0, 'delta' => 'a', 'item_id' => 'i', 'output_index' => 0, 'sequence_number' => 1], $response->meta()))\n+        ->logprobs->toBeNull()\n+        ->and(OutputTextDelta::from(['type' => 'x', 'content_index' => 0, 'delta' => 'a', 'item_id' => 'i', 'output_index' => 0, 'sequence_number' => 1], $response->meta())->toArray())->not->toHaveKey('logprobs');\n+});\n+\n test('reasoning text delta event', function () {\n     $response = CreateStreamedResponse::fake(responseReasoningTextDeltaEvent());\n "
+  }
+ ],
+ "test_files": [
+  "tests/Fixtures/Responses.php",
+  "tests/Fixtures/Streams/ResponseOutputTextDeltaLogprobs.txt",
+  "tests/Fixtures/Streams/ResponseOutputTextDoneLogprobs.txt",
+  "tests/Responses/Responses/CreateStreamedResponse.php"
+ ]
+}

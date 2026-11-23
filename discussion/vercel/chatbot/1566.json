@@ -20,6 +20,16 @@
    "role": "none",
    "created_at": "2026-11-22T18:29:36Z",
    "body": "Related to this: `tests/e2e/chat.test.ts:27` (\"can stop generation with stop button\") is why #1565 passed CI. It has no `expect`, and the click at line 38 is wrapped in `.catch(() => {})`, so it passes whether or not the button exists or works.\n\nNow that `stop-while-streaming.test.ts` covers this with a held-open response, I'd suggest either removing the old test or making it assert something, for example:\n\n```ts\nconst stopButton = page.getByTestId(\"stop-button\");\nawait expect(stopButton).toBeVisible();\nawait stopButton.click();\nawait expect(page.getByTestId(\"send-button\")).toBeVisible();\n```\n\nThat version depends on the mock response being slow enough to catch the button, so removing it in favor of the new test may be simpler. Happy to send that change as a follow-up if it helps.\n"
+  },
+  {
+   "role": "none",
+   "created_at": "2026-11-23T03:05:20Z",
+   "body": "Thanks for catching that, @DenisCDev. Silently swallowing the click failure makes the old test ineffective.\n\nOne detail worth preserving: the new held-open-response test checks that Stop remains visible and enabled, but doesn’t click it yet. Extending it to verify that clicking Stop returns the composer to its ready state and prevents further text from appearing would cover cancellation too.\n\nThat would make replacing the old test more convincing. Thanks for offering to put together a follow-up!"
+  },
+  {
+   "role": "none",
+   "created_at": "2026-11-23T04:52:10Z",
+   "body": "Agreed, the replacement should exercise the click too. Since `stop-while-streaming.test.ts` lives in this PR, the cleanest order is to extend it here or right after this lands, and then drop the old test in the same follow-up.\n\nA sketch of the extension, placed after the `toBeEnabled()` check (not run yet):\n\n```ts\nconst closed = new Promise<void>((resolve) => held.once(\"close\", () => resolve()));\nawait stopButton.click();\nawait expect(page.getByTestId(\"send-button\")).toBeVisible({ timeout: 5000 });\nawait closed;\n```\n\nWaiting for the fixture's response to close shows the abort reached the request, which says more than checking for missing text, and it avoids writing to a socket the client already closed. @pcbeingused333, if you'd rather fold this into this PR, go ahead; otherwise I'll send it together with the removal of the old test once this is merged.\n"
   }
  ]
 }

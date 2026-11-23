@@ -1,0 +1,26 @@
+{
+ "repo": "k8sgpt-ai/k8sgpt",
+ "number": 1963,
+ "url": "https://github.com/k8sgpt-ai/k8sgpt/pull/1963",
+ "title": "fix: stop sending the DEFAULT_PROMPT placeholder to SageMaker",
+ "merged_at": "2026-11-23T07:18:07Z",
+ "files": [
+  {
+   "filename": "pkg/ai/amazonsagemaker.go",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 2,
+   "patch": "@@ -81,11 +81,13 @@ func (c *SageMakerAIClient) Configure(config IAIConfig) error {\n }\n \n func (c *SageMakerAIClient) GetCompletion(_ context.Context, prompt string) (string, error) {\n-\t// Create a completion request\n+\t// Callers (analyze, query) already pass the full instruction as prompt,\n+\t// the same text every other backend sends as the user message. A system\n+\t// turn used to carry the literal \"DEFAULT_PROMPT\", which the endpoint\n+\t// forwarded to the model unchanged.\n \trequest := Request{\n \t\tInputs: [][]Message{\n \t\t\t{\n-\t\t\t\t{Role: \"system\", Content: \"DEFAULT_PROMPT\"},\n \t\t\t\t{Role: \"user\", Content: prompt},\n \t\t\t},\n \t\t},"
+  },
+  {
+   "filename": "pkg/ai/amazonsagemaker_test.go",
+   "status": "added",
+   "additions": 76,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,76 @@\n+package ai\n+\n+import (\n+\t\"context\"\n+\t\"encoding/json\"\n+\t\"io\"\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"testing\"\n+\n+\t\"github.com/aws/aws-sdk-go/aws\"                      //nolint:staticcheck // backend still uses aws-sdk-go v1\n+\t\"github.com/aws/aws-sdk-go/aws/credentials\"          //nolint:staticcheck // backend still uses aws-sdk-go v1\n+\t\"github.com/aws/aws-sdk-go/aws/session\"              //nolint:staticcheck // backend still uses aws-sdk-go v1\n+\t\"github.com/aws/aws-sdk-go/service/sagemakerruntime\" //nolint:staticcheck // backend still uses aws-sdk-go v1\n+\t\"github.com/stretchr/testify/assert\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+// The analysis layer already hands GetCompletion a complete instruction.\n+// The SageMaker body must carry that text as the user message and must not\n+// send the literal placeholder DEFAULT_PROMPT.\n+func TestSageMakerAIClient_GetCompletionSendsCallerPrompt(t *testing.T) {\n+\tconst prompt = \"Respond ONLY in the --- English --- language. Simplify the following Kubernetes error.\"\n+\n+\ttype captured struct {\n+\t\tpath string\n+\t\tbody []byte\n+\t}\n+\tgot := make(chan captured, 1)\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tbody, err := io.ReadAll(r.Body)\n+\t\tif err != nil {\n+\t\t\tt.Errorf(\"read body: %v\", err)\n+\t\t}\n+\t\tgot <- captured{path: r.URL.Path, body: body}\n+\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t_, _ = w.Write([]byte(`[{\"generation\":{\"role\":\"assistant\",\"content\":\"Error: x\\nSolution: y\"}}]`))\n+\t}))\n+\tt.Cleanup(server.Close)\n+\n+\tsess := session.Must(session.NewSession(&aws.Config{\n+\t\tCredentials: credentials.NewStaticCredentials(\"test\", \"test\", \"\"),\n+\t\tEndpoint:    aws.String(server.URL),\n+\t\tRegion:      aws.String(\"us-east-1\"),\n+\t\tDisableSSL:  aws.Bool(true),\n+\t}))\n+\tclient := &SageMakerAIClient{\n+\t\tclient:      sagemakerruntime.New(sess),\n+\t\tendpoint:    \"k8sgpt-endpoint\",\n+\t\ttemperature: 0.7,\n+\t\ttopP:        0.9,\n+\t\ttopK:        50,\n+\t\tmaxTokens:   256,\n+\t}\n+\n+\tout, err := client.GetCompletion(context.Background(), prompt)\n+\trequire.NoError(t, err)\n+\tassert.Equal(t, \"Error: x\\nSolution: y\", out)\n+\n+\treq := <-got\n+\tassert.Equal(t, \"/endpoints/k8sgpt-endpoint/invocations\", req.path)\n+\n+\tvar body Request\n+\trequire.NoError(t, json.Unmarshal(req.body, &body))\n+\trequire.Len(t, body.Inputs, 1)\n+\trequire.Len(t, body.Inputs[0], 1)\n+\tassert.Equal(t, \"user\", body.Inputs[0][0].Role)\n+\tassert.Equal(t, prompt, body.Inputs[0][0].Content)\n+\tfor _, msg := range body.Inputs[0] {\n+\t\tassert.NotEqual(t, \"DEFAULT_PROMPT\", msg.Content)\n+\t}\n+\tassert.Equal(t, 256, body.Parameters.MaxNewTokens)\n+\tassert.InDelta(t, 0.9, body.Parameters.TopP, 0.0001)\n+\tassert.InDelta(t, 50, body.Parameters.TopK, 0.0001)\n+\tassert.InDelta(t, 0.7, body.Parameters.Temperature, 0.0001)\n+}"
+  }
+ ],
+ "test_files": [
+  "pkg/ai/amazonsagemaker_test.go"
+ ]
+}

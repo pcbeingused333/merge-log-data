@@ -1,0 +1,26 @@
+{
+ "repo": "looplj/axonhub",
+ "number": 3064,
+ "url": "https://github.com/looplj/axonhub/pull/3064",
+ "title": "fix(ollama): send tool_calls finish_reason only on the done chunk of a stream",
+ "merged_at": "2026-11-23T05:46:41Z",
+ "files": [
+  {
+   "filename": "llm/transformer/ollama/outbound.go",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 7,
+   "patch": "@@ -500,21 +500,24 @@ func (t *OutboundTransformer) transformStreamChunk(_ context.Context, event *htt\n \t\t\t\t\tToolCalls:        toolCalls,\n \t\t\t\t},\n \t\t\t\tFinishReason: func() *string {\n-\t\t\t\t\tif len(toolCalls) > 0 {\n+\t\t\t\t\tif !ollamaResp.Done {\n+\t\t\t\t\t\treturn nil\n+\t\t\t\t\t}\n+\n+\t\t\t\t\t// Ollama reports done_reason \"stop\" even when the stream carried\n+\t\t\t\t\t// tool calls (possibly in an earlier chunk), so use the counter.\n+\t\t\t\t\tif *toolCallOffset > 0 {\n \t\t\t\t\t\treason := \"tool_calls\"\n \t\t\t\t\t\treturn &reason\n \t\t\t\t\t}\n \n-\t\t\t\t\tif ollamaResp.Done && ollamaResp.DoneReason != \"\" {\n+\t\t\t\t\tif ollamaResp.DoneReason != \"\" {\n \t\t\t\t\t\treturn &ollamaResp.DoneReason\n \t\t\t\t\t}\n \n-\t\t\t\t\tif ollamaResp.Done {\n-\t\t\t\t\t\treason := \"stop\"\n-\t\t\t\t\t\treturn &reason\n-\t\t\t\t\t}\n+\t\t\t\t\treason := \"stop\"\n \n-\t\t\t\t\treturn nil\n+\t\t\t\t\treturn &reason\n \t\t\t\t}(),\n \t\t\t},\n \t\t},"
+  },
+  {
+   "filename": "llm/transformer/ollama/outbound_test.go",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 0,
+   "patch": "@@ -272,6 +272,34 @@ func TestTransformStreamAssignsDistinctToolCallIndexAcrossChunks(t *testing.T) {\n \trequire.NotEqual(t, calls[0].ID, calls[1].ID)\n }\n \n+func TestTransformStreamFinishReasonOnlyOnDoneChunk(t *testing.T) {\n+\tollamaTransformer, err := NewOutboundTransformerWithConfig(&Config{BaseURL: \"http://localhost:11434\"})\n+\trequire.NoError(t, err)\n+\n+\ttransformer, ok := ollamaTransformer.(*OutboundTransformer)\n+\trequire.True(t, ok)\n+\n+\tchunks := []*httpclient.StreamEvent{\n+\t\t{Data: []byte(`{\"model\":\"qwen3\",\"message\":{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"function\":{\"name\":\"get_weather\",\"arguments\":{\"location\":\"Paris\"}}}]},\"done\":false}`)},\n+\t\t{Data: []byte(`{\"model\":\"qwen3\",\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"done_reason\":\"stop\"}`)},\n+\t}\n+\n+\tout, err := transformer.TransformStream(context.Background(), nil, streams.SliceStream(chunks))\n+\trequire.NoError(t, err)\n+\n+\tvar finishes []*string\n+\n+\tfor out.Next() {\n+\t\tfinishes = append(finishes, out.Current().Choices[0].FinishReason)\n+\t}\n+\n+\trequire.NoError(t, out.Err())\n+\trequire.Len(t, finishes, 2)\n+\trequire.Nil(t, finishes[0], \"finish_reason must not be sent before the done chunk\")\n+\trequire.NotNil(t, finishes[1])\n+\trequire.Equal(t, \"tool_calls\", *finishes[1])\n+}\n+\n func TestAggregateStreamChunksKeepsToolCallsFromAllChunks(t *testing.T) {\n \tollamaTransformer, err := NewOutboundTransformerWithConfig(&Config{BaseURL: \"http://localhost:11434\"})\n \trequire.NoError(t, err)"
+  }
+ ],
+ "test_files": [
+  "llm/transformer/ollama/outbound_test.go"
+ ]
+}

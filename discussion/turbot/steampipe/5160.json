@@ -15,6 +15,12 @@
    "state": "CHANGES_REQUESTED",
    "submitted_at": "2026-11-22T17:37:24Z",
    "body": "Thanks for working through both points. Both are fixed: a live process whose command line can't be read keeps its state, and the single-process check reuses `findSteampipePostgresInstances`. I also tried a real postgres started from an install path with a space in it, and it is recognised.\n\nTwo things still block the merge, both from the stricter `GetState`:\n\n**1. Two existing tests now fail, and a third passes without testing anything.**\n\n```\ngo test -count=1 -run TestLocalConnection ./pkg/db/db_local/\n--- FAIL: TestLocalConnectionStringKeepsSpecialCharacters\n    create_connection_test.go:33: failed to build connection string: steampipe service is not running\n--- FAIL: TestLocalConnectionStringKeepsSSLPassphraseOutOfLog\n    create_connection_test.go:59: failed to build connection string: steampipe service is not running\n```\n\nThese came with #5183. Their helper `setUpLocalSSLService` (`create_connection_test.go:110`) saves the running info with `os.Getpid()`, which is the test binary and not a postgres. So `GetState` now drops the state. `TestLocalConnectionErrorsHideSSLPassphrase` still passes, but only because every error it checks is \"service is not running\", raised before the passphrase is read. It needs to fail if the passphrase leaks, so please make sure it reaches the code it was written for.\n\nFix: have `setUpLocalSSLService` start the stand-in with `startFakeDatabase` and save that pid, and set `app_specific.AppName = \"steampipe\"`, as `service_test.go` does.\n\n**2. Lint fails.** CI's golangci-lint reports a new finding (Test Linting run on this head):\n\n```\npkg/db/db_local/running_info.go:122:21: G703: Path traversal via taint analysis (gosec)\n```\n\nThe taint starts at `stop_services_test.go:108`: the command built from `os.Args[0]` is passed to `newRunningDBInstanceInfo` and then saved. Passing `&exec.Cmd{Process: &os.Process{Pid: service.Process.Pid}}` instead, as `writeStateForPid` does, clears it.\n\n**Also:** the CLA check is still pending. We can only merge once it's signed (the CLA assistant link is in the comment above).\n\nOnce you push, I'll start CI on it straight away.\n"
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-22T21:30:12Z",
+   "body": "Thanks, both fixes are right. The connection-string tests now run against a stand-in database, so `TestLocalConnectionErrorsHideSSLPassphrase` checks the passphrase path again, and lint is clean. `go test ./pkg/db/...` passes on e73d54b4, and CI is green.\n\nThe only thing left is the CLA: please sign it through the CLA assistant link above. Once it's green I'll merge."
   }
  ],
  "review_comments": [],
@@ -33,6 +39,11 @@
    "role": "author",
    "created_at": "2026-11-22T04:07:50Z",
    "body": "Merged the latest `develop` into this branch to resolve the conflict; no other changes."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-22T20:59:01Z",
+   "body": "Thanks, both are addressed in e73d54b. (1) `setUpLocalSSLService` now starts the stand-in with `startFakeDatabase`, saves that pid and sets `app_specific.AppName = \"steampipe\"`, as `service_test.go` does. `TestLocalConnectionStringKeepsSpecialCharacters` and `TestLocalConnectionStringKeepsSSLPassphraseOutOfLog` pass again, and `TestLocalConnectionErrorsHideSSLPassphrase` now gets past the service check: each of the three errors it inspects is the TLS key decryption failure (`x509: decryption password incorrect`) from the wrong passphrase, not \"service is not running\". (2) `startOlderVersionService` passes `&exec.Cmd{Process: &os.Process{Pid: service.Process.Pid}}` to `newRunningDBInstanceInfo`, as `writeStateForPid` does, for the G703 finding.\n\n\nThis comment was drafted with Claude Code.\n"
   }
  ]
 }

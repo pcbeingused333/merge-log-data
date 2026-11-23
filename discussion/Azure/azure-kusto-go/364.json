@@ -69,6 +69,24 @@
    "state": "COMMENTED",
    "submitted_at": "2026-11-19T10:36:31Z",
    "body": "<!-- ccr-overview-v2 -->\n\n### 🟡 Changes recommended\n\nTests do not verify request-context cancellation or cancellation-safe decompressor shutdown ordering, and reader ownership on constructor errors remains undocumented.\n\n<details open>\n<summary><strong>4 open issues</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Test read, decompressor, and body cleanup ordering](https://github.com/Azure/azure-kusto-go/pull/364#discussion_r4627464408) · New\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Assert materialization cancels the outbound request context](https://github.com/Azure/azure-kusto-go/pull/364#discussion_r4627464502) · New\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Test cancellation when ToDataset exits early on a stalled malformed stream](https://github.com/Azure/azure-kusto-go/pull/364#discussion_r4599636448)\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/low-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/low-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/low-v2-light.png\" alt=\"Low severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Document reader ownership when construction fails](https://github.com/Azure/azure-kusto-go/pull/364#discussion_r4627464565) · New\n</details>\n\n<sub>Review effort: Max</sub>"
+  },
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-23T05:57:59Z",
+   "body": ""
+  },
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-23T06:01:30Z",
+   "body": ""
+  },
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-23T06:02:30Z",
+   "body": ""
   }
  ],
  "review_comments": [
@@ -161,6 +179,24 @@
    "path": "azkustodata/query/v2/iterative_dataset.go",
    "created_at": "2026-11-19T10:36:31Z",
    "body": "The dataset takes ownership of `r` only after successful construction: if `newFrameReader` fails, this function returns without closing it. Please document that callers must close `r` on constructor errors, so callers following this ownership contract do not leak the response body."
+  },
+  {
+   "role": "collaborator",
+   "path": "azkustodata/kusto.go",
+   "created_at": "2026-11-23T05:57:59Z",
+   "body": "@pcbeingused333 \r\nAdd an integrated test that closes an actual iterative dataset while its decompressor is blocked reading HTTP data.\r\n\r\nThe test should:\r\n\r\n1. Serve a compressed V2 response from a local HTTP server, then stall it.\r\n2. Instrument the real gzip/deflate reader to record when Read() returns and when Close() starts/completes.\r\n3. Confirm a decompressor read is genuinely blocked—use synchronization, not just a sleep.\r\n4. Call dataset.Close() before the stalled read finishes.\r\n5. Assert:\r\nHTTP Read returns\r\n→ decompressor Read returns\r\n→ decompressor Close starts and completes\r\n→ HTTP body Close starts\r\nAlso verify exactly-once closure and that the reader goroutine terminates.\r\n\r\nCover gzip payload stalls, gzip trailer stalls, and deflate payload stalls. Include a decompressor-close error case proving the HTTP body still closes.\r\n\r\nThe key difference from existing tests: cancellation must trigger the cleanup sequence, rather than calling Close() only after ReadAll() has already finished. Run the test under -race where supported"
+  },
+  {
+   "role": "collaborator",
+   "path": "azkustodata/kusto_todataset_test.go",
+   "created_at": "2026-11-23T06:01:30Z",
+   "body": "@pcbeingused333 \r\nThe current assertions verify response-body cleanup, but EOF triggers that cleanup even without request-context cancellation. We should capture the outbound request’s context in trackingTransport and assert its Done() channel is closed after both IterativeQuery().ToDataset() and Client.Query() return successfully."
+  },
+  {
+   "role": "collaborator",
+   "path": "azkustodata/query/v2/iterative_dataset.go",
+   "created_at": "2026-11-23T06:02:29Z",
+   "body": "@pcbeingused333 \r\nThe documentation should say:\r\n\r\nOwnership of the reader transfers to the dataset only on successful construction. If construction fails, the caller remains responsible for closing the reader."
   }
  ],
  "comments": [
@@ -183,6 +219,11 @@
    "role": "author",
    "created_at": "2026-11-18T08:10:16Z",
    "body": "Thanks @pragatibaheti, pushed a follow-up commit:\n\n- `Client.IterativeQuery` now closes the response reader when `NewIterativeDataset` fails (no read goroutine exists on that path, so nothing else would), in addition to cancelling the request context.\n- Added root-package tests (`kusto_todataset_test.go`) for `cancelOnCloseDataset.ToDataset()` through both `IterativeQuery().ToDataset()` and `Client.Query()`: a multi-table success case (both primary tables arrive complete, body closed exactly once, never mid-read) and an early conversion error with a stalled remaining response (request cancellation reaches the server, body closed exactly once, without an explicit `Close()`), plus a test that the body is closed when dataset creation fails on a non-JSON response. Removing the `ToDataset` override or the new `res.Close()` makes these fail.\n- On point 3: you were right that the previous wording did not hold: `gzip.Reader.Close` does not close the underlying body, so it cannot be \"covered by its observable effect\". `response.go` now builds the decompressors through package-level `newGzipReader` / `newFlateReader` variables (same behavior), and `response_order_test.go` wraps the real `compress/gzip` and `compress/flate` readers with spies. It asserts the order HTTP read -> decompressor read -> decompressor close -> body close for gzip and deflate, with a stalled payload and a gzip stalled-then-truncated trailer, exactly one close of each, and that an error from the decompressor's `Close` is returned but still closes the body. Removing `o.ReadCloser.Close()` from `originalCloser.Close` now fails these tests. These lock in existing behavior rather than fix a new bug.\n- The new commits sit on top of your `master` merge (no force-push).\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-23T07:41:57Z",
+   "body": "Thanks @pragatibaheti. The three points from the latest review are on the branch:\n\n- `trackingTransport` stores the outbound query request's context. `TestToDatasetReleasesRequest` asserts that context's `Done` channel is closed after both `IterativeQuery().ToDataset()` and `Client.Query()` return on the success path. Body cleanup at EOF does not satisfy that assertion.\n- `NewIterativeDataset` documents that ownership of the reader transfers only when construction succeeds. If construction fails, the caller still closes the reader.\n- `TestIterativeQueryCloseOrderCompressed` serves a compressed V2 response and stalls it, with the real gzip or deflate reader wrapped so the test can see when `Read` returns and when `Close` starts and finishes. It waits until a decompressor `Read` is blocked inside an HTTP `Read` (in-flight counters held for 100ms, not a sleep), then calls `dataset.Close()`. The recorded order is: the stalled HTTP read returns, the decompressor read returns, decompressor `Close` starts and completes, then the HTTP body `Close` starts. Each close happens once and the dataset's read goroutine finishes. Subtests cover a gzip payload stall, a gzip trailer stall, a deflate payload stall, and a decompressor `Close` error for gzip and deflate; the body still closes in the error case. The package tests run under the race detector.\n\nThis comment was prepared with the assistance of an AI coding assistant.\n"
   }
  ]
 }

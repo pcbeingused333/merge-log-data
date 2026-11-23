@@ -1,0 +1,26 @@
+{
+ "repo": "open-mercato/open-mercato",
+ "number": 10282,
+ "url": "https://github.com/open-mercato/open-mercato/pull/10282",
+ "title": "fix(search): use asymmetric Google embedding taskType for queries vs documents",
+ "merged_at": "2026-11-22T22:11:03Z",
+ "files": [
+  {
+   "filename": "packages/search/src/__tests__/embedding.test.ts",
+   "status": "modified",
+   "additions": 40,
+   "deletions": 0,
+   "patch": "@@ -192,6 +192,46 @@ describe('EmbeddingService Cohere inputType', () => {\n   })\n })\n \n+describe('EmbeddingService Google taskType', () => {\n+  const originalEnv = { ...process.env }\n+\n+  beforeEach(() => {\n+    jest.clearAllMocks()\n+    process.env = { ...originalEnv, GOOGLE_GENERATIVE_AI_API_KEY: 'test-key' }\n+    mockedEmbed.mockResolvedValue({ embedding: [0.1, 0.2] } as Awaited<ReturnType<typeof embed>>)\n+  })\n+\n+  afterAll(() => {\n+    process.env = originalEnv\n+  })\n+\n+  const build = (dimension?: number) =>\n+    new EmbeddingService({\n+      config: {\n+        providerId: 'google',\n+        model: 'gemini-embedding-001',\n+        dimension: 768,\n+        outputDimensionality: dimension,\n+        updatedAt: new Date().toISOString(),\n+      },\n+    })\n+\n+  const sentGoogleOptions = () =>\n+    (mockedEmbed.mock.calls[0][0] as { providerOptions?: { google?: { taskType?: string; outputDimensionality?: number } } })\n+      .providerOptions?.google\n+\n+  it.each([undefined, 768])('embeds documents with RETRIEVAL_DOCUMENT (outputDimensionality=%s)', async (dim) => {\n+    await build(dim).createEmbedding('some document')\n+    expect(sentGoogleOptions()?.taskType).toBe('RETRIEVAL_DOCUMENT')\n+    expect(sentGoogleOptions()?.outputDimensionality).toBe(dim)\n+  })\n+\n+  it.each([undefined, 768])('embeds queries with RETRIEVAL_QUERY (outputDimensionality=%s)', async (dim) => {\n+    await build(dim).createEmbedding('what is a query', { purpose: 'query' })\n+    expect(sentGoogleOptions()?.taskType).toBe('RETRIEVAL_QUERY')\n+  })\n+})\n+\n describe('EmbeddingService bedrock credentials', () => {\n   const originalEnv = { ...process.env }\n   const bedrockConfig = {"
+  },
+  {
+   "filename": "packages/search/src/vector/services/embedding.ts",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -59,6 +59,9 @@ export type EmbeddingPurpose = 'document' | 'query'\n // Cohere v3+ embeddings are asymmetric: queries must use `search_query`, indexed content `search_document`.\n const cohereInputType = (purpose: EmbeddingPurpose) => (purpose === 'query' ? 'search_query' : 'search_document')\n \n+// Gemini embeddings accept a taskType hint; queries and indexed content should use the asymmetric pair.\n+const googleTaskType = (purpose: EmbeddingPurpose) => (purpose === 'query' ? 'RETRIEVAL_QUERY' : 'RETRIEVAL_DOCUMENT')\n+\n export class EmbeddingService {\n   private config: EmbeddingProviderConfig\n   private clientCache: Map<EmbeddingProviderId, ProviderClient> = new Map()\n@@ -227,6 +230,9 @@ export class EmbeddingService {\n       if (providerId === 'cohere') {\n         return { cohere: { inputType: cohereInputType(purpose) } }\n       }\n+      if (providerId === 'google') {\n+        return { google: { taskType: googleTaskType(purpose) } }\n+      }\n       return undefined\n     }\n \n@@ -237,7 +243,7 @@ export class EmbeddingService {\n         }\n         return undefined\n       case 'google':\n-        return { google: { outputDimensionality } }\n+        return { google: { outputDimensionality, taskType: googleTaskType(purpose) } }\n       case 'bedrock':\n         return { bedrock: { dimensions: outputDimensionality } }\n       case 'cohere':"
+  }
+ ],
+ "test_files": [
+  "packages/search/src/__tests__/embedding.test.ts"
+ ]
+}

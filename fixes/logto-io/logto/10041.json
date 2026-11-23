@@ -1,0 +1,40 @@
+{
+ "repo": "logto-io/logto",
+ "number": 10041,
+ "url": "https://github.com/logto-io/logto/pull/10041",
+ "title": "fix(connector): honor replyTo of the i18n email template in aliyun-dm",
+ "merged_at": "2026-11-23T04:35:49Z",
+ "files": [
+  {
+   "filename": ".changeset/aliyun-dm-reply-to.md",
+   "status": "added",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,7 @@\n+---\n+\"@logto/connector-aliyun-dm\": patch\n+---\n+\n+honor `replyTo` of the i18n email template\n+\n+With a custom i18n email template, the Aliyun Direct Mail connector always sent `ReplyToAddress: 'false'` and ignored the template's `replyTo`. It now sends the rendered address as `ReplyAddress` (with handlebars replaced) when it is a valid email, like the SMTP, SendGrid and AWS SES connectors; otherwise the behavior is unchanged."
+  },
+  {
+   "filename": "packages/connectors/connector-aliyun-dm/src/index.test.ts",
+   "status": "modified",
+   "additions": 52,
+   "deletions": 0,
+   "patch": "@@ -90,4 +90,56 @@ describe('sendMessage()', () => {\n       expect.anything()\n     );\n   });\n+\n+  it('should send the rendered reply-to address of the custom template', async () => {\n+    const connector = await createConnector({\n+      getConfig,\n+      getI18nEmailTemplate: vi.fn().mockResolvedValue({\n+        ...mockGenericI18nEmailTemplate,\n+        replyTo: 'support-{{applicationName}}@example.com',\n+      }),\n+    });\n+    await connector.sendMessage({\n+      to: 'to@email.com',\n+      type: TemplateType.Generic,\n+      payload: { code: '1234', applicationName: 'bar' },\n+    });\n+    expect(singleSendMail).toHaveBeenCalledWith(\n+      expect.objectContaining({\n+        ReplyToAddress: 'true',\n+        ReplyAddress: 'support-bar@example.com',\n+      }),\n+      expect.anything()\n+    );\n+  });\n+\n+  it('should not send a reply-to address when the template renders to an invalid one', async () => {\n+    const connector = await createConnector({ getConfig, getI18nEmailTemplate });\n+    await connector.sendMessage({\n+      to: 'to@email.com',\n+      type: TemplateType.Generic,\n+      payload: { code: '1234', applicationName: 'bar' },\n+    });\n+    const [parameters] = singleSendMail.mock.calls[0] as unknown as [Record<string, unknown>];\n+    expect(parameters).toEqual(expect.objectContaining({ ReplyToAddress: 'false' }));\n+    expect(parameters).not.toHaveProperty('ReplyAddress');\n+  });\n+\n+  it('should not send a reply-to address containing characters Aliyun does not accept', async () => {\n+    const connector = await createConnector({\n+      getConfig,\n+      getI18nEmailTemplate: vi.fn().mockResolvedValue({\n+        ...mockGenericI18nEmailTemplate,\n+        replyTo: 'support+app@example.com',\n+      }),\n+    });\n+    await connector.sendMessage({\n+      to: 'to@email.com',\n+      type: TemplateType.Generic,\n+      payload: { code: '1234', applicationName: 'bar' },\n+    });\n+    const [parameters] = singleSendMail.mock.calls[0] as unknown as [Record<string, unknown>];\n+    expect(parameters).toEqual(expect.objectContaining({ ReplyToAddress: 'false' }));\n+    expect(parameters).not.toHaveProperty('ReplyAddress');\n+  });\n });"
+  },
+  {
+   "filename": "packages/connectors/connector-aliyun-dm/src/index.ts",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 1,
+   "patch": "@@ -1,5 +1,6 @@\n import { assert, trySafe } from '@silverhand/essentials';\n import { HTTPError } from 'got';\n+import { z } from 'zod';\n \n import type {\n   CreateConnector,\n@@ -26,6 +27,10 @@ import {\n   sendMailErrorResponseGuard,\n } from './types.js';\n \n+// Aliyun rejects a `ReplyAddress` with characters outside letters, digits, `_`, `.` and `-`\n+// (e.g. `+`) as `InvalidReplyAddress.Malformed`, so validate it before sending.\n+const replyAddressGuard = z.string().regex(/^[\\w.-]+@[\\w-]+(\\.[\\w-]+)+$/);\n+\n const sendMessage =\n   (\n     getConfig: GetConnectorConfig,\n@@ -55,13 +60,23 @@ const sendMessage =\n       )\n     );\n \n+    // The i18n email template may customize the reply-to address. Skip it unless it renders to a\n+    // valid address for Aliyun (e.g. an unresolved placeholder or a `+` alias is not one).\n+    const renderedReplyTo = customTemplate?.replyTo\n+      ? replaceSendMessageHandlebars(customTemplate.replyTo, payload).trim()\n+      : '';\n+    const replyAddress = replyAddressGuard.safeParse(renderedReplyTo).success\n+      ? renderedReplyTo\n+      : undefined;\n+\n     try {\n       const httpResponse = await singleSendMail(\n         {\n           AccessKeyId: accessKeyId,\n           RegionId: regionId,\n           AccountName: accountName,\n-          ReplyToAddress: 'false',\n+          ReplyToAddress: replyAddress ? 'true' : 'false',\n+          ...(replyAddress && { ReplyAddress: replyAddress }),\n           AddressType: '1',\n           ToAddress: to,\n           FromAlias: customTemplate?.sendFrom"
+  },
+  {
+   "filename": "packages/connectors/connector-aliyun-dm/src/types.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -54,6 +54,7 @@ export type SingleSendMail = {\n   FromAlias?: string;\n   HtmlBody?: string;\n   ReplyToAddress: 'true' | 'false';\n+  ReplyAddress?: string;\n   Subject: string;\n   TagName?: string;\n   TextBody?: string;"
+  }
+ ],
+ "test_files": [
+  "packages/connectors/connector-aliyun-dm/src/index.test.ts"
+ ]
+}

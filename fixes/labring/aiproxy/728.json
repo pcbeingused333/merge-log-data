@@ -1,0 +1,26 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 728,
+ "url": "https://github.com/labring/aiproxy/pull/728",
+ "title": "fix(baidu): forward OpenAI stop to ERNIE stop",
+ "merged_at": "2026-11-23T03:09:56Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/baidu/main.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -33,6 +33,7 @@ type ChatRequest struct {\n \tStream          bool                 `json:\"stream,omitempty\"`\n \tDisableSearch   bool                 `json:\"disable_search,omitempty\"`\n \tEnableCitation  bool                 `json:\"enable_citation,omitempty\"`\n+\tStop            []string             `json:\"stop,omitempty\"`\n }\n \n func ConvertRequest(meta *meta.Meta, req *http.Request) (adaptor.ConvertResult, error) {\n@@ -51,6 +52,7 @@ func ConvertRequest(meta *meta.Meta, req *http.Request) (adaptor.ConvertResult,\n \t\tEnableCitation:  false,\n \t\tMaxOutputTokens: request.MaxTokens,\n \t\tUserID:          request.User,\n+\t\tStop:            utils.ParseOpenAIStopSequences(request.Stop),\n \t}\n \t// Convert frequency penalty to penalty score range [1.0, 2.0]\n \tif request.FrequencyPenalty != nil {"
+  },
+  {
+   "filename": "core/relay/adaptor/baidu/request_test.go",
+   "status": "modified",
+   "additions": 44,
+   "deletions": 0,
+   "patch": "@@ -62,3 +62,47 @@ func TestConvertRequestSystemMessage(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestConvertRequestStop(t *testing.T) {\n+\tfor _, tc := range []struct {\n+\t\tname string\n+\t\tstop any\n+\t\twant []string\n+\t}{\n+\t\t{\"string\", \"END\", []string{\"END\"}},\n+\t\t{\"array\", []any{\"a\", \"b\"}, []string{\"a\", \"b\"}},\n+\t\t{\"mixed array\", []any{\"a\", 1, \"b\"}, []string{\"a\", \"b\"}},\n+\t\t{\"absent\", nil, nil},\n+\t} {\n+\t\tt.Run(tc.name, func(t *testing.T) {\n+\t\t\tbody, err := json.Marshal(relaymodel.GeneralOpenAIRequest{\n+\t\t\t\tMessages: []relaymodel.Message{{Role: \"user\", Content: \"hello\"}},\n+\t\t\t\tStop:     tc.stop,\n+\t\t\t})\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\n+\t\t\treq := httptest.NewRequestWithContext(\n+\t\t\t\tt.Context(),\n+\t\t\t\thttp.MethodPost,\n+\t\t\t\t\"/\",\n+\t\t\t\tstrings.NewReader(string(body)),\n+\t\t\t)\n+\n+\t\t\tresult, err := ConvertRequest(&meta.Meta{ActualModel: \"ernie\"}, req)\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\n+\t\t\tvar got ChatRequest\n+\t\t\tif err := json.NewDecoder(result.Body).Decode(&got); err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\n+\t\t\tif !reflect.DeepEqual(got.Stop, tc.want) {\n+\t\t\t\tt.Errorf(\"stop = %#v, want %#v\", got.Stop, tc.want)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/baidu/request_test.go"
+ ]
+}

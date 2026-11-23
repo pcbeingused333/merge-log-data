@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 325,
+ "url": "https://github.com/lofcz/LLMTornado/pull/325",
+ "title": "fix(a2a): handle raw base64 ChatImage in ToA2AFilePart",
+ "merged_at": "2026-11-23T02:13:36Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.A2A/A2ATornadoExtension.ChatMessage.cs",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 4,
+   "patch": "@@ -22,13 +22,16 @@ public static FilePart ToA2AFilePart(this ChatDocument doc)\n         return doc.Uri != null ? new FilePart { File = new FileContent(doc.Uri) } : new FilePart { File = new FileContent(doc.Base64) };\n     }\n \n-    public static FilePart ToA2AFilePart(this ChatImage img) => new FilePart\n+    public static FilePart ToA2AFilePart(this ChatImage img)\n     {\n-        File = new FileContent(new Uri(img.Url))\n+        // ChatImage.Url may hold raw base64 (with MimeType); on Unix a JPEG (\"/9j/...\") even parses as an absolute file Uri, so a file Uri is only accepted when the value really starts with \"file:\"\n+        if (Uri.TryCreate(img.Url, UriKind.Absolute, out Uri? uri) && (!uri.IsFile || img.Url.StartsWith(\"file:\", StringComparison.OrdinalIgnoreCase)))\n         {\n-            MimeType = img.MimeType\n+            return new FilePart { File = new FileContent(uri) { MimeType = img.MimeType } };\n         }\n-    };\n+\n+        return new FilePart { File = new FileContent(img.Url) { MimeType = img.MimeType } };\n+    }\n \n     public static FilePart ToA2AFilePart(this ChatAudio audio)\n     {"
+  },
+  {
+   "filename": "src/LlmTornado.Tests/A2AFilePartUriTests.cs",
+   "status": "modified",
+   "additions": 51,
+   "deletions": 0,
+   "patch": "@@ -1,6 +1,7 @@\n using A2A;\n using LlmTornado.A2A;\n using LlmTornado.Chat;\n+using LlmTornado.Code;\n \n namespace LlmTornado.Tests;\n \n@@ -57,4 +58,54 @@ public void UriWithPdfMimeType_IsFileLinkNotImage()\n         Assert.That(part.FileLinkData!.FileUri, Is.EqualTo(\"https://example.com/a.pdf\"));\n         Assert.That(part.FileLinkData.MimeType, Is.EqualTo(\"application/pdf\"));\n     }\n+\n+    [Test]\n+    public void ChatImageWithRawBase64_DoesNotThrow_AndKeepsBytes()\n+    {\n+        ChatImage img = new(\"iVBORw0KGgo=\") { MimeType = \"image/png\" };\n+\n+        FilePart part = img.ToA2AFilePart();\n+\n+        Assert.That(part.File, Is.InstanceOf<FileContent>());\n+        Assert.That(part.File.Bytes, Is.EqualTo(\"iVBORw0KGgo=\"));\n+        Assert.That(part.File.MimeType, Is.EqualTo(\"image/png\"));\n+    }\n+\n+    [Test]\n+    public void ChatImageWithJpegBase64StartingWithSlash_KeepsBytes()\n+    {\n+        FilePart part = new ChatImage(\"/9j/4AAQSkZJRg==\") { MimeType = \"image/jpeg\" }.ToA2AFilePart();\n+\n+        Assert.That(part.File.Uri, Is.Null);\n+        Assert.That(part.File.Bytes, Is.EqualTo(\"/9j/4AAQSkZJRg==\"));\n+        Assert.That(part.File.MimeType, Is.EqualTo(\"image/jpeg\"));\n+    }\n+\n+    [Test]\n+    public void ChatImageWithHttpUrl_KeepsUri()\n+    {\n+        FilePart part = new ChatImage(\"https://example.com/a.png\").ToA2AFilePart();\n+\n+        Assert.That(part.File.Uri?.ToString(), Is.EqualTo(\"https://example.com/a.png\"));\n+    }\n+\n+    [Test]\n+    public void ChatImageWithDataUri_KeepsUri_AndRoundTripsToImage()\n+    {\n+        const string dataUri = \"data:image/jpeg;base64,/9j/4AAQSkZJRg==\";\n+        FilePart part = new ChatImage(dataUri) { MimeType = \"image/jpeg\" }.ToA2AFilePart();\n+\n+        Assert.That(part.File.Uri, Is.Not.Null);\n+        Assert.That(part.File.Bytes, Is.Null);\n+        Assert.That(part.ToTornadoMessagePart()!.Type, Is.EqualTo(ChatMessageTypes.Image));\n+    }\n+\n+    [Test]\n+    public void ChatImageWithGcsUri_KeepsUri()\n+    {\n+        FilePart part = new ChatImage(\"gs://bucket/img.png\").ToA2AFilePart();\n+\n+        Assert.That(part.File.Bytes, Is.Null);\n+        Assert.That(part.File.Uri?.ToString(), Is.EqualTo(\"gs://bucket/img.png\"));\n+    }\n }"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/A2AFilePartUriTests.cs"
+ ]
+}

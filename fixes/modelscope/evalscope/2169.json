@@ -1,0 +1,26 @@
+{
+ "repo": "modelscope/evalscope",
+ "number": 2169,
+ "url": "https://github.com/modelscope/evalscope/pull/2169",
+ "title": "fix(text2speech): forward extra_headers/extra_query to OpenAI-compatible TTS requests",
+ "merged_at": "2026-11-23T03:21:50Z",
+ "files": [
+  {
+   "filename": "evalscope/models/text2speech_model.py",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 3,
+   "patch": "@@ -11,6 +11,7 @@\n from evalscope.api.messages import ChatMessage, ContentAudio\n from evalscope.api.model import ChatCompletionChoice, GenerateConfig, ModelAPI, ModelOutput\n from evalscope.api.tool import ToolChoice, ToolInfo\n+from evalscope.utils.argument_utils import get_secret_value\n from evalscope.utils.io_utils import bytes_to_base64\n \n \n@@ -63,7 +64,7 @@ def generate(\n         if self.provider == 'volcengine':\n             audio_bytes, metadata = self._generate_volcengine_audio(input, config.timeout or self.timeout)\n         else:\n-            audio_bytes, metadata = self._generate_openai_audio(input, config.timeout or self.timeout)\n+            audio_bytes, metadata = self._generate_openai_audio(input, config.timeout or self.timeout, config)\n \n         return ModelOutput(\n             model=self.model_name,\n@@ -170,13 +171,26 @@ def _generate_volcengine_audio(self, input: List[ChatMessage], timeout: float) -\n         response.raise_for_status()\n         return self._collect_volcengine_audio(response)\n \n-    def _generate_openai_audio(self, input: List[ChatMessage], timeout: float) -> tuple[bytes, Dict[str, Any]]:\n+    def _generate_openai_audio(\n+        self,\n+        input: List[ChatMessage],\n+        timeout: float,\n+        config: Optional[GenerateConfig] = None,\n+    ) -> tuple[bytes, Dict[str, Any]]:\n         payload = self._openai_payload(input)\n+        headers = self._openai_headers()\n+        request_kwargs: Dict[str, Any] = {}\n+        if config is not None:\n+            if config.extra_headers:\n+                headers.update(get_secret_value(config.extra_headers))\n+            if config.extra_query:\n+                request_kwargs['params'] = get_secret_value(config.extra_query)\n         response = self.session.post(\n             self.url,\n-            headers=self._openai_headers(),\n+            headers=headers,\n             json=payload,\n             timeout=timeout,\n+            **request_kwargs,\n         )\n         response.raise_for_status()\n         return self._collect_openai_audio(response)"
+  },
+  {
+   "filename": "tests/api/test_text2speech_model.py",
+   "status": "modified",
+   "additions": 37,
+   "deletions": 1,
+   "patch": "@@ -2,7 +2,7 @@\n from typing import Any\n \n from evalscope.api.messages import ChatMessageUser, ContentAudio, ContentText\n-from evalscope.api.model import get_model\n+from evalscope.api.model import GenerateConfig, get_model\n from evalscope.benchmarks.seed_tts_eval.seed_tts_eval_adapter import PROMPT_TEMPLATE\n from evalscope.constants import EvalType\n from evalscope.utils.uri_utils import data_uri_to_base64\n@@ -163,3 +163,39 @@ def mock_post(\n     assert audio_content.format == 'wav'\n     assert base64.b64decode(data_uri_to_base64(audio_content.audio)) == b'audio-bytes'\n     assert output.metadata['request_id'] == 'request-2'\n+\n+\n+def test_text2speech_openai_provider_forwards_extra_headers_and_query(monkeypatch: Any) -> None:\n+    calls: dict[str, Any] = {}\n+\n+    class MockResponse:\n+\n+        headers = {'x-request-id': 'request-3', 'Content-Type': 'audio/mpeg'}\n+        content = b'audio-bytes'\n+\n+        def raise_for_status(self) -> None:\n+            pass\n+\n+    def mock_post(self: Any, url: str, **kwargs: Any) -> MockResponse:\n+        calls['url'] = url\n+        calls.update(kwargs)\n+        return MockResponse()\n+\n+    monkeypatch.setattr('requests.Session.post', mock_post)\n+    model = get_model(\n+        model='tts-1',\n+        eval_type=EvalType.TEXT2SPEECH,\n+        base_url='https://tts.example.com/v1',\n+        api_key='openai-test-key',\n+        config=GenerateConfig(\n+            extra_headers={'X-Gateway-Token': 'abc'},\n+            extra_query={'api-version': '2024-01'},\n+        ),\n+        model_args={'provider': 'openai'},\n+        memoize=False,\n+    )\n+    model.generate([ChatMessageUser(content='Hello there.')])\n+\n+    assert calls['headers']['X-Gateway-Token'] == 'abc'\n+    assert calls['headers']['Authorization'] == 'Bearer openai-test-key'\n+    assert calls['params'] == {'api-version': '2024-01'}"
+  }
+ ],
+ "test_files": [
+  "tests/api/test_text2speech_model.py"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "open-mercato/open-mercato",
+ "number": 10288,
+ "url": "https://github.com/open-mercato/open-mercato/pull/10288",
+ "title": "fix(catalog): allow clearing price startsAt/endsAt with null instead of epoch",
+ "merged_at": "2026-11-22T22:10:50Z",
+ "files": [
+  {
+   "filename": "packages/core/src/modules/catalog/data/__tests__/validators.prices.test.ts",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -12,6 +12,28 @@ const basePrice = {\n   priceKindId: '55555555-5555-4555-8555-555555555555',\n }\n \n+describe('price validity window clearing', () => {\n+  it.each([null, ''])('maps %j to null instead of the epoch date on update', (empty) => {\n+    const result = priceUpdateSchema.safeParse({\n+      id: '66666666-6666-4666-8666-666666666666',\n+      ...scope,\n+      startsAt: empty,\n+      endsAt: empty,\n+    })\n+    expect(result.success).toBe(true)\n+    if (result.success) {\n+      expect(result.data.startsAt).toBeNull()\n+      expect(result.data.endsAt).toBeNull()\n+    }\n+  })\n+\n+  it('still coerces ISO strings to dates and rejects garbage', () => {\n+    const ok = priceCreateSchema.safeParse({ ...basePrice, startsAt: '2026-01-01T00:00:00.000Z' })\n+    expect(ok.success && ok.data.startsAt instanceof Date).toBe(true)\n+    expect(priceCreateSchema.safeParse({ ...basePrice, endsAt: 'not-a-date' }).success).toBe(false)\n+  })\n+})\n+\n describe('price cross-field validators', () => {\n   it('accepts a full payload with a quantity tier and validity window', () => {\n     const result = priceCreateSchema.safeParse({"
+  },
+  {
+   "filename": "packages/core/src/modules/catalog/data/validators.ts",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 3,
+   "patch": "@@ -478,6 +478,12 @@ export const priceKindUpdateSchema = z\n   })\n \n // Base schema without refinements (used for .partial() in the update schema).\n+// `null` (or an empty string) clears a date; z.coerce.date() would turn it into the epoch.\n+const nullableDateSchema = z.preprocess(\n+  (value) => (value === null || value === '' ? null : value),\n+  z.union([z.null(), z.coerce.date()]),\n+)\n+\n const priceBaseSchema = scoped.extend({\n   variantId: uuid().optional(),\n   productId: uuid().optional(),\n@@ -496,8 +502,8 @@ const priceBaseSchema = scoped.extend({\n   customerId: uuid().optional(),\n   customerGroupId: uuid().optional(),\n   metadata: metadataSchema,\n-  startsAt: z.coerce.date().optional(),\n-  endsAt: z.coerce.date().optional(),\n+  startsAt: nullableDateSchema.optional(),\n+  endsAt: nullableDateSchema.optional(),\n })\n \n // Both checks only fire when both sides of the comparison are present in this\n@@ -522,7 +528,7 @@ const priceQuantityRangeRefinement = (\n }\n \n const priceValidityWindowRefinement = (\n-  input: { startsAt?: Date; endsAt?: Date },\n+  input: { startsAt?: Date | null; endsAt?: Date | null },\n   ctx: z.RefinementCtx,\n ) => {\n   if (input.startsAt && input.endsAt && input.endsAt < input.startsAt) {"
+  }
+ ],
+ "test_files": [
+  "packages/core/src/modules/catalog/data/__tests__/validators.prices.test.ts"
+ ]
+}
