@@ -1,0 +1,115 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 737,
+ "url": "https://github.com/labring/aiproxy/pull/737",
+ "title": "fix(relay): honor max_completion_tokens in Gemini, Anthropic, Cohere, Ollama and Baidu adaptors",
+ "merged_at": "2026-11-24T02:24:07Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/anthropic/openai.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -119,7 +119,7 @@ func openAIConvertRequest(\n \n \tclaudeRequest := relaymodel.ClaudeRequest{\n \t\tModel:       meta.ActualModel,\n-\t\tMaxTokens:   textRequest.MaxTokens,\n+\t\tMaxTokens:   textRequest.OutputTokenLimit(),\n \t\tTemperature: textRequest.Temperature,\n \t\tTopP:        textRequest.TopP,\n \t\tTopK:        textRequest.TopK,"
+  },
+  {
+   "filename": "core/relay/adaptor/anthropic/openai_test.go",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -781,3 +781,30 @@ func TestOpenAIConvertRequest_StopSequences(t *testing.T) {\n \t\trequire.Empty(t, claudeReq.StopSequences)\n \t})\n }\n+\n+func TestOpenAIConvertRequest_MaxCompletionTokens(t *testing.T) {\n+\tm := &meta.Meta{\n+\t\tActualModel: \"claude-sonnet-4-20250514\",\n+\t\tOriginModel: \"claude-sonnet-4-20250514\",\n+\t\tMode:        mode.ChatCompletions,\n+\t}\n+\n+\tdata, err := sonic.Marshal(relaymodel.GeneralOpenAIRequest{\n+\t\tModel:               \"claude-sonnet-4-20250514\",\n+\t\tMessages:            []relaymodel.Message{{Role: \"user\", Content: \"hello\"}},\n+\t\tMaxCompletionTokens: 777,\n+\t})\n+\trequire.NoError(t, err)\n+\n+\treq, err := http.NewRequestWithContext(\n+\t\tt.Context(),\n+\t\thttp.MethodPost,\n+\t\t\"http://localhost/v1/chat/completions\",\n+\t\tbytes.NewBuffer(data),\n+\t)\n+\trequire.NoError(t, err)\n+\n+\tclaudeReq, err := anthropic.OpenAIConvertRequest(m, req)\n+\trequire.NoError(t, err)\n+\tassert.Equal(t, 777, claudeReq.MaxTokens)\n+}"
+  },
+  {
+   "filename": "core/relay/adaptor/baidu/main.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -50,7 +50,7 @@ func ConvertRequest(meta *meta.Meta, req *http.Request) (adaptor.ConvertResult,\n \t\tStream:          request.Stream,\n \t\tDisableSearch:   false,\n \t\tEnableCitation:  false,\n-\t\tMaxOutputTokens: request.MaxTokens,\n+\t\tMaxOutputTokens: request.OutputTokenLimit(),\n \t\tUserID:          request.User,\n \t\tStop:            utils.ParseOpenAIStopSequences(request.Stop),\n \t}"
+  },
+  {
+   "filename": "core/relay/adaptor/baidu/main_test.go",
+   "status": "modified",
+   "additions": 40,
+   "deletions": 0,
+   "patch": "@@ -2,6 +2,11 @@\n package baidu\n \n import (\n+\t\"context\"\n+\t\"encoding/json\"\n+\t\"io\"\n+\t\"net/http\"\n+\t\"strings\"\n \t\"testing\"\n \n \t\"github.com/labring/aiproxy/core/relay/meta\"\n@@ -73,3 +78,38 @@ func TestStreamResponse2OpenAI_FinishReason(t *testing.T) {\n \t\tt.Fatalf(\"need_clear_history finish_reason = %q, want content_filter\", fr)\n \t}\n }\n+\n+func TestConvertRequestMaxCompletionTokens(t *testing.T) {\n+\tt.Parallel()\n+\n+\tbody := `{\"model\":\"ernie\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_completion_tokens\":123}`\n+\n+\treq, err := http.NewRequestWithContext(\n+\t\tcontext.Background(),\n+\t\thttp.MethodPost,\n+\t\t\"/v1/chat/completions\",\n+\t\tstrings.NewReader(body),\n+\t)\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\n+\tresult, err := ConvertRequest(&meta.Meta{ActualModel: \"ernie\"}, req)\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\n+\tdata, err := io.ReadAll(result.Body)\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\n+\tvar got ChatRequest\n+\tif err := json.Unmarshal(data, &got); err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\n+\tif got.MaxOutputTokens != 123 {\n+\t\tt.Fatalf(\"MaxOutputTokens = %d, want 123\", got.MaxOutputTokens)\n+\t}\n+}"
+  },
+  {
+   "filename": "core/relay/adaptor/cohere/main.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -43,7 +43,7 @@ func ConvertRequest(textRequest *relaymodel.GeneralOpenAIRequest) *Request {\n \tcohereRequest := Request{\n \t\tModel:            textRequest.Model,\n \t\tMessage:          \"\",\n-\t\tMaxTokens:        textRequest.MaxTokens,\n+\t\tMaxTokens:        textRequest.OutputTokenLimit(),\n \t\tTemperature:      textRequest.Temperature,\n \t\tP:                textRequest.TopP,\n \t\tK:                textRequest.TopK,"
+  },
+  {
+   "filename": "core/relay/adaptor/cohere/main_test.go",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -239,3 +239,17 @@ func TestConvertRequestStopSequences(t *testing.T) {\n \t\t}\n \t})\n }\n+\n+func TestConvertRequestMaxCompletionTokens(t *testing.T) {\n+\tt.Parallel()\n+\n+\treq := &relaymodel.GeneralOpenAIRequest{\n+\t\tModel:               \"command-r\",\n+\t\tMessages:            []relaymodel.Message{{Role: \"user\", Content: \"hi\"}},\n+\t\tMaxCompletionTokens: 123,\n+\t}\n+\n+\tif got := ConvertRequest(req).MaxTokens; got != 123 {\n+\t\tt.Fatalf(\"MaxTokens = %d, want 123\", got)\n+\t}\n+}"
+  },
+  {
+   "filename": "core/relay/adaptor/gemini/openai.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -217,8 +217,8 @@ func buildGenerationConfig(\n \t}\n \n \t// Convert MaxTokens (int) to MaxOutputTokens (*int)\n-\tif config.MaxOutputTokens == nil && textRequest.MaxTokens != 0 {\n-\t\tconfig.MaxOutputTokens = &textRequest.MaxTokens\n+\tif limit := textRequest.OutputTokenLimit(); config.MaxOutputTokens == nil && limit != 0 {\n+\t\tconfig.MaxOutputTokens = &limit\n \t}\n \n \tif len(config.StopSequences) == 0 {"
+  },
+  {
+   "filename": "core/relay/adaptor/gemini/openai_test.go",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -19,6 +19,7 @@ import (\n \t\"github.com/labring/aiproxy/core/relay/mode\"\n \trelaymodel \"github.com/labring/aiproxy/core/relay/model\"\n \t\"github.com/stretchr/testify/assert\"\n+\t\"github.com/stretchr/testify/require\"\n )\n \n func TestConvertRequest_JsonObject(t *testing.T) {\n@@ -1521,3 +1522,36 @@ func TestConvertRequest_StopSequences(t *testing.T) {\n \t\tassert.Empty(t, geminiReq.GenerationConfig.StopSequences)\n \t})\n }\n+\n+func TestConvertRequest_MaxCompletionTokens(t *testing.T) {\n+\tm := meta.NewMeta(\n+\t\t&model.Channel{Type: model.ChannelTypeGoogleGemini},\n+\t\tmode.Gemini,\n+\t\t\"gemini-1.5-pro\",\n+\t\tmodel.ModelConfig{},\n+\t)\n+\n+\tjsonData, _ := sonic.Marshal(relaymodel.GeneralOpenAIRequest{\n+\t\tModel:               \"gemini-1.5-pro\",\n+\t\tMessages:            []relaymodel.Message{{Role: \"user\", Content: \"hi\"}},\n+\t\tMaxCompletionTokens: 321,\n+\t})\n+\treq, _ := http.NewRequestWithContext(\n+\t\tt.Context(),\n+\t\thttp.MethodPost,\n+\t\t\"http://localhost/v1/chat/completions\",\n+\t\tbytes.NewBuffer(jsonData),\n+\t)\n+\n+\tresult, err := gemini.ConvertRequest(m, req)\n+\tassert.NoError(t, err)\n+\n+\tbodyBytes, _ := io.ReadAll(result.Body)\n+\n+\tvar geminiReq relaymodel.GeminiChatRequest\n+\n+\tassert.NoError(t, json.Unmarshal(bodyBytes, &geminiReq))\n+\tassert.NotNil(t, geminiReq.GenerationConfig)\n+\trequire.NotNil(t, geminiReq.GenerationConfig.MaxOutputTokens)\n+\tassert.Equal(t, 321, *geminiReq.GenerationConfig.MaxOutputTokens)\n+}"
+  },
+  {
+   "filename": "core/relay/adaptor/ollama/main.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -35,7 +35,7 @@ func ConvertRequest(meta *meta.Meta, req *http.Request) (adaptor.ConvertResult,\n \t\t\tTopP:             request.TopP,\n \t\t\tFrequencyPenalty: request.FrequencyPenalty,\n \t\t\tPresencePenalty:  request.PresencePenalty,\n-\t\t\tNumPredict:       request.MaxTokens,\n+\t\t\tNumPredict:       request.OutputTokenLimit(),\n \t\t\tNumCtx:           request.NumCtx,\n \t\t},\n \t\tStream:   request.Stream,"
+  },
+  {
+   "filename": "core/relay/adaptor/ollama/main_test.go",
+   "status": "modified",
+   "additions": 32,
+   "deletions": 0,
+   "patch": "@@ -208,6 +208,38 @@ func TestConvertRequest_ReasoningEffortToThink(t *testing.T) {\n \t}\n }\n \n+func TestConvertRequest_MaxCompletionTokens(t *testing.T) {\n+\tm := meta.NewMeta(\n+\t\t&model.Channel{Type: model.ChannelTypeOllama},\n+\t\t0,\n+\t\t\"llama2\",\n+\t\tmodel.ModelConfig{},\n+\t)\n+\n+\tjsonData, _ := sonic.Marshal(relaymodel.GeneralOpenAIRequest{\n+\t\tModel:               \"llama2\",\n+\t\tMessages:            []relaymodel.Message{{Role: \"user\", Content: \"hi\"}},\n+\t\tMaxCompletionTokens: 55,\n+\t})\n+\treq, _ := http.NewRequestWithContext(\n+\t\tt.Context(),\n+\t\thttp.MethodPost,\n+\t\t\"http://localhost:11434/api/chat\",\n+\t\tbytes.NewBuffer(jsonData),\n+\t)\n+\n+\tresult, err := ollama.ConvertRequest(m, req)\n+\tassert.NoError(t, err)\n+\n+\tbodyBytes, _ := io.ReadAll(result.Body)\n+\n+\tvar ollamaReq ollama.ChatRequest\n+\n+\tassert.NoError(t, json.Unmarshal(bodyBytes, &ollamaReq))\n+\tassert.NotNil(t, ollamaReq.Options)\n+\tassert.Equal(t, 55, ollamaReq.Options.NumPredict)\n+}\n+\n func TestConvertRequest_StopSequences(t *testing.T) {\n \ttests := []struct {\n \t\tname string"
+  },
+  {
+   "filename": "core/relay/adaptor/openai/chat.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 4,
+   "patch": "@@ -1386,10 +1386,8 @@ func ConvertChatCompletionToResponsesRequest(\n \t\t)\n \t}\n \n-\tif chatReq.MaxTokens > 0 {\n-\t\tresponsesReq.MaxOutputTokens = &chatReq.MaxTokens\n-\t} else if chatReq.MaxCompletionTokens > 0 {\n-\t\tresponsesReq.MaxOutputTokens = &chatReq.MaxCompletionTokens\n+\tif limit := chatReq.OutputTokenLimit(); limit > 0 {\n+\t\tresponsesReq.MaxOutputTokens = &limit\n \t}\n \n \t// Map tools"
+  },
+  {
+   "filename": "core/relay/model/claude.go",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 12,
+   "patch": "@@ -8,18 +8,35 @@ import (\n )\n \n type ClaudeOpenAIRequest struct {\n-\tToolChoice      any                    `json:\"tool_choice,omitempty\"`\n-\tStop            any                    `json:\"stop,omitempty\"`\n-\tTemperature     *float64               `json:\"temperature,omitempty\"`\n-\tTopP            *float64               `json:\"top_p,omitempty\"`\n-\tReasoningEffort *string                `json:\"reasoning_effort,omitempty\"`\n-\tModel           string                 `json:\"model,omitempty\"`\n-\tMessages        []*ClaudeOpenaiMessage `json:\"messages,omitempty\"`\n-\tTools           []*ClaudeOpenaiTool    `json:\"tools,omitempty\"`\n-\tSeed            float64                `json:\"seed,omitempty\"`\n-\tMaxTokens       int                    `json:\"max_tokens,omitempty\"`\n-\tTopK            int                    `json:\"top_k,omitempty\"`\n-\tStream          bool                   `json:\"stream,omitempty\"`\n+\tToolChoice          any                    `json:\"tool_choice,omitempty\"`\n+\tStop                any                    `json:\"stop,omitempty\"`\n+\tTemperature         *float64               `json:\"temperature,omitempty\"`\n+\tTopP                *float64               `json:\"top_p,omitempty\"`\n+\tReasoningEffort     *string                `json:\"reasoning_effort,omitempty\"`\n+\tModel               string                 `json:\"model,omitempty\"`\n+\tMessages            []*ClaudeOpenaiMessage `json:\"messages,omitempty\"`\n+\tTools               []*ClaudeOpenaiTool    `json:\"tools,omitempty\"`\n+\tSeed                float64                `json:\"seed,omitempty\"`\n+\tMaxTokens           int                    `json:\"max_tokens,omitempty\"`\n+\tMaxCompletionTokens int                    `json:\"max_completion_tokens,omitempty\"`\n+\tTopK                int                    `json:\"top_k,omitempty\"`\n+\tStream              bool                   `json:\"stream,omitempty\"`\n+}\n+\n+// OutputTokenLimit returns the requested output token cap. OpenAI-format clients\n+// may send either max_tokens (legacy) or max_completion_tokens (newer models);\n+// the former takes precedence when both are set, matching the Responses\n+// conversion. Zero means unset.\n+func (r ClaudeOpenAIRequest) OutputTokenLimit() int {\n+\tif r.MaxTokens > 0 {\n+\t\treturn r.MaxTokens\n+\t}\n+\n+\tif r.MaxCompletionTokens > 0 {\n+\t\treturn r.MaxCompletionTokens\n+\t}\n+\n+\treturn 0\n }\n \n type ClaudeOpenaiMessage struct {"
+  },
+  {
+   "filename": "core/relay/model/completions.go",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -84,6 +84,22 @@ type GeneralOpenAIRequest struct {\n \tThinking *GeneralThinking `json:\"thinking,omitempty\"`\n }\n \n+// OutputTokenLimit returns the requested output token cap. OpenAI-format clients\n+// may send either max_tokens (legacy) or max_completion_tokens (newer models);\n+// the former takes precedence when both are set, matching the Responses\n+// conversion. Zero means unset.\n+func (r GeneralOpenAIRequest) OutputTokenLimit() int {\n+\tif r.MaxTokens > 0 {\n+\t\treturn r.MaxTokens\n+\t}\n+\n+\tif r.MaxCompletionTokens > 0 {\n+\t\treturn r.MaxCompletionTokens\n+\t}\n+\n+\treturn 0\n+}\n+\n func (r GeneralOpenAIRequest) ParseInput() []string {\n \tif r.Input == nil {\n \t\treturn nil"
+  },
+  {
+   "filename": "core/relay/model/output_token_limit_test.go",
+   "status": "added",
+   "additions": 55,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,55 @@\n+package model_test\n+\n+import (\n+\t\"testing\"\n+\n+\t\"github.com/labring/aiproxy/core/relay/model\"\n+)\n+\n+// Both request types must agree with ConvertChatCompletionToResponsesRequest on\n+// which field wins when a client sends both caps.\n+func TestOutputTokenLimit(t *testing.T) {\n+\ttests := []struct {\n+\t\tname                string\n+\t\tmaxTokens           int\n+\t\tmaxCompletionTokens int\n+\t\twant                int\n+\t}{\n+\t\t{name: \"unset\"},\n+\t\t{name: \"max_tokens only\", maxTokens: 100, want: 100},\n+\t\t{name: \"max_completion_tokens only\", maxCompletionTokens: 200, want: 200},\n+\t\t{\n+\t\t\tname:                \"max_tokens wins when both are set\",\n+\t\t\tmaxTokens:           100,\n+\t\t\tmaxCompletionTokens: 200,\n+\t\t\twant:                100,\n+\t\t},\n+\t\t{\n+\t\t\tname:                \"negative max_tokens falls through\",\n+\t\t\tmaxTokens:           -1,\n+\t\t\tmaxCompletionTokens: 200,\n+\t\t\twant:                200,\n+\t\t},\n+\t\t{name: \"negative max_completion_tokens alone is unset\", maxCompletionTokens: -1},\n+\t}\n+\n+\tfor _, tc := range tests {\n+\t\tt.Run(tc.name, func(t *testing.T) {\n+\t\t\tgeneral := model.GeneralOpenAIRequest{\n+\t\t\t\tMaxTokens:           tc.maxTokens,\n+\t\t\t\tMaxCompletionTokens: tc.maxCompletionTokens,\n+\t\t\t}\n+\t\t\tif got := general.OutputTokenLimit(); got != tc.want {\n+\t\t\t\tt.Errorf(\"GeneralOpenAIRequest.OutputTokenLimit() = %d, want %d\", got, tc.want)\n+\t\t\t}\n+\n+\t\t\tclaude := model.ClaudeOpenAIRequest{\n+\t\t\t\tMaxTokens:           tc.maxTokens,\n+\t\t\t\tMaxCompletionTokens: tc.maxCompletionTokens,\n+\t\t\t}\n+\t\t\tif got := claude.OutputTokenLimit(); got != tc.want {\n+\t\t\t\tt.Errorf(\"ClaudeOpenAIRequest.OutputTokenLimit() = %d, want %d\", got, tc.want)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/anthropic/openai_test.go",
+  "core/relay/adaptor/baidu/main_test.go",
+  "core/relay/adaptor/cohere/main_test.go",
+  "core/relay/adaptor/gemini/openai_test.go",
+  "core/relay/adaptor/ollama/main_test.go",
+  "core/relay/model/output_token_limit_test.go"
+ ]
+}

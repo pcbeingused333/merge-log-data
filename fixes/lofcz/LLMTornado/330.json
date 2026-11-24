@@ -1,0 +1,26 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 330,
+ "url": "https://github.com/lofcz/LLMTornado/pull/330",
+ "title": "Send raw base64 images in the OpenAI Sora JSON video path",
+ "merged_at": "2026-11-24T05:53:12Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/VideoOpenAiJsonImageTests.cs",
+   "status": "added",
+   "additions": 32,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,32 @@\n+using LlmTornado.Videos;\n+using LlmTornado.Videos.Models;\n+using LlmTornado.Videos.Vendors.OpenAi;\n+using Newtonsoft.Json;\n+using Newtonsoft.Json.Linq;\n+\n+namespace LlmTornado.Tests;\n+\n+/// <summary>\n+/// VideoImage is documented as a public URL or raw base64. The OpenAI JSON path\n+/// (UseJsonContent / characters) must not silently drop raw base64 images.\n+/// </summary>\n+[TestFixture]\n+public class VideoOpenAiJsonImageTests\n+{\n+    [TestCase(\"QUJD\", \"image/png\", \"data:image/png;base64,QUJD\")]\n+    [TestCase(\"QUJD\", null, \"data:image/jpeg;base64,QUJD\")]\n+    [TestCase(\"data:image/png;base64,QUJD\", \"image/png\", \"data:image/png;base64,QUJD\")]\n+    [TestCase(\"https://example.com/a.png\", \"image/png\", \"https://example.com/a.png\")]\n+    public void SerializeJson_SendsInputReference(string content, string? mimeType, string expected)\n+    {\n+        VideoGenerationRequest request = new(\"animate\")\n+        {\n+            Model = VideoModel.OpenAi.Sora.Sora2,\n+            Image = new VideoImage(content) { MimeType = mimeType },\n+            OpenAiExtensions = new VideoOpenAiExtensions { UseJsonContent = true }\n+        };\n+\n+        JObject body = JObject.Parse(JsonConvert.SerializeObject(VendorOpenAiVideoRequest.SerializeJson(request)));\n+        Assert.That(body[\"input_reference\"]?[\"image_url\"]?.Value<string>(), Is.EqualTo(expected));\n+    }\n+}"
+  },
+  {
+   "filename": "src/LlmTornado/Videos/Vendors/OpenAi/VendorOpenAiVideoRequest.cs",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -86,7 +86,11 @@ public static object SerializeJson(VideoGenerationRequest request)\n         }\n         else if (request.Image is not null && !string.IsNullOrEmpty(request.Image.Url))\n         {\n-            string url = request.Image.Url;\n+            // Raw base64 is wrapped as a data URI (image/jpeg when no MIME type is set, as in the multipart path).\n+            VideoImage image = string.IsNullOrWhiteSpace(request.Image.MimeType)\n+                ? new VideoImage(request.Image.Url, \"image/jpeg\")\n+                : request.Image;\n+            string url = image.AsProviderImageUrl();\n             if (url.StartsWith(\"data:\", StringComparison.OrdinalIgnoreCase) || url.StartsWith(\"http\", StringComparison.OrdinalIgnoreCase))\n             {\n                 body[\"input_reference\"] = new VideoInputReference { ImageUrl = url };"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/VideoOpenAiJsonImageTests.cs"
+ ]
+}

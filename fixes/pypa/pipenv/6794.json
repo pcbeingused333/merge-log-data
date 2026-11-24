@@ -1,0 +1,48 @@
+{
+ "repo": "pypa/pipenv",
+ "number": 6794,
+ "url": "https://github.com/pypa/pipenv/pull/6794",
+ "title": "fix: escape Rich markup in subprocess output on locking and graph errors",
+ "merged_at": "2026-11-24T04:09:11Z",
+ "files": [
+  {
+   "filename": "news/resolver-escape-rich-markup.bugfix.rst",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+Escape Rich markup in pip's stdout/stderr when printing ``Locking Failed!`` and ``pipenv graph`` errors, so bracketed text such as ``requests[security]`` is no longer swallowed or misparsed."
+  },
+  {
+   "filename": "pipenv/routines/graph.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -105,7 +105,7 @@ def traverse(obj):\n \n     if c.returncode != 0:\n         err.print(\n-            f\"[bold][red]ERROR: {c.stderr}[red][/bold]\",\n+            f\"[bold][red]ERROR: {rich_escape(c.stderr)}[red][/bold]\",\n         )\n     # Return its return code.\n     sys.exit(c.returncode)"
+  },
+  {
+   "filename": "pipenv/utils/resolver.py",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 7,
+   "patch": "@@ -36,6 +36,7 @@\n from pipenv.patched.pip._internal.req.req_install import InstallRequirement\n from pipenv.patched.pip._internal.utils.temp_dir import global_tempdir_manager\n from pipenv.patched.pip._vendor.packaging.utils import canonicalize_name\n+from pipenv.patched.pip._vendor.rich.markup import escape as rich_escape\n from pipenv.resolver.schema import (\n     SCHEMA_VERSION,\n     InternalError,\n@@ -1339,11 +1340,11 @@ def read_stderr():\n             if line.rstrip():\n                 stderr_lines.append(line)\n                 if is_verbose:\n-                    st.console.print(line.rstrip())\n+                    st.console.print(rich_escape(line.rstrip()))\n                 elif _is_download_status_line(line):\n                     # Always show download progress so users know pipenv is not\n                     # frozen when pip is fetching a large package (issue #5718).\n-                    err.print(f\"  [dim]{line.rstrip()}[/dim]\")\n+                    err.print(f\"  [dim]{rich_escape(line.rstrip())}[/dim]\")\n \n     # Start reader threads\n     stdout_thread = threading.Thread(target=read_stdout, daemon=True)\n@@ -1389,7 +1390,7 @@ def read_stderr():\n             f\"[pipenv] resolver_timeout_seconds in your Pipfile) to extend, or \"\n             f\"check that your index/mirror is reachable.\"\n         )\n-        err.print(f\"[red]{msg}[/red]\")\n+        err.print(f\"[red]{rich_escape(msg)}[/red]\")\n         raise ResolutionFailure(msg)\n \n     # Make sure reader threads have finished draining the now-closed pipes\n@@ -1723,7 +1724,7 @@ def _run_resolver_subprocess(*, request, python_executable, project, st):\n             # double-output.\n             if not project.s.is_verbose() and c.stderr and c.stderr.strip():\n                 err.print(\n-                    f\"Warning: {c.stderr.strip()}\",\n+                    f\"Warning: {rich_escape(c.stderr.strip())}\",\n                     overflow=\"ignore\",\n                     crop=False,\n                 )\n@@ -1744,8 +1745,8 @@ def _run_resolver_subprocess(*, request, python_executable, project, st):\n         st.console.print(\n             environments.PIPENV_SPINNER_FAIL_TEXT.format(\"Locking Failed!\")\n         )\n-        err.print(f\"Output: {c.stdout.strip()}\")\n-        err.print(f\"Error: {c.stderr.strip()}\")\n+        err.print(f\"Output: {rich_escape(c.stdout.strip())}\")\n+        err.print(f\"Error: {rich_escape(c.stderr.strip())}\")\n         # Provide helpful hints for common build errors\n         # See: https://github.com/pypa/pipenv/issues/6058\n         combined_output = (c.stdout + c.stderr).lower()\n@@ -1796,7 +1797,7 @@ def _surface_resolver_log(response, project) -> None:\n         return\n     err.print(\"[dim]--- resolver log ---[/dim]\")\n     for record in log:\n-        err.print(f\"[dim]{record}[/dim]\")\n+        err.print(f\"[dim]{rich_escape(str(record))}[/dim]\")\n     err.print(\"[dim]--- end resolver log ---[/dim]\")\n \n "
+  },
+  {
+   "filename": "tests/unit/test_graph_encoding.py",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -31,3 +31,22 @@ def test_graph_tree_uses_characters_stdout_can_encode(monkeypatch, encoding, bra\n     assert excinfo.value.code == 0\n     stdout.flush()\n     assert branch in stdout.buffer.getvalue().decode(encoding)\n+\n+\n+def test_graph_error_output_is_not_parsed_as_rich_markup(monkeypatch):\n+    from io import StringIO\n+\n+    from pipenv.patched.pip._vendor.rich.console import Console\n+\n+    buf = StringIO()\n+    monkeypatch.setattr(\"pipenv.routines.graph.err\", Console(file=buf, width=200))\n+    project = mock.MagicMock()\n+    project.venv_locator.python.return_value = sys.executable\n+    project.venv_locator.exists = True\n+    project.s.is_verbose.return_value = False\n+    fake = mock.MagicMock(returncode=1, stdout=\"\", stderr=\"oops foo[bar] [/bold]\")\n+    monkeypatch.setattr(\"pipenv.routines.graph.run_command\", lambda *a, **k: fake)\n+\n+    with pytest.raises(SystemExit):\n+        do_graph(project)\n+    assert \"foo[bar] [/bold]\" in buf.getvalue()"
+  },
+  {
+   "filename": "tests/unit/test_resolver_parent_dispatch.py",
+   "status": "modified",
+   "additions": 58,
+   "deletions": 0,
+   "patch": "@@ -559,3 +559,61 @@ def fake_resolve(cmd, st, project, **_kwargs):\n                 project=project,\n                 st=st,\n             )\n+\n+\n+def test_locking_failed_output_is_not_parsed_as_rich_markup(tmp_path, monkeypatch):\n+    \"\"\"Bracketed text in the child's stdout/stderr must be printed literally.\"\"\"\n+    from io import StringIO\n+\n+    from pipenv.patched.pip._vendor.rich.console import Console\n+\n+    request = ResolverRequest(\n+        schema_version=SCHEMA_VERSION,\n+        category=\"default\",\n+        packages=PackageSpecs(specs={\"foo\": \"foo\"}),\n+        options=ResolverOptions(),\n+        sources=(Source(name=\"pypi\", url=\"https://pypi.org/simple\", verify_ssl=True),),\n+    )\n+\n+    def fake_resolve(cmd, st, project, **_kwargs):\n+        return subprocess.CompletedProcess(\n+            cmd, 1, \"out requests[security] [end of output]\", \"bad [/bold] foo[bar]\\n\"\n+        )\n+\n+    buf = StringIO()\n+    monkeypatch.setattr(resolver_mod, \"resolve\", fake_resolve)\n+    monkeypatch.setattr(resolver_mod, \"err\", Console(file=buf, width=200))\n+\n+    st = SimpleNamespace(console=mock.MagicMock())\n+    with pytest.raises(RuntimeError):\n+        resolver_mod._run_resolver_subprocess(\n+            request=request,\n+            python_executable=\"/usr/bin/python3\",\n+            project=_stub_project(tmp_path),\n+            st=st,\n+        )\n+    out = buf.getvalue()\n+    assert \"requests[security] [end of output]\" in out\n+    assert \"bad [/bold] foo[bar]\" in out\n+\n+\n+def test_verbose_resolver_stderr_is_not_parsed_as_rich_markup(tmp_path, monkeypatch):\n+    \"\"\"Verbose streaming of the child's stderr must print bracketed text literally.\"\"\"\n+    from io import StringIO\n+\n+    from pipenv.patched.pip._vendor.rich.console import Console\n+\n+    proc = mock.MagicMock()\n+    proc.stdout = StringIO(\"\")\n+    proc.stderr = StringIO(\"pip says requests[security] [/bold] [end of output]\\n\")\n+    proc.wait.return_value = 0\n+    proc.returncode = 0\n+    monkeypatch.setattr(resolver_mod, \"subprocess_run\", lambda *a, **k: proc)\n+\n+    buf = StringIO()\n+    st = SimpleNamespace(console=Console(file=buf, width=200))\n+    project = _stub_project(tmp_path)\n+    project.s.is_verbose.return_value = True\n+\n+    resolver_mod.resolve([\"python\", \"-c\", \"pass\"], st, project, deadline_seconds=5)\n+    assert \"requests[security] [/bold] [end of output]\" in buf.getvalue()"
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_graph_encoding.py",
+  "tests/unit/test_resolver_parent_dispatch.py"
+ ]
+}

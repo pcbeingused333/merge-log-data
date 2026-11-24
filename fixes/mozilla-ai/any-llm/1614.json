@@ -1,0 +1,26 @@
+{
+ "repo": "mozilla-ai/any-llm",
+ "number": 1614,
+ "url": "https://github.com/mozilla-ai/any-llm/pull/1614",
+ "title": "fix(cohere): send stop, top_p and max_completion_tokens under Cohere's names",
+ "merged_at": "2026-11-24T01:46:21Z",
+ "files": [
+  {
+   "filename": "src/any_llm/providers/cohere/cohere.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -79,6 +79,13 @@ def _convert_completion_params(params: CompletionParams, **kwargs: Any) -> dict[\n             exclude_none=True,\n             exclude={\"model_id\", \"messages\", \"response_format\", \"stream\", \"stream_options\", \"reasoning_effort\"},\n         )\n+        # Cohere's chat endpoint names these differently from the OpenAI parameters CompletionParams uses.\n+        if (stop := converted_params.pop(\"stop\", None)) is not None:\n+            converted_params[\"stop_sequences\"] = [stop] if isinstance(stop, str) else stop\n+        if (top_p := converted_params.pop(\"top_p\", None)) is not None:\n+            converted_params[\"p\"] = top_p\n+        if (max_completion_tokens := converted_params.pop(\"max_completion_tokens\", None)) is not None:\n+            converted_params[\"max_tokens\"] = max_completion_tokens\n         if params.reasoning_effort != \"auto\":\n             if params.reasoning_effort is None or params.reasoning_effort == \"none\":\n                 converted_params[\"thinking\"] = {\"type\": \"disabled\"}"
+  },
+  {
+   "filename": "tests/unit/providers/test_cohere_provider.py",
+   "status": "modified",
+   "additions": 57,
+   "deletions": 0,
+   "patch": "@@ -1495,3 +1495,60 @@ def test_streaming_tool_plan_delta_without_text_carries_no_content() -> None:\n     result = _create_openai_chunk_from_cohere_chunk(ToolPlanDeltaV2ChatStreamResponse(), \"command-a-03-2025\")\n \n     assert result.choices[0].delta.content is None\n+\n+\n+@pytest.mark.asyncio\n+@pytest.mark.parametrize(\n+    (\"openai_params\", \"cohere_params\"),\n+    [\n+        ({\"stop\": \"END\"}, {\"stop_sequences\": [\"END\"]}),\n+        ({\"stop\": [\"a\", \"b\"]}, {\"stop_sequences\": [\"a\", \"b\"]}),\n+        ({\"top_p\": 0.5}, {\"p\": 0.5}),\n+        ({\"max_completion_tokens\": 64}, {\"max_tokens\": 64}),\n+        ({\"max_tokens\": 32, \"max_completion_tokens\": 64}, {\"max_tokens\": 64}),\n+        ({\"max_tokens\": 32}, {\"max_tokens\": 32}),\n+    ],\n+)\n+async def test_openai_style_params_are_renamed_for_chat(\n+    openai_params: dict[str, Any], cohere_params: dict[str, Any]\n+) -> None:\n+    provider = _mk_provider()\n+\n+    with (\n+        patch.object(provider.client, \"chat\", autospec=True) as mock_chat,\n+        patch(\"any_llm.providers.cohere.cohere._convert_response\", return_value=Mock()),\n+    ):\n+        await provider.acompletion(model=\"model-id\", messages=[{\"role\": \"user\", \"content\": \"Hello\"}], **openai_params)\n+\n+    sent = mock_chat.call_args.kwargs\n+    for name in (\"stop\", \"top_p\", \"max_completion_tokens\"):\n+        assert name not in sent\n+    for name, value in cohere_params.items():\n+        assert sent[name] == value\n+\n+\n+@pytest.mark.asyncio\n+async def test_openai_style_params_are_renamed_for_chat_stream() -> None:\n+    provider = _mk_provider()\n+\n+    async def _stream() -> Any:\n+        if False:\n+            yield None\n+\n+    with patch.object(provider.client, \"chat_stream\", autospec=True, return_value=_stream()) as mock_chat_stream:\n+        result = await provider.acompletion(\n+            model=\"model-id\",\n+            messages=[{\"role\": \"user\", \"content\": \"Hello\"}],\n+            stop=\"END\",\n+            top_p=0.5,\n+            max_completion_tokens=64,\n+            stream=True,\n+        )\n+        assert [chunk async for chunk in result] == []\n+\n+    sent = mock_chat_stream.call_args.kwargs\n+    for name in (\"stop\", \"top_p\", \"max_completion_tokens\"):\n+        assert name not in sent\n+    assert sent[\"stop_sequences\"] == [\"END\"]\n+    assert sent[\"p\"] == 0.5\n+    assert sent[\"max_tokens\"] == 64"
+  }
+ ],
+ "test_files": [
+  "tests/unit/providers/test_cohere_provider.py"
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "kestra-io/plugin-ai",
+ "number": 577,
+ "url": "https://github.com/kestra-io/plugin-ai/pull/577",
+ "title": "fix(openrouter,github-models): forward returnThinking to the chat model",
+ "merged_at": "2026-11-24T09:32:23Z",
+ "files": [
+  {
+   "filename": "src/main/java/io/kestra/plugin/ai/provider/GitHubModels.java",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -108,6 +108,7 @@ public ChatModel chatModel(RunContext runContext, ChatConfiguration configuratio\n             .topP(runContext.render(configuration.getTopP()).as(Double.class).orElse(null))\n             .seed(seed)\n             .responseFormat(toAzureResponseFormat(runContext, configuration))\n+            .returnThinking(runContext.render(configuration.getReturnThinking()).as(Boolean.class).orElse(null))\n             .maxCompletionTokens(runContext.render(configuration.getMaxToken()).as(Integer.class).orElse(null))\n             .logRequests(logRequests)\n             .logResponses(logResponses)"
+  },
+  {
+   "filename": "src/main/java/io/kestra/plugin/ai/provider/OpenRouter.java",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -108,6 +108,7 @@ public ChatModel chatModel(RunContext runContext, ChatConfiguration configuratio\n             .logResponses(runContext.render(configuration.getLogResponses()).as(Boolean.class).orElse(false))\n             .logger(runContext.logger())\n             .responseFormat(configuration.computeResponseFormat(runContext))\n+            .returnThinking(runContext.render(configuration.getReturnThinking()).as(Boolean.class).orElse(null))\n             .listeners(allListeners)\n             .maxCompletionTokens(runContext.render(configuration.getMaxToken()).as(Integer.class).orElse(null))\n             .timeout(timeout);"
+  },
+  {
+   "filename": "src/test/java/io/kestra/plugin/ai/provider/ReturnThinkingForwardingTest.java",
+   "status": "added",
+   "additions": 67,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,67 @@\n+package io.kestra.plugin.ai.provider;\n+\n+import java.util.Map;\n+\n+import org.junit.jupiter.api.Test;\n+\n+import io.kestra.core.context.TestRunContextFactory;\n+import io.kestra.core.junit.annotations.KestraTest;\n+import io.kestra.core.models.property.Property;\n+import io.kestra.plugin.ai.domain.ChatConfiguration;\n+\n+import dev.langchain4j.model.chat.ChatModel;\n+import dev.langchain4j.model.openai.OpenAiChatModel;\n+import jakarta.inject.Inject;\n+\n+import static org.assertj.core.api.Assertions.assertThat;\n+\n+@KestraTest\n+class ReturnThinkingForwardingTest {\n+\n+    @Inject\n+    private TestRunContextFactory runContextFactory;\n+\n+    @Test\n+    void openRouter_shouldForwardReturnThinking() throws Exception {\n+        assertThat(thinking(openRouter(ChatConfiguration.empty()))).isFalse();\n+        assertThat(thinking(openRouter(withReturnThinking(true)))).isTrue();\n+        assertThat(thinking(openRouter(withReturnThinking(false)))).isFalse();\n+    }\n+\n+    @Test\n+    void gitHubModels_shouldForwardReturnThinking() throws Exception {\n+        assertThat(thinking(gitHubModels(ChatConfiguration.empty()))).isFalse();\n+        assertThat(thinking(gitHubModels(withReturnThinking(true)))).isTrue();\n+        assertThat(thinking(gitHubModels(withReturnThinking(false)))).isFalse();\n+    }\n+\n+    // OpenAiChatModel keeps the flag in a private field and exposes no getter.\n+    private static boolean thinking(ChatModel model) throws Exception {\n+        var field = OpenAiChatModel.class.getDeclaredField(\"returnThinking\");\n+        field.setAccessible(true);\n+        return field.getBoolean(model);\n+    }\n+\n+    private static ChatConfiguration withReturnThinking(boolean value) {\n+        return ChatConfiguration.builder().returnThinking(Property.ofValue(value)).build();\n+    }\n+\n+    // Building the model does not call any remote API.\n+    private ChatModel openRouter(ChatConfiguration configuration) throws Exception {\n+        var provider = OpenRouter.builder()\n+            .type(OpenRouter.class.getName())\n+            .modelName(Property.ofValue(\"openai/gpt-4o\"))\n+            .apiKey(Property.ofValue(\"test-key\"))\n+            .build();\n+        return provider.chatModel(runContextFactory.of(Map.of()), configuration);\n+    }\n+\n+    private ChatModel gitHubModels(ChatConfiguration configuration) throws Exception {\n+        var provider = GitHubModels.builder()\n+            .type(GitHubModels.class.getName())\n+            .modelName(Property.ofValue(\"gpt-4o\"))\n+            .gitHubToken(Property.ofValue(\"test-token\"))\n+            .build();\n+        return provider.chatModel(runContextFactory.of(Map.of()), configuration);\n+    }\n+}"
+  }
+ ],
+ "test_files": [
+  "src/test/java/io/kestra/plugin/ai/provider/ReturnThinkingForwardingTest.java"
+ ]
+}

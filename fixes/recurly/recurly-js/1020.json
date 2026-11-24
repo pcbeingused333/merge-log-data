@@ -1,0 +1,26 @@
+{
+ "repo": "recurly/recurly-js",
+ "number": 1020,
+ "url": "https://github.com/recurly/recurly-js/pull/1020",
+ "title": "fix(paypal): fall back when Braintree scripts fail to load",
+ "merged_at": "2026-11-24T00:32:24Z",
+ "files": [
+  {
+   "filename": "lib/recurly/paypal/strategy/braintree.js",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 2,
+   "patch": "@@ -17,8 +17,10 @@ export class BraintreeStrategy extends PayPalStrategy {\n     this.config.clientAuthorization = options.braintree.clientAuthorization;\n \n     BraintreeLoader.loadModules('paypal', 'dataCollector')\n-      .catch(cause => this.error('paypal-load-error', { cause }))\n-      .then(() => this.initialize());\n+      .then(\n+        () => this.initialize(),\n+        cause => this.fail('paypal-load-error', { cause })\n+      );\n   }\n \n   /**"
+  },
+  {
+   "filename": "test/unit/paypal/paypal.test.js",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -1,4 +1,5 @@\n import assert from 'assert';\n+import BraintreeLoader from '../../../lib/util/braintree-loader';\n import { DirectStrategy } from '../../../lib/recurly/paypal/strategy/direct';\n import { BraintreeStrategy } from '../../../lib/recurly/paypal/strategy/braintree';\n import {\n@@ -71,6 +72,30 @@ describe('Recurly.PayPal', function () {\n     });\n   });\n \n+  it('falls back to direct PayPal when Braintree modules fail to load', async function () {\n+    const cause = new Error('Braintree script failed to load');\n+    this.sandbox.stub(BraintreeLoader, 'loadModules').rejects(cause);\n+    const initialize = this.sandbox.stub(BraintreeStrategy.prototype, 'initialize');\n+    const onError = this.sandbox.spy();\n+    const onFail = this.sandbox.spy();\n+    this.paypal = this.recurly.PayPal({ braintree: { clientAuthorization: 'valid' } });\n+    this.paypal.on('error', onError);\n+    this.paypal.strategy.on('fail', onFail);\n+\n+    // Let the load rejection and any chained initialization settle.\n+    await new Promise(resolve => setTimeout(resolve, 0));\n+\n+    sinon.assert.calledOnce(onError);\n+    const error = onError.firstCall.args[0];\n+    assert.strictEqual(error.code, 'paypal-load-error');\n+    assert.strictEqual(error.cause, cause);\n+    sinon.assert.notCalled(initialize);\n+    sinon.assert.calledOnce(onFail);\n+    assert.strictEqual(onFail.firstCall.args[0], error);\n+    assert(this.paypal.strategy instanceof DirectStrategy);\n+    assert.strictEqual(this.paypal.isReady, true);\n+  });\n+\n   describe('when configured using PayPal Complete', function () {\n     const validOpts = { payPalComplete: true };\n "
+  }
+ ],
+ "test_files": [
+  "test/unit/paypal/paypal.test.js"
+ ]
+}

@@ -1,0 +1,40 @@
+{
+ "repo": "open-multi-agent/open-multi-agent",
+ "number": 694,
+ "url": "https://github.com/open-multi-agent/open-multi-agent/pull/694",
+ "title": "fix(core): forward Gemini topK and keep sampling penalties off the request",
+ "merged_at": "2026-11-24T08:22:29Z",
+ "files": [
+  {
+   "filename": "docs/providers.md",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -168,7 +168,7 @@ targets and are forwarded only where the wire format accepts them.\n |---|---|---|---|---|---|---|---|\n | `temperature` | `temperature` | yes | yes | yes | yes | yes | yes |\n | `topP` | `top_p` | yes | yes | yes | no | yes (`topP`) | yes (`topP`) |\n-| `topK` | `top_k` | yes | yes | no | no | no | yes, via `additionalModelRequestFields` |\n+| `topK` | `top_k` | yes | yes | no | no | yes (`topK`) | yes, via `additionalModelRequestFields` |\n | `minP` | `min_p` | no | yes | no | no | no | no |\n | `frequencyPenalty` | `frequency_penalty` | no | yes | yes | no | no | no |\n | `presencePenalty` | `presence_penalty` | no | yes | yes | no | no | no |\n@@ -206,6 +206,12 @@ the rest) keep them. `extraBody` is still copied into\n not contain the model id is left unchanged, because the id alone does not say\n which model it routes to.\n \n+Gemini forwards `topK` on `GenerateContentConfig`. Gemini 3.6 and later\n+ignore a custom value; earlier models accept it. The adapter does not send\n+`frequencyPenalty` or `presencePenalty`. The Gemini API returns 400\n+(\"Penalty is not enabled\") for those fields on Gemini 2.5 and on Gemini\n+3.x Flash, so a shared agent config that sets them stays safe.\n+\n `extraBody` is spread between the sampling parameters and the structural fields.\n It can therefore override `temperature`, `topP`, and the rest, but not\n transport-level fields (`model`, `messages`, `tools`, `stream`, and Anthropic's"
+  },
+  {
+   "filename": "packages/core/src/llm/gemini.ts",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -280,6 +280,13 @@ function toGeminiThinkingConfig(\n \n /**\n  * Build the {@link GenerateContentConfig} shared by chat() and stream().\n+ *\n+ * `topK` is forwarded. Earlier Gemini models accept it. Gemini 3.6 and\n+ * later ignore a custom value rather than rejecting the request.\n+ * `frequencyPenalty` and `presencePenalty` stay off the request: the\n+ * Gemini API returns 400 (\"Penalty is not enabled\") for those fields on\n+ * Gemini 2.5 and on Gemini 3.x Flash, so a shared agent config must not\n+ * start failing here.\n  */\n function buildConfig(\n   options: LLMChatOptions | LLMStreamOptions,\n@@ -288,6 +295,7 @@ function buildConfig(\n     maxOutputTokens: options.maxTokens ?? 4096,\n     temperature: options.temperature,\n     topP: options.topP,\n+    topK: options.topK,\n     systemInstruction: options.systemPrompt,\n     tools: options.tools ? toGeminiTools(options.tools) : undefined,\n     toolConfig: options.tools"
+  },
+  {
+   "filename": "packages/core/src/types.ts",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 5,
+   "patch": "@@ -1127,13 +1127,15 @@ export interface AgentConfig {\n   /**\n    * OpenAI-track sampling penalty for token frequency. Forwarded to OpenAI\n    * cloud and OpenAI-compatible local servers (vLLM, llama-server). The\n-   * Anthropic adapter ignores this field.\n+   * Gemini adapter does not send this field: the API returns 400 when it\n+   * is set on Gemini 2.5 and Gemini 3.x Flash. The Anthropic adapter\n+   * ignores this field.\n    */\n   readonly frequencyPenalty?: number\n   /**\n    * OpenAI-track sampling penalty for token presence. Forwarded to OpenAI\n-   * cloud and OpenAI-compatible local servers. The Anthropic adapter\n-   * ignores this field.\n+   * cloud and OpenAI-compatible local servers. The Gemini adapter does not\n+   * send this field. The Anthropic adapter ignores this field.\n    */\n   readonly presencePenalty?: number\n   /**\n@@ -1142,8 +1144,10 @@ export interface AgentConfig {\n    */\n   readonly topP?: number\n   /**\n-   * Top-k sampling cutoff. Forwarded to Anthropic and OpenAI-compatible\n-   * local servers. Cloud OpenAI rejects this parameter.\n+   * Top-k sampling cutoff. Forwarded to Anthropic, Gemini, and\n+   * OpenAI-compatible local servers. Cloud OpenAI rejects this parameter.\n+   * Gemini 3.6 and later ignore a custom value; earlier Gemini models\n+   * accept it.\n    */\n   readonly topK?: number\n   /**"
+  },
+  {
+   "filename": "packages/core/tests/gemini-adapter-contract.test.ts",
+   "status": "modified",
+   "additions": 61,
+   "deletions": 0,
+   "patch": "@@ -261,6 +261,67 @@ describe('GeminiAdapter (contract)', () => {\n       expect(mockGenerateContentStream.mock.calls[0][0].config.topP).toBe(0.85)\n     })\n \n+    it('forwards topK and omits frequencyPenalty and presencePenalty for chat() and stream()', async () => {\n+      const sampling = { topK: 40, frequencyPenalty: 0.3, presencePenalty: 0.6 }\n+      mockGenerateContent.mockResolvedValue(makeGeminiResponse([{ text: 'ok' }]))\n+      await adapter.chat([textMsg('user', 'Hi')], chatOpts(sampling))\n+      const config = mockGenerateContent.mock.calls[0][0].config\n+      expect(config.topK).toBe(40)\n+      expect(config).not.toHaveProperty('frequencyPenalty')\n+      expect(config).not.toHaveProperty('presencePenalty')\n+\n+      mockGenerateContentStream.mockResolvedValue(\n+        (async function* () {\n+          yield makeGeminiResponse([{ text: 'ok' }])\n+        })(),\n+      )\n+      await collectEvents(adapter.stream([textMsg('user', 'Hi')], chatOpts(sampling)))\n+      const streamed = mockGenerateContentStream.mock.calls[0][0].config\n+      expect(streamed.topK).toBe(40)\n+      expect(streamed).not.toHaveProperty('frequencyPenalty')\n+      expect(streamed).not.toHaveProperty('presencePenalty')\n+    })\n+\n+    it('forwards topK and omits penalties for every Gemini model id', async () => {\n+      const sampling = { topK: 40, frequencyPenalty: 0.3, presencePenalty: 0.6 }\n+      for (const model of [\n+        'gemini-2.5-flash',\n+        'gemini-2.5-pro',\n+        'models/gemini-2.5-flash',\n+        'gemini-3-flash',\n+        'gemini-3.5-flash',\n+        'gemini-3.6-flash',\n+        'Gemini-3.6-Flash',\n+        'models/gemini-3.6-flash-lite',\n+        'gemini-3.8-flash',\n+        'gemini-4-flash',\n+        'gemini-flash-latest',\n+      ]) {\n+        mockGenerateContent.mockReset()\n+        mockGenerateContent.mockResolvedValue(makeGeminiResponse([{ text: 'ok' }]))\n+        await adapter.chat([textMsg('user', 'Hi')], chatOpts({ model, ...sampling }))\n+        const config = mockGenerateContent.mock.calls[0][0].config\n+        expect(config.topK).toBe(40)\n+        expect(config).not.toHaveProperty('frequencyPenalty')\n+        expect(config).not.toHaveProperty('presencePenalty')\n+      }\n+\n+      mockGenerateContentStream.mockReset()\n+      mockGenerateContentStream.mockResolvedValue(\n+        (async function* () {\n+          yield makeGeminiResponse([{ text: 'ok' }])\n+        })(),\n+      )\n+      await collectEvents(adapter.stream(\n+        [textMsg('user', 'Hi')],\n+        chatOpts({ model: 'gemini-2.5-pro', ...sampling }),\n+      ))\n+      const streamed = mockGenerateContentStream.mock.calls[0][0].config\n+      expect(streamed.topK).toBe(40)\n+      expect(streamed).not.toHaveProperty('frequencyPenalty')\n+      expect(streamed).not.toHaveProperty('presencePenalty')\n+    })\n+\n     it('omits tools/toolConfig when no tools provided', async () => {\n       mockGenerateContent.mockResolvedValue(makeGeminiResponse([{ text: 'ok' }]))\n "
+  }
+ ],
+ "test_files": [
+  "packages/core/tests/gemini-adapter-contract.test.ts"
+ ]
+}

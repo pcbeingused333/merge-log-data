@@ -1,0 +1,33 @@
+{
+ "repo": "pypa/pipenv",
+ "number": 6793,
+ "url": "https://github.com/pypa/pipenv/pull/6793",
+ "title": "fix(graph): stop Rich from wrapping --json/--json-tree/--bare output",
+ "merged_at": "2026-11-24T04:08:49Z",
+ "files": [
+  {
+   "filename": "news/6793.bugfix.rst",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+Fix ``pipenv graph --json``, ``--json-tree`` and ``--bare`` printing invalid JSON when a line is wider than the terminal, by no longer letting Rich wrap or interpret markup in the output."
+  },
+  {
+   "filename": "pipenv/routines/graph.py",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 3,
+   "patch": "@@ -63,7 +63,12 @@ def do_graph(project, bare=False, json=False, json_tree=False, reverse=False):\n                 raise exceptions.JSONParseError(c.stdout, c.stderr)\n             else:\n                 data += [d for d in parsed if d[\"package\"][\"key\"] not in BAD_PACKAGES]\n-            console.print(simplejson.dumps(data, indent=4))\n+            console.print(\n+                simplejson.dumps(data, indent=4),\n+                markup=False,\n+                highlight=False,\n+                soft_wrap=True,\n+            )\n             sys.exit(0)\n         elif json_tree:\n \n@@ -84,7 +89,12 @@ def traverse(obj):\n                 raise exceptions.JSONParseError(c.stdout, c.stderr)\n             else:\n                 data = traverse(parsed)\n-                console.print(simplejson.dumps(data, indent=4))\n+                console.print(\n+                    simplejson.dumps(data, indent=4),\n+                    markup=False,\n+                    highlight=False,\n+                    soft_wrap=True,\n+                )\n                 sys.exit(0)\n         else:\n             for line in c.stdout.strip().split(\"\\n\"):\n@@ -101,7 +111,7 @@ def traverse(obj):\n                 else:\n                     console.print(escaped_line)\n     else:\n-        console.print(rich_escape(c.stdout))\n+        console.print(c.stdout, markup=False, highlight=False, soft_wrap=True)\n \n     if c.returncode != 0:\n         err.print("
+  },
+  {
+   "filename": "tests/unit/test_graph_json_output.py",
+   "status": "added",
+   "additions": 67,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,67 @@\n+\"\"\"``pipenv graph --json`` output must stay valid JSON whatever the terminal width.\"\"\"\n+\n+import io\n+import json\n+import sys\n+from unittest import mock\n+\n+import pytest\n+\n+from pipenv.patched.pip._vendor.rich.console import Console\n+from pipenv.routines import graph\n+from pipenv.routines.graph import do_graph\n+\n+LONG_NAME = \"a-very-long-package-name-\" + \"x\" * 75  # 100 characters\n+\n+JSON_OUTPUT = json.dumps(\n+    [\n+        {\n+            \"package\": {\n+                \"key\": LONG_NAME,\n+                \"package_name\": LONG_NAME,\n+                \"installed_version\": \"1.0.0\",\n+            },\n+            \"dependencies\": [],\n+        }\n+    ]\n+)\n+JSON_TREE_OUTPUT = json.dumps(\n+    [\n+        {\n+            \"key\": LONG_NAME,\n+            \"package_name\": LONG_NAME,\n+            \"installed_version\": \"1.0.0\",\n+            \"required_version\": \"1.0.0\",\n+            \"dependencies\": [],\n+        }\n+    ]\n+)\n+\n+\n+@pytest.mark.parametrize(\n+    (\"kwargs\", \"stdout\"),\n+    [\n+        ({\"json\": True}, JSON_OUTPUT),\n+        ({\"json_tree\": True}, JSON_TREE_OUTPUT),\n+        ({\"json\": True, \"bare\": True}, JSON_OUTPUT),\n+    ],\n+)\n+def test_graph_json_is_not_wrapped_by_rich(monkeypatch, kwargs, stdout):\n+    buffer = io.StringIO()\n+    # A narrow, non-terminal console wraps long lines unless told not to.\n+    console = Console(file=buffer, width=80, force_terminal=False)\n+    monkeypatch.setattr(graph, \"console\", console)\n+    monkeypatch.setattr(sys, \"stdout\", buffer)\n+    result = mock.MagicMock(stdout=stdout, stderr=\"\", returncode=0)\n+    monkeypatch.setattr(graph, \"run_command\", lambda *a, **k: result)\n+    project = mock.MagicMock()\n+    project.venv_locator.python.return_value = sys.executable\n+    project.venv_locator.exists = True\n+    project.s.is_verbose.return_value = False\n+\n+    with pytest.raises(SystemExit) as excinfo:\n+        do_graph(project, **kwargs)\n+\n+    assert excinfo.value.code == 0\n+    parsed = json.loads(buffer.getvalue())\n+    assert LONG_NAME in json.dumps(parsed)"
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_graph_json_output.py"
+ ]
+}

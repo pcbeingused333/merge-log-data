@@ -1,0 +1,26 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 736,
+ "url": "https://github.com/labring/aiproxy/pull/736",
+ "title": "fix(ollama): convert string stop to a list of stop sequences",
+ "merged_at": "2026-11-24T02:09:34Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/ollama/main.go",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -37,14 +37,17 @@ func ConvertRequest(meta *meta.Meta, req *http.Request) (adaptor.ConvertResult,\n \t\t\tPresencePenalty:  request.PresencePenalty,\n \t\t\tNumPredict:       request.MaxTokens,\n \t\t\tNumCtx:           request.NumCtx,\n-\t\t\tStop:             request.Stop,\n \t\t},\n \t\tStream:   request.Stream,\n \t\tMessages: make([]Message, 0, len(request.Messages)),\n \t\tPrompt:   request.Prompt,\n \t\tTools:    make([]*Tool, 0, len(request.Tools)),\n \t}\n \n+\tif stop := utils.ParseOpenAIStopSequences(request.Stop); len(stop) > 0 {\n+\t\tollamaRequest.Options.Stop = stop\n+\t}\n+\n \tif request.ResponseFormat != nil {\n \t\tif request.ResponseFormat.Type == \"json_schema\" &&\n \t\t\trequest.ResponseFormat.JSONSchema != nil &&"
+  },
+  {
+   "filename": "core/relay/adaptor/ollama/main_test.go",
+   "status": "modified",
+   "additions": 44,
+   "deletions": 0,
+   "patch": "@@ -207,3 +207,47 @@ func TestConvertRequest_ReasoningEffortToThink(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestConvertRequest_StopSequences(t *testing.T) {\n+\ttests := []struct {\n+\t\tname string\n+\t\tstop any\n+\t\twant []any\n+\t}{\n+\t\t{name: \"string\", stop: \"END\", want: []any{\"END\"}},\n+\t\t{name: \"array\", stop: []string{\"a\", \"b\"}, want: []any{\"a\", \"b\"}},\n+\t}\n+\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tm := meta.NewMeta(\n+\t\t\t\t&model.Channel{Type: model.ChannelTypeOllama},\n+\t\t\t\t0,\n+\t\t\t\t\"llama2\",\n+\t\t\t\tmodel.ModelConfig{},\n+\t\t\t)\n+\n+\t\t\tjsonData, _ := sonic.Marshal(relaymodel.GeneralOpenAIRequest{\n+\t\t\t\tModel:    \"llama2\",\n+\t\t\t\tMessages: []relaymodel.Message{{Role: \"user\", Content: \"hi\"}},\n+\t\t\t\tStop:     tt.stop,\n+\t\t\t})\n+\t\t\treq, _ := http.NewRequestWithContext(\n+\t\t\t\tt.Context(),\n+\t\t\t\thttp.MethodPost,\n+\t\t\t\t\"http://localhost:11434/api/chat\",\n+\t\t\t\tbytes.NewBuffer(jsonData),\n+\t\t\t)\n+\n+\t\t\tresult, err := ollama.ConvertRequest(m, req)\n+\t\t\tassert.NoError(t, err)\n+\n+\t\t\tbodyBytes, _ := io.ReadAll(result.Body)\n+\n+\t\t\tvar ollamaReq ollama.ChatRequest\n+\n+\t\t\tassert.NoError(t, json.Unmarshal(bodyBytes, &ollamaReq))\n+\t\t\tassert.Equal(t, tt.want, ollamaReq.Options.Stop)\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/ollama/main_test.go"
+ ]
+}

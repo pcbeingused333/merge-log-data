@@ -1,0 +1,26 @@
+{
+ "repo": "agentscope-ai/QwenPaw",
+ "number": 8818,
+ "url": "https://github.com/agentscope-ai/QwenPaw/pull/8818",
+ "title": "fix(plugins): log unhandled errors in RPC request handlers",
+ "merged_at": "2026-11-24T02:24:09Z",
+ "files": [
+  {
+   "filename": "src/qwenpaw/plugins/execution/rpc.py",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 2,
+   "patch": "@@ -7,6 +7,7 @@\n import contextlib\n import inspect\n import json\n+import logging\n from collections.abc import Callable, Mapping\n from contextvars import ContextVar\n from dataclasses import dataclass\n@@ -40,6 +41,9 @@\n _TASK_SHUTDOWN_TIMEOUT = 0.1\n \n \n+logger = logging.getLogger(__name__)\n+\n+\n def _reject_non_finite(value: str) -> object:\n     \"\"\"Reject non-standard JSON numeric constants.\"\"\"\n     raise ValueError(f\"non-finite JSON constant is not allowed: {value}\")\n@@ -602,7 +606,11 @@ async def _dispatch_request(\n                 \"request cancelled\",\n                 data={\"reason_code\": \"REQUEST_CANCELLED\"},\n             )\n-        except Exception as exc:\n+        except Exception:\n+            logger.exception(\n+                \"Unhandled error in RPC handler for method %r\",\n+                request.method,\n+            )\n             if await self._abort_response_publication(\n                 publication,\n                 response_sent,\n@@ -615,7 +623,6 @@ async def _dispatch_request(\n                 \"internal error\",\n                 data={\"reason_code\": \"INTERNAL_ERROR\"},\n             )\n-            _ = exc\n         finally:\n             _CURRENT_CANCELLATION.reset(token)\n "
+  },
+  {
+   "filename": "tests/unit/plugins/test_rpc_internal_error_logging.py",
+   "status": "added",
+   "additions": 43,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,43 @@\n+# -*- coding: utf-8 -*-\n+\"\"\"Internal handler failures in the RPC peer must be logged.\"\"\"\n+\n+from __future__ import annotations\n+\n+import logging\n+\n+from qwenpaw.plugins.execution.models import RpcRequest\n+from qwenpaw.plugins.execution.rpc import RpcPeer, _RequestCancellation\n+\n+\n+class _FakeTransport:\n+    def __init__(self) -> None:\n+        self.sent: list[str] = []\n+\n+    async def send(\n+        self,\n+        payload: str,\n+        *args: object,\n+        **kwargs: object,\n+    ) -> None:\n+        self.sent.append(payload)\n+\n+\n+async def test_handler_exception_is_logged_and_error_returned(caplog) -> None:\n+    transport = _FakeTransport()\n+    peer = RpcPeer(transport, params_validator=lambda _m, p: p)\n+\n+    def boom(_params: object, _request: object) -> object:\n+        raise RuntimeError(\"plugin handler exploded\")\n+\n+    peer.register_method(\"demo\", boom)\n+    with caplog.at_level(logging.ERROR):\n+        await peer._dispatch_request(  # pylint: disable=protected-access\n+            RpcRequest(id=1, method=\"demo\", params={}),\n+            _RequestCancellation(),\n+        )\n+\n+    assert any(\"INTERNAL_ERROR\" in sent for sent in transport.sent)\n+    assert any(\n+        \"plugin handler exploded\" in (r.exc_text or r.getMessage())\n+        for r in caplog.records\n+    )"
+  }
+ ],
+ "test_files": [
+  "tests/unit/plugins/test_rpc_internal_error_logging.py"
+ ]
+}

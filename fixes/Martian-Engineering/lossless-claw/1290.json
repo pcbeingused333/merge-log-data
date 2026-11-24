@@ -1,0 +1,33 @@
+{
+ "repo": "Martian-Engineering/lossless-claw",
+ "number": 1290,
+ "url": "https://github.com/Martian-Engineering/lossless-claw/pull/1290",
+ "title": "fix(tools): treat conversationId <= 0 as not provided in LCM recall tools",
+ "merged_at": "2026-11-24T05:39:40Z",
+ "files": [
+  {
+   "filename": ".changeset/conversation-id-zero.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+\"@martian-engineering/lossless-claw\": patch\n+---\n+\n+Treat `conversationId` values of 0 or below as \"not provided\" in the LCM recall tools, so models on OpenAI strict tool schemas (which fill every optional property) search the current conversation instead of getting empty results."
+  },
+  {
+   "filename": "src/tools/lcm-conversation-scope.ts",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -111,10 +111,16 @@ export async function resolveLcmConversationScope(input: {\n   const isolateCurrentSessionFamily = isIsolatedCronSessionKey(normalizedSessionKey);\n   let allowedConversationIds: number[] = [];\n \n-  const explicitConversationId =\n+  // Conversation IDs start at 1. Strict tool schemas (e.g. OpenAI) fill every\n+  // optional property, sending 0 for \"not provided\", so treat <= 0 as unset.\n+  const requestedConversationId =\n     typeof params.conversationId === \"number\" && Number.isFinite(params.conversationId)\n       ? Math.trunc(params.conversationId)\n       : undefined;\n+  const explicitConversationId =\n+    requestedConversationId != null && requestedConversationId > 0\n+      ? requestedConversationId\n+      : undefined;\n \n   if (isDelegatedSession) {\n     const delegatedGrantId = resolveDelegatedExpansionGrantId(normalizedSessionKey!);"
+  },
+  {
+   "filename": "test/lcm-delegated-conversation-scope.test.ts",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -130,4 +130,14 @@ describe(\"delegated own-conversation authorization\", () => {\n     expect(scope).toMatchObject({ delegated: false, conversationId: parentId });\n     expect(scope.conversationIds).toEqual([parentId]);\n   });\n+\n+  it.each([0, -1])(\"treats conversationId %i as not provided\", async (id) => {\n+    const scope = await resolveLcmConversationScope({\n+      lcm, deps, sessionKey: \"agent:main:main\", sessionId: \"parent-runtime\",\n+      params: { conversationId: id },\n+    });\n+    expect(scope.error).toBeUndefined();\n+    expect(scope).toMatchObject({ delegated: false, conversationId: parentId });\n+    expect(scope.conversationIds).toEqual([parentId]);\n+  });\n });"
+  }
+ ],
+ "test_files": [
+  "test/lcm-delegated-conversation-scope.test.ts"
+ ]
+}

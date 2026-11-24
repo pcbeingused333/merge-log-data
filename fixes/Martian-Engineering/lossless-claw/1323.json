@@ -1,0 +1,33 @@
+{
+ "repo": "Martian-Engineering/lossless-claw",
+ "number": 1323,
+ "url": "https://github.com/Martian-Engineering/lossless-claw/pull/1323",
+ "title": "fix: forward summary thinking effort to runtime llm",
+ "merged_at": "2026-11-24T05:39:46Z",
+ "files": [
+  {
+   "filename": ".changeset/summary-thinking-runtime-bridge.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+\"@martian-engineering/lossless-claw\": patch\n+---\n+\n+Forward summary thinking effort to the host runtime so initial summarization requests use the configured low reasoning effort instead of the provider default."
+  },
+  {
+   "filename": "src/plugin/index.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -1397,6 +1397,7 @@ function createLcmDependencies(\n       const modelRef = runtimeModelOverride?.modelRef.trim();\n       const runtimeLlm = runtimeLlmComplete ?? getRuntimeLlm(api)?.complete;\n       const isBoundRuntimeLlm = !!runtimeLlmComplete;\n+      const effectiveReasoning = reasoning?.trim() || reasoningIfSupported?.trim();\n       const requestMetadata = {\n         request_provider: providerId ?? \"(runtime)\",\n         request_model: modelId || \"(runtime)\",\n@@ -1434,7 +1435,7 @@ function createLcmDependencies(\n           // agentId. Plugin-wide api.runtime.llm.complete is gateway-scoped and rejects\n           // target-agent overrides unless OpenClaw is explicitly configured otherwise.\n           ...(isBoundRuntimeLlm && agentId?.trim() ? { agentId: agentId.trim() } : {}),\n-          ...(reasoning !== undefined ? { reasoning } : {}),\n+          ...(effectiveReasoning ? { reasoning: effectiveReasoning } : {}),\n         });\n         const text = typeof result.text === \"string\" ? result.text : \"\";\n         return {"
+  },
+  {
+   "filename": "test/index-runtime-llm-complete.test.ts",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 0,
+   "patch": "@@ -139,6 +139,7 @@ function getRegisteredEngine(api: OpenClawPluginApi, getFactory: () => Registere\n         messages: Array<{ role: string; content: unknown }>;\n         maxTokens: number;\n         temperature?: number;\n+        reasoning?: string;\n         reasoningIfSupported?: string;\n       }) => Promise<CompletionResult>;\n       resolveModel: (modelRef?: string, providerHint?: string) => {\n@@ -198,6 +199,7 @@ describe(\"createLcmDependencies.complete runtime.llm bridge\", () => {\n         systemPrompt: \"System summary policy.\",\n         purpose: \"lossless-claw compaction summarization\",\n         authProfileId: \"openai-codex:work\",\n+        reasoning: \"low\",\n       });\n       expect(result).toMatchObject({\n         content: [{ type: \"text\", text: \"summary output\" }],\n@@ -211,6 +213,38 @@ describe(\"createLcmDependencies.complete runtime.llm bridge\", () => {\n     }\n   });\n \n+  it.each([\n+    { reasoning: \"high\", reasoningIfSupported: \"low\", expected: \"high\" },\n+    { reasoning: \" high \", reasoningIfSupported: \" low \", expected: \"high\" },\n+    { reasoning: \" \", reasoningIfSupported: \" low \", expected: \"low\" },\n+    { reasoning: undefined, reasoningIfSupported: undefined, expected: undefined },\n+    { reasoning: \" \", reasoningIfSupported: \" \", expected: undefined },\n+  ])(\"forwards effective reasoning to the host: %j\", async ({ reasoning, reasoningIfSupported, expected }) => {\n+    const runtimeLlmComplete = vi.fn(async (_request: unknown) => ({ text: \"summary output\" }));\n+    const { api, getFactory, dbPath } = buildApi({ runtimeLlmComplete });\n+    const engine = getRegisteredEngine(api, getFactory);\n+\n+    try {\n+      await engine.deps.complete({\n+        model: \"gpt-5.4\",\n+        messages: [{ role: \"user\", content: \"Summarize this.\" }],\n+        maxTokens: 256,\n+        reasoning,\n+        reasoningIfSupported,\n+      });\n+\n+      expect(runtimeLlmComplete).toHaveBeenCalledTimes(1);\n+      const request = runtimeLlmComplete.mock.calls[0]?.[0];\n+      if (expected === undefined) {\n+        expect(request).not.toHaveProperty(\"reasoning\");\n+      } else {\n+        expect(request).toHaveProperty(\"reasoning\", expected);\n+      }\n+    } finally {\n+      closeLcmConnection(dbPath);\n+    }\n+  });\n+\n   it(\"keeps ignored-session compaction safe when the host SDK delegate is unavailable\", async () => {\n     const { api, getFactory, dbPath } = buildApi();\n     const engine = getRegisteredEngine(api, getFactory);"
+  }
+ ],
+ "test_files": [
+  "test/index-runtime-llm-complete.test.ts"
+ ]
+}

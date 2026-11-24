@@ -1,0 +1,26 @@
+{
+ "repo": "mozilla-ai/any-llm",
+ "number": 1624,
+ "url": "https://github.com/mozilla-ai/any-llm/pull/1624",
+ "title": "fix(groq): respect configured base URL for responses",
+ "merged_at": "2026-11-24T01:46:59Z",
+ "files": [
+  {
+   "filename": "src/any_llm/providers/groq/groq.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 2,
+   "patch": "@@ -129,8 +129,10 @@ def _convert_list_models_response(response: Any) -> Sequence[Model]:\n     @override\n     def _init_client(self, api_key: str | None = None, api_base: str | None = None, **kwargs: Any) -> None:\n         self.api_key = api_key\n+        base_url = kwargs.pop(\"base_url\", None)\n+        self.api_base = str(base_url or api_base or \"https://api.groq.com\").rstrip(\"/\").removesuffix(\"/openai/v1\")\n         self.kwargs = kwargs\n-        self.client = AsyncGroq(api_key=api_key, **kwargs)\n+        self.client = AsyncGroq(api_key=api_key, base_url=self.api_base, **kwargs)\n \n     async def _stream_async_completion(\n         self, params: CompletionParams, **kwargs: Any\n@@ -198,7 +200,7 @@ async def _aresponses(\n             raise UnsupportedParameterError(parameter, self.PROVIDER_NAME)\n \n         client = AsyncOpenAI(\n-            base_url=\"https://api.groq.com/openai/v1\",\n+            base_url=f\"{self.api_base}/openai/v1\",\n             api_key=self.api_key,\n             **self.kwargs,\n         )"
+  },
+  {
+   "filename": "tests/unit/providers/test_groq_provider.py",
+   "status": "modified",
+   "additions": 59,
+   "deletions": 0,
+   "patch": "@@ -1,5 +1,6 @@\n from unittest.mock import AsyncMock, Mock, patch\n \n+import httpx\n import pytest\n from pydantic import BaseModel\n \n@@ -769,3 +770,61 @@ async def test_speech_rejects_instructions() -> None:\n             )\n \n     create.assert_not_called()\n+\n+\n+@pytest.mark.asyncio\n+@pytest.mark.parametrize(\n+    (\"api_base\", \"env_base\", \"base_url\", \"expected_root\"),\n+    [\n+        (None, None, None, \"https://api.groq.com\"),\n+        (None, \"https://api.groq.com\", None, \"https://api.groq.com\"),\n+        (None, \"https://proxy.example\", None, \"https://proxy.example\"),\n+        (None, \"https://proxy.example/openai/v1/\", None, \"https://proxy.example\"),\n+        (\"https://proxy.example\", None, None, \"https://proxy.example\"),\n+        (\"https://proxy.example/openai/v1\", None, None, \"https://proxy.example\"),\n+        (\"https://proxy.example/openai/v1/\", \"https://env.example\", None, \"https://proxy.example\"),\n+        (None, None, \"https://client.example\", \"https://client.example\"),\n+        (None, \"https://env.example\", \"https://client.example\", \"https://client.example\"),\n+        (\"https://api.example\", \"https://env.example\", \"https://client.example/openai/v1/\", \"https://client.example\"),\n+    ],\n+)\n+async def test_chat_and_responses_use_configured_base_url(\n+    monkeypatch: pytest.MonkeyPatch,\n+    api_base: str | None,\n+    env_base: str | None,\n+    base_url: str | None,\n+    expected_root: str,\n+) -> None:\n+    from any_llm.providers.groq.groq import GroqProvider\n+\n+    monkeypatch.delenv(\"GROQ_BASE_URL\", raising=False)\n+    if env_base is not None:\n+        monkeypatch.setenv(\"GROQ_BASE_URL\", env_base)\n+\n+    requests: list[httpx.Request] = []\n+\n+    def handle(request: httpx.Request) -> httpx.Response:\n+        requests.append(request)\n+        if request.url.path.endswith(\"/responses\"):\n+            return httpx.Response(200, json=_make_openai_response(\"hi\").model_dump(mode=\"json\"))\n+        return httpx.Response(\n+            200,\n+            json={\n+                \"id\": \"chat-1\",\n+                \"object\": \"chat.completion\",\n+                \"created\": 0,\n+                \"model\": \"test-model\",\n+                \"choices\": [{\"index\": 0, \"message\": {\"role\": \"assistant\", \"content\": \"hi\"}, \"finish_reason\": \"stop\"}],\n+            },\n+        )\n+\n+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http_client:\n+        provider = GroqProvider(api_key=\"test-api-key\", api_base=api_base, http_client=http_client, base_url=base_url)\n+        await provider.acompletion(\"test-model\", [{\"role\": \"user\", \"content\": \"hello\"}])\n+        await provider.aresponses(\"test-model\", \"hello\")\n+\n+    assert [str(request.url) for request in requests] == [\n+        f\"{expected_root}/openai/v1/chat/completions\",\n+        f\"{expected_root}/openai/v1/responses\",\n+    ]\n+    assert all(request.headers[\"authorization\"] == \"Bearer test-api-key\" for request in requests)"
+  }
+ ],
+ "test_files": [
+  "tests/unit/providers/test_groq_provider.py"
+ ]
+}

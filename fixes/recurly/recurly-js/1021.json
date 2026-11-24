@@ -1,0 +1,26 @@
+{
+ "repo": "recurly/recurly-js",
+ "number": 1021,
+ "url": "https://github.com/recurly/recurly-js/pull/1021",
+ "title": "fix(google-pay): stop Braintree flow after init error",
+ "merged_at": "2026-11-24T00:31:35Z",
+ "files": [
+  {
+   "filename": "lib/recurly/google-pay/google-pay.braintree.js",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 2,
+   "patch": "@@ -24,8 +24,7 @@ export class GooglePayBraintree extends GooglePay {\n         })\n       ]))\n       .then(([dataCollector, googlePayment]) => { this.braintree = { dataCollector, googlePayment }; })\n-      .catch(err => this.emit('error', errors('google-pay-init-error', { err })))\n-      .then(() => super.configure(options));\n+      .then(() => super.configure(options), err => this.emit('error', errors('google-pay-init-error', { err })));\n   }\n \n   createButton ({ paymentOptions, isReadyToPayRequest, paymentDataRequest: recurlyPaymentDataRequest, buttonOptions }) {"
+  },
+  {
+   "filename": "test/unit/google-pay/google-pay.test.js",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -1,6 +1,7 @@\n import assert from 'assert';\n import recurlyError from '../../../lib/recurly/errors';\n import BraintreeLoader from '../../../lib/util/braintree-loader';\n+import { GooglePayBraintree } from '../../../lib/recurly/google-pay/google-pay.braintree';\n import { initRecurly, nextTick, assertDone, stubGooglePaymentAPI } from '../support/helpers';\n import dom from '../../../lib/util/dom';\n import { Risk } from '../../../lib/recurly/risk';\n@@ -176,6 +177,19 @@ function googlePayTest (integrationType) {\n             assert.match(err.message, /boom/);\n           }));\n         });\n+\n+        it('emits only the init error and does not try to create the button', function (done) {\n+          this.stubRequestAndGoogleApi();\n+          const errors = [];\n+          const createButton = this.sandbox.spy(GooglePayBraintree.prototype, 'createButton');\n+          const result = this.recurly.GooglePay(this.googlePayOpts);\n+          result.on('error', err => errors.push(err));\n+\n+          setTimeout(() => assertDone(done, () => {\n+            assert.deepEqual(errors.map(err => err.code), ['google-pay-init-error']);\n+            assert.equal(createButton.called, false);\n+          }), 50);\n+        });\n       });\n \n       it('assigns the braintree configuration', function (done) {"
+  }
+ ],
+ "test_files": [
+  "test/unit/google-pay/google-pay.test.js"
+ ]
+}

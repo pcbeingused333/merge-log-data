@@ -1,0 +1,26 @@
+{
+ "repo": "sligter/LandPPT",
+ "number": 162,
+ "url": "https://github.com/sligter/LandPPT/pull/162",
+ "title": "fix(api): honor stream=true on /v1/completions",
+ "merged_at": "2026-11-24T03:02:26Z",
+ "files": [
+  {
+   "filename": "src/landppt/api/openai_compat.py",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 1,
+   "patch": "@@ -88,7 +88,11 @@ async def create_chat_completion(request: ChatCompletionRequest):\n     except Exception as e:\n         raise HTTPException(status_code=500, detail=f\"Error generating completion: {str(e)}\")\n \n-@router.post(\"/completions\", response_model=CompletionResponse)\n+@router.post(\n+    \"/completions\",\n+    response_model=CompletionResponse,\n+    responses={200: {\"content\": {\"text/event-stream\": {}}}},\n+)\n async def create_completion(request: CompletionRequest):\n     \"\"\"\n     Create a text completion (OpenAI compatible)\n@@ -105,6 +109,12 @@ async def create_completion(request: CompletionRequest):\n         \n         response_text = _apply_stop(response_text, request.stop)\n \n+        if request.stream:\n+            return StreamingResponse(\n+                _completion_chunks(request.model, response_text),\n+                media_type=\"text/event-stream\",\n+            )\n+\n         # Calculate token usage (simplified)\n         prompt_tokens = len(prompt.split())\n         completion_tokens = len(response_text.split())\n@@ -182,6 +192,29 @@ def chunk(delta: dict, finish_reason=None) -> str:\n     yield \"data: [DONE]\\n\\n\"\n \n \n+async def _completion_chunks(model: str, response_text: str) -> AsyncGenerator[str, None]:\n+    \"\"\"\n+    Yield OpenAI-style legacy completion SSE chunks for an already generated response\n+    \"\"\"\n+    chunk_id = f\"cmpl-{uuid.uuid4().hex}\"\n+    created = int(time.time())\n+\n+    def chunk(text: str, finish_reason=None) -> str:\n+        data = {\n+            \"id\": chunk_id,\n+            \"object\": \"text_completion\",\n+            \"created\": created,\n+            \"model\": model,\n+            \"choices\": [{\"index\": 0, \"text\": text, \"finish_reason\": finish_reason}],\n+        }\n+        return f\"data: {json.dumps(data)}\\n\\n\"\n+\n+    for piece in re.findall(r\"\\S+\\s*|\\s+\", response_text):\n+        yield chunk(piece)\n+    yield chunk(\"\", \"stop\")\n+    yield \"data: [DONE]\\n\\n\"\n+\n+\n async def stream_chat_completion(request: ChatCompletionRequest) -> AsyncGenerator[str, None]:\n     \"\"\"\n     Stream chat completion responses"
+  },
+  {
+   "filename": "tests/test_openai_compat_stream.py",
+   "status": "modified",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -87,3 +87,48 @@ async def fake_completion(request):\n     )\n     assert resp.status_code == 200\n     assert resp.json()[\"choices\"][0][\"text\"] == \"line one\\n\\nline \"\n+\n+\n+@pytest.fixture\n+def completion_client(monkeypatch):\n+    async def fake_completion(request):\n+        return CONTENT\n+\n+    monkeypatch.setattr(openai_compat.ai_service, \"is_ppt_request\", lambda text: False)\n+    monkeypatch.setattr(openai_compat.ai_service, \"handle_general_completion_request\", fake_completion)\n+    app = FastAPI()\n+    app.include_router(openai_compat.router, prefix=\"/v1\")\n+    return TestClient(app)\n+\n+\n+def test_completion_stream_false_returns_json(completion_client):\n+    resp = completion_client.post(\n+        \"/v1/completions\", json={\"model\": \"landppt-v1\", \"prompt\": \"hi\", \"stream\": False}\n+    )\n+    assert resp.status_code == 200\n+    assert resp.json()[\"choices\"][0][\"text\"] == CONTENT\n+\n+\n+def test_completion_stream_true_returns_sse(completion_client):\n+    resp = completion_client.post(\n+        \"/v1/completions\", json={\"model\": \"landppt-v1\", \"prompt\": \"hi\", \"stream\": True}\n+    )\n+    assert resp.status_code == 200\n+    assert resp.headers[\"content-type\"].startswith(\"text/event-stream\")\n+    lines = [l[len(\"data: \"):] for l in resp.text.split(\"\\n\\n\") if l.startswith(\"data: \")]\n+    assert lines[-1] == \"[DONE]\"\n+    chunks = [json.loads(l) for l in lines[:-1]]\n+    assert all(c[\"object\"] == \"text_completion\" for c in chunks)\n+    assert chunks[-1][\"choices\"][0][\"finish_reason\"] == \"stop\"\n+    assert len({c[\"id\"] for c in chunks}) == 1\n+    assert \"\".join(c[\"choices\"][0][\"text\"] for c in chunks) == CONTENT\n+\n+\n+def test_completion_stream_respects_stop(completion_client):\n+    resp = completion_client.post(\n+        \"/v1/completions\",\n+        json={\"model\": \"landppt-v1\", \"prompt\": \"hi\", \"stream\": True, \"stop\": \"two\"},\n+    )\n+    lines = [l[len(\"data: \"):] for l in resp.text.split(\"\\n\\n\") if l.startswith(\"data: \")]\n+    chunks = [json.loads(l) for l in lines[:-1]]\n+    assert \"\".join(c[\"choices\"][0][\"text\"] for c in chunks) == \"line one\\n\\nline \""
+  }
+ ],
+ "test_files": [
+  "tests/test_openai_compat_stream.py"
+ ]
+}
