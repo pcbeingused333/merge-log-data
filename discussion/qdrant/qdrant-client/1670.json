@@ -15,6 +15,12 @@
    "state": "COMMENTED",
    "submitted_at": "2026-11-22T11:57:56Z",
    "body": "ran the new deadline expression (transcribed onto `dev`, sync and async, not the branch) against `qdrant/qdrant:v1.20.0` frozen 3 s with `docker pause`. with `QdrantClient(timeout=1, prefer_grpc=True)`, `upsert(..., timeout=30)` raises `DEADLINE_EXCEEDED` after 1.01 s on `dev` although the point lands; here it returns `completed` after 3.05 s. same for `batch_update_points` and the async client.\n\nthe cost coderabbit flagged is real: with the update queue loaded, `upsert(wait=True, timeout=1)` on `dev` gets status `wait_timeout` at 1.01 s in 3 of 3 runs. here the deadline equals the server's wait, so 2 `DEADLINE_EXCEEDED` and 1 `CANCELLED`, point landed each time. rest already loses it the same way, `api_client.py` uses `params[\"timeout\"]` as the httpx timeout. a deadline of `timeout + 1` gives `wait_timeout` 3 of 3.\n\n(ai-assisted, checked by me)\n"
+  },
+  {
+   "role": "none",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-23T09:56:12Z",
+   "body": "re-ran aa0aa81 transcribed onto `dev` (ff8a8db), not the branch, against `qdrant/qdrant:v1.20.0`. loaded update queue, `upsert(wait=True, timeout=1)`: `wait_timeout` 5 of 5 here, the first commit got it 1 of 5 (1 `DEADLINE_EXCEEDED`, 3 `CANCELLED`), point landed every time. server frozen 3 s: client `timeout=1` + `upsert(timeout=30)` completes after 3.06 s sync, 3.95 s async. all 9 write methods sync and async give the same result as `dev` for `timeout` None, 0 and 5. your test file: 36 pass, 18 fail on `dev`.\n\nfollow-up, not this pr: `create_collection` and `create_payload_index` still use the client deadline. `create_payload_index(timeout=30)` on a `timeout=1` client hits `DEADLINE_EXCEEDED` after 1.01 s, though the index is created.\n\n(ai-assisted, checked by me)\n"
   }
  ],
  "review_comments": [

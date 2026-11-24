@@ -1,0 +1,26 @@
+{
+ "repo": "software-mansion/argent",
+ "number": 2076,
+ "url": "https://github.com/software-mansion/argent/pull/2076",
+ "title": "fix(tool-server): fall back to adb when a stale emulator discovery file refuses the connection",
+ "merged_at": "2026-11-23T10:33:59Z",
+ "files": [
+  {
+   "filename": "packages/tool-server/src/blueprints/simulator-server.ts",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 2,
+   "patch": "@@ -307,10 +307,12 @@ function subcommandForDevice(device: DeviceInfo): \"ios\" | \"android\" | \"android_d\n  * `avd/running/pid_*.ini` discovery file. An emulator started under another\n  * user or HOME, or with `-port`, has no such file where argent looks. The phone\n  * controller (screen-sharing agent over adb) needs only adb, so such an\n- * emulator is retried through it.\n+ * emulator is retried through it. A stale discovery file left by a dead\n+ * emulator on the same serial makes the controller dial a closed gRPC port\n+ * (\"Connection refused\" on Unix, \"actively refused\" on Windows).\n  */\n const EMULATOR_NOT_DISCOVERED =\n-  /not found among running emulators|Failed to find any running emulator/;\n+  /not found among running emulators|Failed to find any running emulator|transport error[\\s\\S]*tcp connect error: (?:Connection refused|[^\\n]*actively refused)/;\n \n const FIRST_FRAME_TIMEOUT_MS = 5_000;\n "
+  },
+  {
+   "filename": "packages/tool-server/test/simulator-server-blueprint.test.ts",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -245,6 +245,8 @@ describe(\"simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf\n   it.each([\n     'Error: emulator \"emulator-5570\" not found among running emulators\\n',\n     \"Error: Failed to find any running emulator\\n\",\n+    \"Error: transport error\\nCaused by:\\n    0: tcp connect error: Connection refused (os error 61)\\n\",\n+    \"Error: transport error\\nCaused by:\\n    0: tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)\\n\",\n   ])(\"falls back to `android_device` on %j\", async (discoveryError) => {\n     const serial = \"emulator-5570\";\n     await startAdbFallback(serial, 55570, discoveryError);\n@@ -254,6 +256,23 @@ describe(\"simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf\n     expect(spawnMock.mock.calls[1]![1]).toEqual([\"android_device\", \"--id\", serial]);\n   });\n \n+  it(\"does not fall back on a transport error that is not a refused connection\", async () => {\n+    const grpcLess = makeFakeProc();\n+    spawnMock.mockReturnValueOnce(grpcLess);\n+    const { simulatorServerBlueprint } = await import(\"../src/blueprints/simulator-server\");\n+    const device = androidDevice(\"emulator-5590\");\n+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });\n+    const assertion = expect(factoryPromise).rejects.toThrow(/transport error/);\n+    setImmediate(() => {\n+      grpcLess.stderr.push(\n+        \"Error: transport error\\nCaused by:\\n    0: tcp connect error: Connection reset by peer\\n\"\n+      );\n+      setTimeout(() => grpcLess.emit(\"exit\", 1), 20);\n+    });\n+    await assertion;\n+    expect(spawnMock).toHaveBeenCalledTimes(1);\n+  });\n+\n   it(\"hands out the fallback only after its first frame and then closes the stream\", async () => {\n     let sendFrame!: () => void;\n     const frame = new Promise<void>((resolve) => (sendFrame = resolve));"
+  }
+ ],
+ "test_files": [
+  "packages/tool-server/test/simulator-server-blueprint.test.ts"
+ ]
+}

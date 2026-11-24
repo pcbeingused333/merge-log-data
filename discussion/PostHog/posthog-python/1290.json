@@ -3,7 +3,39 @@
  "number": 1290,
  "url": "https://github.com/PostHog/posthog-python/pull/1290",
  "state": "open",
- "reviews": [],
- "review_comments": [],
- "comments": []
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-23T21:10:24Z",
+   "body": "The runtime fix looks solid — we verified OpenAI and Gemini sync/async embedding events (including explicit override, blank-context fallback, and error paths) end-to-end against `sdk-mock-server` over `/i/v1/ai/events`, along with local `ruff`, `mypy`, `check_public_api.py`, and the OpenAI/Gemini/utils test suites.\n\nOne test coverage concern to address before approval: both new tests check `distinct_id` and `event`, but neither asserts that `options` is absent (so `personless=resolved_distinct_id is None` is currently unguarded), and `_resolve_distinct_id` precedence / whitespace-context cases aren't covered yet. Left details inline along with two optional suggestions.\n\nAI-assisted review."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "posthog/test/ai/openai/test_openai.py",
+   "created_at": "2026-11-23T21:10:24Z",
+   "body": "**Concern:** Neither new test asserts that `options` is absent when the embedding event resolves `distinct_id` from `identify_context()`, leaving the `personless=resolved_distinct_id is None` half of the production change in `posthog/ai/openai/_embeddings.py` (line 66) and `posthog/ai/gemini/_shared.py` (line 285) unguarded, along with `_resolve_distinct_id`'s precedence and blank-context branches.\n\n**Evidence and impact:**\n- Inside `with new_context(): identify_context(\"context-user\")`, this PR changes two user-visible behaviors: `distinct_id` switches from `trace_id` to `\"context-user\"`, and `personless` switches from `True` (`options={\"process_person_profile\": False}`) to `False` (`options` omitted).\n- Both `test_embeddings_use_context_distinct_id` (`posthog/test/ai/openai/test_openai.py:480-482`) and `test_embed_content_uses_context_distinct_id` (`posthog/test/ai/gemini/test_gemini.py:1388-1390`) assert only `call_args[\"distinct_id\"]` and `call_args[\"event\"]`. Reverting `personless=resolved_distinct_id is None` back to `personless=_user_distinct_id(distinct_id) is None` in both production files would silently emit personless `$ai_embedding` events (`options={\"process_person_profile\": False}`) for identified users while all 404 OpenAI and Gemini tests still pass.\n- Sibling context tests in this repo (`test_streaming_uses_outer_context_distinct_id` from #1286 and `test_outer_context_distinct_id_is_used` in `posthog/test/ai/anthropic/test_anthropic.py`) assert `assert \"options\" not in call_args` to guard this contract (`capture-ai` spec: only fallback trace IDs force `options.process_person_profile: false`).\n\n**Recommendation:**\nConsider adding `assert \"options\" not in call_args` to both `test_embeddings_use_context_distinct_id` (here) and `test_embed_content_uses_context_distinct_id` (`posthog/test/ai/gemini/test_gemini.py:1390`), plus a focused test covering explicit `posthog_distinct_id` overriding `identify_context` and a whitespace-only context falling back to a personless `trace_id`.\n\nTest sketch (not executed as a committed test; equivalent scenarios passed on head `f3c8d48b` via local mock-server smoke testing):\n```python\n# In both test_embeddings_use_context_distinct_id and test_embed_content_uses_context_distinct_id:\nassert call_args[\"distinct_id\"] == \"context-user\"\nassert call_args[\"event\"] == \"$ai_embedding\"\nassert \"options\" not in call_args\n\n# Plus in posthog/test/ai/test_utils.py (or alongside the embedding tests):\ndef test_resolve_distinct_id_precedence_and_blank_values():\n    from posthog import identify_context, new_context\n    from posthog.ai.utils import _resolve_distinct_id\n\n    with new_context(fresh=True):\n        assert _resolve_distinct_id(None) is None\n        identify_context(\"   \")\n        assert _resolve_distinct_id(None) is None\n        identify_context(\"context-user\")\n        assert _resolve_distinct_id(None) == \"context-user\"\n        assert _resolve_distinct_id(\"   \") == \"context-user\"\n        assert _resolve_distinct_id(\"explicit-user\") == \"explicit-user\"\n```"
+  },
+  {
+   "role": "contributor",
+   "path": "posthog/ai/utils.py",
+   "created_at": "2026-11-23T21:10:24Z",
+   "body": "**Suggestion:** `_resolve_distinct_id` and its callers mix `or` truthiness with `is None`, which mishandles falsy non-string distinct IDs such as integer `0`.\n\n**Evidence and reachability:**\n- `_user_distinct_id(0)` returns `0` (not `None`) because `_explicit_distinct_id(0)` uses `stringify_id(0) == \"0\"`.\n- In `_resolve_distinct_id` (`posthog/ai/utils.py:77`) and the callers (`posthog/ai/openai/_embeddings.py:63-66`, `posthog/ai/gemini/_shared.py:282-285`), `resolved_distinct_id or trace_id` treats `0` as falsy while `personless=resolved_distinct_id is None` treats `0` as present.\n- Executed base (`84fc9e06`) vs head (`f3c8d48b`) comparison:\n  - `with new_context(): identify_context(0); client.embeddings.create(..., posthog_trace_id=\"t4\")`:\n    - Base: `distinct_id=\"t4\"`, `options={\"process_person_profile\": False}`\n    - Head: `distinct_id=\"t4\"`, `options=None` (emits a random trace UUID without `process_person_profile: False`)\n  - `with new_context(): identify_context(\"context-user\"); client.embeddings.create(..., posthog_distinct_id=0, posthog_trace_id=\"t5\")`:\n    - Base: `distinct_id=\"t5\"`, `options=None`\n    - Head: `distinct_id=\"context-user\"`, `options=None` (explicit `0` is overridden by the context user)\n- Reachability is low because `identify_context(distinct_id: str)` and `posthog_distinct_id: Optional[str]` are typed `str`, so only untyped/dynamic callers passing integer `0` hit this.\n\n**Recommendation:**\nConsider using explicit `is not None` checks so truthiness and `personless` cannot disagree:\n```python\ndef _resolve_distinct_id(distinct_id: Any) -> Any:\n    \"\"\"The caller's distinct id, else the one from the active PostHog context, else None.\"\"\"\n    resolved = _user_distinct_id(distinct_id)\n    if resolved is not None:\n        return resolved\n    return _user_distinct_id(contexts.get_context_distinct_id())\n```\nand in `posthog/ai/openai/_embeddings.py:63` / `posthog/ai/gemini/_shared.py:282`:\n```python\ndistinct_id=resolved_distinct_id if resolved_distinct_id is not None else trace_id,\n```"
+  },
+  {
+   "role": "contributor",
+   "path": "posthog/ai/utils.py",
+   "created_at": "2026-11-23T21:10:24Z",
+   "body": "**Suggestion:** Now that #1286 (`470a6413`) has landed on `main` with the identical `_user_distinct_id(...) or _user_distinct_id(contexts.get_context_distinct_id())` expression in `capture_streaming_event` (`posthog/ai/utils.py:1321-1323` on `main`), consider reusing `_resolve_distinct_id(event_data.get(\"distinct_id\"))` there if you rebase onto `main`, so both streaming and embedding paths share one helper. (No merge conflict exists either way.)"
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-23T23:01:14Z",
+   "body": "Thanks for the thorough review. Pushed 01feddc:\n- both embedding tests now assert `\"options\" not in call_args`;\n- added `test_resolve_distinct_id_precedence_and_blank_values` (precedence, blank context, explicit override, falsy `0`);\n- `_resolve_distinct_id` and the OpenAI/Gemini callers use `is not None` checks, so `distinct_id` and `personless` cannot disagree for falsy ids.\n\nI left the `capture_streaming_event` reuse for a separate change to keep this PR scoped.\n\nThis reply was drafted with an AI coding assistant (Claude); the change was tested with the OpenAI/Gemini/utils suites.\n"
+  }
+ ]
 }

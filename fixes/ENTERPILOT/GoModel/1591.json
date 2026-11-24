@@ -1,0 +1,41 @@
+{
+ "repo": "ENTERPILOT/GoModel",
+ "number": 1591,
+ "url": "https://github.com/ENTERPILOT/GoModel/pull/1591",
+ "title": "fix(gemini): cap stop sequences at five entries",
+ "merged_at": "2026-11-23T15:45:50Z",
+ "files": [
+  {
+   "filename": "internal/providers/gemini/chat.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -26,11 +26,16 @@ var googleCompatRejectedFields = []string{\n }\n \n // adaptChatRequest rewrites a ChatRequest for Gemini's OpenAI-compatible\n-// endpoint: members it rejects are dropped, unsigned Gemini 3+ tool calls get\n+// endpoint: members it rejects are dropped, a \"stop\" list is capped at the\n+// five entries the endpoint accepts, unsigned Gemini 3+ tool calls get\n // the validator placeholder, and the reasoning effort becomes the top-level\n // \"reasoning_effort\" string the endpoint reads (not the nested\n // \"reasoning\": {\"effort\": \"...\"} object), clamped to a level the model has.\n func adaptChatRequest(req *core.ChatRequest) (*core.ChatRequest, error) {\n+\treq, err := providers.CapStopSequences(req, maxStopSequences)\n+\tif err != nil {\n+\t\treturn nil, err\n+\t}\n \tadapted := *req\n \tadapted.ExtraFields = req.ExtraFields.Without(googleCompatRejectedFields...)\n \tadapted.Messages = withCompatThoughtSignatures(req.Model, req.Messages)"
+  },
+  {
+   "filename": "internal/providers/gemini/compat_request_test.go",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -110,6 +110,36 @@ func TestChatCompletion_CompatDropsRejectedFieldsAndClampsEffort(t *testing.T) {\n \tassert.Equal(t, float64(1), sent[\"n\"])\n }\n \n+// Gemini's OpenAI-compatible endpoint answers HTTP 400 \"the number of\n+// stop_sequences must not exceed 5\" for a longer list, like the native API.\n+func TestChatCompletion_CompatCapsStopSequences(t *testing.T) {\n+\tt.Setenv(useNativeAPIEnvVar, \"false\")\n+\ttests := []struct {\n+\t\tname string\n+\t\tstop string\n+\t\twant any\n+\t}{\n+\t\t{name: \"within limit is kept\", stop: `[\"a\",\"b\",\"c\",\"d\",\"e\"]`, want: []any{\"a\", \"b\", \"c\", \"d\", \"e\"}},\n+\t\t{name: \"over limit is truncated\", stop: `[\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\"]`, want: []any{\"a\", \"b\", \"c\", \"d\", \"e\"}},\n+\t\t{name: \"bare string is kept\", stop: `\"END\"`, want: \"END\"},\n+\t}\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tserver, capture := providertest.JSONServer(t, http.StatusOK, `{\"id\":\"x\",\"object\":\"chat.completion\",\"model\":\"gemini-2.5-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}`)\n+\t\t\tprovider := New(providers.ProviderConfig{APIKey: \"key\", BaseURL: server.URL}, providertest.Options(llmclient.Hooks{})).(*Provider)\n+\n+\t\t\tvar req core.ChatRequest\n+\t\t\tbody := `{\"model\":\"gemini-2.5-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stop\":` + tt.stop + `}`\n+\t\t\trequire.NoError(t, json.Unmarshal([]byte(body), &req))\n+\n+\t\t\t_, err := provider.ChatCompletion(context.Background(), &req)\n+\t\t\trequire.NoError(t, err)\n+\n+\t\t\tassert.Equal(t, tt.want, capture.Last(t).JSON(t)[\"stop\"])\n+\t\t})\n+\t}\n+}\n+\n func TestChatCompletion_CompatNestedReasoningIsClamped(t *testing.T) {\n \tt.Setenv(useNativeAPIEnvVar, \"false\")\n \tserver, capture := providertest.JSONServer(t, http.StatusOK, `{\"id\":\"x\",\"object\":\"chat.completion\",\"model\":\"gemini-2.5-flash\",\"choices\":[]}`)"
+  },
+  {
+   "filename": "internal/providers/gemini/native.go",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 2,
+   "patch": "@@ -4,6 +4,7 @@ import (\n \t\"bytes\"\n \t\"encoding/base64\"\n \t\"fmt\"\n+\t\"log/slog\"\n \t\"maps\"\n \t\"mime\"\n \t\"net/http\"\n@@ -857,7 +858,7 @@ func geminiGenerationConfig(req *core.ChatRequest) map[string]any {\n \t// models) answers HTTP 400 \"Penalty is not enabled for this model\", and\n \t// Google's Gemini 4 migration guide lists both among the parameters to\n \t// remove because they error.\n-\tcopyStopSequences(req.ExtraFields.Lookup(\"stop\"), cfg)\n+\tcopyStopSequences(req.Model, req.ExtraFields.Lookup(\"stop\"), cfg)\n \tcopyResponseFormat(req.ExtraFields.Lookup(\"response_format\"), cfg)\n \tcopyGoogleThinkingConfig(req.ExtraFields.Lookup(\"extra_body\"), cfg)\n \tif effort := nativeReasoningEffort(req); effort != \"\" {\n@@ -948,7 +949,13 @@ func copyJSONNumber(raw json.RawMessage, cfg map[string]any, key string) {\n \t}\n }\n \n-func copyStopSequences(raw json.RawMessage, cfg map[string]any) {\n+// maxStopSequences is the longest stop list Gemini accepts, on the native\n+// generateContent API and the OpenAI-compatible endpoint alike: a sixth entry\n+// answers HTTP 400 \"the number of stop_sequences must not exceed 5\". A longer\n+// client list is truncated rather than failed upstream.\n+const maxStopSequences = 5\n+\n+func copyStopSequences(model string, raw json.RawMessage, cfg map[string]any) {\n \tif len(raw) == 0 {\n \t\treturn\n \t}\n@@ -959,6 +966,14 @@ func copyStopSequences(raw json.RawMessage, cfg map[string]any) {\n \t}\n \tvar many []string\n \tif err := json.Unmarshal(raw, &many); err == nil && len(many) > 0 {\n+\t\tif len(many) > maxStopSequences {\n+\t\t\t// Same message as providers.CapStopSequences, which caps the\n+\t\t\t// OpenAI-compatible mode: the dropped stops stay visible to\n+\t\t\t// operators, without logging the sequences themselves.\n+\t\t\tslog.Warn(\"truncated stop sequences to the provider limit\",\n+\t\t\t\t\"model\", model, \"limit\", maxStopSequences, \"requested\", len(many))\n+\t\t\tmany = many[:maxStopSequences]\n+\t\t}\n \t\tcfg[\"stopSequences\"] = many\n \t}\n }"
+  },
+  {
+   "filename": "internal/providers/gemini/native_sampling_test.go",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -96,3 +96,28 @@ func TestGeminiGenerationConfig_DropsPenalties(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+// Gemini's GenerationConfig.stopSequences accepts at most five entries and\n+// answers HTTP 400 for a longer list, so longer client lists are truncated.\n+func TestGeminiGenerationConfig_CapsStopSequences(t *testing.T) {\n+\ttests := []struct {\n+\t\tname string\n+\t\tstop string\n+\t\twant []string\n+\t}{\n+\t\t{name: \"within limit is kept\", stop: `[\"a\",\"b\",\"c\",\"d\",\"e\"]`, want: []string{\"a\", \"b\", \"c\", \"d\", \"e\"}},\n+\t\t{name: \"over limit is truncated\", stop: `[\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\"]`, want: []string{\"a\", \"b\", \"c\", \"d\", \"e\"}},\n+\t\t{name: \"bare string is kept\", stop: `\"END\"`, want: []string{\"END\"}},\n+\t}\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tvar req core.ChatRequest\n+\t\t\tbody := `{\"model\":\"gemini-2.5-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stop\":` + tt.stop + `}`\n+\t\t\trequire.NoError(t, json.Unmarshal([]byte(body), &req))\n+\n+\t\t\tcfg := geminiGenerationConfig(&req)\n+\n+\t\t\tassert.Equal(t, tt.want, cfg[\"stopSequences\"])\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/providers/gemini/compat_request_test.go",
+  "internal/providers/gemini/native_sampling_test.go"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "charmbracelet/fantasy",
+ "number": 457,
+ "url": "https://github.com/charmbracelet/fantasy/pull/457",
+ "title": "fix(anthropic): include cache tokens in TotalTokens",
+ "merged_at": "2026-11-23T17:49:51Z",
+ "files": [
+  {
+   "filename": "providers/anthropic/anthropic.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -1446,7 +1446,7 @@ func (a languageModel) Generate(ctx context.Context, call fantasy.Call) (*fantas\n \t\tUsage: fantasy.Usage{\n \t\t\tInputTokens:         response.Usage.InputTokens,\n \t\t\tOutputTokens:        response.Usage.OutputTokens,\n-\t\t\tTotalTokens:         response.Usage.InputTokens + response.Usage.OutputTokens,\n+\t\t\tTotalTokens:         response.Usage.InputTokens + response.Usage.OutputTokens + response.Usage.CacheCreationInputTokens + response.Usage.CacheReadInputTokens,\n \t\t\tCacheCreationTokens: response.Usage.CacheCreationInputTokens,\n \t\t\tCacheReadTokens:     response.Usage.CacheReadInputTokens,\n \t\t},\n@@ -1740,7 +1740,7 @@ func (a languageModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.S\n \t\t\tUsage: fantasy.Usage{\n \t\t\t\tInputTokens:         acc.Usage.InputTokens,\n \t\t\t\tOutputTokens:        acc.Usage.OutputTokens,\n-\t\t\t\tTotalTokens:         acc.Usage.InputTokens + acc.Usage.OutputTokens,\n+\t\t\t\tTotalTokens:         acc.Usage.InputTokens + acc.Usage.OutputTokens + acc.Usage.CacheCreationInputTokens + acc.Usage.CacheReadInputTokens,\n \t\t\t\tCacheCreationTokens: acc.Usage.CacheCreationInputTokens,\n \t\t\t\tCacheReadTokens:     acc.Usage.CacheReadInputTokens,\n \t\t\t},"
+  },
+  {
+   "filename": "providers/anthropic/usage_test.go",
+   "status": "added",
+   "additions": 69,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,69 @@\n+package anthropic\n+\n+import (\n+\t\"context\"\n+\t\"testing\"\n+\n+\t\"charm.land/fantasy\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+func TestGenerate_TotalTokensIncludesCache(t *testing.T) {\n+\tt.Parallel()\n+\n+\tresp := mockAnthropicGenerateResponse()\n+\tusage := resp[\"usage\"].(map[string]any)\n+\tusage[\"input_tokens\"] = 5\n+\tusage[\"output_tokens\"] = 2\n+\tusage[\"cache_creation_input_tokens\"] = 100\n+\tusage[\"cache_read_input_tokens\"] = 1000\n+\n+\tserver, _ := newAnthropicJSONServer(resp)\n+\tdefer server.Close()\n+\n+\tprovider, err := New(WithAPIKey(\"test-api-key\"), WithBaseURL(server.URL))\n+\trequire.NoError(t, err)\n+\tmodel, err := provider.LanguageModel(context.Background(), \"claude-sonnet-4-20250514\")\n+\trequire.NoError(t, err)\n+\n+\tgot, err := model.Generate(context.Background(), fantasy.Call{Prompt: testPrompt()})\n+\trequire.NoError(t, err)\n+\trequire.Equal(t, int64(5), got.Usage.InputTokens)\n+\trequire.Equal(t, int64(100), got.Usage.CacheCreationTokens)\n+\trequire.Equal(t, int64(1000), got.Usage.CacheReadTokens)\n+\trequire.Equal(t, int64(1107), got.Usage.TotalTokens)\n+}\n+\n+func TestStream_TotalTokensIncludesCache(t *testing.T) {\n+\tt.Parallel()\n+\n+\tserver, _ := newAnthropicStreamingServer([]string{\n+\t\tanthropicSSEEvent(\"message_start\", `{\"type\":\"message_start\",\"message\":{\"id\":\"msg_cache\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-20250514\",\"content\":[],\"stop_reason\":null,\"usage\":{\"input_tokens\":5,\"output_tokens\":0,\"cache_creation_input_tokens\":100,\"cache_read_input_tokens\":1000}}}`),\n+\t\tanthropicSSEEvent(\"content_block_start\", `{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}`),\n+\t\tanthropicSSEEvent(\"content_block_delta\", `{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}`),\n+\t\tanthropicSSEEvent(\"content_block_stop\", `{\"type\":\"content_block_stop\",\"index\":0}`),\n+\t\tanthropicSSEEvent(\"message_delta\", `{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":2}}`),\n+\t\tanthropicSSEEvent(\"message_stop\", `{\"type\":\"message_stop\"}`),\n+\t})\n+\tdefer server.Close()\n+\n+\tprovider, err := New(WithAPIKey(\"test-api-key\"), WithBaseURL(server.URL))\n+\trequire.NoError(t, err)\n+\tmodel, err := provider.LanguageModel(context.Background(), \"claude-sonnet-4-20250514\")\n+\trequire.NoError(t, err)\n+\n+\tstream, err := model.Stream(context.Background(), fantasy.Call{Prompt: testPrompt()})\n+\trequire.NoError(t, err)\n+\n+\tvar finish *fantasy.StreamPart\n+\tstream(func(p fantasy.StreamPart) bool {\n+\t\tif p.Type == fantasy.StreamPartTypeFinish {\n+\t\t\tp := p\n+\t\t\tfinish = &p\n+\t\t}\n+\t\treturn true\n+\t})\n+\trequire.NotNil(t, finish)\n+\trequire.Equal(t, int64(1000), finish.Usage.CacheReadTokens)\n+\trequire.Equal(t, int64(1107), finish.Usage.TotalTokens)\n+}"
+  }
+ ],
+ "test_files": [
+  "providers/anthropic/usage_test.go"
+ ]
+}

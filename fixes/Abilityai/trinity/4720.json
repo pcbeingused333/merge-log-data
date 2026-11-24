@@ -1,0 +1,41 @@
+{
+ "repo": "Abilityai/trinity",
+ "number": 4720,
+ "url": "https://github.com/Abilityai/trinity/pull/4720",
+ "title": "fix(monitoring): report measured 0% uptime and 0 ms latency from perform_health_check",
+ "merged_at": "2026-11-23T09:45:41Z",
+ "files": [
+  {
+   "filename": "docs/memory/learnings/2026-11-22-a-measured-zero-is-not-missing.md",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+## 2026-11-22 — pitfall — A measured zero is a value: `x if x else None` turns it into \"never measured\"\n+**Context**: #4702, the second site of the #4685 class. `#4699` fixed the monitoring router's own response builder, but `monitoring_service.perform_health_check` built `uptime_percent_24h` and `avg_latency_24h_ms` with `round(x, 1) if x else None`, so an agent down for the whole 24 h window (uptime `0.0`) or a measured 0 ms latency came back as `null` from `POST /api/monitoring/agents/{name}/check`, the MCP check tool and the first-check path of `GET /api/monitoring/agents/{name}` — every consumer reads `null` as \"no history\".\n+**Lesson**: For a numeric field where `None` means \"not measured\", gate on `is not None`, never truthiness. When fixing one builder of a value, grep every other builder of the same field (`round(.*) if .* else None`) in the same change, and test the zero case end to end through the function that returns it — not only the db helper that computes it."
+  },
+  {
+   "filename": "src/backend/services/monitoring_service.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -856,8 +856,8 @@ async def perform_health_check(\n         business=business_check,\n         issues=issues,\n         recent_alerts=[],  # TODO: Fetch from notifications\n-        uptime_percent_24h=round(uptime, 2) if uptime else None,\n-        avg_latency_24h_ms=round(avg_latency, 2) if avg_latency else None\n+        uptime_percent_24h=round(uptime, 2) if uptime is not None else None,\n+        avg_latency_24h_ms=round(avg_latency, 2) if avg_latency is not None else None\n     )\n \n "
+  },
+  {
+   "filename": "tests/registry.json",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -9609,6 +9609,17 @@\n         \"security\"\n       ],\n       \"description\": \"The web code door answers 429 with the channel doors' sentence when the shared per-address budget refuses, identically for members and outsiders; the code-row gate stays byte-identical to the success and not-allow-listed answers.\"\n+    },\n+    {\n+      \"file\": \"unit/test_4702_perform_health_check_zero.py\",\n+      \"feature\": \"#4702\",\n+      \"added\": \"2026-11-22\",\n+      \"categories\": [\n+        \"backend\",\n+        \"unit\",\n+        \"monitoring\"\n+      ],\n+      \"description\": \"perform_health_check (behind POST /api/monitoring/agents/{name}/check and the first-check path of GET) reports a measured 0.0 uptime_percent_24h and 0.0 avg_latency_24h_ms as 0.0, not null; probes and DB stubbed. With no measurement at all both fields still read None.\"\n     }\n   ]\n }"
+  },
+  {
+   "filename": "tests/unit/test_4702_perform_health_check_zero.py",
+   "status": "added",
+   "additions": 139,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,139 @@\n+\"\"\"perform_health_check reports a measured 0% uptime / 0 ms latency (#4702).\n+\n+The 24h figures were built with a truthiness test, so a measured `0.0` (an\n+agent unreachable for the whole window, or a 0 ms probe) came back as `None`,\n+which consumers read as \"never measured\". Sibling of #4685 (router builder).\n+\"\"\"\n+\n+from __future__ import annotations\n+\n+import asyncio\n+import importlib.util\n+import os\n+import sys\n+import types\n+from datetime import datetime, timezone\n+from pathlib import Path\n+from unittest.mock import AsyncMock, MagicMock\n+\n+import pytest\n+\n+os.environ.setdefault(\"REDIS_URL\", \"redis://test:test@redis:6379\")\n+os.environ.setdefault(\"REDIS_PASSWORD\", \"test\")\n+os.environ.setdefault(\"REDIS_BACKEND_PASSWORD\", \"test\")\n+\n+_BACKEND = Path(__file__).resolve().parent.parent.parent / \"src\" / \"backend\"\n+if str(_BACKEND) not in sys.path:\n+    sys.path.insert(0, str(_BACKEND))\n+\n+pytestmark = pytest.mark.unit\n+\n+\n+def _stub_module(name: str, **attrs) -> types.ModuleType:\n+    mod = types.ModuleType(name)\n+    for k, v in attrs.items():\n+        setattr(mod, k, v)\n+    return mod\n+\n+\n+@pytest.fixture\n+def monitoring_service(monkeypatch):\n+    fake_docker = _stub_module(\"docker\")\n+    fake_docker.from_env = MagicMock(side_effect=Exception(\"stubbed\"))\n+    monkeypatch.setitem(sys.modules, \"docker\", fake_docker)\n+\n+    fake_db_module = _stub_module(\"database\")\n+    fake_db_module.db = MagicMock()\n+    monkeypatch.setitem(sys.modules, \"database\", fake_db_module)\n+\n+    monkeypatch.setitem(\n+        sys.modules,\n+        \"services.docker_service\",\n+        _stub_module(\n+            \"services.docker_service\",\n+            docker_client=None,\n+            get_agent_container=MagicMock(return_value=None),\n+            list_all_agents_fast=MagicMock(return_value=[]),\n+        ),\n+    )\n+    monkeypatch.setitem(\n+        sys.modules,\n+        \"services.docker_utils\",\n+        _stub_module(\"services.docker_utils\", container_exec_run=AsyncMock()),\n+    )\n+\n+    class _ClosedCircuit:\n+        def __init__(self, agent_name):\n+            self.state = \"closed\"\n+\n+    monkeypatch.setitem(\n+        sys.modules,\n+        \"services.agent_client\",\n+        _stub_module(\"services.agent_client\", CircuitState=_ClosedCircuit),\n+    )\n+\n+    spec = importlib.util.spec_from_file_location(\n+        \"monitoring_service_under_test_4702\",\n+        str(_BACKEND / \"services\" / \"monitoring_service.py\"),\n+    )\n+    module = importlib.util.module_from_spec(spec)\n+    monkeypatch.setitem(sys.modules, \"monitoring_service_under_test_4702\", module)\n+    spec.loader.exec_module(module)\n+\n+    from db_models import (\n+        AgentHealthStatus,\n+        BusinessHealthCheck,\n+        DockerHealthCheck,\n+        NetworkHealthCheck,\n+    )\n+\n+    now = datetime.now(timezone.utc).isoformat().replace(\"+00:00\", \"Z\")\n+\n+    async def fake_network(name, _timeout):\n+        return NetworkHealthCheck(\n+            agent_name=name, reachable=False, latency_ms=0.0, checked_at=now\n+        )\n+\n+    async def fake_business(name, _timeout):\n+        return BusinessHealthCheck(agent_name=name, status=\"unknown\", checked_at=now)\n+\n+    def fake_docker_check(name):\n+        return DockerHealthCheck(\n+            agent_name=name, container_status=\"running\", checked_at=now\n+        )\n+\n+    monkeypatch.setattr(module, \"check_network_health\", fake_network)\n+    monkeypatch.setattr(module, \"check_business_health\", fake_business)\n+    monkeypatch.setattr(module, \"check_docker_health\", fake_docker_check)\n+    monkeypatch.setattr(\n+        module, \"aggregate_health\", lambda *_a, **_k: (AgentHealthStatus.UNHEALTHY, [])\n+    )\n+    return module, fake_db_module.db\n+\n+\n+def _check(module):\n+    return asyncio.run(module.perform_health_check(\"agent-x\", store_results=False))\n+\n+\n+def test_measured_zero_uptime_and_latency_are_reported_as_zero(monitoring_service):\n+    mod, fake_db = monitoring_service\n+    fake_db.calculate_uptime_percent.return_value = 0.0\n+    fake_db.calculate_avg_latency.return_value = 0.0\n+\n+    result = _check(mod)\n+\n+    assert result.uptime_percent_24h == 0.0\n+    assert result.uptime_percent_24h is not None\n+    assert result.avg_latency_24h_ms == 0.0\n+    assert result.avg_latency_24h_ms is not None\n+\n+\n+def test_no_measurement_still_reads_none(monitoring_service):\n+    mod, fake_db = monitoring_service\n+    fake_db.calculate_uptime_percent.return_value = None\n+    fake_db.calculate_avg_latency.return_value = None\n+\n+    result = _check(mod)\n+\n+    assert result.uptime_percent_24h is None\n+    assert result.avg_latency_24h_ms is None"
+  }
+ ],
+ "test_files": [
+  "tests/registry.json",
+  "tests/unit/test_4702_perform_health_check_zero.py"
+ ]
+}

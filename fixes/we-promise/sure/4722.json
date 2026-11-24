@@ -1,0 +1,47 @@
+{
+ "repo": "we-promise/sure",
+ "number": 4722,
+ "url": "https://github.com/we-promise/sure/pull/4722",
+ "title": "fix(ui): don't close dialog when a text selection is released outside it",
+ "merged_at": "2026-11-23T07:49:28Z",
+ "files": [
+  {
+   "filename": "app/components/DS/dialog.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -139,7 +139,7 @@ def merged_opts\n     data[:DS__dialog_auto_open_value] = auto_open\n     data[:DS__dialog_reload_on_close_value] = reload_on_close\n     data[:DS__dialog_disable_click_outside_value] = disable_click_outside\n-    data[:action] = [ \"click->DS--dialog#clickOutside\", data[:action] ].compact.join(\" \")\n+    data[:action] = [ \"pointerdown->DS--dialog#trackPress pointercancel->DS--dialog#clearPress click->DS--dialog#clickOutside\", data[:action] ].compact.join(\" \")\n     data[:hotkey] = \"esc:DS--dialog#close\"\n     # Fetched into a frame over the page, the dialog is left out of Turbo's\n     # cached copy of that page, or Back brings it back: stray if it was still"
+  },
+  {
+   "filename": "app/components/DS/dialog_controller.js",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 1,
+   "patch": "@@ -1,4 +1,5 @@\n import { Controller } from \"@hotwired/stimulus\";\n+import { shouldCloseOnClick } from \"utils/dialog_click_outside\";\n \n const FOCUSABLE_SELECTOR = [\n   \"a[href]\",\n@@ -28,6 +29,7 @@ export default class extends Controller {\n     this._frame = this.element.closest(\"turbo-frame\");\n     this._onKeydown = this.#onKeydown.bind(this);\n     this._onClose = this.#onClose.bind(this);\n+    this._pressTarget = null;\n \n     this.element.addEventListener(\"keydown\", this._onKeydown);\n     this.element.addEventListener(\"close\", this._onClose);\n@@ -59,10 +61,24 @@ export default class extends Controller {\n     }\n   }\n \n+  // Where the gesture that may end in a click started. Only the primary\n+  // pointer counts, so a second finger cannot overwrite the first one's origin.\n+  trackPress(e) {\n+    if (e.isPrimary === false) return;\n+    this._pressTarget = e.target;\n+  }\n+\n+  clearPress() {\n+    this._pressTarget = null;\n+  }\n+\n   // If the user clicks anywhere outside of the visible content, close the dialog\n   clickOutside(e) {\n     if (this.disableClickOutsideValue) return;\n-    if (!this.contentTarget.contains(e.target)) {\n+    // A click with no detail comes from the keyboard, not from the press kept here.\n+    const pressTarget = e.detail === 0 ? null : this._pressTarget;\n+    this._pressTarget = null;\n+    if (shouldCloseOnClick(pressTarget, e.target, this.contentTarget)) {\n       this.close();\n     }\n   }"
+  },
+  {
+   "filename": "app/javascript/utils/dialog_click_outside.mjs",
+   "status": "added",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,8 @@\n+// A click closes a dialog only when it landed outside the content and the press\n+// that produced it did not start inside the content. Selecting text inside the\n+// dialog and releasing the mouse over the backdrop fires a click on the backdrop,\n+// which must not be treated as a click outside.\n+export function shouldCloseOnClick(pressTarget, clickTarget, content) {\n+  if (pressTarget && content.contains(pressTarget)) return false;\n+  return !content.contains(clickTarget);\n+}"
+  },
+  {
+   "filename": "config/importmap.rb",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -62,5 +62,6 @@\n pin \"utils/sankey_comparison\", to: \"utils/sankey_comparison.mjs\"\n \n pin \"utils/sankey_labels\", to: \"utils/sankey_labels.mjs\"\n+pin \"utils/dialog_click_outside\", to: \"utils/dialog_click_outside.mjs\"\n pin \"utils/sankey_align\", to: \"utils/sankey_align.mjs\"\n pin \"utils/sankey_subcategories\", to: \"utils/sankey_subcategories.mjs\""
+  },
+  {
+   "filename": "test/javascript/utils/dialog_click_outside_test.mjs",
+   "status": "added",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,24 @@\n+import assert from \"node:assert/strict\";\n+import { test } from \"node:test\";\n+import { shouldCloseOnClick } from \"../../../app/javascript/utils/dialog_click_outside.mjs\";\n+\n+// Minimal stand-in for the dialog's content element.\n+const content = (...inside) => ({ contains: (node) => inside.includes(node) });\n+const inside = {};\n+const outside = {};\n+\n+test(\"closes when the press and the click both happen outside the content\", () => {\n+  assert.equal(shouldCloseOnClick(outside, outside, content(inside)), true);\n+});\n+\n+test(\"does not close when both happen inside the content\", () => {\n+  assert.equal(shouldCloseOnClick(inside, inside, content(inside)), false);\n+});\n+\n+test(\"does not close when a text selection starts inside and is released outside\", () => {\n+  assert.equal(shouldCloseOnClick(inside, outside, content(inside)), false);\n+});\n+\n+test(\"closes when there was no tracked press (e.g. keyboard-triggered click)\", () => {\n+  assert.equal(shouldCloseOnClick(null, outside, content(inside)), true);\n+});"
+  }
+ ],
+ "test_files": [
+  "test/javascript/utils/dialog_click_outside_test.mjs"
+ ]
+}

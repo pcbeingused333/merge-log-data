@@ -1,0 +1,47 @@
+{
+ "repo": "Agent-Field/CodeAF",
+ "number": 2878,
+ "url": "https://github.com/Agent-Field/CodeAF/pull/2878",
+ "title": "fix(provider): omit router usage on direct requests",
+ "merged_at": "2026-11-23T13:52:35Z",
+ "files": [
+  {
+   "filename": "docs/changes/unreleased/2865-direct-provider-usage.md",
+   "status": "added",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,8 @@\n+---\n+kind: fixed\n+title: Direct OpenAI-compatible requests omit the router usage field\n+pr: 2865\n+surface: [chat, engine, docs]\n+invalidates:\n+  - \"Connected OpenAI-compatible services received the router's top-level usage opt-in and strict gateways could reject the call. Direct requests now omit that field and opt in to streaming counts with stream_options.include_usage when supported.\"\n+---"
+  },
+  {
+   "filename": "internal/manual/chat/running-from-the-terminal.md",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -1864,8 +1864,8 @@ leaves for the Model Pool after a task lands (*Model Pool* above).\n Connected services ask for streaming token counts with `stream_options.include_usage`.\n If a service explicitly refuses that option with HTTP 400 or 422, codeaf retries\n once without it and omits it on later calls to that endpoint. An unrelated error\n-does not turn usage reporting off. The default router uses its existing usage\n-request without the extra option.\n+does not turn usage reporting off. Only the default router receives the\n+`usage.include` opt-in.\n The usage-option repair can follow or precede an independent reasoning repair;\n each distinct repair is used once in that chain.\n "
+  },
+  {
+   "filename": "internal/provider/usage_contract_test.go",
+   "status": "modified",
+   "additions": 37,
+   "deletions": 2,
+   "patch": "@@ -5,6 +5,7 @@ import (\n \t\"encoding/json\"\n \t\"fmt\"\n \t\"net/http\"\n+\t\"net/http/httptest\"\n \t\"strings\"\n \t\"testing\"\n \n@@ -45,13 +46,47 @@ func TestK2StreamUsageOptInFollowsTheActualRoad(t *testing.T) {\n \t\t\tif got := string(body[\"stream_options\"]); (got != \"\") != tc.want || tc.want && got != `{\"include_usage\":true}` {\n \t\t\t\tt.Fatalf(\"stream_options=%s, want present=%t\", got, tc.want)\n \t\t\t}\n-\t\t\tif !tc.direct && tc.base == \"\" && string(body[\"usage\"]) != `{\"include\":true}` {\n-\t\t\t\tt.Fatalf(\"router usage=%s\", body[\"usage\"])\n+\t\t\twantUsage := `{\"include\":true}`\n+\t\t\tif tc.want {\n+\t\t\t\twantUsage = \"\"\n+\t\t\t}\n+\t\t\tif got := string(body[\"usage\"]); got != wantUsage {\n+\t\t\t\tt.Fatalf(\"usage=%q, want %q\", got, wantUsage)\n \t\t\t}\n \t\t})\n \t}\n }\n \n+func TestDirectCompletionOmitsRouterUsage(t *testing.T) {\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+\t\tvar body map[string]json.RawMessage\n+\t\tif err := json.NewDecoder(r.Body).Decode(&body); err != nil {\n+\t\t\thttp.Error(w, err.Error(), http.StatusBadRequest)\n+\t\t\treturn\n+\t\t}\n+\t\tif _, sent := body[\"usage\"]; sent {\n+\t\t\tw.WriteHeader(http.StatusBadRequest)\n+\t\t\tfmt.Fprint(w, `{\"error\":{\"message\":\"unrecognized request argument supplied: usage\"}}`)\n+\t\t\treturn\n+\t\t}\n+\t\tvar options streamOptions\n+\t\tif err := json.Unmarshal(body[\"stream_options\"], &options); err != nil || !options.IncludeUsage {\n+\t\t\thttp.Error(w, \"missing stream_options.include_usage\", http.StatusBadRequest)\n+\t\t\treturn\n+\t\t}\n+\t\tw.Header().Set(\"Content-Type\", \"text/event-stream\")\n+\t\tfmt.Fprint(w, \"data: {\\\"choices\\\":[{\\\"index\\\":0,\\\"delta\\\":{\\\"content\\\":\\\"hello\\\"},\\\"finish_reason\\\":\\\"stop\\\"}]}\\n\\ndata: [DONE]\\n\\n\")\n+\t}))\n+\tt.Cleanup(server.Close)\n+\tclient, err := NewClient(Config{BaseURL: server.URL, Model: \"stub/model\", Direct: true, KeyOptional: true, HTTPClient: server.Client()})\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tif _, err := client.CompleteWithMessages(t.Context(), userMessages(\"hello\")); err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+}\n+\n func TestK2StreamUsageRefusalIsRememberedOn400And422(t *testing.T) {\n \tfor _, status := range []int{http.StatusBadRequest, http.StatusUnprocessableEntity} {\n \t\tt.Run(fmt.Sprint(status), func(t *testing.T) {"
+  },
+  {
+   "filename": "internal/provider/usage_estimate.go",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 6,
+   "patch": "@@ -270,18 +270,21 @@ func (c *Client) usageEndpoint(knobs callKnobs) string {\n \treturn c.config.BaseURL\n }\n \n-func (c *Client) streamUsageSupported(knobs callKnobs) bool {\n+func (c *Client) directUsageEndpoint(knobs callKnobs) bool {\n \tbase := c.usageEndpoint(knobs)\n-\tdirect := c.config.Direct\n-\tif base != c.config.BaseURL {\n-\t\tdirect = telemetry.RoutingProvider(base) != modelsource.DefaultID\n+\tif base == c.config.BaseURL {\n+\t\treturn c.config.Direct\n \t}\n+\treturn telemetry.RoutingProvider(base) != modelsource.DefaultID\n+}\n+\n+func (c *Client) streamUsageSupported(knobs callKnobs) bool {\n \t// The router already receives usage.include. Only a connected service\n \t// needs the compatible API's opt-in, including after a billing-road move.\n-\tif !direct {\n+\tif !c.directUsageEndpoint(knobs) {\n \t\treturn false\n \t}\n-\t_, refused := c.streamUsageUnsupported.Load(base)\n+\t_, refused := c.streamUsageUnsupported.Load(c.usageEndpoint(knobs))\n \treturn !refused\n }\n "
+  },
+  {
+   "filename": "internal/provider/wire.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -419,8 +419,11 @@ func (c *Client) encodeRequest(request *ai.Request, knobs callKnobs) ([]byte, er\n \n \t// OpenRouter only reports cache reads, cache writes, and native cost when\n \t// the request opts into usage accounting. Without it the single largest\n-\t// lever on a long run's bill is invisible, so it is never optional here.\n-\tif scrubbed.Usage == nil {\n+\t// lever on a long run's bill is invisible. Direct services use the\n+\t// streaming opt-in below and may reject the router field.\n+\tif c.directUsageEndpoint(knobs) {\n+\t\tscrubbed.Usage = nil\n+\t} else if scrubbed.Usage == nil {\n \t\tscrubbed.Usage = &ai.RequestUsage{Include: true}\n \t}\n "
+  }
+ ],
+ "test_files": [
+  "internal/provider/usage_contract_test.go"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "openai-php/client",
+ "number": 860,
+ "url": "https://github.com/openai-php/client/pull/860",
+ "title": "fix(audio): read the logprob key in streamed transcription logprobs",
+ "merged_at": "2026-11-23T11:23:36Z",
+ "files": [
+  {
+   "filename": "src/Responses/Audio/Streaming/Logprobs.php",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 5,
+   "patch": "@@ -12,7 +12,7 @@\n use OpenAI\\Testing\\Responses\\Concerns\\Fakeable;\n \n /**\n- * @phpstan-type LogprobsType array{bytes: array<int, string>, logprobs: int, token: string}\n+ * @phpstan-type LogprobsType array{bytes: array<int, int>, logprob: float, token: string}\n  *\n  * @implements ResponseContract<LogprobsType>\n  */\n@@ -27,11 +27,11 @@ final class Logprobs implements ResponseContract, ResponseHasMetaInformationCont\n     use HasMetaInformation;\n \n     /**\n-     * @param  array<int, string>  $bytes\n+     * @param  array<int, int>  $bytes\n      */\n     private function __construct(\n         public readonly array $bytes,\n-        public readonly int $logprobs,\n+        public readonly float $logprob,\n         public readonly string $token,\n         public readonly MetaInformation $meta,\n     ) {}\n@@ -43,7 +43,7 @@ public static function from(array $attributes, MetaInformation $meta): self\n     {\n         return new self(\n             bytes: $attributes['bytes'],\n-            logprobs: $attributes['logprobs'],\n+            logprob: $attributes['logprob'],\n             token: $attributes['token'],\n             meta: $meta,\n         );\n@@ -56,7 +56,7 @@ public function toArray(): array\n     {\n         return [\n             'bytes' => $this->bytes,\n-            'logprobs' => $this->logprobs,\n+            'logprob' => $this->logprob,\n             'token' => $this->token,\n         ];\n     }"
+  },
+  {
+   "filename": "tests/Responses/Audio/Streaming/Logprobs.php",
+   "status": "added",
+   "additions": 40,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,40 @@\n+<?php\n+\n+use OpenAI\\Responses\\Audio\\Streaming\\TranscriptTextDelta;\n+use OpenAI\\Responses\\Audio\\Streaming\\TranscriptTextDone;\n+use OpenAI\\Responses\\Meta\\MetaInformation;\n+\n+function transcriptLogprobsMeta(): MetaInformation\n+{\n+    return MetaInformation::from([]);\n+}\n+\n+test('transcript delta keeps the logprob values returned by the api', function () {\n+    $response = TranscriptTextDelta::from([\n+        'delta' => 'Hello',\n+        'logprobs' => [\n+            ['token' => 'Hello', 'logprob' => -0.0123, 'bytes' => [72, 101, 108, 108, 111]],\n+        ],\n+    ], transcriptLogprobsMeta());\n+\n+    expect($response->logprobs)->toHaveCount(1)\n+        ->and($response->logprobs[0]->token)->toBe('Hello')\n+        ->and($response->logprobs[0]->logprob)->toBe(-0.0123)\n+        ->and($response->logprobs[0]->bytes)->toBe([72, 101, 108, 108, 111])\n+        ->and($response->toArray()['logprobs'][0])->toBe([\n+            'bytes' => [72, 101, 108, 108, 111],\n+            'logprob' => -0.0123,\n+            'token' => 'Hello',\n+        ]);\n+});\n+\n+test('transcript done keeps the logprob values returned by the api', function () {\n+    $response = TranscriptTextDone::from([\n+        'text' => 'Hello',\n+        'logprobs' => [\n+            ['token' => 'Hello', 'logprob' => -0.5, 'bytes' => [72]],\n+        ],\n+    ], transcriptLogprobsMeta());\n+\n+    expect($response->logprobs[0]->logprob)->toBe(-0.5);\n+});"
+  }
+ ],
+ "test_files": [
+  "tests/Responses/Audio/Streaming/Logprobs.php"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "aws/aws-durable-execution-sdk-go",
+ "number": 182,
+ "url": "https://github.com/aws/aws-durable-execution-sdk-go/pull/182",
+ "title": "fix(telemetry): stop on-change dispatches after invocation end",
+ "merged_at": "2026-11-23T18:56:19Z",
+ "files": [
+  {
+   "filename": "telemetry/plugin.go",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 5,
+   "patch": "@@ -84,6 +84,10 @@ type telemetryInvocation struct {\n \t// The same execution has the same decision across invocations.\n \tsampledIn bool\n \n+\t// ended prevents new on-change dispatches once invocation finalization starts.\n+\t// Protected by mu, so every WaitGroup Add precedes the final Wait.\n+\tended bool\n+\n \t// onChangeDispatching/onChangeDirty implement EmitOnChange's\n \t// coalescing behavior: at most one dispatch goroutine runs at a\n \t// time per Plugin instance.\n@@ -288,6 +292,10 @@ func orderedOperationIDs(ops map[string]durable.OperationHookInfo) []string {\n // so it leaves the record running; EmitAlways still emits a snapshot for\n // it, since that mode reports every invocation regardless of outcome.\n func (p *telemetryInvocation) onInvocationEnd(ctx context.Context, info durable.InvocationEndHookInfo) {\n+\tp.mu.Lock()\n+\tp.ended = true\n+\tp.mu.Unlock()\n+\n \tif info.Status == durable.PluginInvocationPending || info.Status == durable.PluginInvocationRetrying {\n \t\tif p.env.emitMode == EmitOnChange {\n \t\t\t// Finish this invocation's on-change dispatches before its\n@@ -542,7 +550,7 @@ func (p *telemetryInvocation) scheduleOnChangeDispatch(ctx context.Context) {\n \t}\n \n \tp.mu.Lock()\n-\tif !p.sampledIn {\n+\tif !p.sampledIn || p.ended {\n \t\tp.mu.Unlock()\n \t\treturn\n \t}\n@@ -552,10 +560,8 @@ func (p *telemetryInvocation) scheduleOnChangeDispatch(ctx context.Context) {\n \t\treturn\n \t}\n \tp.onChangeDispatching = true\n-\t// Add before Unlock. onInvocationEnd calls Wait once it observes a\n-\t// dispatch in flight. An Add after the Unlock would leave a window\n-\t// where Wait sees a zero counter and returns early, so the final\n-\t// record could precede this dispatch.\n+\t// Add while holding mu, before onInvocationEnd can set ended and\n+\t// begin waiting. Once ended is set, no new dispatch can be added.\n \tp.onChangeWG.Add(1)\n \tp.mu.Unlock()\n "
+  },
+  {
+   "filename": "telemetry/plugin_end_test.go",
+   "status": "added",
+   "additions": 70,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,70 @@\n+package telemetry\n+\n+import (\n+\t\"context\"\n+\t\"testing\"\n+\n+\t\"github.com/aws/aws-durable-execution-sdk-go/durable\"\n+)\n+\n+func TestPlugin_LateHookDoesNotEmitAfterInvocationEnd(t *testing.T) {\n+\tfor _, status := range []durable.PluginInvocationStatus{\n+\t\tdurable.PluginInvocationSucceeded,\n+\t\tdurable.PluginInvocationFailed,\n+\t\tdurable.PluginInvocationPending,\n+\t\tdurable.PluginInvocationRetrying,\n+\t} {\n+\t\tt.Run(string(status), func(t *testing.T) {\n+\t\t\texp := &capturingExporter{}\n+\t\t\tp := &telemetryInvocation{\n+\t\t\t\tenv:    New(Config{EmitMode: EmitOnChange, Exporters: []Exporter{exp}}),\n+\t\t\t\trecord: &Record{Status: StatusRunning, ExecutionArn: \"test-execution\"},\n+\t\t\t\tbyOpID: make(map[string]int), resultText: make(map[string]string), sampledIn: true,\n+\t\t\t}\n+\t\t\tctx := context.Background()\n+\t\t\tp.onInvocationEnd(ctx, durable.InvocationEndHookInfo{Status: status})\n+\t\t\tif n := len(exp.snapshot()); n != 1 {\n+\t\t\t\tt.Fatalf(\"final record missing: %d\", n)\n+\t\t\t}\n+\t\t\tp.onOperationStart(ctx, durable.OperationHookInfo{ID: \"late-op\", Type: \"STEP\", Status: durable.PluginOperationStarted})\n+\t\t\tp.onChangeWG.Wait()\n+\t\t\trecords := exp.snapshot()\n+\t\t\tif len(records) != 1 {\n+\t\t\t\tt.Fatalf(\"late hook emitted after final: got %d records\", len(records))\n+\t\t\t}\n+\t\t})\n+\t}\n+}\n+\n+func TestPlugin_ConcurrentHooksAndInvocationEnd(t *testing.T) {\n+\tfor i := 0; i < 50; i++ {\n+\t\texp := &capturingExporter{}\n+\t\tp := &telemetryInvocation{\n+\t\t\tenv:    New(Config{EmitMode: EmitOnChange, Exporters: []Exporter{exp}}),\n+\t\t\trecord: &Record{Status: StatusRunning, ExecutionArn: \"test-execution\"},\n+\t\t\tbyOpID: make(map[string]int), resultText: make(map[string]string), sampledIn: true,\n+\t\t}\n+\t\tctx := context.Background()\n+\t\tstart := make(chan struct{})\n+\t\tdone := make(chan struct{})\n+\t\tgo func() {\n+\t\t\tdefer close(done)\n+\t\t\t<-start\n+\t\t\tfor j := 0; j < 100; j++ {\n+\t\t\t\tp.onOperationStart(ctx, durable.OperationHookInfo{ID: \"op\", Type: \"STEP\", Status: durable.PluginOperationStarted})\n+\t\t\t}\n+\t\t}()\n+\t\tclose(start)\n+\t\tp.onInvocationEnd(ctx, durable.InvocationEndHookInfo{Status: durable.PluginInvocationSucceeded})\n+\t\tatEnd := len(exp.snapshot())\n+\t\t<-done\n+\t\tp.onChangeWG.Wait()\n+\t\trecords := exp.snapshot()\n+\t\tif len(records) != atEnd {\n+\t\t\tt.Fatalf(\"records emitted after invocation end: %d -> %d\", atEnd, len(records))\n+\t\t}\n+\t\tif records[len(records)-1].Status != StatusSucceeded {\n+\t\t\tt.Fatalf(\"last record is not terminal: %s\", records[len(records)-1].Status)\n+\t\t}\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "telemetry/plugin_end_test.go"
+ ]
+}

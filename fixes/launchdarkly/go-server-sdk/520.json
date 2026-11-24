@@ -1,0 +1,34 @@
+{
+ "repo": "launchdarkly/go-server-sdk",
+ "number": 520,
+ "url": "https://github.com/launchdarkly/go-server-sdk/pull/520",
+ "title": "fix: Drop TrackMetric events with a NaN or infinite metric value",
+ "merged_at": "2026-11-23T18:29:28Z",
+ "files": [
+  {
+   "filename": "ldclient.go",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -7,6 +7,7 @@ import (\n \t\"encoding/hex\"\n \t\"errors\"\n \t\"fmt\"\n+\t\"math\"\n \t\"reflect\"\n \t\"time\"\n \n@@ -616,6 +617,10 @@ func (client *LDClient) TrackMetric(\n \t\tclient.loggers.Warnf(\"TrackMetric called with invalid context: %s\", err)\n \t\treturn nil // Don't return an error value because we didn't in the past and it might confuse users\n \t}\n+\tif math.IsNaN(metricValue) || math.IsInf(metricValue, 0) {\n+\t\tclient.loggers.Warnf(\"TrackMetric called with non-finite metric value for event %q; event not recorded\", eventName)\n+\t\treturn nil\n+\t}\n \tclient.trackWithHooks(\n \t\tgocontext.TODO(),\n \t\teventName,\n@@ -647,6 +652,10 @@ func (client *LDClient) TrackMetricCtx(\n \t\tclient.loggers.Warnf(\"TrackMetricCtx called with invalid context: %s\", err)\n \t\treturn nil // Don't return an error value because we didn't in the past and it might confuse users\n \t}\n+\tif math.IsNaN(metricValue) || math.IsInf(metricValue, 0) {\n+\t\tclient.loggers.Warnf(\"TrackMetricCtx called with non-finite metric value for event %q; event not recorded\", eventName)\n+\t\treturn nil\n+\t}\n \tclient.trackWithHooks(\n \t\tctx,\n \t\teventName,"
+  },
+  {
+   "filename": "ldclient_events_test.go",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 0,
+   "patch": "@@ -2,6 +2,7 @@ package ldclient\n \n import (\n \tgocontext \"context\"\n+\t\"math\"\n \t\"testing\"\n \t\"time\"\n \n@@ -204,6 +205,33 @@ func TestTrackMetricCtxSendsCustomEventWithMetricAndData(t *testing.T) {\n \tassert.Equal(t, metric, e.MetricValue)\n }\n \n+func TestTrackMetricWithNonFiniteValueSendsNoEventAndLogsWarning(t *testing.T) {\n+\tfor name, metric := range map[string]float64{\"NaN\": math.NaN(), \"+Inf\": math.Inf(1), \"-Inf\": math.Inf(-1)} {\n+\t\tfor _, method := range []string{\"TrackMetric\", \"TrackMetricCtx\"} {\n+\t\t\tt.Run(method+\" \"+name, func(t *testing.T) {\n+\t\t\t\tmockLog := ldlogtest.NewMockLog()\n+\t\t\t\tclient := makeTestClientWithConfig(func(c *Config) {\n+\t\t\t\t\tc.Logging = ldcomponents.Logging().Loggers(mockLog.Loggers)\n+\t\t\t\t})\n+\t\t\t\tdefer client.Close()\n+\n+\t\t\t\tuser := lduser.NewUser(\"userKey\")\n+\t\t\t\tvar err error\n+\t\t\t\tif method == \"TrackMetric\" {\n+\t\t\t\t\terr = client.TrackMetric(\"eventKey\", user, metric, ldvalue.Null())\n+\t\t\t\t} else {\n+\t\t\t\t\terr = client.TrackMetricCtx(gocontext.TODO(), \"eventKey\", user, metric, ldvalue.Null())\n+\t\t\t\t}\n+\t\t\t\tassert.NoError(t, err)\n+\n+\t\t\t\tevents := client.eventProcessor.(*mocks.CapturingEventProcessor).Events\n+\t\t\t\tassert.Len(t, events, 0)\n+\t\t\t\tmockLog.AssertMessageMatch(t, true, ldlog.Warn, \"non-finite metric value.*eventKey\")\n+\t\t\t})\n+\t\t}\n+\t}\n+}\n+\n func TestTrackEventWithEmptyUserKeySendsNoEvent(t *testing.T) {\n \tclient := makeTestClient()\n \tdefer client.Close()"
+  },
+  {
+   "filename": "ldclient_hooks_test.go",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -3,6 +3,7 @@ package ldclient\n import (\n \tgocontext \"context\"\n \t\"fmt\"\n+\t\"math\"\n \t\"testing\"\n \n \t\"github.com/launchdarkly/go-sdk-common/v3/ldcontext\"\n@@ -367,3 +368,15 @@ func TestHooksAreExecutedForAllTrackMethods(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestHooksAreNotExecutedForNonFiniteTrackMetric(t *testing.T) {\n+\ttestContext := ldcontext.New(\"test-context\")\n+\thook := sharedtest.NewTestHook(\"test-hook\")\n+\tclient, _ := MakeCustomClient(\"\", Config{Offline: true, Hooks: []ldhooks.Hook{hook}}, 0)\n+\tclient.eventsDefault = newEventsScope(client, false)\n+\n+\t_ = client.TrackMetric(hookTestEvent, testContext, math.NaN(), ldvalue.Null())\n+\t_ = client.TrackMetricCtx(gocontext.TODO(), hookTestEvent, testContext, math.Inf(1), ldvalue.Null())\n+\n+\thook.VerifyNoCalls(t)\n+}"
+  }
+ ],
+ "test_files": [
+  "ldclient_events_test.go",
+  "ldclient_hooks_test.go"
+ ]
+}

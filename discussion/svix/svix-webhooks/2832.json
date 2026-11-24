@@ -5,5 +5,11 @@
  "state": "open",
  "reviews": [],
  "review_comments": [],
- "comments": []
+ "comments": [
+  {
+   "role": "none",
+   "created_at": "2026-11-23T14:40:50Z",
+   "body": "Ran this locally against master `c35d595` and the PR head `176f8aad` (.NET 8, `dotnet test` in `csharp/`):\n\n- master: 83 passed, 1 skipped, 84 total.\n- master + this PR's tests: `TestMultiSigPayloadSkipsMalformedEntry` fails with `Invalid Signature Headers` (the `throw` at `csharp/Svix/Webhook.cs:126`).\n- this PR as submitted: 85 passed, 1 skipped, 86 total, matching the description.\n\nTo add to the cross-SDK note in the description: Ruby skips these too (`ruby/lib/svix/webhook.rb:54-55`).\n\nTwo small test suggestions, if useful:\n\n1. A double space between entries hits the same path on master, because the empty token has no `,`. This fails on master with `Invalid Signature Headers` and passes with the PR:\n\n```diff\n+        [Fact]\n+        public void TestMultiSigPayloadSkipsEmptyEntryFromDoubleSpace()\n+        {\n+            var testPayload = new TestPayload(DateTimeOffset.UtcNow);\n+            var valid = testPayload.headers.Get(TestPayload.SVIX_SIGNATURE_HEADER_KEY);\n+            testPayload.headers.Set(\n+                TestPayload.SVIX_SIGNATURE_HEADER_KEY,\n+                \"v1,Ceo5qEr07ixe2NLpvHk3FH9bwy/WavXrAFQ/9tdO6mc=  \" + valid\n+            );\n+\n+            var wh = new Webhook(testPayload.secret);\n+\n+            wh.Verify(testPayload.payload, testPayload.headers);\n+        }\n```\n\n2. `TestOnlyMalformedSignatureThrowsNoMatch` passes on master as written, since master throws the same exception type with a different message. Asserting the message makes it catch the change:\n\n```diff\n-            Assert.Throws<WebhookVerificationException>(() =>\n+            var ex = Assert.Throws<WebhookVerificationException>(() =>\n                 wh.Verify(testPayload.payload, testPayload.headers)\n             );\n+            Assert.Equal(\"No matching signature found\", ex.Message);\n```\n\nWith both added, all three new tests fail on master and pass with this PR, and the suite stays green (86 passed, 1 skipped, 87 total).\n\nWritten with AI assistance (Claude ran the repro and the tests and drafted this comment).\n"
+  }
+ ]
 }

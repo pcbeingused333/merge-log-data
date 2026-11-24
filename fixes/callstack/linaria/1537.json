@@ -1,0 +1,33 @@
+{
+ "repo": "callstack/linaria",
+ "number": 1537,
+ "url": "https://github.com/callstack/linaria/pull/1537",
+ "title": "fix(server): retain keyframes across animation shorthand components",
+ "merged_at": "2026-11-23T10:26:07Z",
+ "files": [
+  {
+   "filename": ".changeset/tidy-spins-remain.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@linaria/server': patch\n+---\n+\n+Preserve critical keyframes when animation names follow other shorthand components or appear in comma-separated animation lists."
+  },
+  {
+   "filename": "packages/server/__tests__/collect.test.ts",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -418,3 +418,27 @@ test('keeps the order of rules in a large stylesheet', () => {\n   expect(selectorsOf(critical)).toEqual(expectedCritical);\n   expect(selectorsOf(other)).toEqual(expectedOther);\n });\n+\n+test.each([\n+  ['animation', 'spin 1s linear', ['spin']],\n+  ['animation', '1s linear spin', ['spin']],\n+  ['animation', '1s spin linear', ['spin']],\n+  ['animation', '1s\\tlinear\\nspin', ['spin']],\n+  ['animation', 'spin 1s, fade 2s', ['spin', 'fade']],\n+  ['animation', '1s steps(2, end) spin, 2s ease-in fade', ['spin', 'fade']],\n+  ['animation-name', 'spin, fade', ['spin', 'fade']],\n+])('collects keyframes for %s: %s', (property, value, expected) => {\n+  const css = `\n+    .linaria { ${property}: ${value}; }\n+    .other { animation: unused 1s; }\n+    @keyframes spin { to { transform: rotate(360deg); } }\n+    @keyframes fade { to { opacity: 0; } }\n+    @keyframes unused { to { opacity: 1; } }\n+  `;\n+  const { critical } = collect(html, css);\n+  const names: string[] = [];\n+  postcss.parse(critical).walkAtRules('keyframes', (rule) => {\n+    names.push(rule.params);\n+  });\n+  expect(names).toEqual(expected);\n+});"
+  },
+  {
+   "filename": "packages/server/src/collect.ts",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -184,7 +184,12 @@ export default function collect(\n   other.append(otherNodes);\n \n   critical.walkDecls(/animation/, (decl) => {\n-    animations.add(decl.value.split(' ')[0]);\n+    // Names can appear anywhere in each shorthand, including after timing functions.\n+    postcss.list.comma(decl.value).forEach((animation) => {\n+      postcss.list.space(animation).forEach((token) => {\n+        animations.add(token);\n+      });\n+    });\n   });\n \n   keyframes.forEach((rule) => {"
+  }
+ ],
+ "test_files": [
+  "packages/server/__tests__/collect.test.ts"
+ ]
+}

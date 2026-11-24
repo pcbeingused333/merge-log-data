@@ -1,0 +1,26 @@
+{
+ "repo": "Adyen/adyen-ruby-api-library",
+ "number": 413,
+ "url": "https://github.com/Adyen/adyen-ruby-api-library/pull/413",
+ "title": "fix: raise APIError for HTTP 429 responses",
+ "merged_at": "2026-11-23T13:26:42Z",
+ "files": [
+  {
+   "filename": "lib/adyen/client.rb",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -210,6 +210,9 @@ def call_adyen_api(service, action, request_data, headers, version, _with_applic\n         when 422\n           full_message = build_error_message(response.body, 'Validation error')\n           raise Adyen::ValidationError.new(full_message, request_data, response.body)\n+        when 429\n+          full_message = build_error_message(response.body, 'Too many requests')\n+          raise Adyen::APIError.new(full_message, request_data, response.body, response.status)\n         when 500..599\n           full_message = build_error_message(response.body, 'Internal server error')\n           raise Adyen::ServerError.new(full_message, request_data, response.body)"
+  },
+  {
+   "filename": "spec/client_spec.rb",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -552,6 +552,33 @@\n     end\n   end\n \n+  describe 'rate-limited payments' do\n+    let(:client) { create_client(:api_key) }\n+    let(:request_body) { { amount: { value: 100, currency: 'EUR' }, reference: 'test' } }\n+\n+    [\n+      ['legacy', { status: 429, errorCode: '703', message: 'Too many requests' }.to_json,\n+       'Too many requests ErrorCode: 703'],\n+      ['RFC 7807', { status: 429, errorCode: '703', detail: 'Too many requests' }.to_json,\n+       'Too many requests ErrorCode: 703'],\n+      ['non-JSON', 'Too many requests', 'Too many requests']\n+    ].each do |format, response_body, message|\n+      it \"raises APIError for a 429 #{format} response\" do\n+        url = client.service_url('Checkout', 'payments', client.checkout.version)\n+        stub_request(:post, url).to_return(status: 429, body: response_body)\n+\n+        expect { client.checkout.payments_api.payments(request_body) }\n+          .to raise_error(Adyen::APIError) do |error|\n+            expect(error).to be_a(Adyen::AdyenError)\n+            expect(error.code).to eq(429)\n+            expect(error.msg).to eq(message)\n+            expect(error.response).to eq(response_body)\n+            expect(error.request[:reference]).to eq('test')\n+          end\n+      end\n+    end\n+  end\n+\n   it 'raises ServerError on 500 response and checks content' do\n     client = Adyen::Client.new(api_key: 'api_key', env: :test)\n     mock_faraday_connection = double(Faraday::Connection)"
+  }
+ ],
+ "test_files": [
+  "spec/client_spec.rb"
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "PostHog/posthog-android",
+ "number": 1000,
+ "url": "https://github.com/PostHog/posthog-android/pull/1000",
+ "title": "fix(android): wait for survey activation before evaluating flags",
+ "merged_at": "2026-11-23T20:33:50Z",
+ "files": [
+  {
+   "filename": ".changeset/quiet-checkout-surveys.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+\"posthog-android\": patch\n+---\n+\n+Wait for a survey's activation event before evaluating its feature flags."
+  },
+  {
+   "filename": "posthog-android/src/main/java/com/posthog/android/surveys/PostHogSurveysIntegration.kt",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 11,
+   "patch": "@@ -281,18 +281,11 @@ public class PostHogSurveysIntegration(\n             // 3.5. Filter out surveys whose wait period has not passed\n             if (!hasWaitPeriodPassed(survey, getLastSeenSurveyDate(), config.dateProvider.currentDate())) return@filter false\n \n-            // 4. Check feature flags (collect all non-empty keys and verify they're enabled)\n-            val featureFlagsMatch = matchesFeatureFlags(survey, postHog)\n-\n-            // 5. For event-based surveys, check if they have been activated by the event\n-            val eventActivationCheck =\n-                if (hasEvents(survey)) {\n-                    isSurveyEventActivated(survey)\n-                } else {\n-                    true\n-                }\n+            // 4. For event-based surveys, wait for activation before evaluating flags\n+            if (hasEvents(survey) && !isSurveyEventActivated(survey)) return@filter false\n \n-            featureFlagsMatch && eventActivationCheck\n+            // 5. Check that all configured feature flags match\n+            matchesFeatureFlags(survey, postHog)\n         }.sortedByDescending(::hasProgress)\n     }\n "
+  },
+  {
+   "filename": "posthog-android/src/test/java/com/posthog/android/surveys/PostHogSurveysSelectionTest.kt",
+   "status": "modified",
+   "additions": 31,
+   "deletions": 0,
+   "patch": "@@ -18,7 +18,10 @@ import com.posthog.surveys.SurveyType\n import org.junit.runner.RunWith\n import org.mockito.kotlin.any\n import org.mockito.kotlin.anyOrNull\n+import org.mockito.kotlin.atLeastOnce\n import org.mockito.kotlin.mock\n+import org.mockito.kotlin.never\n+import org.mockito.kotlin.verify\n import org.mockito.kotlin.whenever\n import java.util.Date\n import kotlin.test.Test\n@@ -115,6 +118,34 @@ internal class PostHogSurveysSelectionTest {\n         assertEligible(survey(conditions()), true, event = \"unrelated\")\n     }\n \n+    @Test\n+    fun `linked flag is evaluated only after the survey activation event`() {\n+        val event = \"checkout_completed\"\n+        val flag = \"beta-program\"\n+        val survey = survey(conditions(eventNames = listOf(event))).copy(linkedFlagKey = flag)\n+        val config =\n+            PostHogConfig(\"selection-test\").apply {\n+                cachePreferences = PostHogMemoryPreferences()\n+                surveys = true\n+                surveysConfig.surveysDelegate = mock<PostHogSurveysDelegate>()\n+            }\n+        val postHog = mock<PostHogInterface>()\n+        whenever(postHog.isFeatureEnabled(flag, sendFeatureFlagEvent = null)).thenReturn(true)\n+        val integration = PostHogSurveysIntegration(ApplicationProvider.getApplicationContext<Context>(), config)\n+        integration.install(postHog)\n+        try {\n+            integration.onSurveysLoaded(listOf(survey))\n+            assertEquals(emptyList(), integration.getActiveMatchingSurveys())\n+            verify(postHog, never()).isFeatureEnabled(any(), any(), anyOrNull())\n+\n+            integration.onEvent(event, null)\n+            assertEquals(listOf(survey.id), integration.getActiveMatchingSurveys().map { it.id })\n+            verify(postHog, atLeastOnce()).isFeatureEnabled(flag, sendFeatureFlagEvent = null)\n+        } finally {\n+            integration.uninstall()\n+        }\n+    }\n+\n     @Test\n     fun `device and event targeting must both match`() {\n         val survey = survey(conditions(listOf(\"Mobile\"), SurveyMatchType.EXACT, listOf(\"app_opened\")))"
+  }
+ ],
+ "test_files": [
+  "posthog-android/src/test/java/com/posthog/android/surveys/PostHogSurveysSelectionTest.kt"
+ ]
+}

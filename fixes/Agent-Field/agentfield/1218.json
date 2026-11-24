@@ -1,0 +1,26 @@
+{
+ "repo": "Agent-Field/agentfield",
+ "number": 1218,
+ "url": "https://github.com/Agent-Field/agentfield/pull/1218",
+ "title": "fix(control-plane): honor AGENTFIELD_STORAGE_LOCAL_* env overrides",
+ "merged_at": "2026-11-23T13:48:50Z",
+ "files": [
+  {
+   "filename": "control-plane/internal/config/config.go",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -796,6 +796,16 @@ func ApplyEnvOverrides(cfg *Config) {\n \t\tcfg.API.Auth.APIKey = apiKey\n \t}\n \n+\t// Local storage paths. Like the CORS keys below, these are absent when no\n+\t// config file is loaded, so viper's AutomaticEnv never resolves the\n+\t// documented AGENTFIELD_STORAGE_LOCAL_* names.\n+\tif val := strings.TrimSpace(os.Getenv(\"AGENTFIELD_STORAGE_LOCAL_DATABASE_PATH\")); val != \"\" {\n+\t\tcfg.Storage.Local.DatabasePath = val\n+\t}\n+\tif val := strings.TrimSpace(os.Getenv(\"AGENTFIELD_STORAGE_LOCAL_KV_STORE_PATH\")); val != \"\" {\n+\t\tcfg.Storage.Local.KVStorePath = val\n+\t}\n+\n \t// CORS. These keys are absent when no config file is loaded, so viper's\n \t// AutomaticEnv never resolves the documented AGENTFIELD_API_CORS_* names.\n \tif val := os.Getenv(\"AGENTFIELD_API_CORS_ALLOWED_ORIGINS\"); val != \"\" {"
+  },
+  {
+   "filename": "control-plane/internal/config/config_storage_env_test.go",
+   "status": "added",
+   "additions": 31,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,31 @@\n+package config\n+\n+import (\n+\t\"testing\"\n+\n+\t\"github.com/Agent-Field/agentfield/control-plane/internal/storage\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+func TestApplyEnvOverrides_StorageLocal(t *testing.T) {\n+\tt.Setenv(\"AGENTFIELD_STORAGE_LOCAL_DATABASE_PATH\", \" /data/agentfield.db \")\n+\tt.Setenv(\"AGENTFIELD_STORAGE_LOCAL_KV_STORE_PATH\", \"/data/agentfield.bolt\")\n+\n+\tcfg := &Config{}\n+\tApplyEnvOverrides(cfg)\n+\n+\trequire.Equal(t, \"/data/agentfield.db\", cfg.Storage.Local.DatabasePath)\n+\trequire.Equal(t, \"/data/agentfield.bolt\", cfg.Storage.Local.KVStorePath)\n+}\n+\n+func TestApplyEnvOverrides_StorageLocalUnsetKeepsConfig(t *testing.T) {\n+\tt.Setenv(\"AGENTFIELD_STORAGE_LOCAL_DATABASE_PATH\", \"\")\n+\tt.Setenv(\"AGENTFIELD_STORAGE_LOCAL_KV_STORE_PATH\", \"\")\n+\n+\tcfg := &Config{}\n+\tcfg.Storage.Local = storage.LocalStorageConfig{DatabasePath: \"/from-file.db\", KVStorePath: \"/from-file.bolt\"}\n+\tApplyEnvOverrides(cfg)\n+\n+\trequire.Equal(t, \"/from-file.db\", cfg.Storage.Local.DatabasePath)\n+\trequire.Equal(t, \"/from-file.bolt\", cfg.Storage.Local.KVStorePath)\n+}"
+  }
+ ],
+ "test_files": [
+  "control-plane/internal/config/config_storage_env_test.go"
+ ]
+}

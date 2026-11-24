@@ -1,0 +1,57 @@
+{
+ "repo": "openai-php/client",
+ "number": 862,
+ "url": "https://github.com/openai-php/client/pull/862",
+ "title": "fix(OpenAI): preserve sequence numbers on streamed refusal events",
+ "merged_at": "2026-11-23T11:17:04Z",
+ "files": [
+  {
+   "filename": "src/Responses/Responses/Streaming/RefusalDelta.php",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 2,
+   "patch": "@@ -12,7 +12,7 @@\n use OpenAI\\Testing\\Responses\\Concerns\\Fakeable;\n \n /**\n- * @phpstan-type RefusalDeltaType array{type: string, content_index: int, delta: string, item_id: string, output_index: int}\n+ * @phpstan-type RefusalDeltaType array{type: string, content_index: int, delta: string, item_id: string, output_index: int, sequence_number?: int}\n  *\n  * @implements ResponseContract<RefusalDeltaType>\n  */\n@@ -32,6 +32,7 @@ private function __construct(\n         public readonly string $delta,\n         public readonly string $itemId,\n         public readonly int $outputIndex,\n+        public readonly ?int $sequenceNumber,\n         private readonly MetaInformation $meta,\n     ) {}\n \n@@ -46,6 +47,7 @@ public static function from(array $attributes, MetaInformation $meta): self\n             delta: $attributes['delta'],\n             itemId: $attributes['item_id'],\n             outputIndex: $attributes['output_index'],\n+            sequenceNumber: $attributes['sequence_number'] ?? null,\n             meta: $meta,\n         );\n     }\n@@ -55,12 +57,18 @@ public static function from(array $attributes, MetaInformation $meta): self\n      */\n     public function toArray(): array\n     {\n-        return [\n+        $attributes = [\n             'type' => $this->type,\n             'content_index' => $this->contentIndex,\n             'delta' => $this->delta,\n             'item_id' => $this->itemId,\n             'output_index' => $this->outputIndex,\n         ];\n+\n+        if ($this->sequenceNumber !== null) {\n+            $attributes['sequence_number'] = $this->sequenceNumber;\n+        }\n+\n+        return $attributes;\n     }\n }"
+  },
+  {
+   "filename": "src/Responses/Responses/Streaming/RefusalDone.php",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 2,
+   "patch": "@@ -12,7 +12,7 @@\n use OpenAI\\Testing\\Responses\\Concerns\\Fakeable;\n \n /**\n- * @phpstan-type RefusalDoneType array{type: string, content_index: int, item_id: string, output_index: int, refusal: string}\n+ * @phpstan-type RefusalDoneType array{type: string, content_index: int, item_id: string, output_index: int, refusal: string, sequence_number?: int}\n  *\n  * @implements ResponseContract<RefusalDoneType>\n  */\n@@ -32,6 +32,7 @@ private function __construct(\n         public readonly string $itemId,\n         public readonly int $outputIndex,\n         public readonly string $refusal,\n+        public readonly ?int $sequenceNumber,\n         private readonly MetaInformation $meta,\n     ) {}\n \n@@ -46,6 +47,7 @@ public static function from(array $attributes, MetaInformation $meta): self\n             itemId: $attributes['item_id'],\n             outputIndex: $attributes['output_index'],\n             refusal: $attributes['refusal'],\n+            sequenceNumber: $attributes['sequence_number'] ?? null,\n             meta: $meta,\n         );\n     }\n@@ -55,12 +57,18 @@ public static function from(array $attributes, MetaInformation $meta): self\n      */\n     public function toArray(): array\n     {\n-        return [\n+        $attributes = [\n             'type' => $this->type,\n             'content_index' => $this->contentIndex,\n             'item_id' => $this->itemId,\n             'output_index' => $this->outputIndex,\n             'refusal' => $this->refusal,\n         ];\n+\n+        if ($this->sequenceNumber !== null) {\n+            $attributes['sequence_number'] = $this->sequenceNumber;\n+        }\n+\n+        return $attributes;\n     }\n }"
+  },
+  {
+   "filename": "tests/Fixtures/Responses.php",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -1350,3 +1350,13 @@ function responseCompactionCompactingEvents()\n {\n     return fopen(__DIR__.'/Streams/ResponseCompactionCompacting.txt', 'r');\n }\n+\n+function responseRefusalDeltaEvent()\n+{\n+    return fopen(__DIR__.'/Streams/ResponseRefusalDelta.txt', 'r');\n+}\n+\n+function responseRefusalDoneEvent()\n+{\n+    return fopen(__DIR__.'/Streams/ResponseRefusalDone.txt', 'r');\n+}"
+  },
+  {
+   "filename": "tests/Fixtures/Streams/ResponseRefusalDelta.txt",
+   "status": "added",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,4 @@\n+event: response.refusal.delta\n+data: {\"type\":\"response.refusal.delta\",\"item_id\":\"item_123\",\"output_index\":0,\"content_index\":0,\"delta\":\"I cannot help with that.\",\"sequence_number\":4}\n+\n+data: [DONE]"
+  },
+  {
+   "filename": "tests/Fixtures/Streams/ResponseRefusalDone.txt",
+   "status": "added",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,4 @@\n+event: response.refusal.done\n+data: {\"type\":\"response.refusal.done\",\"item_id\":\"item_123\",\"output_index\":0,\"content_index\":0,\"refusal\":\"I cannot help with that.\",\"sequence_number\":5}\n+\n+data: [DONE]"
+  },
+  {
+   "filename": "tests/Responses/Responses/CreateStreamedResponse.php",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -28,6 +28,8 @@\n use OpenAI\\Responses\\Responses\\Streaming\\RateLimits;\n use OpenAI\\Responses\\Responses\\Streaming\\ReasoningTextDelta;\n use OpenAI\\Responses\\Responses\\Streaming\\ReasoningTextDone;\n+use OpenAI\\Responses\\Responses\\Streaming\\RefusalDelta;\n+use OpenAI\\Responses\\Responses\\Streaming\\RefusalDone;\n use OpenAI\\Responses\\Responses\\Streaming\\Response;\n use OpenAI\\Responses\\Responses\\Tool\\WebSearchTool;\n use OpenAI\\Testing\\Responses\\Fixtures\\Responses\\Output\\OutputShellCallFixture;\n@@ -94,6 +96,28 @@\n         ->and(OutputTextDelta::from(['type' => 'x', 'content_index' => 0, 'delta' => 'a', 'item_id' => 'i', 'output_index' => 0, 'sequence_number' => 1], $response->meta())->toArray())->not->toHaveKey('logprobs');\n });\n \n+test('refusal delta event keeps the sequence number', function () {\n+    $response = CreateStreamedResponse::fake(responseRefusalDeltaEvent());\n+    $event = $response->getIterator()->current();\n+\n+    expect($event)\n+        ->event->toBe('response.refusal.delta')\n+        ->response->toBeInstanceOf(RefusalDelta::class)\n+        ->response->sequenceNumber->toBe(4)\n+        ->and($event->response->toArray())->toHaveKey('sequence_number', 4);\n+});\n+\n+test('refusal done event keeps the sequence number', function () {\n+    $response = CreateStreamedResponse::fake(responseRefusalDoneEvent());\n+    $event = $response->getIterator()->current();\n+\n+    expect($event)\n+        ->event->toBe('response.refusal.done')\n+        ->response->toBeInstanceOf(RefusalDone::class)\n+        ->response->sequenceNumber->toBe(5)\n+        ->and($event->response->toArray())->toHaveKey('sequence_number', 5);\n+});\n+\n test('reasoning text delta event', function () {\n     $response = CreateStreamedResponse::fake(responseReasoningTextDeltaEvent());\n "
+  }
+ ],
+ "test_files": [
+  "tests/Fixtures/Responses.php",
+  "tests/Fixtures/Streams/ResponseRefusalDelta.txt",
+  "tests/Fixtures/Streams/ResponseRefusalDone.txt",
+  "tests/Responses/Responses/CreateStreamedResponse.php"
+ ]
+}

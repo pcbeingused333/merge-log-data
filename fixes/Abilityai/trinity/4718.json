@@ -1,0 +1,82 @@
+{
+ "repo": "Abilityai/trinity",
+ "number": 4718,
+ "url": "https://github.com/Abilityai/trinity/pull/4718",
+ "title": "fix(image-gen): make the Gemini image model configurable and replace the retired default",
+ "merged_at": "2026-11-23T09:45:57Z",
+ "files": [
+  {
+   "filename": ".env.example",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 3,
+   "patch": "@@ -264,12 +264,15 @@ ELEVENLABS_MODEL_ID=eleven_multilingual_v2\n TTS_MAX_CHARS=1500\n \n # Gemini model overrides (#1130) — set these if Google retires the built-in\n-# default (both default to gemini-3.5-flash, set in src/backend/config.py).\n-# Two vars because the modalities differ: TEXT is text-only (image-gen prompt\n-# refinement), TRANSCRIPTION needs inline-audio support (Telegram voice).\n+# default (set in src/backend/config.py). TEXT and TRANSCRIPTION default to\n+# gemini-3.5-flash; IMAGE defaults to gemini-nano-banana-2.1 (#4717). Separate\n+# vars because the modalities differ: TEXT is text-only (image-gen prompt\n+# refinement), IMAGE generates images, TRANSCRIPTION needs inline-audio support\n+# (Telegram voice).\n # Leave commented unless overriding — an uncommented empty value exports \"\"\n # which shadows the default (#1076).\n # GEMINI_TEXT_MODEL=gemini-3.5-flash\n+# GEMINI_IMAGE_MODEL=gemini-nano-banana-2.1\n # GEMINI_TRANSCRIPTION_MODEL=gemini-3.5-flash\n \n # ==========================================="
+  },
+  {
+   "filename": "docker-compose.hosted.yml",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -188,6 +188,7 @@ services:\n       # lines the env knobs are inert in prod (#1039 packaging-gap class). Non-empty\n       # defaults so an unset var doesn't inject \"\" (#1076).\n       - GEMINI_TEXT_MODEL=${GEMINI_TEXT_MODEL:-gemini-3.5-flash}              # image-gen prompt refinement\n+      - GEMINI_IMAGE_MODEL=${GEMINI_IMAGE_MODEL:-gemini-nano-banana-2.1}              # image-gen model\n       - GEMINI_TRANSCRIPTION_MODEL=${GEMINI_TRANSCRIPTION_MODEL:-gemini-3.5-flash}  # Telegram voice transcription\n       # Voice chat (VOICE-001) — mirrors docker-compose.yml so operators can\n       # tune/disable voice in prod (code default is ON; without these lines the"
+  },
+  {
+   "filename": "docker-compose.prod.yml",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -127,6 +127,7 @@ services:\n       # lines the env knobs are inert in prod (#1039 packaging-gap class). Non-empty\n       # defaults so an unset var doesn't inject \"\" (#1076).\n       - GEMINI_TEXT_MODEL=${GEMINI_TEXT_MODEL:-gemini-3.5-flash}              # image-gen prompt refinement\n+      - GEMINI_IMAGE_MODEL=${GEMINI_IMAGE_MODEL:-gemini-nano-banana-2.1}              # image-gen model\n       - GEMINI_TRANSCRIPTION_MODEL=${GEMINI_TRANSCRIPTION_MODEL:-gemini-3.5-flash}  # Telegram voice transcription\n       # Voice chat (VOICE-001) — mirrors docker-compose.yml so operators can\n       # tune/disable voice in prod (code default is ON; without these lines the"
+  },
+  {
+   "filename": "docker-compose.yml",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -53,6 +53,7 @@ services:\n       - GEMINI_API_KEY=${GEMINI_API_KEY:-}  # For platform image generation (IMG-001)\n       # Gemini model overrides (#1130) — non-empty defaults so an unset var doesn't inject \"\" (#1076)\n       - GEMINI_TEXT_MODEL=${GEMINI_TEXT_MODEL:-gemini-3.5-flash}              # image-gen prompt refinement\n+      - GEMINI_IMAGE_MODEL=${GEMINI_IMAGE_MODEL:-gemini-nano-banana-2.1}              # image-gen model\n       - GEMINI_TRANSCRIPTION_MODEL=${GEMINI_TRANSCRIPTION_MODEL:-gemini-3.5-flash}  # Telegram voice transcription\n       - VOICE_MODEL=${VOICE_MODEL:-models/gemini-3.8-live}  # Gemini Live model override (#1076: non-empty default so an unset var doesn't inject \"\")\n       - VOICE_ENABLED=${VOICE_ENABLED:-true}  # Voice mode (default on when GEMINI_API_KEY set)"
+  },
+  {
+   "filename": "docs/memory/feature-flows/agent-avatars.md",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -243,11 +243,11 @@ The avatar generation uses the shared image generation service (IMG-001).\n \n **Models** (lines 29-30):\n - Text model (prompt refinement): `GEMINI_TEXT_MODEL` (default `gemini-3.5-flash`, env-overridable — #1130)\n-- Image model (image generation): `gemini-3.1-flash-image-preview` (latest image model)\n+- Image model (image generation): `gemini-nano-banana-2.1` (latest image model)\n \n **Generate flow** (`generate_image()`, line 71):\n 1. **Prompt Refinement** (lines 122-128): Gemini 2.0 Flash rewrites the raw identity prompt using avatar-specific best practices\n-2. **Image Generation** (lines 131-156): Gemini 3.1 Flash Image Preview generates the actual PNG\n+2. **Image Generation** (lines 131-156): the `GEMINI_IMAGE_MODEL` model (default `gemini-nano-banana-2.1`, #4717) generates the actual PNG\n \n **Variation flow** (`generate_variation()`, line 313):\n 1. Wraps the stored prompt with variation instructions (lines 343-349):"
+  },
+  {
+   "filename": "docs/memory/feature-flows/image-generation.md",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 6,
+   "patch": "@@ -1,7 +1,7 @@\n # Feature: Platform Image Generation (IMG-001)\n \n ## Overview\n-Platform-level image generation service using Google Gemini models with a two-step pipeline: prompt refinement via Gemini 2.0 Flash text model, then image generation via Gemini 3.1 Flash Image Preview model. Supports use-case-specific best practices (general, thumbnail, diagram, social, avatar), configurable aspect ratios, and image-to-image variation generation from a reference image.\n+Platform-level image generation service using Google Gemini models with a two-step pipeline: prompt refinement via Gemini 2.0 Flash text model, then image generation via the `GEMINI_IMAGE_MODEL` model (default `gemini-nano-banana-2.1`, #4717). Supports use-case-specific best practices (general, thumbnail, diagram, social, avatar), configurable aspect ratios, and image-to-image variation generation from a reference image.\n \n ## User Story\n As a platform user (or internal service), I want to generate high-quality images from text descriptions so that agents and platform features can produce visual content without managing their own image generation infrastructure.\n@@ -49,7 +49,7 @@ router = APIRouter(prefix=\"/api/images\", tags=[\"images\"])\n       \"mime_type\": \"image/png\",\n       \"refined_prompt\": \"the refined prompt used for generation\",\n       \"original_prompt\": \"the user's raw prompt\",\n-      \"model_used\": \"gemini-3.1-flash-image-preview\",\n+      \"model_used\": \"gemini-nano-banana-2.1\",\n       \"use_case\": \"general\",\n       \"aspect_ratio\": \"1:1\"\n   }\n@@ -64,9 +64,9 @@ router = APIRouter(prefix=\"/api/images\", tags=[\"images\"])\n       \"available\": true,\n       \"models\": {\n           \"text_refinement\": \"gemini-3.5-flash\",\n-          \"image_generation\": \"gemini-3.1-flash-image-preview\"\n+          \"image_generation\": \"gemini-nano-banana-2.1\"\n       },\n-      \"default_model\": \"gemini-3.1-flash-image-preview\",\n+      \"default_model\": \"gemini-nano-banana-2.1\",\n       \"use_cases\": [\"general\", \"thumbnail\", \"diagram\", \"social\", \"avatar\"],\n       \"aspect_ratios\": [\"1:1\", \"16:9\", \"9:16\", \"4:3\", \"3:4\", \"3:2\", \"2:3\"]\n   }\n@@ -89,7 +89,7 @@ Singleton service accessed via `get_image_generation_service()` (line 395).\n | Constant | Value |\n |----------|-------|\n | `GEMINI_TEXT_MODEL` | `gemini-3.5-flash` (env-overridable, defined in `config.py` — #1130) |\n-| `GEMINI_IMAGE_MODEL` | `gemini-3.1-flash-image-preview` |\n+| `GEMINI_IMAGE_MODEL` | `gemini-nano-banana-2.1` (env-overridable, defined in `config.py`) |\n | `GEMINI_API_BASE` | `https://generativelanguage.googleapis.com/v1beta/models` |\n | `PROMPT_REFINEMENT_TIMEOUT` | 30 seconds |\n | `IMAGE_GENERATION_TIMEOUT` | 120 seconds |\n@@ -120,7 +120,7 @@ Main entry point. Parameters: `prompt`, `use_case`, `aspect_ratio`, `refine_prom\n - **Response parsing**: `data[\"candidates\"][0][\"content\"][\"parts\"][0][\"text\"]`\n \n #### _call_gemini_image() (line 232)\n-- **URL**: `{GEMINI_API_BASE}/gemini-3.1-flash-image-preview:generateContent`\n+- **URL**: `{GEMINI_API_BASE}/gemini-nano-banana-2.1:generateContent`\n - **Auth**: `x-goog-api-key` header with `GEMINI_API_KEY`\n - **Config**: `responseModalities: [\"image\", \"text\"]`, `imageConfig.aspectRatio`\n - **Parameters**:\n@@ -246,10 +246,12 @@ Used by `avatar.py:_generate_emotions_background()` to build emotion-specific pr\n **File**: `src/backend/config.py`\n - `GEMINI_API_KEY = os.getenv(\"GEMINI_API_KEY\", \"\")`\n - `GEMINI_TEXT_MODEL = os.getenv(\"GEMINI_TEXT_MODEL\") or \"gemini-3.5-flash\"` -- prompt-refinement model, env-overridable (#1130; `or`-coalesce per #1076 so an empty var can't shadow the default)\n+- `GEMINI_IMAGE_MODEL = os.getenv(\"GEMINI_IMAGE_MODEL\") or \"gemini-nano-banana-2.1\"` -- image-generation model, env-overridable (#4717; same coalesce)\n \n **Files**: `docker-compose.yml` + `docker-compose.prod.yml`\n - `GEMINI_API_KEY=${GEMINI_API_KEY:-}` -- Passed through from host `.env` to backend container\n - `GEMINI_TEXT_MODEL=${GEMINI_TEXT_MODEL:-gemini-3.5-flash}` -- non-empty default (#1130)\n+- `GEMINI_IMAGE_MODEL=${GEMINI_IMAGE_MODEL:-gemini-nano-banana-2.1}` -- non-empty default (#4717)\n \n ---\n "
+  },
+  {
+   "filename": "docs/user-docs/guides/deploying/single-server.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -514,7 +514,7 @@ Every key in `.env.example`, with the compose files that forward it. **A key a c\n | `ELEVENLABS_API_KEY` | dev · prod · hosted | Outbound voice replies on channels; empty = off. |\n | `ELEVENLABS_MODEL_ID` | dev · prod · hosted | ElevenLabs model (default `eleven_multilingual_v2`). |\n | `TTS_MAX_CHARS` | dev · prod · hosted | Replies longer than this are delivered as text instead of synthesized. |\n-| `GEMINI_TEXT_MODEL` / `GEMINI_TRANSCRIPTION_MODEL` (commented) | dev · prod · hosted | Override the built-in Gemini model ids. Keep commented unless overriding — an empty value shadows the default. |\n+| `GEMINI_TEXT_MODEL` / `GEMINI_TRANSCRIPTION_MODEL` / `GEMINI_IMAGE_MODEL` (commented) | dev · prod · hosted | Override the built-in Gemini model ids. Keep commented unless overriding — an empty value shadows the default. |\n | `VOICE_ENABLED` | dev · prod · hosted | Voice chat platform-wide (default on). |\n | `VOICE_MODEL` (commented) | dev · prod · hosted | Gemini Live model override. Keep commented unless overriding. |\n | `WORKSPACE_VOICE_MAX_DURATION` | dev · prod · hosted | Max length of one Workspace voice call, seconds (default 1800). |"
+  },
+  {
+   "filename": "src/backend/config.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -402,6 +402,8 @@\n # (Telegram voice messages). Both default to the same model today.\n GEMINI_TEXT_MODEL = os.getenv(\"GEMINI_TEXT_MODEL\") or \"gemini-3.5-flash\"\n GEMINI_TRANSCRIPTION_MODEL = os.getenv(\"GEMINI_TRANSCRIPTION_MODEL\") or \"gemini-3.5-flash\"\n+# Image generation model (the previous hard-coded gemini-3.1-flash-image-preview was shut down).\n+GEMINI_IMAGE_MODEL = os.getenv(\"GEMINI_IMAGE_MODEL\") or \"gemini-nano-banana-2.1\"\n # Workspace Direct calls (trinity-enterprise#1046). The speech model transcribes only:\n # on a silent clip it returns nothing, where a general model has been seen to invent\n # text. TTS tries the models in order."
+  },
+  {
+   "filename": "src/backend/services/image_generation_service.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 4,
+   "patch": "@@ -4,7 +4,7 @@\n Two-step pipeline:\n 1. Prompt refinement — the configured Gemini text model (GEMINI_TEXT_MODEL) rewrites\n    the raw prompt using best practices\n-2. Image generation — Gemini 3.1 Flash Image Preview produces the actual image\n+2. Image generation — the configured Gemini image model (GEMINI_IMAGE_MODEL) produces the actual image\n \n Other code (routers, services, MCP tools, agents) calls:\n     await image_generation_service.generate_image(\"a red apple\", use_case=\"thumbnail\")\n@@ -17,7 +17,7 @@\n \n import httpx\n \n-from config import GEMINI_TEXT_MODEL\n+from config import GEMINI_IMAGE_MODEL, GEMINI_TEXT_MODEL\n from services.image_generation_prompts import (\n     USE_CASE_PROMPTS,\n     VALID_ASPECT_RATIOS,\n@@ -34,8 +34,7 @@ def _gemini_key() -> str:\n     from services.settings_service import get_gemini_api_key\n     return get_gemini_api_key()\n \n-# Gemini API configuration (text model lives in config.py — env-overridable, #1130)\n-GEMINI_IMAGE_MODEL = \"gemini-3.1-flash-image-preview\"\n+# Gemini API configuration (text and image models live in config.py — env-overridable, #1130)\n GEMINI_API_BASE = \"https://generativelanguage.googleapis.com/v1beta/models\"\n \n # Timeouts"
+  },
+  {
+   "filename": "tests/unit/test_image_generation_service.py",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 1,
+   "patch": "@@ -46,7 +46,7 @@ def _load_prompts():\n     return _load_module(\"image_generation_prompts\", \"image_generation_prompts.py\")\n \n \n-def _load_service(api_key=\"\"):\n+def _load_service(api_key=\"\", image_model=\"gemini-nano-banana-2.1\"):\n     \"\"\"Load image_generation_service module with mocked config.GEMINI_API_KEY.\n \n     The service module imports from config and from image_generation_prompts.\n@@ -62,6 +62,8 @@ def _load_service(api_key=\"\"):\n     # #1130: the service imports GEMINI_TEXT_MODEL from config — must be a\n     # real string or it lands as a MagicMock repr in the request URL\n     mock_config.GEMINI_TEXT_MODEL = \"gemini-3.5-flash\"\n+    # #4717: the image model is env-overridable via config too\n+    mock_config.GEMINI_IMAGE_MODEL = image_model\n \n     # Pre-populate sys.modules so the service can import its dependencies\n     saved_modules = {}\n@@ -694,6 +696,28 @@ async def test_returns_bytes_and_mime_type(self):\n         assert mime_type == \"image/png\"\n         assert image_bytes == b\"fake_png_image_data_for_testing\"\n \n+    @pytest.mark.asyncio\n+    async def test_image_model_comes_from_config(self):\n+        \"\"\"Image model is read from config (env-overridable), not hard-coded.\n+\n+        Regression for a retired hard-coded image model: the request URL and\n+        the reported model_used must follow config.GEMINI_IMAGE_MODEL.\n+        \"\"\"\n+        mod = _load_service(api_key=\"test-key\", image_model=\"gemini-test-image-override\")\n+        service = mod.ImageGenerationService()\n+\n+        mock_http = AsyncMock()\n+        mock_http.post.return_value = _make_mock_response(200, FAKE_IMAGE_RESPONSE)\n+        mock_http.is_closed = False\n+        service._client = mock_http\n+\n+        await service._call_gemini_image(\"prompt\", \"1:1\")\n+\n+        url = mock_http.post.call_args.args[0]\n+        assert \"/gemini-test-image-override:generateContent\" in url\n+        assert \"gemini-3.1-flash-image-preview\" not in url\n+        assert mod.GEMINI_IMAGE_MODEL == \"gemini-test-image-override\"\n+\n     @pytest.mark.asyncio\n     async def test_raises_on_non_200(self):\n         \"\"\"_call_gemini_image() raises RuntimeError on non-200 response.\"\"\""
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_image_generation_service.py"
+ ]
+}

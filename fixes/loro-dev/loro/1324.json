@@ -1,0 +1,114 @@
+{
+ "repo": "loro-dev/loro",
+ "number": 1324,
+ "url": "https://github.com/loro-dev/loro/pull/1324",
+ "title": "fix(undo): keep undo/redo stacks across import_batch",
+ "merged_at": "2026-11-23T09:24:08Z",
+ "files": [
+  {
+   "filename": ".changeset/import-batch-preserve-undo.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+\"loro-crdt\": patch\n+---\n+\n+Keep UndoManager undo/redo history across multi-blob `importBatch`. Its events change `by` from `\"checkout\"` to `\"import\"`, while preserving the existing `origin: \"checkout\"` contract."
+  },
+  {
+   "filename": ".changeset/loro-js-batch-import-origin.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+\"loro.js\": patch\n+---\n+\n+Match Rust's multi-blob `importBatch` event labels: keep `by: \"import\"` and emit `origin: \"checkout\"`. Single-blob batches continue to use ordinary import event labels."
+  },
+  {
+   "filename": "context/dead-container-cache.md",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 5,
+   "patch": "@@ -1,6 +1,6 @@\n # Dead Container Cache\n \n-Verified against code 2026-11-18.\n+Verified against code 2026-11-23.\n \n `DocState::is_deleted` (`crates/loro-internal/src/state/dead_containers_cache.rs`)\n answers whether a container is unreachable from a root: it walks the arena\n@@ -40,10 +40,13 @@ walk and assert that no cached entry on the chain contradicts the result.\n - `DocState::apply_diff` clears both sets when the direction mode is\n   `Checkout` (moving backwards can revive anything) or the diff comes from a\n   checkout (`EventTriggerKind::Checkout`). The latter covers forward\n-  checkouts (`attach`, `checkout_to_latest`, `checkout` to a newer version,\n-  and `import_batch`'s reattach), whose direction mode is `Import`, `Linear`,\n-  or `ImportGreaterUpdates`. The only checkout triggered as `Import` is the\n-  snapshot import into an empty document, whose state is new.\n+  checkouts (`attach`, `checkout_to_latest`, `checkout` to a newer version),\n+  whose direction mode is `Import`, `Linear`, or `ImportGreaterUpdates`.\n+  `_checkout_without_emitting_with_event` also explicitly clears both sets\n+  before applying state, including `import_batch`'s reattach: its public event\n+  is `Import` to preserve undo/redo history, with origin still `\"checkout\"`\n+  for compatibility. Snapshot\n+  imports into an empty document also use `Import`.\n - `DocState::apply_diff` in any other mode clears `revivable` when the batch\n   touches a Tree or MovableList container.\n - `DocState::apply_local_op` clears `revivable` before a tree `Move`. A local"
+  },
+  {
+   "filename": "context/import-batch-atomicity.md",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 2,
+   "patch": "@@ -1,11 +1,16 @@\n # `import_batch` Atomicity and the Detached-Mode Invariant\n \n-Verified against code 2026-11-12.\n+Verified against code 2026-11-23.\n \n `LoroDoc::import_batch` (`crates/loro-internal/src/loro.rs`) stops the auto-commit txn,\n keeps the txn mutex for the whole critical section, force-detaches with\n `set_detached(true)`, and reattaches with a **single**\n-`_checkout_to_latest_without_commit` at the end. Usually every blob updates only the\n+`_checkout_to_latest_without_commit_with_event` at the end, reporting\n+`by: \"import\"` so UndoManager keeps its undo/redo stacks, while preserving the\n+existing `origin: \"checkout\"` contract. Single-blob batches still use standalone\n+import labels.\n+The checkout clears the dead-container cache even on a forward transition: a\n+query while state lags behind imported history can cache a live child as deleted. Usually every blob updates only the\n `OpLog`, so a batch of N blobs costs one state apply instead of N.\n \n For an attached document with no applied history and snapshot-compatible state,"
+  },
+  {
+   "filename": "context/loro-js-movable-list.md",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 3,
+   "patch": "@@ -1,6 +1,6 @@\n # loro.js MovableList: Rust-Compatible Model\n \n-Verified against code 2026-10-17.\n+Verified against code 2026-11-23 (importBatch event labels; model last checked 2026-10-17).\n \n `loro-js/` must converge with the Rust implementation and read and write its\n encoding. This article states the Rust MovableList semantics that loro.js must\n@@ -320,8 +320,11 @@ loro.js, not specific to MovableList:\n   were all set and deleted again in that range; Rust lists those keys as\n   deleted. It happens under List, Map and MovableList parents alike (also on\n   `main`). The suite skips such map entries when it compares `diff()`.\n-- Event labels: multi-blob `importBatch` is `by: \"checkout\"` in Rust, and\n-  checkout events carry origin `\"checkout\"` only in Rust. Rust's\n+- Event labels: checkout events carry origin `\"checkout\"` only in Rust.\n+  Multi-blob `importBatch` matches on both engines (`by: \"import\"`,\n+  `origin: \"checkout\"`); loro.js sets that origin only in its batch event\n+  emitter, leaving single imports unchanged. The harness does not normalize\n+  batch labels. Rust's\n   `oplogVersion()` also counts the pending transaction.\n \n Differences in form, not in effect:"
+  },
+  {
+   "filename": "crates/loro-internal/src/dag.rs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -2227,6 +2227,7 @@ mod tests {\n                 lookups.set(lookups.get() + 1);\n                 Ok(dag.get(id))\n             },\n+            &|dep, target| dag.try_does_id_cover(dep, target),\n             &side.id.into(),\n             &prev_join.into(),\n         )"
+  },
+  {
+   "filename": "crates/loro-internal/src/loro.rs",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -4339,6 +4339,9 @@ impl LoroDoc {\n             None,\n         )?;\n         self.set_detached(true);\n+        // A forward checkout can revive map/list children queried while state\n+        // lagged behind history, even when the public event is an import.\n+        state.clear_dead_container_cache();\n         state.apply_diff(\n             InternalDocDiff {\n                 origin,\n@@ -5511,7 +5514,9 @@ impl BatchImportGuard<'_> {\n                 doc._checkout_to_latest_without_commit_with_event(\n                     true,\n                     \"checkout\".into(),\n-                    EventTriggerKind::Checkout,\n+                    // The batch is a remote import: reporting it as a checkout\n+                    // would make the `UndoManager` clear its undo/redo stacks.\n+                    EventTriggerKind::Import,\n                     !self.has_doc_budget,\n                 )\n             });"
+  },
+  {
+   "filename": "crates/loro-internal/src/state/dead_containers_cache.rs",
+   "status": "modified",
+   "additions": 51,
+   "deletions": 0,
+   "patch": "@@ -36,6 +36,10 @@ impl DeadContainersCache {\n }\n \n impl DocState {\n+    pub(crate) fn clear_dead_container_cache(&mut self) {\n+        self.dead_containers_cache.clear();\n+    }\n+\n     /// Called when a failed import is rolled back. The import may have registered parent links\n     /// that the arena rollback drops, and a deletion found through one of them while it ran\n     /// (e.g. by a query on another thread) is not true of the kept history.\n@@ -388,4 +392,51 @@ mod tests {\n         assert_eq!(doc.state.lock().dead_cache_entry(idx), None);\n         assert!(!child.is_deleted());\n     }\n+\n+    #[test]\n+    fn batch_import_drops_deletions_cached_while_state_lags() {\n+        use crate::{encoding::ExportMode, MapHandler};\n+\n+        let source = LoroDoc::new_auto_commit();\n+        source.set_peer_id(1).unwrap();\n+        let child = source\n+            .get_map(\"m\")\n+            .insert_container(\"c\", MapHandler::new_detached())\n+            .unwrap();\n+        source.commit_then_renew();\n+        let first = source.export(ExportMode::all_updates()).unwrap();\n+        let vv = source.oplog_vv();\n+        child.insert(\"x\", 1).unwrap();\n+        source.commit_then_renew();\n+        let second = source.export(ExportMode::updates(&vv)).unwrap();\n+\n+        let doc = LoroDoc::new_auto_commit();\n+        doc.set_peer_id(2).unwrap();\n+        let blobs = [first, second]\n+            .into_iter()\n+            .enumerate()\n+            .map(|(i, blob)| {\n+                let meta = LoroDoc::decode_import_blob_meta(&blob, false).unwrap();\n+                let doc = &doc;\n+                let child_id = child.id();\n+                (meta, move || {\n+                    if i == 1 {\n+                        // The first blob registered the map parent, but the batch\n+                        // has not applied it to state yet. This caches a final deletion.\n+                        let child = doc.get_map(child_id);\n+                        assert!(child.is_deleted());\n+                        let idx = doc.state.lock().arena.id_to_idx(&child.id()).unwrap();\n+                        assert_eq!(doc.state.lock().dead_cache_entry(idx), Some(true));\n+                    }\n+                    Ok(bytes::Bytes::from(blob))\n+                })\n+            })\n+            .collect();\n+        doc.import_batch_with_loaders(blobs, false).unwrap();\n+        let child = doc.get_map(child.id());\n+        let idx = doc.state.lock().arena.id_to_idx(&child.id()).unwrap();\n+        assert_eq!(doc.state.lock().dead_cache_entry(idx), None);\n+        assert!(!child.is_deleted());\n+        child.insert(\"after\", 2).unwrap();\n+    }\n }"
+  },
+  {
+   "filename": "crates/loro-wasm/tests/undo.test.ts",
+   "status": "modified",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -3,6 +3,39 @@ import { describe, expect, test, vi } from \"vitest\";\n import { expectDefined } from \"./helpers\";\n \n describe(\"undo\", () => {\n+  test.each([false, true])(\n+    \"importBatch preserves undo and redo (redo=%s)\",\n+    (redo) => {\n+      const doc = new LoroDoc();\n+      doc.setPeerId(1);\n+      const undo = new UndoManager(doc, {});\n+      doc.getMap(\"local\").set(\"value\", 1);\n+      doc.commit();\n+      if (redo) expect(undo.undo()).toBe(true);\n+      const events: { by: string; origin?: string }[] = [];\n+      doc.subscribe((event) => events.push(event));\n+      const blobs = [2, 3].map((peer) => {\n+        const remote = new LoroDoc();\n+        remote.setPeerId(peer);\n+        remote.getMap(\"remote\").set(String(peer), peer);\n+        return remote.export({ mode: \"update\" });\n+      });\n+      doc.importBatch(blobs);\n+      expect(events).toHaveLength(1);\n+      expect(events[0]).toMatchObject({ by: \"import\", origin: \"checkout\" });\n+      if (redo) {\n+        expect(undo.canRedo()).toBe(true);\n+        expect(undo.redo()).toBe(true);\n+        expect(doc.getMap(\"local\").get(\"value\")).toBe(1);\n+      } else {\n+        expect(undo.canUndo()).toBe(true);\n+        expect(undo.undo()).toBe(true);\n+        expect(doc.getMap(\"local\").get(\"value\")).toBeUndefined();\n+      }\n+      expect(doc.getMap(\"remote\").toJSON()).toEqual({ \"2\": 2, \"3\": 3 });\n+    },\n+  );\n+\n   test.each([false, true])(\n     \"no-op undo preserves an earlier item (parent=%s)\",\n     (parent) => {"
+  },
+  {
+   "filename": "crates/loro/tests/import_batch_undo.rs",
+   "status": "added",
+   "additions": 65,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,65 @@\n+use loro::{ExportMode, LoroDoc, UndoManager};\n+\n+fn remote_update(peer: u64, text: &str) -> Vec<u8> {\n+    let doc = LoroDoc::new();\n+    doc.set_peer_id(peer).unwrap();\n+    doc.get_text(\"text\").insert(0, text).unwrap();\n+    doc.commit();\n+    doc.export(ExportMode::all_updates()).unwrap()\n+}\n+\n+#[test]\n+fn import_batch_keeps_undo_stack() {\n+    let doc = LoroDoc::new();\n+    doc.set_peer_id(1).unwrap();\n+    let mut undo = UndoManager::new(&doc);\n+    let text = doc.get_text(\"text\");\n+    text.insert(0, \"R\").unwrap();\n+    doc.commit();\n+    assert!(undo.can_undo());\n+\n+    doc.import_batch(&[remote_update(2, \"S\"), remote_update(3, \"T\")])\n+        .unwrap();\n+\n+    assert!(undo.can_undo());\n+    assert!(undo.undo().unwrap());\n+    assert!(!text.to_string().contains('R'));\n+}\n+\n+#[test]\n+fn import_batch_matches_sequential_import_for_undo() {\n+    let (a, b) = (remote_update(2, \"S\"), remote_update(3, \"T\"));\n+    for batched in [false, true] {\n+        let doc = LoroDoc::new();\n+        doc.set_peer_id(1).unwrap();\n+        let undo = UndoManager::new(&doc);\n+        doc.get_text(\"text\").insert(0, \"R\").unwrap();\n+        doc.commit();\n+        if batched {\n+            doc.import_batch(&[a.clone(), b.clone()]).unwrap();\n+        } else {\n+            doc.import(&a).unwrap();\n+            doc.import(&b).unwrap();\n+        }\n+        assert!(undo.can_undo(), \"batched = {batched}\");\n+    }\n+}\n+\n+#[test]\n+fn import_batch_keeps_redo_stack() {\n+    let doc = LoroDoc::new();\n+    doc.set_peer_id(1).unwrap();\n+    let mut undo = UndoManager::new(&doc);\n+    doc.get_map(\"local\").insert(\"value\", 1).unwrap();\n+    doc.commit();\n+    assert!(undo.undo().unwrap());\n+    assert!(undo.can_redo());\n+\n+    doc.import_batch(&[remote_update(2, \"S\"), remote_update(3, \"T\")])\n+        .unwrap();\n+\n+    assert!(undo.can_redo());\n+    assert!(undo.redo().unwrap());\n+    assert!(doc.get_map(\"local\").get(\"value\").is_some());\n+    assert_eq!(doc.get_text(\"text\").len_unicode(), 2);\n+}"
+  },
+  {
+   "filename": "loro-js/src/runtime/document.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -1180,7 +1180,7 @@ export class LoroDoc<T extends Record<string, Container> = Record<string, Contai\n       emit: () =>\n         this.#emit(\n           \"import\",\n-          undefined,\n+          \"checkout\",\n           before,\n           after,\n           changed,"
+  },
+  {
+   "filename": "loro-js/tests/differential/fuzz.ts",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 13,
+   "patch": "@@ -700,19 +700,13 @@ export class FuzzRun {\n       rust: exported(\"rust\"),\n       js: exported(\"js\"),\n     };\n-    target.batchImport = action.mode === \"batch\";\n-    let imported: unknown;\n-    try {\n-      imported = target.both(\n-        `import from ${source.name} (${action.mode})`,\n-        (doc, engine) =>\n-          action.mode === \"batch\"\n-            ? doc.importBatch(blobs[engine])\n-            : doc.import(blobs[engine][0]!),\n-      );\n-    } finally {\n-      target.batchImport = false;\n-    }\n+    const imported = target.both(\n+      `import from ${source.name} (${action.mode})`,\n+      (doc, engine) =>\n+        action.mode === \"batch\"\n+          ? doc.importBatch(blobs[engine])\n+          : doc.import(blobs[engine][0]!),\n+    );\n     if (imported === undefined) {\n       // Both rejected it, typically a change concurrent with a shallow root.\n       // Rust keeps the blob's other changes; loro.js imports atomically. The"
+  },
+  {
+   "filename": "loro-js/tests/differential/harness.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 11,
+   "patch": "@@ -80,8 +80,6 @@ export class Twin {\n   readonly undo: Side<UndoManagerLike> | undefined;\n   /** Frontiers reached by this peer, shared by both halves once they agree. */\n   readonly history: FrontiersLike[] = [];\n-  /** Set while `importBatch` runs; see `canonicalBatch`. */\n-  batchImport = false;\n   /** List and Text values at the last comparison, to replay event deltas. */\n   readonly lists = new Map<string, unknown[] | string>();\n \n@@ -99,7 +97,7 @@ export class Twin {\n     for (const engine of ENGINES) {\n       this.docs[engine].setPeerId(peer);\n       this.docs[engine].subscribe((event) => {\n-        const batch = canonicalBatch(event, this.batchImport);\n+        const batch = canonicalBatch(event);\n         if (batch.events.length > 0) this.events[engine].push(batch);\n       });\n     }\n@@ -289,19 +287,13 @@ export function canonicalDiff(diff: unknown): unknown {\n  *\n  * - Rust labels checkout events with origin `\"checkout\"`; loro.js leaves the\n  *   origin empty.\n- * - Rust's multi-blob `importBatch` imports while detached and reattaches with a\n- *   checkout, so its events say `by: \"checkout\"`; loro.js says `\"import\"`.\n  * - Rust commits both undo and redo with origin `\"undo\"`; loro.js uses\n  *   `\"redo\"` for redo.\n  */\n-export function canonicalBatch(\n-  batch: EventBatchLike,\n-  batchImport = false,\n-): EventBatchLike {\n-  const by = batchImport && batch.by === \"checkout\" ? \"import\" : batch.by;\n+export function canonicalBatch(batch: EventBatchLike): EventBatchLike {\n   const origin = batch.by === \"checkout\" ? \"\" : (batch.origin ?? \"\");\n   return {\n-    by,\n+    by: batch.by,\n     origin: origin === \"redo\" ? \"undo\" : origin,\n     events: batch.events\n       .map((event) => ({"
+  },
+  {
+   "filename": "loro-js/tests/event-diff.test.ts",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -5,6 +5,22 @@ import { LoroDoc } from \"../src/runtime\";\n import type { Delta, LoroEventBatch } from \"../src/runtime/types\";\n \n describe(\"incremental event diffs\", () => {\n+  test.each([1, 2])(\"importBatch labels %s blobs like Rust\", (count) => {\n+    const doc = new LoroDoc();\n+    const events: LoroEventBatch[] = [];\n+    doc.subscribe((event) => events.push(event));\n+    const blobs = [2, 3].slice(0, count).map((peer) => {\n+      const source = new LoroDoc();\n+      source.setPeerId(peer);\n+      source.getMap(\"remote\").set(String(peer), peer);\n+      return source.export({ mode: \"update\" });\n+    });\n+    doc.importBatch(blobs);\n+    expect(events).toHaveLength(1);\n+    expect(events[0]?.by).toBe(\"import\");\n+    expect(events[0]?.origin).toBe(count === 1 ? undefined : \"checkout\");\n+  });\n+\n   test(\"composes randomized text edits against a string model\", () => {\n     const original = \"abcdefghijklmnopqrstuvwxyz\";\n     const diff = new SequenceEventDiff(\"text\", original.length);"
+  }
+ ],
+ "test_files": [
+  "crates/loro-wasm/tests/undo.test.ts",
+  "crates/loro/tests/import_batch_undo.rs",
+  "loro-js/tests/differential/fuzz.ts",
+  "loro-js/tests/differential/harness.ts",
+  "loro-js/tests/event-diff.test.ts"
+ ]
+}

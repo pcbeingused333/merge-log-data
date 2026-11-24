@@ -1,0 +1,26 @@
+{
+ "repo": "phoenixframework/phoenix_live_view",
+ "number": 4510,
+ "url": "https://github.com/phoenixframework/phoenix_live_view/pull/4510",
+ "title": "fix: refresh main view history id after reload",
+ "merged_at": "2026-11-23T17:34:08Z",
+ "files": [
+  {
+   "filename": "assets/js/phoenix_live_view/view.ts",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 7,
+   "patch": "@@ -469,13 +469,18 @@ export default class View {\n     if (this.root === this) {\n       this.formsForRecovery = this.getFormsForRecovery();\n     }\n-    if (this.isMain() && window.history.state === null) {\n-      // set initial history entry if this is the first page load (no history)\n-      Browser.pushState(\"replace\", {\n-        type: \"patch\",\n-        id: this.id,\n-        position: this.liveSocket.currentHistoryPosition,\n-      });\n+    if (this.isMain()) {\n+      if (window.history.state === null) {\n+        // set initial history entry if this is the first page load (no history)\n+        Browser.pushState(\"replace\", {\n+          type: \"patch\",\n+          id: this.id,\n+          position: this.liveSocket.currentHistoryPosition,\n+        });\n+      } else {\n+        // A reload preserves history state, but gives the main view a new id.\n+        Browser.updateCurrentState((state) => ({ ...state, id: this.id }));\n+      }\n     }\n \n     if (liveview_version !== this.liveSocket.version()) {"
+  },
+  {
+   "filename": "assets/test/view_test.ts",
+   "status": "modified",
+   "additions": 53,
+   "deletions": 0,
+   "patch": "@@ -67,6 +67,59 @@ describe(\"View + DOM\", function () {\n     global.document.body.innerHTML = \"\";\n   });\n \n+  test(\"onJoin refreshes history from a previous document after reload\", () => {\n+    const initialState = window.history.state;\n+    const initialHref = window.location.href;\n+    window.history.replaceState(\n+      { type: \"patch\", id: \"previous-document\", position: 7 },\n+      \"\",\n+    );\n+    window.sessionStorage.setItem(\"phx:nav-history-position\", \"7\");\n+\n+    try {\n+      liveSocket = new LiveSocket(\"/live\", Socket);\n+      const view = simulateJoinedView(liveViewDOM(), liveSocket);\n+\n+      expect(window.history.state).toEqual({\n+        type: \"patch\",\n+        id: view.id,\n+        position: 7,\n+      });\n+      expect(liveSocket.currentHistoryPosition).toBe(7);\n+\n+      liveSocket.main = view;\n+      liveSocket.requestDOMUpdate = (callback) => callback();\n+      const pushLinkPatch = jest\n+        .spyOn(view, \"pushLinkPatch\")\n+        .mockImplementation(() => {});\n+      const replaceMain = jest.spyOn(liveSocket, \"replaceMain\");\n+      const addEventListener = jest\n+        .spyOn(window, \"addEventListener\")\n+        .mockImplementation(() => {});\n+      let popstate: EventListener;\n+      try {\n+        liveSocket.bindNav();\n+        popstate = addEventListener.mock.calls.find(\n+          ([name]) => name === \"popstate\",\n+        )![1] as EventListener;\n+      } finally {\n+        addEventListener.mockRestore();\n+      }\n+\n+      const reloadedState = window.history.state;\n+      liveSocket.reserveHistoryEntry(`${initialHref}?page=two`, \"patch\");\n+      // Return to the reloaded entry, as a browser back traversal would.\n+      window.history.replaceState(reloadedState, \"\", initialHref);\n+      popstate!(new PopStateEvent(\"popstate\", { state: reloadedState }));\n+\n+      expect(pushLinkPatch).toHaveBeenCalled();\n+      expect(replaceMain).not.toHaveBeenCalled();\n+    } finally {\n+      window.history.replaceState(initialState, \"\", initialHref);\n+      window.sessionStorage.removeItem(\"phx:nav-history-position\");\n+    }\n+  });\n+\n   test(\"update\", async () => {\n     liveSocket = new LiveSocket(\"/live\", Socket);\n     const el = liveViewDOM();"
+  }
+ ],
+ "test_files": [
+  "assets/test/view_test.ts"
+ ]
+}

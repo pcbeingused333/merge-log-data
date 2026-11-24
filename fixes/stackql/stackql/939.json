@@ -1,0 +1,26 @@
+{
+ "repo": "stackql/stackql",
+ "number": 939,
+ "url": "https://github.com/stackql/stackql/pull/939",
+ "title": "fix(output): flush CSV rows already written when a later chunk cannot be decoded",
+ "merged_at": "2026-11-23T08:59:14Z",
+ "files": [
+  {
+   "filename": "internal/stackql/output/output.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -391,6 +391,7 @@ func (csvw *CSVWriter) Write(res sqldata.ISQLResultStream) error {\n \t\t\t\t}\n \t\t\t\trowsArr, err = tabulateResults(r, csvw.ci)\n \t\t\t\tif err != nil {\n+\t\t\t\t\tw.Flush()\n \t\t\t\t\treturn err\n \t\t\t\t}\n \t\t\t\tfor _, rs := range rowsArr {\n@@ -415,6 +416,7 @@ func (csvw *CSVWriter) Write(res sqldata.ISQLResultStream) error {\n \t\t}\n \t\trowsArr, err = tabulateResults(r, csvw.ci)\n \t\tif err != nil {\n+\t\t\tw.Flush()\n \t\t\treturn err\n \t\t}\n \t\tfor _, rs := range rowsArr {"
+  },
+  {
+   "filename": "internal/stackql/output/partial_table_test.go",
+   "status": "modified",
+   "additions": 39,
+   "deletions": 0,
+   "patch": "@@ -4,6 +4,7 @@ package output\n import (\n \t\"bytes\"\n \t\"errors\"\n+\t\"io\"\n \t\"strings\"\n \t\"testing\"\n \n@@ -66,3 +67,41 @@ func TestCSVWriterRetainsCompletedRowsOnStreamFailure(t *testing.T) {\n \t\tt.Fatalf(\"completed csv rows were discarded: %q\", output.String())\n \t}\n }\n+\n+type batchedStream struct {\n+\tsqldata.ISQLResultStream\n+\tbatches []sqldata.ISQLResult\n+\tnext    int\n+}\n+\n+func (s *batchedStream) Read() (sqldata.ISQLResult, error) {\n+\tif s.next >= len(s.batches) {\n+\t\treturn nil, io.EOF\n+\t}\n+\tb := s.batches[s.next]\n+\ts.next++\n+\treturn b, nil\n+}\n+func (s *batchedStream) GetColumns() []sqldata.ISQLColumn { return s.batches[0].GetColumns() }\n+func (s *batchedStream) Close() error                     { return nil }\n+\n+func TestCSVWriterRetainsEarlierChunksOnUndecodableChunk(t *testing.T) {\n+\ttable := sqldata.NewSQLTable(0, \"partial\")\n+\tcolumn := sqldata.NewSQLColumn(table, \"id\", 0, 25, 1024, 0, \"TextFormat\")\n+\tcols := []sqldata.ISQLColumn{column}\n+\tgood := sqldata.NewSQLResult(cols, 1, 0, []sqldata.ISQLRow{sqldata.NewSQLRow([]interface{}{\"one\"})})\n+\t// two values for a single column: tabulateResults fails on this chunk\n+\tbad := sqldata.NewSQLResult(cols, 1, 0, []sqldata.ISQLRow{sqldata.NewSQLRow([]interface{}{\"x\", \"y\"})})\n+\tstream := &batchedStream{batches: []sqldata.ISQLResult{good, bad}}\n+\tvar output, stderr bytes.Buffer\n+\twriter, err := GetOutputWriter(&output, &stderr, internaldto.OutputContext{RuntimeContext: dto.RuntimeCtx{OutputFormat: \"csv\", Delimiter: \",\"}, Result: stream})\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tif err := writer.Write(stream); err == nil {\n+\t\tt.Fatal(\"expected decode error for malformed chunk\")\n+\t}\n+\tif !strings.Contains(output.String(), \"one\") {\n+\t\tt.Fatalf(\"rows from earlier chunks were discarded: %q\", output.String())\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/stackql/output/partial_table_test.go"
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "repo": "dbgate/dbgate",
+ "number": 1633,
+ "url": "https://github.com/dbgate/dbgate/pull/1633",
+ "title": "fix(mssql): keep columns whose user-defined type is not visible to the login",
+ "merged_at": "2026-11-23T09:56:59Z",
+ "files": [
+  {
+   "filename": "plugins/dbgate-plugin-mssql/package.json",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 1,
+   "patch": "@@ -28,10 +28,17 @@\n     \"prepublishOnly\": \"yarn build\",\n     \"plugin\": \"yarn build && yarn pack && dbgate-plugin dbgate-plugin-mssql\",\n     \"copydist\": \"yarn build && yarn pack && dbgate-copydist ../dist/dbgate-plugin-mssql\",\n-    \"plugout\": \"dbgate-plugout dbgate-plugin-mssql\"\n+    \"plugout\": \"dbgate-plugout dbgate-plugin-mssql\",\n+    \"test\": \"jest\"\n+  },\n+  \"jest\": {\n+    \"testMatch\": [\n+      \"**/*.test.js\"\n+    ]\n   },\n   \"devDependencies\": {\n     \"dbgate-plugin-tools\": \"^1.0.8\",\n+    \"jest\": \"^30.5.2\",\n     \"webpack\": \"^5.111.1\",\n     \"webpack-cli\": \"^7.2.3\"\n   },"
+  },
+  {
+   "filename": "plugins/dbgate-plugin-mssql/src/backend/sql/columns.js",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -1,5 +1,5 @@\n module.exports = `\n-select c.name as columnName, t.name as dataType, c.object_id as objectId, c.is_identity as isIdentity,\n+select c.name as columnName, COALESCE(t.name, TYPE_NAME(c.system_type_id)) as dataType, c.object_id as objectId, c.is_identity as isIdentity,\n     c.max_length as maxLength, c.precision, c.scale, c.is_nullable as isNullable,\n     col.CHARACTER_MAXIMUM_LENGTH as charMaxLength,\n     d.definition as defaultValue, d.name as defaultConstraint,\n@@ -9,10 +9,10 @@ select c.name as columnName, t.name as dataType, c.object_id as objectId, c.is_i\n     c.is_sparse as isSparse,\n     ep.value as columnComment\n from sys.columns c\n-inner join sys.types t on c.system_type_id = t.system_type_id and c.user_type_id = t.user_type_id\n+left join sys.types t on c.system_type_id = t.system_type_id and c.user_type_id = t.user_type_id\n inner join sys.objects o on c.object_id = o.object_id\n INNER JOIN sys.schemas u ON u.schema_id=o.schema_id \n-INNER JOIN INFORMATION_SCHEMA.COLUMNS col ON col.TABLE_NAME = o.name AND col.TABLE_SCHEMA = u.name and col.COLUMN_NAME = c.name\n+LEFT JOIN INFORMATION_SCHEMA.COLUMNS col ON col.TABLE_NAME = o.name AND col.TABLE_SCHEMA = u.name and col.COLUMN_NAME = c.name\n left join sys.default_constraints d on c.default_object_id = d.object_id\n left join sys.computed_columns m on m.object_id = c.object_id and m.column_id = c.column_id\n left join sys.extended_properties ep on ep.major_id = c.object_id "
+  },
+  {
+   "filename": "plugins/dbgate-plugin-mssql/src/backend/sql/columns.test.js",
+   "status": "added",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,22 @@\n+// Regression test for #1631: on SQL Server, sys.types only lists user-defined (alias) types the login\n+// has permission on, so an INNER JOIN on it silently dropped every column using such a type for\n+// read-only logins. The query must keep those columns and fall back to the base type name.\n+\n+const sql = require('./columns');\n+\n+describe('mssql columns query', () => {\n+  const normalized = sql.replace(/\\s+/g, ' ');\n+\n+  test('does not drop columns whose user-defined type is not visible', () => {\n+    expect(normalized).not.toMatch(/inner join sys\\.types/i);\n+    expect(normalized).toMatch(/left join sys\\.types/i);\n+  });\n+\n+  test('falls back to the base type name when the alias type is not visible', () => {\n+    expect(normalized).toMatch(/COALESCE\\(t\\.name, TYPE_NAME\\(c\\.system_type_id\\)\\) as dataType/i);\n+  });\n+\n+  test('does not drop columns missing from INFORMATION_SCHEMA.COLUMNS', () => {\n+    expect(normalized).not.toMatch(/inner join INFORMATION_SCHEMA\\.COLUMNS/i);\n+  });\n+});"
+  }
+ ],
+ "test_files": [
+  "plugins/dbgate-plugin-mssql/src/backend/sql/columns.test.js"
+ ]
+}

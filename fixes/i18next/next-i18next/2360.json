@@ -1,0 +1,33 @@
+{
+ "repo": "i18next/next-i18next",
+ "number": 2360,
+ "url": "https://github.com/i18next/next-i18next/pull/2360",
+ "title": "fix(pages): discover nested namespaces for server-side translations",
+ "merged_at": "2026-11-23T09:42:20Z",
+ "files": [
+  {
+   "filename": "src/pagesRouter/config/serverSideConfig.ts",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 18,
+   "patch": "@@ -5,6 +5,24 @@ import { InternalConfig, UserConfig } from '../types'\n import { getFallbackForLng, unique } from '../utils'\n import { Module } from 'i18next'\n \n+export const getLocaleNamespaces = (\n+  directory: string,\n+  localeExtension?: string\n+): string[] => {\n+  if (!fs.existsSync(directory)) return []\n+\n+  return fs.readdirSync(directory).flatMap(file => {\n+    const entry = path.join(directory, file)\n+    if (fs.statSync(entry).isDirectory()) {\n+      return getLocaleNamespaces(entry, localeExtension).map(\n+        namespace => `${file}/${namespace}`\n+      )\n+    }\n+\n+    return file.replace(`.${localeExtension}`, '')\n+  })\n+}\n+\n // Server-only logic extracted from createConfig so that the bundler never\n // traces `fs`/`path` from the client side. createConfig invokes this via the\n // `applyServerSideConfig` hook, which is wired up only by callers that are\n@@ -113,31 +131,15 @@ export const applyServerSideConfig = (\n     }\n \n     const getNamespaces = (loc: string[]): string[] => {\n-      const getLocaleNamespaces = (p: string): string[] => {\n-        let ret: string[] = []\n-        if (!fs.existsSync(p)) return ret\n-        fs.readdirSync(p).forEach((file: string) => {\n-          const joinedP = path.join(p, file)\n-          if (fs.statSync(joinedP).isDirectory()) {\n-            const subRet = getLocaleNamespaces(joinedP).map(\n-              n => `${file}/${n}`\n-            )\n-            ret = ret.concat(subRet)\n-            return\n-          }\n-          ret.push(file.replace(`.${localeExtension}`, ''))\n-        })\n-        return ret\n-      }\n-\n       let namespacesByLocale: string[][]\n       const r = combinedConfig.resources\n       if (!localePath && r) {\n         namespacesByLocale = loc.map(locale => Object.keys(r[locale]))\n       } else {\n         namespacesByLocale = loc.map(locale =>\n           getLocaleNamespaces(\n-            path.resolve(process.cwd(), `${localePath}/${locale}`)\n+            path.resolve(process.cwd(), `${localePath}/${locale}`),\n+            localeExtension\n           )\n         )\n       }"
+  },
+  {
+   "filename": "src/pagesRouter/serverSideTranslations.test.tsx",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 0,
+   "patch": "@@ -78,6 +78,29 @@ describe('serverSideTranslations', () => {\n       ])\n     })\n \n+    it('includes translations from nested namespaces', async () => {\n+      ;(fs.readdirSync as jest.Mock).mockImplementation(directory =>\n+        path.basename(directory) === 'checkout'\n+          ? ['cart.json']\n+          : ['checkout', 'common.json']\n+      )\n+      ;(fs.statSync as jest.Mock).mockImplementation(entry => ({\n+        isDirectory: () => path.basename(entry) === 'checkout',\n+      }))\n+\n+      const props = await serverSideTranslations('en', undefined, {\n+        i18n: { defaultLocale: 'en', locales: ['en'] },\n+        resources: {\n+          en: { common: { greeting: 'Hello' }, 'checkout/cart': { pay: 'Pay' } },\n+        },\n+      })\n+\n+      expect(props._nextI18Next?.initialI18nStore).toEqual({\n+        en: { common: { greeting: 'Hello' }, 'checkout/cart': { pay: 'Pay' } },\n+      })\n+      expect(props._nextI18Next?.ns).toEqual(['checkout/cart', 'common'])\n+    })\n+\n     it('returns all namespaces with fallbackLng (as string)', async () => {\n       const props = await serverSideTranslations(\n         'en-US',"
+  },
+  {
+   "filename": "src/pagesRouter/serverSideTranslations.ts",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 9,
+   "patch": "@@ -3,7 +3,10 @@ import path from 'path'\n import { createRequire } from 'module'\n \n import { createConfig } from './config/createConfig'\n-import { applyServerSideConfig } from './config/serverSideConfig'\n+import {\n+  applyServerSideConfig,\n+  getLocaleNamespaces,\n+} from './config/serverSideConfig'\n import createClient from './createClient/node'\n \n import { UserConfig, SSRConfig } from './types'\n@@ -112,17 +115,11 @@ export const serverSideTranslations = async (\n       )\n     }\n \n-    const getLocaleNamespaces = (path: string) =>\n-      fs.existsSync(path)\n-        ? fs\n-          .readdirSync(path)\n-          .map(file => file.replace(`.${localeExtension}`, ''))\n-        : []\n-\n     const namespacesByLocale = Object.keys(initialI18nStore)\n       .map(locale =>\n         getLocaleNamespaces(\n-          path.resolve(process.cwd(), `${localePath}/${locale}`)\n+          path.resolve(process.cwd(), `${localePath}/${locale}`),\n+          localeExtension\n         )\n       )\n       .flat()"
+  }
+ ],
+ "test_files": [
+  "src/pagesRouter/serverSideTranslations.test.tsx"
+ ]
+}

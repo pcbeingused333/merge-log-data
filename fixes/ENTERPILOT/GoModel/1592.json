@@ -1,0 +1,26 @@
+{
+ "repo": "ENTERPILOT/GoModel",
+ "number": 1592,
+ "url": "https://github.com/ENTERPILOT/GoModel/pull/1592",
+ "title": "fix(bedrock): forward stop sequences to Converse inferenceConfig",
+ "merged_at": "2026-11-23T15:18:28Z",
+ "files": [
+  {
+   "filename": "internal/providers/bedrock/bedrock_test.go",
+   "status": "modified",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -966,3 +966,36 @@ func TestConvertTools_AllowedToolsNarrowsDeclaredTools(t *testing.T) {\n \trequire.Error(t, err)\n \tassert.Contains(t, err.Error(), \"tool_choice.allowed_tools.tools\")\n }\n+\n+func TestBuildConverseParts_StopSequences(t *testing.T) {\n+\ttests := []struct {\n+\t\tname string\n+\t\tstop string\n+\t\twant []string\n+\t}{\n+\t\t{name: \"string\", stop: `\"END\"`, want: []string{\"END\"}},\n+\t\t{name: \"array\", stop: `[\"a\",\"b\"]`, want: []string{\"a\", \"b\"}},\n+\t\t{name: \"empty items dropped\", stop: `[\"a\",\"\"]`, want: []string{\"a\"}},\n+\t\t{name: \"null\", stop: `null`, want: nil},\n+\t\t{name: \"malformed\", stop: `42`, want: nil},\n+\t}\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\treq := &core.ChatRequest{\n+\t\t\t\tModel:    \"anthropic.claude-3-5-haiku-20241022-v1:0\",\n+\t\t\t\tMessages: []core.Message{{Role: \"user\", Content: \"hi\"}},\n+\t\t\t\tExtraFields: core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{\n+\t\t\t\t\t\"stop\": json.RawMessage(tt.stop),\n+\t\t\t\t}),\n+\t\t\t}\n+\t\t\tparts, err := buildConverseParts(req)\n+\t\t\trequire.NoError(t, err)\n+\t\t\tif tt.want == nil {\n+\t\t\t\tassert.Nil(t, parts.infCfg)\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t\trequire.NotNil(t, parts.infCfg)\n+\t\t\tassert.Equal(t, tt.want, parts.infCfg.StopSequences)\n+\t\t})\n+\t}\n+}"
+  },
+  {
+   "filename": "internal/providers/bedrock/chat.go",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -168,6 +168,10 @@ func buildConverseParts(req *core.ChatRequest) (converseParts, error) {\n \t\tinfCfg.TopP = awssdk.Float32(float32(topP))\n \t\thasInfCfg = true\n \t}\n+\tif stop := stopSequencesFromExtra(req.ExtraFields); len(stop) > 0 {\n+\t\tinfCfg.StopSequences = stop\n+\t\thasInfCfg = true\n+\t}\n \tif hasInfCfg {\n \t\tparts.infCfg = infCfg\n \t}\n@@ -589,3 +593,35 @@ func bedrockUsageExtras(u *brtypes.TokenUsage) map[string]any {\n \t}\n \treturn out\n }\n+\n+// stopSequencesFromExtra maps the OpenAI-compatible stop field (a string or an\n+// array of strings, carried in the request's extra fields) to Converse\n+// inferenceConfig.stopSequences. Empty or malformed values yield no sequences.\n+func stopSequencesFromExtra(extraFields core.UnknownJSONFields) []string {\n+\traw := strings.TrimSpace(string(extraFields.Lookup(\"stop\")))\n+\tif raw == \"\" || raw == \"null\" {\n+\t\treturn nil\n+\t}\n+\tswitch raw[0] {\n+\tcase '\"':\n+\t\tvar single string\n+\t\tif err := json.Unmarshal([]byte(raw), &single); err != nil || single == \"\" {\n+\t\t\treturn nil\n+\t\t}\n+\t\treturn []string{single}\n+\tcase '[':\n+\t\tvar list []string\n+\t\tif err := json.Unmarshal([]byte(raw), &list); err != nil {\n+\t\t\treturn nil\n+\t\t}\n+\t\tsequences := make([]string, 0, len(list))\n+\t\tfor _, item := range list {\n+\t\t\tif item != \"\" {\n+\t\t\t\tsequences = append(sequences, item)\n+\t\t\t}\n+\t\t}\n+\t\treturn sequences\n+\tdefault:\n+\t\treturn nil\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/providers/bedrock/bedrock_test.go"
+ ]
+}

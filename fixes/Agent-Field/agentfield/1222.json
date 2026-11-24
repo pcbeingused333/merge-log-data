@@ -1,0 +1,26 @@
+{
+ "repo": "Agent-Field/agentfield",
+ "number": 1222,
+ "url": "https://github.com/Agent-Field/agentfield/pull/1222",
+ "title": "fix(sdk-python): record prompt-cache tokens for streaming calls",
+ "merged_at": "2026-11-23T14:39:52Z",
+ "files": [
+  {
+   "filename": "sdk/python/agentfield/usage_stream.py",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 0,
+   "patch": "@@ -3,6 +3,8 @@\n import math\n from typing import Any\n \n+from agentfield.multimodal_response import _extract_usage\n+\n \n class UsageTrackingStream:\n     def __init__(\n@@ -84,13 +86,21 @@ def _finish(self):\n                     for field in fields\n                 )\n             if known:\n+                try:\n+                    cache = _extract_usage(usage)\n+                except Exception:\n+                    # A malformed optional cache count must not discard the\n+                    # validated prompt/completion/total receipt.\n+                    cache = {}\n                 self._tracker.record(\n                     model=self._model,\n                     provider=self._provider,\n                     routing_provider=self._routing_provider,\n                     prompt_tokens=int(usage.get(\"prompt_tokens\", 0)),\n                     completion_tokens=int(usage.get(\"completion_tokens\", 0)),\n                     total_tokens=int(usage.get(\"total_tokens\", 0)),\n+                    cache_read_tokens=cache.get(\"cache_read_tokens\", 0),\n+                    cache_creation_tokens=cache.get(\"cache_creation_tokens\", 0),\n                 )\n             else:\n                 self._tracker.record("
+  },
+  {
+   "filename": "sdk/python/tests/test_usage_stream.py",
+   "status": "modified",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -157,3 +157,52 @@ async def source():\n     entry = tracker.serialize()[\"entries\"][0]\n     assert entry[\"provider\"] == \"openai\"\n     assert entry[\"routing_provider\"] == \"openrouter\"\n+\n+\n+@pytest.mark.asyncio\n+@pytest.mark.parametrize(\n+    \"usage, read, creation\",\n+    [\n+        ({\"cache_read_input_tokens\": 30, \"cache_creation_input_tokens\": 5}, 30, 5),\n+        ({\"prompt_tokens_details\": {\"cached_tokens\": 40}}, 40, 0),\n+    ],\n+)\n+async def test_stream_receipt_records_cache_tokens(usage, read, creation):\n+    async def source():\n+        yield SimpleNamespace(\n+            usage={\n+                \"prompt_tokens\": 80,\n+                \"completion_tokens\": 20,\n+                \"total_tokens\": 100,\n+                **usage,\n+            }\n+        )\n+\n+    tracker = CostTracker()\n+    stream = UsageTrackingStream(source(), tracker, \"anthropic/claude\", \"anthropic\")\n+    async for _ in stream:\n+        pass\n+    entry = tracker.serialize()[\"entries\"][0]\n+    assert entry[\"cache_read_tokens\"] == read\n+    assert entry[\"cache_creation_tokens\"] == creation\n+\n+\n+@pytest.mark.asyncio\n+async def test_stream_receipt_keeps_tokens_when_cache_count_is_malformed():\n+    async def source():\n+        yield SimpleNamespace(\n+            usage={\n+                \"prompt_tokens\": 80,\n+                \"completion_tokens\": 20,\n+                \"total_tokens\": 100,\n+                \"prompt_tokens_details\": {\"cached_tokens\": float(\"inf\")},\n+            }\n+        )\n+\n+    tracker = CostTracker()\n+    stream = UsageTrackingStream(source(), tracker, \"anthropic/claude\", \"anthropic\")\n+    async for _ in stream:\n+        pass\n+    entry = tracker.serialize()[\"entries\"][0]\n+    assert entry[\"total_tokens\"] == 100\n+    assert entry[\"cache_read_tokens\"] == 0"
+  }
+ ],
+ "test_files": [
+  "sdk/python/tests/test_usage_stream.py"
+ ]
+}

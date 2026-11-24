@@ -1,0 +1,26 @@
+{
+ "repo": "Agent-Field/agentfield",
+ "number": 1223,
+ "url": "https://github.com/Agent-Field/agentfield/pull/1223",
+ "title": "fix(sdk-python): raise on in-band error events in OpenRouter audio/music stream",
+ "merged_at": "2026-11-23T13:48:50Z",
+ "files": [
+  {
+   "filename": "sdk/python/agentfield/media_providers.py",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -2789,6 +2789,19 @@ async def _stream_openrouter_audio(\n                         except json_mod.JSONDecodeError:\n                             continue\n \n+                        # OpenRouter reports mid-stream failures as an\n+                        # in-band ``{\"error\": {...}}`` event on an HTTP 200.\n+                        if isinstance(event, dict) and event.get(\"error\"):\n+                            err = event[\"error\"]\n+                            msg = (\n+                                err.get(\"message\")\n+                                if isinstance(err, dict)\n+                                else None\n+                            ) or str(err)\n+                            raise RuntimeError(\n+                                f\"OpenRouter {label} stream failed: {msg}\"\n+                            )\n+\n                         choices = event.get(\"choices\", [])\n                         if not choices:\n                             continue"
+  },
+  {
+   "filename": "sdk/python/tests/test_openrouter_audio.py",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -352,6 +352,31 @@ async def test_malformed_sse_lines_skipped(self, monkeypatch):\n         assert result.has_audio\n         assert result.audio.data == valid_b64\n \n+    @pytest.mark.asyncio\n+    @pytest.mark.parametrize(\"with_partial_chunk\", [False, True])\n+    async def test_in_stream_error_event_raises(\n+        self, monkeypatch, with_partial_chunk\n+    ):\n+        \"\"\"An in-band ``{\"error\": ...}`` SSE event must raise, not be dropped.\"\"\"\n+        events = []\n+        if with_partial_chunk:\n+            events.append(\n+                _audio_event(b64_chunk=base64.b64encode(b\"AAA\").decode())\n+            )\n+        events.append({\"error\": {\"code\": 429, \"message\": \"upstream rate limited\"}})\n+        fake_resp = _FakeStreamResponse(_make_sse_lines(events))\n+        fake_session = _FakeSession(fake_resp)\n+\n+        monkeypatch.setenv(\"OPENROUTER_API_KEY\", \"test-key\")\n+\n+        with patch(\"aiohttp.ClientSession\", return_value=fake_session):\n+            provider = OpenRouterProvider()\n+            _prime_chat_audio_cache(provider, \"openai/gpt-audio-mini\")\n+            with pytest.raises(RuntimeError, match=\"stream failed.*rate limited\"):\n+                await provider.generate_audio(\n+                    text=\"test\", model=\"openai/gpt-audio-mini\", format=\"pcm16\"\n+                )\n+\n \n class TestOpenRouterChatAudioFormatGuard:\n     \"\"\"Chat-audio models can only deliver pcm16, so anything else fails fast."
+  }
+ ],
+ "test_files": [
+  "sdk/python/tests/test_openrouter_audio.py"
+ ]
+}

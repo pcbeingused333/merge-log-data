@@ -1,0 +1,26 @@
+{
+ "repo": "kestra-io/plugin-ai",
+ "number": 576,
+ "url": "https://github.com/kestra-io/plugin-ai/pull/576",
+ "title": "fix(provider): apply AIAgent timeout to LocalAI chat model",
+ "merged_at": "2026-11-23T16:04:09Z",
+ "files": [
+  {
+   "filename": "src/main/java/io/kestra/plugin/ai/provider/LocalAI.java",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -1,5 +1,7 @@\n package io.kestra.plugin.ai.provider;\n \n+import java.time.Duration;\n+\n import com.fasterxml.jackson.databind.annotation.JsonDeserialize;\n \n import io.kestra.core.exceptions.IllegalVariableEvaluationException;\n@@ -77,7 +79,11 @@ public class LocalAI extends ModelProvider {\n \n     @Override\n     public ChatModel chatModel(RunContext runContext, ChatConfiguration configuration) throws IllegalVariableEvaluationException {\n+        return chatModel(runContext, configuration, Duration.ofSeconds(120));\n+    }\n \n+    @Override\n+    public ChatModel chatModel(RunContext runContext, ChatConfiguration configuration, Duration timeout) throws IllegalVariableEvaluationException {\n         return LocalAiChatModel.builder()\n             .modelName(runContext.render(this.getModelName()).as(String.class).orElseThrow())\n             .baseUrl(runContext.render(this.baseUrl).as(String.class).orElseThrow()) // for local, it is required\n@@ -86,6 +92,7 @@ public ChatModel chatModel(RunContext runContext, ChatConfiguration configuratio\n             .logRequests(runContext.render(configuration.getLogRequests()).as(Boolean.class).orElse(false))\n             .logResponses(runContext.render(configuration.getLogResponses()).as(Boolean.class).orElse(false))\n             .maxTokens(runContext.render(configuration.getMaxToken()).as(Integer.class).orElse(null))\n+            .timeout(timeout)\n             .build();\n     }\n "
+  },
+  {
+   "filename": "src/test/java/io/kestra/plugin/ai/provider/LocalAITest.java",
+   "status": "added",
+   "additions": 73,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,73 @@\n+package io.kestra.plugin.ai.provider;\n+\n+import java.time.Duration;\n+import java.util.Map;\n+\n+import org.junit.jupiter.api.Test;\n+import org.junit.jupiter.api.extension.RegisterExtension;\n+import org.junit.jupiter.api.parallel.ResourceLock;\n+\n+import com.github.tomakehurst.wiremock.junit5.WireMockExtension;\n+\n+import io.kestra.core.context.TestRunContextFactory;\n+import io.kestra.core.junit.annotations.KestraTest;\n+import io.kestra.core.models.property.Property;\n+import io.kestra.plugin.ai.domain.ChatConfiguration;\n+\n+import jakarta.inject.Inject;\n+\n+import static com.github.tomakehurst.wiremock.client.WireMock.okJson;\n+import static com.github.tomakehurst.wiremock.client.WireMock.post;\n+import static com.github.tomakehurst.wiremock.client.WireMock.urlPathMatching;\n+import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;\n+import static org.assertj.core.api.Assertions.assertThat;\n+import static org.assertj.core.api.Assertions.assertThatThrownBy;\n+\n+@ResourceLock(\"kestra-h2-flyway\")\n+@KestraTest\n+class LocalAITest {\n+\n+    private static final String RESPONSE = \"\"\"\n+        {\n+          \"id\": \"chatcmpl-1\",\n+          \"object\": \"chat.completion\",\n+          \"model\": \"test-model\",\n+          \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"Hello John\"}}],\n+          \"usage\": {\"prompt_tokens\": 10, \"completion_tokens\": 3, \"total_tokens\": 13}\n+        }\"\"\";\n+\n+    @Inject\n+    private TestRunContextFactory runContextFactory;\n+\n+    @RegisterExtension\n+    static WireMockExtension wireMock = WireMockExtension.newInstance()\n+        .options(wireMockConfig().dynamicPort())\n+        .build();\n+\n+    @Test\n+    void chatModel_shouldApplyTimeout() throws Exception {\n+        wireMock.stubFor(post(urlPathMatching(\".*/chat/completions\")).willReturn(okJson(RESPONSE).withFixedDelay(3000)));\n+\n+        var model = localAi().chatModel(runContextFactory.of(Map.of()), ChatConfiguration.builder().build(), Duration.ofMillis(500));\n+\n+        assertThatThrownBy(() -> model.chat(\"Hello\"))\n+            .hasStackTraceContaining(\"timed out\");\n+    }\n+\n+    @Test\n+    void chatModel_shouldReturnResponse() throws Exception {\n+        wireMock.stubFor(post(urlPathMatching(\".*/chat/completions\")).willReturn(okJson(RESPONSE)));\n+\n+        var model = localAi().chatModel(runContextFactory.of(Map.of()), ChatConfiguration.builder().build(), Duration.ofSeconds(5));\n+\n+        assertThat(model.chat(\"Hello\")).isEqualTo(\"Hello John\");\n+    }\n+\n+    private LocalAI localAi() {\n+        return LocalAI.builder()\n+            .type(LocalAI.class.getName())\n+            .modelName(Property.ofValue(\"test-model\"))\n+            .baseUrl(Property.ofValue(\"http://localhost:\" + wireMock.getPort() + \"/v1\"))\n+            .build();\n+    }\n+}"
+  }
+ ],
+ "test_files": [
+  "src/test/java/io/kestra/plugin/ai/provider/LocalAITest.java"
+ ]
+}

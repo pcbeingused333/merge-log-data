@@ -3,8 +3,46 @@
  "number": 2695,
  "url": "https://github.com/versity/versitygw/pull/2695",
  "state": "open",
- "reviews": [],
- "review_comments": [],
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-23T13:11:36Z",
+   "body": "Two related places have the same one-way rule:\n- `convert-posix` (`cmd/internal/gwcli/utils.go:399`) has its own `filepath.Rel` check that also accepts a sidecar containing the root. Please reuse the same helper so both commands agree.\n- `extra/example.conf` says nothing about nesting for `VGW_META_SIDECAR`, and `VGW_VERSIONING_DIR` only says \"must NOT be a subdirectory\". Please document \"must not be the same as, inside, or contain the root directory\"."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-23T13:06:32Z",
+   "body": "Fixing the sibling-prefix false positive is right, but just deleting this and relying on `validateSubDir` leaves the dangerous case open. `validateSubDir` only rejects a sidecar *inside* the root. A sidecar that *contains* the root is accepted, and the sidecar storer creates and `RemoveAll`s `<sidecar>/<bucket>/...`.\n\nRepro: `posix --sidecar /d /d/gwroot`, then `create-bucket gwroot` + `delete-bucket gwroot`. `SideCar.DeleteAttributes` runs `os.RemoveAll(\"/d/gwroot\")` and wipes the whole gateway root, all buckets included. Creating `gwroot` also adds a phantom bucket `meta`, and `put-object gwroot/victim` writes sidecar files into bucket `victim`.\n\nPlease replace this with a two-way check (equal, or either one contains the other). Doing it in `validateSubDir` covers `--versioning-dir` too:\n\n```go\nif isDirBelowRoot(root, absDir) || isDirBelowRoot(absDir, root) {\n\treturn \"\", fmt.Errorf(\"%v and the root directory %v must not be the same or nested in one another\", dir, root)\n}\n```\n\nThe Helm chart already documents this intent: \"Must not overlap /mnt/data or versioningDir\"."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-23T13:08:20Z",
+   "body": "While fixing this: the comparison uses `filepath.Abs` only, so a symlinked path segment hides nesting in both directions. Root `/d/link/gwroot` (`link -> real`) with sidecar `/d/real/gwroot/inner` is accepted, and so is the reverse. Both dirs must exist anyway, so please compare `filepath.EvalSymlinks` of both. That also handles macOS `/tmp` vs `/private/tmp`."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-23T13:08:50Z",
+   "body": "Nit: with this message gone, a bad `--sidecar` now fails with \"the root directory X contains the directory Y\", which doesn't say which flag is wrong (`validateSubDir` is shared with `--versioning-dir`). Please wrap it at the call sites, e.g. `fmt.Errorf(\"invalid sidecar directory: %w\", err)` and the same for the versioning dir."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/sidecardir_test.go",
+   "created_at": "2026-11-23T13:09:25Z",
+   "body": "This passes on any error, e.g. a stat failure if `inside` weren't created. Please assert the nesting error itself (a sentinel checked with `errors.Is`, or at least the message).\n\nPlease also make it table-driven and add cases for:\n- sidecar == root (rejected)\n- sidecar is the parent / an ancestor of root (rejected, after the fix above)\n- symlinked path hiding the nesting (rejected)\n- root `.` with sidecar `../s3-sidecar` in default (non-AbsolutePaths) mode (accepted; main rejected this too), using `t.Chdir`\n- trailing separator on the root"
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/sidecardir_test.go",
+   "created_at": "2026-11-23T13:09:42Z",
+   "body": "This uses `meta.XattrMeta{}` with `SideCarDir` set, a combination the CLI never builds. Please use `meta.NewSideCar(sibling)` so the test runs the real sidecar setup."
+  }
+ ],
  "comments": [
   {
    "role": "collaborator",

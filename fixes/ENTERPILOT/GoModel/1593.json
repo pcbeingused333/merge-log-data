@@ -1,0 +1,40 @@
+{
+ "repo": "ENTERPILOT/GoModel",
+ "number": 1593,
+ "url": "https://github.com/ENTERPILOT/GoModel/pull/1593",
+ "title": "fix(mistral): map model_length finish reason to length",
+ "merged_at": "2026-11-23T15:44:42Z",
+ "files": [
+  {
+   "filename": "internal/providers/mistral/finish.go",
+   "status": "added",
+   "additions": 65,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,65 @@\n+package mistral\n+\n+import (\n+\t\"bytes\"\n+\n+\t\"github.com/goccy/go-json\"\n+)\n+\n+// Mistral reports a completion cut off by the model's context window as\n+// finish_reason \"model_length\" (alongside the OpenAI-style \"length\" for\n+// max_tokens). Chat clients only know the OpenAI vocabulary, so the value is\n+// mapped to \"length\".\n+const (\n+\tfinishReasonModelLength = \"model_length\"\n+\tfinishReasonLength      = \"length\"\n+)\n+\n+var modelLengthMarker = []byte(finishReasonModelLength)\n+\n+// mapFinishReasons rewrites choices[].finish_reason \"model_length\" to\n+// \"length\" in a chat completion payload (buffered or single SSE chunk). It\n+// returns the original data untouched when the marker is absent, and reports\n+// whether a rewrite happened.\n+func mapFinishReasons(data []byte) ([]byte, bool) {\n+\t// Mistral writes the enum value literally, so a byte scan keeps ordinary\n+\t// chunks off the decode path, as hasContentArray does for content arrays.\n+\t// Decoding every payload that holds a JSON escape instead would put each\n+\t// streamed chunk with a newline or a quote in its text on that path.\n+\tif !bytes.Contains(data, modelLengthMarker) {\n+\t\treturn data, false\n+\t}\n+\tvar top map[string]json.RawMessage\n+\tif err := json.Unmarshal(data, &top); err != nil {\n+\t\treturn data, false\n+\t}\n+\tchoicesRaw, ok := top[\"choices\"]\n+\tif !ok {\n+\t\treturn data, false\n+\t}\n+\tvar choices []map[string]json.RawMessage\n+\tif err := json.Unmarshal(choicesRaw, &choices); err != nil {\n+\t\treturn data, false\n+\t}\n+\tchanged := false\n+\tfor _, choice := range choices {\n+\t\tif rawString(choice[\"finish_reason\"]) != finishReasonModelLength {\n+\t\t\tcontinue\n+\t\t}\n+\t\tchoice[\"finish_reason\"] = json.RawMessage(`\"` + finishReasonLength + `\"`)\n+\t\tchanged = true\n+\t}\n+\tif !changed {\n+\t\treturn data, false\n+\t}\n+\tencodedChoices, err := json.Marshal(choices)\n+\tif err != nil {\n+\t\treturn data, false\n+\t}\n+\ttop[\"choices\"] = encodedChoices\n+\tout, err := json.Marshal(top)\n+\tif err != nil {\n+\t\treturn data, false\n+\t}\n+\treturn out, true\n+}"
+  },
+  {
+   "filename": "internal/providers/mistral/mistral.go",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 2,
+   "patch": "@@ -58,10 +58,12 @@ func New(cfg providers.ProviderConfig, opts providers.ProviderOptions) core.Prov\n \n // normalizeChatResponse flattens a buffered completion's thinking chunks\n // (thinking becomes reasoning_content) before the typed decode, which rejects\n-// Mistral's content chunk arrays.\n+// Mistral's content chunk arrays, and maps Mistral's \"model_length\" finish\n+// reason to \"length\".\n func normalizeChatResponse(raw []byte) []byte {\n \tflattened, _ := flattenThinkingChunks(raw)\n-\treturn flattened\n+\tmapped, _ := mapFinishReasons(flattened)\n+\treturn mapped\n }\n \n // StreamChatCompletion returns Mistral's SSE stream wrapped so that every"
+  },
+  {
+   "filename": "internal/providers/mistral/mistral_test.go",
+   "status": "modified",
+   "additions": 60,
+   "deletions": 0,
+   "patch": "@@ -501,3 +501,63 @@ func TestChatCompletion_AdaptsRequest_Noop(t *testing.T) {\n \tassert.NotContains(t, wire, \"reasoning\")\n \tassert.NotContains(t, wire, \"stream_options\")\n }\n+\n+// Mistral reports a completion cut off by the model's context window as\n+// finish_reason \"model_length\". Clients only know the OpenAI \"length\" value,\n+// so it must be mapped on both the buffered and the streamed path.\n+func TestChatCompletion_MapsModelLengthFinishReason(t *testing.T) {\n+\tserver, _ := providertest.JSONServer(t, http.StatusOK, `{\"id\":\"cmpl-1\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"mistral-large-4-0\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"cut\"},\"finish_reason\":\"model_length\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}`)\n+\tprovider := newTestProvider(server)\n+\n+\tresp, err := provider.ChatCompletion(context.Background(), &core.ChatRequest{\n+\t\tModel:    \"mistral-large-4-0\",\n+\t\tMessages: []core.Message{{Role: \"user\", Content: \"hi\"}},\n+\t})\n+\trequire.NoError(t, err)\n+\trequire.Len(t, resp.Choices, 1)\n+\tassert.Equal(t, \"length\", resp.Choices[0].FinishReason)\n+}\n+\n+func TestStreamChatCompletion_MapsModelLengthFinishReason(t *testing.T) {\n+\tserver, _ := providertest.SSEServer(t, \"data: {\\\"id\\\":\\\"c1\\\",\\\"object\\\":\\\"chat.completion.chunk\\\",\\\"created\\\":1,\\\"model\\\":\\\"m\\\",\\\"choices\\\":[{\\\"index\\\":0,\\\"delta\\\":{\\\"content\\\":\\\"cut\\\"},\\\"finish_reason\\\":null}]}\\n\\n\"+\n+\t\t\"data: {\\\"id\\\":\\\"c1\\\",\\\"object\\\":\\\"chat.completion.chunk\\\",\\\"created\\\":1,\\\"model\\\":\\\"m\\\",\\\"choices\\\":[{\\\"index\\\":0,\\\"delta\\\":{},\\\"finish_reason\\\":\\\"model_length\\\"}]}\\n\\n\"+\n+\t\t\"data: [DONE]\\n\\n\")\n+\tprovider := newTestProvider(server)\n+\n+\tstream, err := provider.StreamChatCompletion(context.Background(), &core.ChatRequest{\n+\t\tModel:    \"mistral-large-4-0\",\n+\t\tMessages: []core.Message{{Role: \"user\", Content: \"hi\"}},\n+\t\tStream:   true,\n+\t})\n+\trequire.NoError(t, err)\n+\tbody, err := io.ReadAll(stream)\n+\trequire.NoError(t, err)\n+\trequire.NoError(t, stream.Close())\n+\n+\tout := string(body)\n+\tassert.Contains(t, out, `\"finish_reason\":\"length\"`)\n+\tassert.NotContains(t, out, \"model_length\")\n+\tassert.Contains(t, out, `\"content\":\"cut\"`)\n+\tassert.Contains(t, out, \"data: [DONE]\")\n+}\n+\n+// Only a finish_reason of \"model_length\" is rewritten: other reasons, and text\n+// that merely mentions the value, are relayed byte for byte.\n+func TestMapFinishReasons_LeavesOtherPayloadsUntouched(t *testing.T) {\n+\ttests := []struct {\n+\t\tname string\n+\t\tin   string\n+\t}{\n+\t\t{name: \"stop\", in: `{\"choices\":[{\"index\":0,\"delta\":{\"content\":\"line\\n\"},\"finish_reason\":\"stop\"}]}`},\n+\t\t{name: \"length\", in: `{\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}]}`},\n+\t\t{name: \"value only in content\", in: `{\"choices\":[{\"index\":0,\"delta\":{\"content\":\"model_length\"},\"finish_reason\":null}]}`},\n+\t}\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tin := []byte(tt.in)\n+\t\t\tout, changed := mapFinishReasons(in)\n+\t\t\tassert.False(t, changed)\n+\t\t\tassert.Equal(t, in, out)\n+\t\t})\n+\t}\n+}"
+  },
+  {
+   "filename": "internal/providers/mistral/stream.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 2,
+   "patch": "@@ -98,8 +98,9 @@ func (s *thinkingChunkStream) emit(raw streaming.RawEvent) {\n \t\ts.out = append(s.out, raw.Raw...)\n \t\treturn\n \t}\n-\tconverted, changed := flattenThinkingChunks(raw.Data)\n-\tif !changed {\n+\tconverted, flattened := flattenThinkingChunks(raw.Data)\n+\tconverted, mapped := mapFinishReasons(converted)\n+\tif !flattened && !mapped {\n \t\ts.out = append(s.out, raw.Raw...)\n \t\treturn\n \t}"
+  }
+ ],
+ "test_files": [
+  "internal/providers/mistral/mistral_test.go"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "looplj/axonhub",
+ "number": 3083,
+ "url": "https://github.com/looplj/axonhub/pull/3083",
+ "title": "fix(ollama): forward seed, frequency_penalty and presence_penalty in outbound options",
+ "merged_at": "2026-11-23T15:33:15Z",
+ "files": [
+  {
+   "filename": "llm/transformer/ollama/outbound.go",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -86,6 +86,10 @@ type Options struct {\n \tNumCtx      *int     `json:\"num_ctx,omitempty\"`\n \tNumPredict  *int     `json:\"num_predict,omitempty\"`\n \tStop        []string `json:\"stop,omitempty\"`\n+\n+\tSeed             *int     `json:\"seed,omitempty\"`\n+\tFrequencyPenalty *float64 `json:\"frequency_penalty,omitempty\"`\n+\tPresencePenalty  *float64 `json:\"presence_penalty,omitempty\"`\n }\n \n type ChatResponse struct {\n@@ -304,6 +308,31 @@ func (t *OutboundTransformer) buildOptions(llmReq *llm.Request) *Options {\n \t\topts.TopP = llmReq.TopP\n \t}\n \n+\tif llmReq.Seed != nil {\n+\t\tif opts == nil {\n+\t\t\topts = &Options{}\n+\t\t}\n+\n+\t\tseed := int(*llmReq.Seed)\n+\t\topts.Seed = &seed\n+\t}\n+\n+\tif llmReq.FrequencyPenalty != nil {\n+\t\tif opts == nil {\n+\t\t\topts = &Options{}\n+\t\t}\n+\n+\t\topts.FrequencyPenalty = llmReq.FrequencyPenalty\n+\t}\n+\n+\tif llmReq.PresencePenalty != nil {\n+\t\tif opts == nil {\n+\t\t\topts = &Options{}\n+\t\t}\n+\n+\t\topts.PresencePenalty = llmReq.PresencePenalty\n+\t}\n+\n \tif llmReq.MaxTokens != nil {\n \t\tif opts == nil {\n \t\t\topts = &Options{}"
+  },
+  {
+   "filename": "llm/transformer/ollama/outbound_test.go",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -325,3 +325,28 @@ func TestAggregateStreamChunksKeepsToolCallsFromAllChunks(t *testing.T) {\n \trequire.Equal(t, \"get_time\", calls[1].Function.Name)\n \trequire.NotEqual(t, calls[0].ID, calls[1].ID)\n }\n+\n+func TestTransformRequestMapsSeedAndPenalties(t *testing.T) {\n+\ttransformer, err := NewOutboundTransformerWithConfig(&Config{\n+\t\tBaseURL: \"http://localhost:11434\",\n+\t})\n+\trequire.NoError(t, err)\n+\n+\treq, err := transformer.TransformRequest(context.Background(), &llm.Request{\n+\t\tModel:            \"qwen3.5:4b-q4_K_M\",\n+\t\tMessages:         []llm.Message{{Role: \"user\", Content: llm.MessageContent{Content: lo.ToPtr(\"hi\")}}},\n+\t\tSeed:             lo.ToPtr(int64(42)),\n+\t\tFrequencyPenalty: lo.ToPtr(0.5),\n+\t\tPresencePenalty:  lo.ToPtr(0.25),\n+\t})\n+\trequire.NoError(t, err)\n+\n+\tvar body map[string]any\n+\trequire.NoError(t, json.Unmarshal(req.Body, &body))\n+\n+\topts, ok := body[\"options\"].(map[string]any)\n+\trequire.True(t, ok, \"options must be present\")\n+\trequire.EqualValues(t, 42, opts[\"seed\"])\n+\trequire.EqualValues(t, 0.5, opts[\"frequency_penalty\"])\n+\trequire.EqualValues(t, 0.25, opts[\"presence_penalty\"])\n+}"
+  }
+ ],
+ "test_files": [
+  "llm/transformer/ollama/outbound_test.go"
+ ]
+}

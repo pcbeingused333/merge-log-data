@@ -1,0 +1,41 @@
+{
+ "repo": "kodustech/kodus-ai",
+ "number": 2325,
+ "url": "https://github.com/kodustech/kodus-ai/pull/2325",
+ "title": "fix(kody-rules): forward stored compile fields to compileAndSave",
+ "merged_at": "2026-11-23T17:49:35Z",
+ "files": [
+  {
+   "filename": "libs/kodyRules/application/use-cases/convert-pending-updates-to-new.use-case.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -91,6 +91,9 @@ export class ConvertPendingUpdatesToNewUseCase {\n                     resolvedAt: undefined,\n                     resolvedBy: undefined,\n                     centralizedConfig: undefined,\n+                    // The new rule has no detector yet; a stale compileAttempt would make\n+                    // the compile gate skip it. contextNeed is left in place on purpose.\n+                    compileAttempt: undefined,\n                 },\n                 organizationId,\n                 userInfo,"
+  },
+  {
+   "filename": "libs/kodyRules/application/use-cases/create-or-update.use-case.spec.ts",
+   "status": "modified",
+   "additions": 48,
+   "deletions": 0,
+   "patch": "@@ -216,3 +216,51 @@ describe('CreateOrUpdateKodyRulesUseCase — isInternalSyncActor', () => {\n         );\n     });\n });\n+\n+describe('CreateOrUpdateKodyRulesUseCase — detector compile on save', () => {\n+    it('passes the stored compileAttempt and contextNeed to compileAndSave so unchanged rules are skipped', async () => {\n+        const compileAttempt = {\n+            sourceHash: 'hash-1',\n+            attemptedAt: new Date('2026-01-01'),\n+            declineReason: 'not mechanical',\n+        };\n+        const contextNeed = { need: 'none', promptVersion: 1 };\n+        const stored = {\n+            uuid: 'rule-1',\n+            detector: undefined,\n+            compileAttempt,\n+            contextNeed,\n+        };\n+        const compileAndSave = jest.fn().mockResolvedValue({});\n+        const useCase = new CreateOrUpdateKodyRulesUseCase(\n+            {\n+                createOrUpdate: jest.fn().mockResolvedValue(stored),\n+            } as any,\n+            {} as any,\n+            {} as any,\n+            {} as any,\n+            {} as any,\n+            {} as any,\n+            { compileAndSave } as any,\n+            { kodyRuleChanged: jest.fn() } as any,\n+        );\n+\n+        await useCase.execute(\n+            {\n+                uuid: 'rule-1',\n+                title: 't',\n+                rule: 'r',\n+                repositoryId: 'repo-1',\n+            } as any,\n+            'org-1',\n+            { userId: 'kody', userEmail: 'kody@kodus.io' },\n+        );\n+\n+        expect(compileAndSave).toHaveBeenCalledTimes(1);\n+        expect(compileAndSave.mock.calls[0][2]).toMatchObject({\n+            uuid: 'rule-1',\n+            compileAttempt,\n+            contextNeed,\n+        });\n+    });\n+});"
+  },
+  {
+   "filename": "libs/kodyRules/application/use-cases/create-or-update.use-case.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -214,6 +214,11 @@ export class CreateOrUpdateKodyRulesUseCase {\n                         // compileAndSave can clear a stale one when an edited\n                         // rule stops being mechanical.\n                         detector: (result as IKodyRule).detector,\n+                        // Carry the stored compile records too: the compile\n+                        // gate skips a rule only when it finds its own\n+                        // compileAttempt/contextNeed, which the DTO never has.\n+                        compileAttempt: (result as IKodyRule).compileAttempt,\n+                        contextNeed: (result as IKodyRule).contextNeed,\n                     })\n                     .catch((error) => {\n                         this.logger.error({"
+  },
+  {
+   "filename": "test/unit/kodyRules/use-cases/convert-pending-updates-to-new.use-case.spec.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -124,7 +124,9 @@ describe('ConvertPendingUpdatesToNewUseCase', () => {\n                 targetRuleUuid: 'target-1',\n                 resolvedAt: new Date('2026-01-01T00:00:00.000Z'),\n                 resolvedBy: 'user-2',\n-            },\n+                compileAttempt: { hash: 'stale-hash' },\n+                contextNeed: { source: 'author' },\n+            } as any,\n             {\n                 uuid: 'pending-2',\n                 title: 'Pending 2',\n@@ -157,6 +159,8 @@ describe('ConvertPendingUpdatesToNewUseCase', () => {\n                 targetRuleUuid: undefined,\n                 resolvedAt: undefined,\n                 resolvedBy: undefined,\n+                compileAttempt: undefined,\n+                contextNeed: { source: 'author' },\n             }),\n             'org-1',\n             { userId: 'user-1', userEmail: 'dev@kodus.io' },"
+  }
+ ],
+ "test_files": [
+  "libs/kodyRules/application/use-cases/create-or-update.use-case.spec.ts",
+  "test/unit/kodyRules/use-cases/convert-pending-updates-to-new.use-case.spec.ts"
+ ]
+}

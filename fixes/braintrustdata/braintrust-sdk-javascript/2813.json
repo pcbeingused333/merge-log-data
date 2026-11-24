@@ -1,0 +1,33 @@
+{
+ "repo": "braintrustdata/braintrust-sdk-javascript",
+ "number": 2813,
+ "url": "https://github.com/braintrustdata/braintrust-sdk-javascript/pull/2813",
+ "title": "fix(genkit): record cached and reasoning tokens under canonical metric names",
+ "merged_at": "2026-11-23T09:57:26Z",
+ "files": [
+  {
+   "filename": ".changeset/fix-genkit-usage-metric-names.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+\"braintrust\": patch\n+---\n+\n+fix(genkit): Record cached and reasoning tokens under the canonical prompt_cached_tokens and completion_reasoning_tokens metric names"
+  },
+  {
+   "filename": "js/src/instrumentation/providers/genkit-instrumentation.test.ts",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -116,4 +116,40 @@ describe(\"registerGenkitInstrumentation stream patching\", () => {\n       \"second\",\n     ]);\n   });\n+\n+  it(\"records cached and reasoning tokens under the canonical metric names\", async () => {\n+    const logger = _exportsForTestingOnly.useTestBackgroundLogger();\n+    registerGenkitInstrumentation();\n+\n+    await genkitChannels.generate.invoke(\n+      () =>\n+        Promise.resolve({\n+          text: \"ok\",\n+          usage: {\n+            inputTokens: 10,\n+            outputTokens: 5,\n+            totalTokens: 20,\n+            cachedContentTokens: 4,\n+            thoughtsTokens: 5,\n+          },\n+        }),\n+      undefined,\n+      [{ prompt: \"hi\" }],\n+      {},\n+    );\n+\n+    const spans = (await logger.drain()) as Record<string, any>[];\n+    const llm = spans.find(\n+      (s) => s.span_attributes?.name === \"genkit.generate\",\n+    );\n+    expect(llm?.metrics).toMatchObject({\n+      prompt_tokens: 10,\n+      completion_tokens: 5,\n+      tokens: 20,\n+      prompt_cached_tokens: 4,\n+      completion_reasoning_tokens: 5,\n+    });\n+    expect(llm?.metrics).not.toHaveProperty(\"cached_tokens\");\n+    expect(llm?.metrics).not.toHaveProperty(\"reasoning_tokens\");\n+  });\n });"
+  },
+  {
+   "filename": "js/src/instrumentation/providers/genkit-instrumentation.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -605,8 +605,8 @@ function parseGenkitUsageMetrics(\n     tokens: usage.totalTokens,\n     prompt_tokens: usage.inputTokens,\n     completion_tokens: usage.outputTokens,\n-    cached_tokens: usage.cachedContentTokens,\n-    reasoning_tokens: usage.thoughtsTokens,\n+    prompt_cached_tokens: usage.cachedContentTokens,\n+    completion_reasoning_tokens: usage.thoughtsTokens,\n   });\n }\n "
+  }
+ ],
+ "test_files": [
+  "js/src/instrumentation/providers/genkit-instrumentation.test.ts"
+ ]
+}

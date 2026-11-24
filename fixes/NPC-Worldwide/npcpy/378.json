@@ -1,0 +1,26 @@
+{
+ "repo": "NPC-Worldwide/npcpy",
+ "number": 378,
+ "url": "https://github.com/NPC-Worldwide/npcpy/pull/378",
+ "title": "fix(gen): forward top_k to the MLX sampler in get_mlx_response",
+ "merged_at": "2026-11-23T22:47:18Z",
+ "files": [
+  {
+   "filename": "npcpy/gen/response.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -1236,7 +1236,10 @@ def get_mlx_response(\n         max_tokens = kwargs.get(\"max_tokens\", kwargs.get(\"max_new_tokens\", 512))\n         temperature = kwargs.get(\"temperature\", 0.7)\n         top_p = kwargs.get(\"top_p\", 0.0)\n-        sampler = make_sampler(temp=temperature, top_p=top_p)\n+        sampler_kwargs = {\"temp\": temperature, \"top_p\": top_p}\n+        if kwargs.get(\"top_k\") is not None:\n+            sampler_kwargs[\"top_k\"] = kwargs[\"top_k\"]\n+        sampler = make_sampler(**sampler_kwargs)\n         out = mlx_generate(\n             mlx_model, tokenizer, prompt=chat_text,\n             max_tokens=max_tokens, sampler=sampler, verbose=False,"
+  },
+  {
+   "filename": "tests/test_mlx_top_k.py",
+   "status": "added",
+   "additions": 41,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,41 @@\n+\"\"\"get_mlx_response must forward top_k to mlx_lm's make_sampler.\"\"\"\n+import sys\n+import types\n+from unittest import mock\n+\n+from npcpy.gen.response import get_mlx_response\n+\n+\n+def _install_stub_mlx_lm():\n+    sampler_calls = []\n+\n+    class _Tok:\n+        def apply_chat_template(self, messages, **kwargs):\n+            return \"chat\"\n+\n+    mlx_lm = types.ModuleType(\"mlx_lm\")\n+    mlx_lm.load = lambda *a, **k: (object(), _Tok())\n+    mlx_lm.generate = lambda *a, **k: \"ok\"\n+    sample_utils = types.ModuleType(\"mlx_lm.sample_utils\")\n+\n+    def make_sampler(**kwargs):\n+        sampler_calls.append(kwargs)\n+        return lambda x: x\n+\n+    sample_utils.make_sampler = make_sampler\n+    mlx_lm.sample_utils = sample_utils\n+    return {\"mlx_lm\": mlx_lm, \"mlx_lm.sample_utils\": sample_utils}, sampler_calls\n+\n+\n+def test_mlx_forwards_top_k_to_sampler():\n+    modules, calls = _install_stub_mlx_lm()\n+    with mock.patch.dict(sys.modules, modules):\n+        get_mlx_response(prompt=\"hi\", model=\"m\", temperature=0.5, top_p=0.9, top_k=40)\n+    assert calls == [{\"temp\": 0.5, \"top_p\": 0.9, \"top_k\": 40}]\n+\n+\n+def test_mlx_omits_top_k_when_not_given():\n+    modules, calls = _install_stub_mlx_lm()\n+    with mock.patch.dict(sys.modules, modules):\n+        get_mlx_response(prompt=\"hi\", model=\"m\", temperature=0.5, top_p=0.9)\n+    assert calls == [{\"temp\": 0.5, \"top_p\": 0.9}]"
+  }
+ ],
+ "test_files": [
+  "tests/test_mlx_top_k.py"
+ ]
+}
