@@ -1,0 +1,34 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 744,
+ "url": "https://github.com/labring/aiproxy/pull/744",
+ "title": "fix(gemini): include toolUsePromptTokenCount in prompt tokens",
+ "merged_at": "2026-11-24T17:39:07Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/gemini/openai_test.go",
+   "status": "modified",
+   "additions": 50,
+   "deletions": 0,
+   "patch": "@@ -1400,6 +1400,56 @@ func TestResponseChat2OpenAIConvertsAudioInlineDataAndUsage(t *testing.T) {\n \t)\n }\n \n+func TestResponseChat2OpenAICountsToolUsePromptTokensAsInput(t *testing.T) {\n+\tt.Parallel()\n+\n+\tmeta := meta.NewMeta(\n+\t\t&model.Channel{Type: model.ChannelTypeGoogleGemini},\n+\t\tmode.ChatCompletions,\n+\t\t\"gemini-2.5-flash\",\n+\t\tmodel.ModelConfig{},\n+\t)\n+\tresponse := &relaymodel.GeminiChatResponse{\n+\t\tCandidates: []*relaymodel.GeminiChatCandidate{\n+\t\t\t{\n+\t\t\t\tContent: relaymodel.GeminiChatContent{\n+\t\t\t\t\tParts: []*relaymodel.GeminiPart{{Text: \"answer\"}},\n+\t\t\t\t},\n+\t\t\t\tFinishReason: relaymodel.GeminiFinishReasonStop,\n+\t\t\t},\n+\t\t},\n+\t\tUsageMetadata: &relaymodel.GeminiUsageMetadata{\n+\t\t\tPromptTokenCount:        12,\n+\t\t\tToolUsePromptTokenCount: 34,\n+\t\t\tCandidatesTokenCount:    5,\n+\t\t\tTotalTokenCount:         51,\n+\t\t},\n+\t}\n+\n+\t// The handler bills the usage it reports to the client.\n+\tcheck := func(usage *relaymodel.ChatUsage) {\n+\t\tt.Helper()\n+\n+\t\tassert.Equal(t, int64(46), usage.PromptTokens)\n+\t\tassert.Equal(\n+\t\t\tt,\n+\t\t\tusage.TotalTokens,\n+\t\t\tusage.PromptTokens+usage.CompletionTokens,\n+\t\t)\n+\t\tassert.Equal(\n+\t\t\tt,\n+\t\t\tmodel.ZeroNullInt64(46),\n+\t\t\tusage.ToModelUsage().InputTokens,\n+\t\t)\n+\t}\n+\n+\tcheck(&gemini.ResponseChat2OpenAIForTest(meta, response).Usage)\n+\n+\tstreamResponse := gemini.StreamResponseChat2OpenAIForTest(meta, response)\n+\trequire.NotNil(t, streamResponse.Usage)\n+\tcheck(streamResponse.Usage)\n+}\n+\n func TestStreamResponseChat2OpenAIConvertsAudioInlineDataToDeltaAudio(t *testing.T) {\n \tt.Parallel()\n "
+  },
+  {
+   "filename": "core/relay/model/gemini.go",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 7,
+   "patch": "@@ -272,10 +272,16 @@ func (u *GeminiUsageMetadata) GetAudioOutputTokens() int64 {\n \treturn 0\n }\n \n+// GetInputTokens returns the tokens of the prompt plus the tokens of the\n+// tool-use prompts, which the API reports in a field of their own.\n+func (u *GeminiUsageMetadata) GetInputTokens() int64 {\n+\treturn u.PromptTokenCount + u.ToolUsePromptTokenCount\n+}\n+\n // ToUsage converts GeminiUsageMetadata to ChatUsage format\n func (u *GeminiUsageMetadata) ToUsage() ChatUsage {\n \tchatUsage := ChatUsage{\n-\t\tPromptTokens: u.PromptTokenCount,\n+\t\tPromptTokens: u.GetInputTokens(),\n \t\tCompletionTokens: u.CandidatesTokenCount +\n \t\t\tu.ThoughtsTokenCount,\n \t\tTotalTokens: u.TotalTokenCount,\n@@ -297,11 +303,8 @@ func (u *GeminiUsageMetadata) ToUsage() ChatUsage {\n \n // ToModelUsage converts GeminiUsageMetadata to model.Usage format with image token support\n func (u *GeminiUsageMetadata) ToModelUsage() model.Usage {\n-\t// Input tokens should include both prompt tokens and tool use prompt tokens\n-\tinputTokens := u.PromptTokenCount + u.ToolUsePromptTokenCount\n-\n \tusage := model.Usage{\n-\t\tInputTokens:       model.ZeroNullInt64(inputTokens),\n+\t\tInputTokens:       model.ZeroNullInt64(u.GetInputTokens()),\n \t\tImageInputTokens:  model.ZeroNullInt64(u.GetImageInputTokens()),\n \t\tAudioInputTokens:  model.ZeroNullInt64(u.GetAudioInputTokens()),\n \t\tVideoInputTokens:  model.ZeroNullInt64(u.GetVideoInputTokens()),\n@@ -319,7 +322,7 @@ func (u *GeminiUsageMetadata) ToModelUsage() model.Usage {\n // ToResponseUsage converts GeminiUsageMetadata to ResponseUsage (OpenAI Responses API format)\n func (u *GeminiUsageMetadata) ToResponseUsage() ResponseUsage {\n \tusage := ResponseUsage{\n-\t\tInputTokens:  u.PromptTokenCount,\n+\t\tInputTokens:  u.GetInputTokens(),\n \t\tOutputTokens: u.CandidatesTokenCount + u.ThoughtsTokenCount,\n \t\tTotalTokens:  u.TotalTokenCount,\n \t}\n@@ -357,7 +360,7 @@ func (u *GeminiUsageMetadata) ToResponseUsage() ResponseUsage {\n // ToClaudeUsage converts GeminiUsageMetadata to ClaudeUsage (Anthropic Claude format)\n func (u *GeminiUsageMetadata) ToClaudeUsage() ClaudeUsage {\n \tusage := ClaudeUsage{\n-\t\tInputTokens:  u.PromptTokenCount,\n+\t\tInputTokens:  u.GetInputTokens(),\n \t\tOutputTokens: u.CandidatesTokenCount,\n \t}\n "
+  },
+  {
+   "filename": "core/relay/model/gemini_test.go",
+   "status": "modified",
+   "additions": 41,
+   "deletions": 0,
+   "patch": "@@ -40,3 +40,44 @@ func TestGeminiChatResponseWebSearchCountUsesSearchQueriesForGemini3(t *testing.\n \t\tt.Fatalf(\"expected two search queries, got %d\", got)\n \t}\n }\n+\n+func TestGeminiUsageMetadataIncludesToolUsePromptTokens(t *testing.T) {\n+\tt.Parallel()\n+\n+\tusage := GeminiUsageMetadata{\n+\t\tPromptTokenCount:        100,\n+\t\tToolUsePromptTokenCount: 40,\n+\t\tCandidatesTokenCount:    10,\n+\t\tThoughtsTokenCount:      5,\n+\t\tTotalTokenCount:         155,\n+\t}\n+\n+\tchatUsage := usage.ToUsage()\n+\tif chatUsage.PromptTokens != 140 {\n+\t\tt.Errorf(\"ToUsage PromptTokens = %d, want 140\", chatUsage.PromptTokens)\n+\t}\n+\n+\t// The API defines the total as prompt + tool-use prompt + thoughts + candidates.\n+\tif got := chatUsage.PromptTokens + chatUsage.CompletionTokens; got != chatUsage.TotalTokens {\n+\t\tt.Errorf(\"prompt + completion tokens = %d, want total %d\", got, chatUsage.TotalTokens)\n+\t}\n+\n+\tif got := usage.GetInputTokens(); got != 140 {\n+\t\tt.Errorf(\"GetInputTokens = %d, want 140\", got)\n+\t}\n+\n+\tresponseUsage := usage.ToResponseUsage()\n+\tif responseUsage.InputTokens != 140 {\n+\t\tt.Errorf(\"ToResponseUsage InputTokens = %d, want 140\", responseUsage.InputTokens)\n+\t}\n+\n+\tclaudeUsage := usage.ToClaudeUsage()\n+\tif claudeUsage.InputTokens != 140 {\n+\t\tt.Errorf(\"ToClaudeUsage InputTokens = %d, want 140\", claudeUsage.InputTokens)\n+\t}\n+\n+\tmodelUsage := usage.ToModelUsage()\n+\tif int64(modelUsage.InputTokens) != 140 {\n+\t\tt.Errorf(\"ToModelUsage InputTokens = %d, want 140\", modelUsage.InputTokens)\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/gemini/openai_test.go",
+  "core/relay/model/gemini_test.go"
+ ]
+}

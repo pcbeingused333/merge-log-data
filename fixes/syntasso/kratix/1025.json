@@ -1,0 +1,26 @@
+{
+ "repo": "syntasso/kratix",
+ "number": 1025,
+ "url": "https://github.com/syntasso/kratix/pull/1025",
+ "title": "fix(controller): restore lastAppliedVersion when a ResourceBinding is recreated",
+ "merged_at": "2026-11-24T12:25:14Z",
+ "files": [
+  {
+   "filename": "internal/controller/dynamic_resource_request_controller.go",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -750,6 +750,19 @@ func (r *DynamicResourceRequestController) updateResourceBinding(ctx context.Con\n \t\t\"resourceNamespace\", resourceBinding.Spec.ResourceRef.Namespace,\n \t)\n \n+\tif op == controllerutil.OperationResultCreated {\n+\t\t// A recreated binding starts with an empty status. Restore lastAppliedVersion from the\n+\t\t// version the resource was last reconciled with, so a failing upgrade cannot leave the\n+\t\t// binding without a record of the applied revision.\n+\t\tappliedVersion := resourceutil.GetStatus(rr, resourcePromiseVersionStatus)\n+\t\tif appliedVersion != \"\" && appliedVersion != v1alpha1.PlaceholderPromiseVersion && resourceBinding.Status.LastAppliedVersion == \"\" {\n+\t\t\tresourceBinding.Status.LastAppliedVersion = appliedVersion\n+\t\t\tif err := r.Client.Status().Update(ctx, resourceBinding); err != nil {\n+\t\t\t\treturn fmt.Errorf(\"failed to restore resource binding status.lastAppliedVersion: %w\", err)\n+\t\t\t}\n+\t\t}\n+\t}\n+\n \tif op == \"created\" {\n \t\tr.EventRecorder.Eventf(rr, nil, v1.EventTypeNormal, \"BindingCreated\", \"BindingCreated\", \"%s\", fmt.Sprintf(\"Binding %s created for promise %s version %s\",\n \t\t\tresourceBinding.GetName(),"
+  },
+  {
+   "filename": "internal/controller/dynamic_resource_request_controller_test.go",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -2844,6 +2844,18 @@ var _ = Describe(\"DynamicResourceRequestController\", func() {\n \t\t\t\t\tExpect(binding.Spec.Version).To(Equal(promiseVersion))\n \t\t\t\t})\n \n+\t\t\t\tIt(\"restores Status.LastAppliedVersion from the resource status promiseVersion\", func() {\n+\t\t\t\t\tresourceutil.SetStatus(resReq, l, \"resourceBindingVersion\", \"latest\")\n+\t\t\t\t\tExpect(fakeK8sClient.Status().Update(ctx, resReq)).To(Succeed())\n+\n+\t\t\t\t\tresult, err := t.reconcileUntilCompletion(reconciler, resReq)\n+\t\t\t\t\tExpect(err).NotTo(HaveOccurred())\n+\t\t\t\t\tExpect(result).To(Equal(ctrl.Result{}))\n+\n+\t\t\t\t\tbinding := getResourceBinding(promise.GetName(), resReqNameNamespace)\n+\t\t\t\t\tExpect(binding.Status.LastAppliedVersion).To(Equal(promiseVersion))\n+\t\t\t\t})\n+\n \t\t\t\tWhen(\"ResourceBindingPinned is true\", func() {\n \t\t\t\t\tBeforeEach(func() {\n \t\t\t\t\t\treconciler.ResourceBindingPinned = true"
+  }
+ ],
+ "test_files": [
+  "internal/controller/dynamic_resource_request_controller_test.go"
+ ]
+}

@@ -1,0 +1,40 @@
+{
+ "repo": "pypa/pipenv",
+ "number": 6797,
+ "url": "https://github.com/pypa/pipenv/pull/6797",
+ "title": "fix(check,scan): run the direct pip install safety retry with subprocess.run",
+ "merged_at": "2026-11-24T17:00:11Z",
+ "files": [
+  {
+   "filename": "news/safety-direct-install-retry.bugfix.rst",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+Fix the direct ``pip install safety`` retry in ``pipenv check`` and ``pipenv scan``, which raised a swallowed ``TypeError`` and never ran."
+  },
+  {
+   "filename": "pipenv/routines/check.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -388,9 +388,10 @@ def do_check(  # noqa: PLR0913\n \n                 try:\n                     python = project_python(project, system=system)\n-                    subprocess.check_call(\n+                    subprocess.run(\n                         [python, \"-m\", \"pip\", \"install\", \"safety>=3.0.0\", \"typer>=0.9.0\"],\n                         capture_output=True,\n+                        check=True,\n                     )\n                 except Exception:\n                     pass  # The explicit availability check below reports failure."
+  },
+  {
+   "filename": "pipenv/routines/scan.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -422,9 +422,10 @@ def do_scan(  # noqa: PLR0913\n \n                 try:\n                     python = project_python(project, system=system)\n-                    subprocess.check_call(\n+                    subprocess.run(\n                         [python, \"-m\", \"pip\", \"install\", \"safety>=3.0.0\", \"typer>=0.9.0\"],\n                         capture_output=True,\n+                        check=True,\n                     )\n                 except Exception:\n                     pass  # The explicit availability check below reports failure."
+  },
+  {
+   "filename": "tests/unit/test_safety_direct_install_retry.py",
+   "status": "added",
+   "additions": 66,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,66 @@\n+\"\"\"The direct ``pip install safety`` retry in check/scan must actually run.\"\"\"\n+\n+from __future__ import annotations\n+\n+import subprocess\n+from pathlib import Path\n+from types import SimpleNamespace\n+from unittest import mock\n+\n+import pytest\n+\n+from pipenv.routines import check, scan\n+\n+\n+def _patch_common(monkeypatch, module):\n+    monkeypatch.setattr(module, \"run_pep508_check\", lambda *a, **kw: {})\n+    monkeypatch.setattr(module, \"check_pep508_requirements\", lambda *a, **kw: None)\n+    monkeypatch.setattr(\n+        module, \"get_requirements\", lambda *a, **kw: SimpleNamespace(stdout=\"x==1\")\n+    )\n+    monkeypatch.setattr(\n+        module,\n+        \"create_temp_requirements\",\n+        lambda *a, **kw: Path(\"does-not-exist-req.txt\"),\n+        raising=False,\n+    )\n+    monkeypatch.setattr(\n+        module, \"create_temp_requirements_file\", lambda *a, **kw: \"req.txt\", raising=False\n+    )\n+    monkeypatch.setattr(module, \"project_python\", lambda *a, **kw: \"python\")\n+    monkeypatch.setattr(module, \"install_safety\", lambda *a, **kw: True)\n+    # Not installed before, still \"not found\" right after the install reported success.\n+    monkeypatch.setattr(module, \"is_safety_installed\", lambda *a, **kw: False)\n+\n+\n+@pytest.mark.parametrize(\n+    \"module, func\", [(check, check.do_check), (scan, scan.do_scan)]\n+)\n+def test_direct_pip_install_retry_runs(monkeypatch, module, func):\n+    _patch_common(monkeypatch, module)\n+\n+    calls = []\n+\n+    def fake_run(cmd, *args, **kwargs):\n+        calls.append(cmd)\n+        return subprocess.CompletedProcess(cmd, 0, b\"\", b\"\")\n+\n+    monkeypatch.setattr(subprocess, \"run\", fake_run)\n+\n+    # ``check_call`` forwards to ``Popen``, which has no ``capture_output``.\n+    real_popen = subprocess.Popen\n+\n+    def strict_popen(*args, **kwargs):\n+        if \"capture_output\" in kwargs:\n+            raise TypeError(\"unexpected keyword argument 'capture_output'\")\n+        return real_popen(*args, **kwargs)\n+\n+    monkeypatch.setattr(subprocess, \"Popen\", strict_popen)\n+\n+    proj = mock.MagicMock()\n+    proj.s.is_quiet.return_value = True\n+    with pytest.raises(SystemExit):\n+        func(proj, system=True, quiet=True)\n+\n+    assert len(calls) == 1\n+    assert calls[0][1:4] == [\"-m\", \"pip\", \"install\"]"
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_safety_direct_install_retry.py"
+ ]
+}

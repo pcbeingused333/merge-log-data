@@ -3,7 +3,33 @@
  "number": 8562,
  "url": "https://github.com/bytedance/deer-flow/pull/8562",
  "state": "open",
- "reviews": [],
- "review_comments": [],
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-24T13:02:25Z",
+   "body": "Verified against head 3ab1e3a in offline sandboxes. The core fix works: on the base script an empty benchmark dir exits 0 and writes all-zero benchmark.json/benchmark.md (diagnostics on stdout); at head it exits 1, writes nothing, and reports on stderr. All 6 new tests pass on head, and the three exit-code regression tests fail on the unfixed script as required. One blocking issue: this PR breaks the existing root suite `tests/skills/test_skill_creator_benchmark.py`, so the `skill-tests` (Skill Review CI) job is failing on this head; plus two suggestions below."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "skills/public/skill-creator/scripts/aggregate_benchmark.py",
+   "created_at": "2026-11-24T13:02:25Z",
+   "body": "The stdout→stderr migration breaks the existing root suite: `tests/skills/test_skill_creator_benchmark.py` asserts `Warning:` on stdout at five sites — `capsys.readouterr().out` (lines 102, 144, 210, 389) and `completed.stdout` (line 314). Skill Review CI is red on this head (`skill-tests`: `assert 'Warning:' in ''`). Those assertions need to switch to `.err` / `completed.stderr` in this same change set, otherwise the PR cannot merge green."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/tests/skills/test_skill_creator_benchmark.py",
+   "created_at": "2026-11-24T13:02:25Z",
+   "body": "This test (and `test_empty_runs_dir_falls_back_to_eval_dirs_in_benchmark_dir`) passes vacuously against the unfixed base script — verified locally: base also exits 0 and writes benchmark.json, just with `runs: []`. Asserting only returncode and file existence means a fallback that picked the wrong directory, mis-assigned `run_number`/`eval_id`, or silently dropped the run would still pass. Per backend/tests/AGENTS.md (assert on structure), parse the report instead: e.g. `benchmark[\"runs\"]` has length 1 with `configuration == \"with_skill\"` and `result[\"pass_rate\"] == 1.0`."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/tests/skills/test_skill_creator_benchmark.py",
+   "created_at": "2026-11-24T13:02:25Z",
+   "body": "Placement: root AGENTS.md puts public-skill-script regressions in root `tests/skills/`, which Skill Review CI runs on every `skills/public/**` change — and this PR has to update `tests/skills/test_skill_creator_benchmark.py` for the stderr migration anyway. Consider folding these cases into that existing file (it already drives the CLI via subprocess) rather than opening a second same-basename `backend/tests/skills/` tree; two suites driving one script invites drift."
+  }
+ ],
  "comments": []
 }

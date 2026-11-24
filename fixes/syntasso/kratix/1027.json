@@ -1,0 +1,26 @@
+{
+ "repo": "syntasso/kratix",
+ "number": 1027,
+ "url": "https://github.com/syntasso/kratix/pull/1027",
+ "title": "fix(destination): return finalizer update error so the reconcile is retried",
+ "merged_at": "2026-11-24T11:37:37Z",
+ "files": [
+  {
+   "filename": "internal/controller/destination_controller.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -122,7 +122,12 @@ func (d *destinationReconcileContext) Reconcile() (ctrl.Result, error) {\n \t\tlogging.Debug(d.logger, \"updating destination finalizers\")\n \t\tif err := d.client.Update(d.ctx, d.destination); err != nil {\n \t\t\tlogging.Error(d.logger, err, \"error adding finalizers to destination\")\n-\t\t\treturn ctrl.Result{}, d.setNotReadyStatus(\"DestinationFinalizerUpdateFailed\", err.Error())\n+\t\t\tif statusErr := d.setNotReadyStatus(\"DestinationFinalizerUpdateFailed\", err.Error()); statusErr != nil {\n+\t\t\t\treturn ctrl.Result{}, errors.Join(err, statusErr)\n+\t\t\t}\n+\t\t\t// setNotReadyStatus is a no-op when the condition is unchanged\n+\t\t\t// return the original finalizer related error so controller-runtime requeues with backoff\n+\t\t\treturn ctrl.Result{}, err\n \t\t}\n \t\treturn ctrl.Result{}, nil\n \t}"
+  },
+  {
+   "filename": "internal/controller/destination_controller_test.go",
+   "status": "modified",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -35,6 +35,7 @@ import (\n \t\"k8s.io/client-go/tools/events\"\n \tctrl \"sigs.k8s.io/controller-runtime\"\n \t\"sigs.k8s.io/controller-runtime/pkg/client\"\n+\t\"sigs.k8s.io/controller-runtime/pkg/client/interceptor\"\n )\n \n var _ = Describe(\"DestinationReconciler\", func() {\n@@ -103,6 +104,38 @@ var _ = Describe(\"DestinationReconciler\", func() {\n \t\t})\n \t})\n \n+\tWhen(\"adding the cleanup finalizer keeps failing\", func() {\n+\t\tBeforeEach(func() {\n+\t\t\ttestDestination.Spec.Cleanup = v1alpha1.DestinationCleanupAll\n+\t\t\tExpect(fakeK8sClient.Create(ctx, testDestination)).To(Succeed())\n+\n+\t\t\tbase, ok := fakeK8sClient.(client.WithWatch)\n+\t\t\tExpect(ok).To(BeTrue())\n+\t\t\treconciler.Client = interceptor.NewClient(base, interceptor.Funcs{\n+\t\t\t\tUpdate: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {\n+\t\t\t\t\tif _, isDestination := obj.(*v1alpha1.Destination); isDestination {\n+\t\t\t\t\t\treturn errors.New(\"transient update failure\")\n+\t\t\t\t\t}\n+\t\t\t\t\treturn c.Update(ctx, obj, opts...)\n+\t\t\t\t},\n+\t\t\t})\n+\t\t})\n+\n+\t\tIt(\"returns the error on every attempt so the request is requeued\", func() {\n+\t\t\treq := ctrl.Request{NamespacedName: testDestinationName}\n+\t\t\tfor attempt := 1; attempt <= 2; attempt++ {\n+\t\t\t\t_, err := reconciler.Reconcile(ctx, req)\n+\t\t\t\tExpect(err).To(MatchError(ContainSubstring(\"transient update failure\")), \"attempt %d\", attempt)\n+\t\t\t}\n+\t\t\tExpect(fakeK8sClient.Get(ctx, testDestinationName, updatedDestination)).To(Succeed())\n+\t\t\tExpect(updatedDestination.Status.Conditions).To(ContainElement(\n+\t\t\t\tSatisfyAll(\n+\t\t\t\t\tHaveField(\"Type\", \"Ready\"),\n+\t\t\t\t\tHaveField(\"Reason\", \"DestinationFinalizerUpdateFailed\"),\n+\t\t\t\t)))\n+\t\t})\n+\t})\n+\n \tWhen(\"the state store writer defers its writes\", func() {\n \t\tvar deferredWriter *fakeDeferredWriter\n "
+  }
+ ],
+ "test_files": [
+  "internal/controller/destination_controller_test.go"
+ ]
+}

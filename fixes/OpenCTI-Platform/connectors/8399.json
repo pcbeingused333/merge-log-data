@@ -1,0 +1,98 @@
+{
+ "repo": "OpenCTI-Platform/connectors",
+ "number": 8399,
+ "url": "https://github.com/OpenCTI-Platform/connectors/pull/8399",
+ "title": "fix(shodan-internetdb): fail the work with a clear message on HTTP 429 (#8398)",
+ "merged_at": "2026-11-24T16:04:42Z",
+ "files": [
+  {
+   "filename": "internal-enrichment/shodan-internetdb/README.md",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -74,6 +74,7 @@ This connector enriches IPv4 observables with:\n | Parameter | Docker envvar | Mandatory | Description |\n |-----------|---------------|-----------|-------------|\n | `shodan_ssl_verify` | `SHODAN_SSL_VERIFY` | No | Verify SSL connections (default: true) |\n+| `shodan_timeout` | `SHODAN_TIMEOUT` | No | Request timeout in seconds (default: 30) |\n \n ---\n \n@@ -100,6 +101,7 @@ services:\n       - CONNECTOR_LOG_LEVEL=error\n       - CONNECTOR_MAX_TLP=TLP:CLEAR\n       - SHODAN_SSL_VERIFY=true\n+      - SHODAN_TIMEOUT=30\n     restart: always\n ```\n "
+  },
+  {
+   "filename": "internal-enrichment/shodan-internetdb/__metadata__/CONNECTOR_CONFIG_DOC.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -15,4 +15,5 @@ Below is an exhaustive enumeration of all configurable parameters available, eac\n | CONNECTOR_AUTO | `boolean` |  | boolean |  | `false` | Whether the connector should run automatically when an entity is created or updated. |\n | CONNECTOR_MAX_TLP | `string` |  | `clear` `white` `green` `amber` `amber+strict` `red` |  | `\"white\"` | The highest TLP of the entities the connector is allowed to enrich. Entities marked with a higher TLP are skipped and never sent to the external source. |\n | SHODAN_SSL_VERIFY | `boolean` |  | boolean |  | `true` | Whether to verify SSL connections to the Shodan InternetDB API. |\n+| SHODAN_TIMEOUT | `integer` |  | `0 < x ` |  | `30` | Timeout in seconds for requests to the Shodan InternetDB API. |\n | SHODAN_MAX_TLP | `string` |  | string | ⛔️ | `null` | Use CONNECTOR_MAX_TLP instead. |"
+  },
+  {
+   "filename": "internal-enrichment/shodan-internetdb/__metadata__/connector_config_schema.json",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -76,6 +76,12 @@\n       \"default\": true,\n       \"description\": \"Whether to verify SSL connections to the Shodan InternetDB API.\",\n       \"type\": \"boolean\"\n+    },\n+    \"SHODAN_TIMEOUT\": {\n+      \"default\": 30,\n+      \"description\": \"Timeout in seconds for requests to the Shodan InternetDB API.\",\n+      \"exclusiveMinimum\": 0,\n+      \"type\": \"integer\"\n     }\n   },\n   \"required\": ["
+  },
+  {
+   "filename": "internal-enrichment/shodan-internetdb/docker-compose.yml",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -14,4 +14,5 @@ services:\n       #- CONNECTOR_LOG_LEVEL=error # Optional (default: 'error')\n       #- CONNECTOR_MAX_TLP=TLP:WHITE # Optional (default: 'TLP:WHITE')\n       #- SHODAN_SSL_VERIFY=true # Optional (default: true)\n+      #- SHODAN_TIMEOUT=30 # Optional (default: 30)\n     restart: always"
+  },
+  {
+   "filename": "internal-enrichment/shodan-internetdb/src/config.yml.sample",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -12,3 +12,4 @@ connector:\n \n shodan:\n   # ssl_verify: true # Optional (default: true)\n+  # timeout: 30 # Optional (default: 30), request timeout in seconds"
+  },
+  {
+   "filename": "internal-enrichment/shodan-internetdb/src/shodan_internetdb/client.py",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 1,
+   "patch": "@@ -9,6 +9,7 @@\n from shodan_internetdb.exceptions import (\n     ShodanInternetDbApiError,\n     ShodanInternetDbNotFoundError,\n+    ShodanInternetDbRateLimitError,\n )\n \n \n@@ -26,15 +27,17 @@ class ShodanResult(BaseModel):\n class ShodanInternetDbClient:\n     \"\"\"Shodan InternetDB client\"\"\"\n \n-    def __init__(self, verify: bool = True):\n+    def __init__(self, verify: bool = True, timeout: int = 30):\n         \"\"\"\n         Constructor\n         :param verify: Verify SSL connections\n+        :param timeout: Request timeout in seconds\n         \"\"\"\n         self._base_url = \"https://internetdb.shodan.io/\"\n         self._headers = {\"Accept\": \"application/json\"}\n         self._session = requests.Session()\n         self._verify = verify\n+        self._timeout = timeout\n \n     def query(self, ip: str) -> ShodanResult:\n         \"\"\"Process the IP and return the result\n@@ -45,6 +48,7 @@ def query(self, ip: str) -> ShodanResult:\n                 f\"{self._base_url}{ip}\",\n                 headers=self._headers,\n                 verify=self._verify,\n+                timeout=self._timeout,\n             )\n         except Exception as e:\n             raise ShodanInternetDbApiError(\n@@ -57,6 +61,14 @@ def query(self, ip: str) -> ShodanResult:\n                 \"[CONNECTOR] No information available, skipping observable (Shodan 404)\"\n             )\n \n+        # Rate limited: fail the work with a clear message (Retry-After can be an hour or more)\n+        if resp.status_code == 429:\n+            retry_after = resp.headers.get(\"Retry-After\", \"unknown\")\n+            raise ShodanInternetDbRateLimitError(\n+                \"[CONNECTOR] Shodan InternetDB rate limit reached (HTTP 429), \"\n+                f\"Retry-After: {retry_after}s; observable not enriched\"\n+            )\n+\n         resp.raise_for_status()\n \n         return parse_raw_as(ShodanResult, resp.text)"
+  },
+  {
+   "filename": "internal-enrichment/shodan-internetdb/src/shodan_internetdb/connector.py",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -28,7 +28,10 @@ def __init__(\n         \"\"\"Constructor\"\"\"\n         self.config = config\n         self.helper = helper\n-        self._client = ShodanInternetDbClient(verify=self.config.shodan.ssl_verify)\n+        self._client = ShodanInternetDbClient(\n+            verify=self.config.shodan.ssl_verify,\n+            timeout=self.config.shodan.timeout,\n+        )\n         self.converter = ConverterToStix(self.helper)\n \n     def extract_and_check_markings(self, observable: dict[str, Any]) -> None:"
+  },
+  {
+   "filename": "internal-enrichment/shodan-internetdb/src/shodan_internetdb/exceptions.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -20,3 +20,8 @@ class ShodanInternetDbExtractAndCheckMarkingsError(Exception):\n \n class ShodanInternetDbInvalidTlpLevelError(Exception):\n     pass\n+\n+\n+class ShodanInternetDbRateLimitError(Exception):\n+    \"\"\"Raised on HTTP 429. Deliberately not handled by process_message so the\n+    enrichment work is reported as failed instead of silently processed.\"\"\""
+  },
+  {
+   "filename": "internal-enrichment/shodan-internetdb/src/shodan_internetdb/settings.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -52,6 +52,11 @@ class ShodanConfig(BaseConfigModel):\n         description=\"Whether to verify SSL connections to the Shodan InternetDB API.\",\n         default=True,\n     )\n+    timeout: int = Field(\n+        description=\"Timeout in seconds for requests to the Shodan InternetDB API.\",\n+        default=30,\n+        gt=0,\n+    )\n \n \n class ConnectorSettings(BaseConnectorSettings):"
+  },
+  {
+   "filename": "internal-enrichment/shodan-internetdb/tests/test_shodan_internet_db_connector.py",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -6,6 +6,7 @@\n from pycti import OpenCTIConnectorHelper\n from pytest_mock import MockerFixture\n from shodan_internetdb.connector import ShodanInternetDBConnector\n+from shodan_internetdb.exceptions import ShodanInternetDbRateLimitError\n from shodan_internetdb.settings import ConnectorSettings\n \n \n@@ -169,3 +170,19 @@ def test_wrong_marking(\n         == \"[CONNECTOR] Do not send any data, TLP of the observable is greater than MAX TLP,\"\n         \"the connector does not has access to this observable, please check the group of the connector user\"\n     )\n+\n+\n+def test_process_message_rate_limit_is_not_swallowed(\n+    mocker: MockerFixture,\n+    config: ConnectorSettings,\n+    helper: OpenCTIConnectorHelper,\n+    data: dict[str, Any],\n+) -> None:\n+    \"\"\"A 429 must fail the work, not be reported as a processed message.\"\"\"\n+    response = mocker.Mock()\n+    response.status_code = 429\n+    response.headers = {\"Retry-After\": \"3406\"}\n+    mocker.patch(\"requests.Session.get\", return_value=response)\n+    connector = ShodanInternetDBConnector(config=config, helper=helper)\n+    with pytest.raises(ShodanInternetDbRateLimitError, match=\"Retry-After: 3406\"):\n+        connector.process_message(data=data)"
+  },
+  {
+   "filename": "internal-enrichment/shodan-internetdb/tests/tests_connector/test_client.py",
+   "status": "added",
+   "additions": 43,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,43 @@\n+from unittest.mock import Mock\n+\n+import pytest\n+import requests\n+from pytest_mock import MockerFixture\n+from shodan_internetdb.client import ShodanInternetDbClient\n+from shodan_internetdb.exceptions import ShodanInternetDbRateLimitError\n+\n+\n+def _mock_get(mocker: MockerFixture, status_code: int) -> Mock:\n+    response = Mock()\n+    response.status_code = status_code\n+    response.headers = {\"Retry-After\": \"3406\"}\n+    response.raise_for_status.side_effect = requests.HTTPError(str(status_code))\n+    return mocker.patch(\n+        \"shodan_internetdb.client.requests.Session.get\", return_value=response\n+    )\n+\n+\n+def test_query_rate_limited_raises_rate_limit_error(mocker: MockerFixture) -> None:\n+    _mock_get(mocker, 429)\n+    with pytest.raises(ShodanInternetDbRateLimitError, match=\"429.*3406\"):\n+        ShodanInternetDbClient().query(\"1.2.3.4\")\n+\n+\n+def test_query_http_error_still_raises(mocker: MockerFixture) -> None:\n+    _mock_get(mocker, 500)\n+    with pytest.raises(requests.HTTPError):\n+        ShodanInternetDbClient().query(\"1.2.3.4\")\n+\n+\n+def test_query_sets_timeout(mocker: MockerFixture) -> None:\n+    get = _mock_get(mocker, 429)\n+    with pytest.raises(ShodanInternetDbRateLimitError):\n+        ShodanInternetDbClient().query(\"1.2.3.4\")\n+    assert get.call_args.kwargs[\"timeout\"] == 30\n+\n+\n+def test_query_uses_configured_timeout(mocker: MockerFixture) -> None:\n+    get = _mock_get(mocker, 429)\n+    with pytest.raises(ShodanInternetDbRateLimitError):\n+        ShodanInternetDbClient(timeout=5).query(\"1.2.3.4\")\n+    assert get.call_args.kwargs[\"timeout\"] == 5"
+  },
+  {
+   "filename": "internal-enrichment/shodan-internetdb/tests/tests_connector/test_settings.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -25,6 +25,7 @@\n                 },\n                 \"shodan\": {\n                     \"ssl_verify\": True,\n+                    \"timeout\": 30,\n                 },\n             },\n             id=\"full_valid_settings_dict\","
+  }
+ ],
+ "test_files": [
+  "internal-enrichment/shodan-internetdb/tests/test_shodan_internet_db_connector.py",
+  "internal-enrichment/shodan-internetdb/tests/tests_connector/test_client.py",
+  "internal-enrichment/shodan-internetdb/tests/tests_connector/test_settings.py"
+ ]
+}

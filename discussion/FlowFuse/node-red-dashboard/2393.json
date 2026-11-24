@@ -25,6 +25,26 @@
    "role": "collaborator",
    "created_at": "2026-11-24T09:16:48Z",
    "body": "The function `addToChart(payload, series)` is a low level functions that adds the data in `payload` to the chart. It should not be testing config or message properties and overriding the passed in `payload` parameter. The fix needs to be at a higher level so that, where a msg property is configured for the Y value, then that is picked up and passed into `addToChart()`"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-24T14:11:32Z",
+   "body": "Thanks @colinl, that makes sense. `addToChart` no longer reads the config or the msg: `beforeSend` now resolves the value first (the configured msg property when Y is a msg property, otherwise the payload) and passes it into `addToChart`, which is back to just adding the value it is given. Pushed as a new commit; behaviour and tests are unchanged (`test/nodes/widgets/ui_chart.spec.js` passes).\n\nThis comment was drafted with AI assistance (Claude Code); the change was tested by running `test/nodes/widgets/ui_chart.spec.js`.\n"
+  },
+  {
+   "role": "collaborator",
+   "created_at": "2026-11-24T17:04:32Z",
+   "body": "In the test flow in the issue, if msg.payload is set to an object then addToChart() is called with that object in the first parameter.  Is that intended?  Somehow the correct value does end up getting added to the chart, but not from that parameter.  I do not understand why, if the value to plot is in msg.someProperty, that msg.payload is being tested to see if it is an object.\r\n\r\nAlso the new function isDataMsg returns true if msg.payload is present.  However, if the value to be charted is coming from, for example, msg.value then the value of msg.payload is irrelevant. If msg.value is not present then it is not a data message whatever the value of msg.payload."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-24T17:41:28Z",
+   "body": "Thanks @colinl. On the first point: you're right that the object case shouldn't be left out. With Y set to a msg property, `beforeSend` now resolves y from that property for object payloads as well, and passes it to `addToChart` instead of letting `addToChart` read the config/msg again. The object payload still supplies x and the series (by key); only y comes from the msg property. Added a test with an object payload and Y = `msg.value`. (The result for objects was already y from the msg property in the plain case, so this is a consistency change, and the test guards it.)\n\nOn `isDataMsg`: agreed, it was wrong. When Y is a msg property it no longer looks at `msg.payload`: a msg is data only if that property is present and the msg is not a `ui_update` (an empty-array payload still counts, as the clear request). A msg with a payload but no value in the configured property is not stored. Added a test for that case; `test/nodes/widgets/ui_chart.spec.js` passes.\n\nThis comment was drafted with AI assistance (Claude Code); the change was tested by running `test/nodes/widgets/ui_chart.spec.js`.\n"
+  },
+  {
+   "role": "collaborator",
+   "created_at": "2026-11-24T21:39:07Z",
+   "body": "> a msg is data only if that property is present and the msg is not a `ui_update`\r\n\r\nIt is perfectly valid to have chart data and msg.ui_update in the same message.\r\n\r\n> an empty-array payload still counts, as the clear request\r\n\r\nI think that possibly, if a message property is specified for the data, then the empty array should be sent to that property rather than msg.payload to clear the chart.  What do you think?\r\n@n-lark I think your opinion is needed here."
   }
  ]
 }

@@ -1,0 +1,29 @@
+{
+ "repo": "FiligranHQ/xtm-composer",
+ "number": 231,
+ "url": "https://github.com/FiligranHQ/xtm-composer/pull/231",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-24T17:49:13Z",
+   "body": "<!-- ccr-overview-v2 -->\n\n### 🟡 Changes recommended\n\nSwarm initialization still panics when the selected socket is unavailable, and remote Docker pulls bypass the URL-safe registry-auth workaround, risking failures for private images.\n\n<details open>\n<summary><strong>2 open issues</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Preserve URL-safe registry auth for remote image pulls](https://github.com/FiligranHQ/xtm-composer/pull/231#discussion_r4684196382) · New\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Retry Swarm initialization when the Docker socket is unavailable](https://github.com/FiligranHQ/xtm-composer/pull/231#discussion_r4684196471) · New\n</details>\n\n<details>\n<summary><strong>What changed in this PR</strong></summary>\n\nThis PR addresses #177 by making Docker and Swarm honor `DOCKER_HOST`, supporting non-default sockets such as those used by Colima and rootless Docker.\n\n**Changes:**\n- Adds shared endpoint resolution that prefers a configured socket, then `DOCKER_HOST`, then the default socket.\n- Uses the resolved endpoint for both orchestrators while preserving Docker’s startup retry loop.\n- Avoids passing remote URLs to the Unix compatibility client and adds endpoint-resolution tests.\n\n| File | Description |\r\n| ---- | ----------- |\r\n| `src/​orchestrator/​swarm/​swarm.rs` | Uses shared endpoint resolution and client creation. |\r\n| `src/​orchestrator/​docker/​docker.rs` | Adds endpoint helpers, updates client initialization, and tests endpoint precedence. |\n</details>\n\n<sub>Review effort: Balanced</sub>"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "src/orchestrator/docker/docker.rs",
+   "created_at": "2026-11-24T17:49:12Z",
+   "body": "Setting `compat` to `None` bypasses the URL-safe registry-auth workaround in `pull_image` for TCP/HTTP endpoints. Private-image pulls can therefore fail when Bollard's standard-base64 `X-Registry-Auth` header contains `+` or `/`, the encoding failure covered by `integration_tests.rs::bollard_registry_auth_header_is_rejected_for_some_passwords`. Support remote transports in the compatibility client, or otherwise preserve URL-safe registry-auth encoding for remote pulls."
+  },
+  {
+   "role": "bot",
+   "path": "src/orchestrator/swarm/swarm.rs",
+   "created_at": "2026-11-24T17:49:12Z",
+   "body": "Swarm still panics if the selected socket does not exist when Composer starts (for example, `DOCKER_HOST=unix:///run/user/1000/docker.sock` before rootless Docker starts). `connect_docker_client` returns the socket error, and this `unwrap()` aborts orchestration before its scheduling loop; there is no retry in `build_orchestrator`. Please make Swarm initialization wait and retry with logged errors, as Docker initialization does, so it recovers when the daemon becomes available."
+  }
+ ],
+ "comments": []
+}

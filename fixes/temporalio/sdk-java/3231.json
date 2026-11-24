@@ -1,0 +1,33 @@
+{
+ "repo": "temporalio/sdk-java",
+ "number": 3231,
+ "url": "https://github.com/temporalio/sdk-java/pull/3231",
+ "title": "fix(metrics): always set update_name tag on client request metrics",
+ "merged_at": "2026-11-24T20:00:13Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -51,6 +51,8 @@ to docs, or any other relevant information.\n   credentials set through `setHeaders` no longer appear in logs.\n - The JavaDoc of `WorkflowClient.startUpdate` and `WorkflowClient.startUpdateWithStart` no longer describes these calls\n   as asynchronous.\n+- Client request metrics (`temporal_long_request_latency` etc.) now always carry the `update_name` tag (default\n+  `none`), fixing Prometheus tag-key conflicts when Workflow Updates are used (#3210).\n \n ## [1.41.1] - 2026-11-16\n "
+  },
+  {
+   "filename": "temporal-sdk/src/test/java/io/temporal/client/functional/MetricsTest.java",
+   "status": "modified",
+   "additions": 68,
+   "deletions": 1,
+   "patch": "@@ -21,7 +21,9 @@\n import io.temporal.testing.internal.SDKTestWorkflowRule;\n import io.temporal.workflow.*;\n import java.time.Duration;\n+import java.util.HashSet;\n import java.util.List;\n+import java.util.Set;\n import java.util.UUID;\n import java.util.concurrent.ExecutionException;\n import java.util.concurrent.atomic.AtomicInteger;\n@@ -42,7 +44,10 @@ public class MetricsTest {\n   @Rule\n   public final SDKTestWorkflowRule testWorkflowRule =\n       SDKTestWorkflowRule.newBuilder()\n-          .setWorkflowTypes(QuicklyCompletingWorkflowImpl.class, MultiScenarioWorkflowImpl.class)\n+          .setWorkflowTypes(\n+              QuicklyCompletingWorkflowImpl.class,\n+              MultiScenarioWorkflowImpl.class,\n+              UpdatableWorkflowImpl.class)\n           .setActivityImplementations(runCallbackActivity, new StandaloneMetricsActivityImpl())\n           .setMetricsScope(\n               new RootScopeBuilder()\n@@ -294,6 +299,43 @@ public void testUnhandledCommand() throws Exception {\n         io.temporal.worker.MetricsType.WORKFLOW_COMPLETED_COUNTER);\n   }\n \n+  @Test\n+  public void testLongRequestMetricsHaveConsistentTagKeysForUpdates() throws Exception {\n+    UpdatableWorkflow workflow =\n+        testWorkflowRule\n+            .getWorkflowClient()\n+            .newWorkflowStub(\n+                UpdatableWorkflow.class,\n+                WorkflowOptions.newBuilder()\n+                    .setTaskQueue(testWorkflowRule.getTaskQueue())\n+                    .validateBuildWithDefaults());\n+    WorkflowClient.start(workflow::execute);\n+    assertEquals(\"updated\", workflow.finish());\n+    assertEquals(\"done\", WorkflowStub.fromTyped(workflow).getResult(String.class));\n+\n+    assertEventually(\n+        Duration.ofSeconds(2),\n+        () -> {\n+          Set<Set<String>> tagKeySets = new HashSet<>();\n+          boolean sawUpdate = false;\n+          for (Meter meter : registry.getMeters()) {\n+            if (MetricsType.TEMPORAL_LONG_REQUEST_LATENCY.equals(meter.getId().getName())) {\n+              tagKeySets.add(\n+                  meter.getId().getTags().stream().map(Tag::getKey).collect(Collectors.toSet()));\n+              sawUpdate |=\n+                  \"finish\".equals(meter.getId().getTag(MetricsTag.UPDATE_NAME))\n+                      && \"UpdateWorkflowExecution\"\n+                          .equals(meter.getId().getTag(MetricsTag.OPERATION_NAME));\n+            }\n+          }\n+          assertTrue(\"no long request latency for the update was reported\", sawUpdate);\n+          assertEquals(\n+              \"all temporal_long_request_latency series must share the same tag keys\",\n+              1,\n+              tagKeySets.size());\n+        });\n+  }\n+\n   private void assertSingleMeterCountForMultiScenario(String metric) {\n     assertEventually(\n         Duration.ofSeconds(2),\n@@ -346,6 +388,31 @@ public String execute() {\n     }\n   }\n \n+  @WorkflowInterface\n+  public interface UpdatableWorkflow {\n+    @WorkflowMethod\n+    String execute();\n+\n+    @UpdateMethod\n+    String finish();\n+  }\n+\n+  public static class UpdatableWorkflowImpl implements UpdatableWorkflow {\n+    private boolean finished;\n+\n+    @Override\n+    public String execute() {\n+      Workflow.await(() -> finished);\n+      return \"done\";\n+    }\n+\n+    @Override\n+    public String finish() {\n+      finished = true;\n+      return \"updated\";\n+    }\n+  }\n+\n   @WorkflowInterface\n   public interface MultiScenarioWorkflow {\n     enum Scenario {"
+  },
+  {
+   "filename": "temporal-serviceclient/src/main/java/io/temporal/serviceclient/MetricsTag.java",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -64,12 +64,13 @@ public static Map<String, String> defaultTags(String namespace) {\n   }\n \n   private static Map<String, String> tags(String namespace) {\n-    return new ImmutableMap.Builder<String, String>(9)\n+    return new ImmutableMap.Builder<String, String>(11)\n         .put(NAMESPACE, namespace)\n         .put(ACTIVITY_TYPE, DEFAULT_VALUE)\n         .put(OPERATION_NAME, DEFAULT_VALUE)\n         .put(SIGNAL_NAME, DEFAULT_VALUE)\n         .put(QUERY_TYPE, DEFAULT_VALUE)\n+        .put(UPDATE_NAME, DEFAULT_VALUE)\n         .put(TASK_QUEUE, DEFAULT_VALUE)\n         .put(STATUS_CODE, DEFAULT_VALUE)\n         .put(EXCEPTION, DEFAULT_VALUE)"
+  }
+ ],
+ "test_files": [
+  "temporal-sdk/src/test/java/io/temporal/client/functional/MetricsTest.java"
+ ]
+}

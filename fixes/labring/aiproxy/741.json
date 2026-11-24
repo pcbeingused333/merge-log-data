@@ -1,0 +1,26 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 741,
+ "url": "https://github.com/labring/aiproxy/pull/741",
+ "title": "fix(ollama): forward top_k in chat and embedding requests",
+ "merged_at": "2026-11-24T15:56:08Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/ollama/main.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -35,6 +35,7 @@ func ConvertRequest(meta *meta.Meta, req *http.Request) (adaptor.ConvertResult,\n \t\t\tTopP:             request.TopP,\n \t\t\tFrequencyPenalty: request.FrequencyPenalty,\n \t\t\tPresencePenalty:  request.PresencePenalty,\n+\t\t\tTopK:             request.TopK,\n \t\t\tNumPredict:       request.OutputTokenLimit(),\n \t\t\tNumCtx:           request.NumCtx,\n \t\t},\n@@ -343,6 +344,7 @@ func ConvertEmbeddingRequest(\n \t\t\tTopP:             request.TopP,\n \t\t\tFrequencyPenalty: request.FrequencyPenalty,\n \t\t\tPresencePenalty:  request.PresencePenalty,\n+\t\t\tTopK:             request.TopK,\n \t\t},\n \t})\n \tif err != nil {"
+  },
+  {
+   "filename": "core/relay/adaptor/ollama/main_test.go",
+   "status": "modified",
+   "additions": 115,
+   "deletions": 0,
+   "patch": "@@ -12,6 +12,7 @@ import (\n \t\"github.com/bytedance/sonic\"\n \t\"github.com/gin-gonic/gin\"\n \t\"github.com/labring/aiproxy/core/model\"\n+\t\"github.com/labring/aiproxy/core/relay/adaptor\"\n \t\"github.com/labring/aiproxy/core/relay/adaptor/ollama\"\n \t\"github.com/labring/aiproxy/core/relay/meta\"\n \trelaymodel \"github.com/labring/aiproxy/core/relay/model\"\n@@ -283,3 +284,117 @@ func TestConvertRequest_StopSequences(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestConvertRequest_ForwardsTopK(t *testing.T) {\n+\tm := meta.NewMeta(\n+\t\t&model.Channel{Type: model.ChannelTypeOllama},\n+\t\t0,\n+\t\t\"llama2\",\n+\t\tmodel.ModelConfig{},\n+\t)\n+\n+\tbody := `{\"model\":\"llama2\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"top_k\":40}`\n+\treq, _ := http.NewRequestWithContext(\n+\t\tt.Context(),\n+\t\thttp.MethodPost,\n+\t\t\"http://localhost:11434/api/chat\",\n+\t\tstrings.NewReader(body),\n+\t)\n+\n+\tresult, err := ollama.ConvertRequest(m, req)\n+\tassert.NoError(t, err)\n+\n+\tbodyBytes, _ := io.ReadAll(result.Body)\n+\n+\tvar got map[string]any\n+\tassert.NoError(t, json.Unmarshal(bodyBytes, &got))\n+\n+\toptions, ok := got[\"options\"].(map[string]any)\n+\tassert.True(t, ok)\n+\tassert.EqualValues(t, 40, options[\"top_k\"])\n+}\n+\n+func TestConvertEmbeddingRequest_ForwardsTopK(t *testing.T) {\n+\tm := meta.NewMeta(\n+\t\t&model.Channel{Type: model.ChannelTypeOllama},\n+\t\t0,\n+\t\t\"llama2\",\n+\t\tmodel.ModelConfig{},\n+\t)\n+\n+\tbody := `{\"model\":\"llama2\",\"input\":\"hi\",\"top_k\":40}`\n+\treq, _ := http.NewRequestWithContext(\n+\t\tt.Context(),\n+\t\thttp.MethodPost,\n+\t\t\"http://localhost:11434/api/embed\",\n+\t\tstrings.NewReader(body),\n+\t)\n+\n+\tresult, err := ollama.ConvertEmbeddingRequest(m, req)\n+\tassert.NoError(t, err)\n+\n+\tbodyBytes, _ := io.ReadAll(result.Body)\n+\n+\tvar got map[string]any\n+\tassert.NoError(t, json.Unmarshal(bodyBytes, &got))\n+\n+\toptions, ok := got[\"options\"].(map[string]any)\n+\tassert.True(t, ok)\n+\tassert.EqualValues(t, 40, options[\"top_k\"])\n+}\n+\n+// A request without top_k must not send the option, so that the model default\n+// applies instead of a zero value.\n+func TestConvertRequest_TopKOmittedWhenAbsent(t *testing.T) {\n+\ttests := []struct {\n+\t\tname    string\n+\t\tpath    string\n+\t\tbody    string\n+\t\tconvert func(*meta.Meta, *http.Request) (adaptor.ConvertResult, error)\n+\t}{\n+\t\t{\n+\t\t\tname:    \"chat\",\n+\t\t\tpath:    \"/api/chat\",\n+\t\t\tbody:    `{\"model\":\"llama2\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}`,\n+\t\t\tconvert: ollama.ConvertRequest,\n+\t\t},\n+\t\t{\n+\t\t\tname:    \"embedding\",\n+\t\t\tpath:    \"/api/embed\",\n+\t\t\tbody:    `{\"model\":\"llama2\",\"input\":\"hi\"}`,\n+\t\t\tconvert: ollama.ConvertEmbeddingRequest,\n+\t\t},\n+\t}\n+\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tm := meta.NewMeta(\n+\t\t\t\t&model.Channel{Type: model.ChannelTypeOllama},\n+\t\t\t\t0,\n+\t\t\t\t\"llama2\",\n+\t\t\t\tmodel.ModelConfig{},\n+\t\t\t)\n+\n+\t\t\treq, _ := http.NewRequestWithContext(\n+\t\t\t\tt.Context(),\n+\t\t\t\thttp.MethodPost,\n+\t\t\t\t\"http://localhost:11434\"+tt.path,\n+\t\t\t\tstrings.NewReader(tt.body),\n+\t\t\t)\n+\n+\t\t\tresult, err := tt.convert(m, req)\n+\t\t\tassert.NoError(t, err)\n+\n+\t\t\tbodyBytes, _ := io.ReadAll(result.Body)\n+\n+\t\t\tvar got map[string]any\n+\t\t\tassert.NoError(t, json.Unmarshal(bodyBytes, &got))\n+\n+\t\t\toptions, ok := got[\"options\"].(map[string]any)\n+\t\t\tassert.True(t, ok)\n+\n+\t\t\t_, sent := options[\"top_k\"]\n+\t\t\tassert.False(t, sent, \"top_k must stay absent, got %v\", options)\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/ollama/main_test.go"
+ ]
+}

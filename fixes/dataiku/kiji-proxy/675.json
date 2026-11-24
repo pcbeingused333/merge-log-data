@@ -1,0 +1,33 @@
+{
+ "repo": "dataiku/kiji-proxy",
+ "number": 675,
+ "url": "https://github.com/dataiku/kiji-proxy/pull/675",
+ "title": "fix(providers): mask PII in Anthropic system prompt and Gemini systemInstruction",
+ "merged_at": "2026-11-24T14:57:22Z",
+ "files": [
+  {
+   "filename": "src/backend/providers/anthropic.go",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 0,
+   "patch": "@@ -116,6 +116,23 @@ func (p *AnthropicProvider) CreateMaskedRequest(maskedRequest map[string]interfa\n \t\treturn maskedText\n \t}\n \n+\t// The top-level `system` prompt is separate from `messages` and, like\n+\t// message content, is either a plain string or an array of text blocks.\n+\tswitch system := maskedRequest[\"system\"].(type) {\n+\tcase string:\n+\t\tmaskedRequest[\"system\"] = mask(system)\n+\tcase []interface{}:\n+\t\tfor _, blk := range system {\n+\t\t\tblkMap, ok := blk.(map[string]interface{})\n+\t\t\tif !ok {\n+\t\t\t\tcontinue\n+\t\t\t}\n+\t\t\tif text, ok := blkMap[\"text\"].(string); ok {\n+\t\t\t\tblkMap[\"text\"] = mask(text)\n+\t\t\t}\n+\t\t}\n+\t}\n+\n \tfor _, msg := range messages {\n \t\tmsgMap, ok := msg.(map[string]interface{})\n \t\tif !ok {"
+  },
+  {
+   "filename": "src/backend/providers/gemini.go",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 9,
+   "patch": "@@ -112,15 +112,9 @@ func (p *GeminiProvider) CreateMaskedRequest(maskedRequest map[string]interface{\n \t\treturn maskedToOriginal, &entities, fmt.Errorf(\"no contents field in request\")\n \t}\n \n-\tfor _, content := range contents {\n-\t\tcontentMap, ok := content.(map[string]interface{})\n-\t\tif !ok {\n-\t\t\tcontinue\n-\t\t}\n-\t\tparts, ok := contentMap[\"parts\"].([]interface{})\n-\t\tif !ok {\n-\t\t\tcontinue\n-\t\t}\n+\t// mask runs PII detection over a single text part and merges the resulting\n+\t// entities and mappings into the accumulators above.\n+\tmaskParts := func(parts []interface{}) {\n \t\tfor _, part := range parts {\n \t\t\tpartMap, ok := part.(map[string]interface{})\n \t\t\tif !ok {\n@@ -143,6 +137,28 @@ func (p *GeminiProvider) CreateMaskedRequest(maskedRequest map[string]interface{\n \t\t}\n \t}\n \n+\t// The system instruction lives outside `contents`; the REST API accepts\n+\t// both camelCase and snake_case spellings.\n+\tfor _, key := range []string{\"systemInstruction\", \"system_instruction\"} {\n+\t\tif sysMap, ok := maskedRequest[key].(map[string]interface{}); ok {\n+\t\t\tif parts, ok := sysMap[\"parts\"].([]interface{}); ok {\n+\t\t\t\tmaskParts(parts)\n+\t\t\t}\n+\t\t}\n+\t}\n+\n+\tfor _, content := range contents {\n+\t\tcontentMap, ok := content.(map[string]interface{})\n+\t\tif !ok {\n+\t\t\tcontinue\n+\t\t}\n+\t\tparts, ok := contentMap[\"parts\"].([]interface{})\n+\t\tif !ok {\n+\t\t\tcontinue\n+\t\t}\n+\t\tmaskParts(parts)\n+\t}\n+\n \treturn maskedToOriginal, &entities, nil\n }\n "
+  },
+  {
+   "filename": "src/backend/providers/providers_test.go",
+   "status": "modified",
+   "additions": 74,
+   "deletions": 0,
+   "patch": "@@ -1056,6 +1056,53 @@ func TestAnthropicProvider_CreateMaskedRequest(t *testing.T) {\n \t})\n }\n \n+func TestAnthropicProvider_CreateMaskedRequest_SystemPrompt(t *testing.T) {\n+\tp := NewAnthropicProvider(\"api.anthropic.com\", \"sk-test\", nil)\n+\n+\tt.Run(\"masks top-level string system prompt\", func(t *testing.T) {\n+\t\tdata := makeOpenAIRequest([]map[string]interface{}{\n+\t\t\t{\"role\": \"user\", \"content\": \"Hi\"},\n+\t\t})\n+\t\tdata[\"system\"] = \"Hello John Doe\"\n+\n+\t\tmapping, entities, err := p.CreateMaskedRequest(data, replaceMaskPII)\n+\t\tif err != nil {\n+\t\t\tt.Fatalf(\"CreateMaskedRequest() error = %v\", err)\n+\t\t}\n+\t\tif got := data[\"system\"]; got != \"Hello Jane Smith\" {\n+\t\t\tt.Errorf(\"system = %q, want %q\", got, \"Hello Jane Smith\")\n+\t\t}\n+\t\tif len(mapping) == 0 || len(*entities) == 0 {\n+\t\t\tt.Error(\"expected mapping and entities from system prompt\")\n+\t\t}\n+\t})\n+\n+\tt.Run(\"masks top-level system text blocks\", func(t *testing.T) {\n+\t\tdata := makeOpenAIRequest([]map[string]interface{}{\n+\t\t\t{\"role\": \"user\", \"content\": \"Hi\"},\n+\t\t})\n+\t\tdata[\"system\"] = []interface{}{\n+\t\t\tmap[string]interface{}{\"type\": \"text\", \"text\": \"Hello John Doe\"},\n+\t\t\tmap[string]interface{}{\"type\": \"text\", \"text\": \"no pii here\"},\n+\t\t}\n+\n+\t\tmapping, _, err := p.CreateMaskedRequest(data, replaceMaskPII)\n+\t\tif err != nil {\n+\t\t\tt.Fatalf(\"CreateMaskedRequest() error = %v\", err)\n+\t\t}\n+\t\tblocks := data[\"system\"].([]interface{})\n+\t\tif got := blocks[0].(map[string]interface{})[\"text\"]; got != \"Hello Jane Smith\" {\n+\t\t\tt.Errorf(\"system[0].text = %q, want %q\", got, \"Hello Jane Smith\")\n+\t\t}\n+\t\tif got := blocks[1].(map[string]interface{})[\"text\"]; got != \"no pii here\" {\n+\t\t\tt.Errorf(\"system[1].text = %q, want unchanged\", got)\n+\t\t}\n+\t\tif len(mapping) == 0 {\n+\t\t\tt.Error(\"expected non-empty mapping\")\n+\t\t}\n+\t})\n+}\n+\n func TestAnthropicProvider_RestoreMaskedResponse(t *testing.T) {\n \tp := NewAnthropicProvider(\"api.anthropic.com\", \"sk-test\", nil)\n \n@@ -1216,6 +1263,33 @@ func TestGeminiProvider_CreateMaskedRequest(t *testing.T) {\n \t})\n }\n \n+func TestGeminiProvider_CreateMaskedRequest_SystemInstruction(t *testing.T) {\n+\tp := NewGeminiProvider(\"generativelanguage.googleapis.com\", \"key\", nil)\n+\n+\tfor _, key := range []string{\"systemInstruction\", \"system_instruction\"} {\n+\t\tt.Run(\"masks \"+key, func(t *testing.T) {\n+\t\t\tdata := makeGeminiRequest([]map[string]interface{}{\n+\t\t\t\t{\"role\": \"user\", \"parts\": []interface{}{map[string]interface{}{\"text\": \"Hi\"}}},\n+\t\t\t})\n+\t\t\tdata[key] = map[string]interface{}{\n+\t\t\t\t\"parts\": []interface{}{map[string]interface{}{\"text\": \"Hello John Doe\"}},\n+\t\t\t}\n+\n+\t\t\tmapping, entities, err := p.CreateMaskedRequest(data, replaceMaskPII)\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatalf(\"CreateMaskedRequest() error = %v\", err)\n+\t\t\t}\n+\t\t\tparts := data[key].(map[string]interface{})[\"parts\"].([]interface{})\n+\t\t\tif got := parts[0].(map[string]interface{})[\"text\"]; got != \"Hello Jane Smith\" {\n+\t\t\t\tt.Errorf(\"%s text = %q, want %q\", key, got, \"Hello Jane Smith\")\n+\t\t\t}\n+\t\t\tif len(mapping) == 0 || len(*entities) == 0 {\n+\t\t\t\tt.Error(\"expected mapping and entities from system instruction\")\n+\t\t\t}\n+\t\t})\n+\t}\n+}\n+\n func TestGeminiProvider_RestoreMaskedResponse(t *testing.T) {\n \tp := NewGeminiProvider(\"generativelanguage.googleapis.com\", \"key\", nil)\n "
+  }
+ ],
+ "test_files": [
+  "src/backend/providers/providers_test.go"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "OpenCSGs/csghub-server",
+ "number": 1643,
+ "url": "https://github.com/OpenCSGs/csghub-server/pull/1643",
+ "title": "fix(aigateway): honor flat forced tool_choice in Responses-to-chat adapter",
+ "merged_at": "2026-11-24T11:13:02Z",
+ "files": [
+  {
+   "filename": "aigateway/handler/responses_adapter.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 1,
+   "patch": "@@ -719,7 +719,11 @@ func responsesToolChoiceToChatToolChoice(ctx context.Context, raw json.RawMessag\n \t}\n \tvar function map[string]json.RawMessage\n \tif err := json.Unmarshal(obj[\"function\"], &function); err != nil {\n-\t\treturn nil, nil\n+\t\t// Responses API forces a tool with a flat {\"type\":\"function\",\"name\":...}.\n+\t\tif _, ok := obj[\"name\"]; !ok {\n+\t\t\treturn nil, nil\n+\t\t}\n+\t\tfunction = map[string]json.RawMessage{\"name\": obj[\"name\"]}\n \t}\n \tvar functionName string\n \t_ = json.Unmarshal(function[\"name\"], &functionName)\n@@ -736,6 +740,7 @@ func responsesToolChoiceToChatToolChoice(ctx context.Context, raw json.RawMessag\n \t\treturn nil, fmt.Errorf(\"convert responses tool_choice to chat tool_choice: %w\", err)\n \t}\n \tobj[\"function\"] = functionRaw\n+\tdelete(obj, \"name\")\n \tresult, err := json.Marshal(obj)\n \tif err != nil {\n \t\treturn nil, fmt.Errorf(\"convert responses tool_choice to chat tool_choice: %w\", err)"
+  },
+  {
+   "filename": "aigateway/handler/responses_adapter_test.go",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -2210,6 +2210,26 @@ func TestResponsesToChatRequestKeepsSurvivingFunctionToolChoice(t *testing.T) {\n \trequire.JSONEq(t, `{\"type\":\"function\",\"function\":{\"name\":\"get_weather\"}}`, string(parsed[\"tool_choice\"]))\n }\n \n+func TestResponsesToChatRequestConvertsFlatFunctionToolChoice(t *testing.T) {\n+\treq := &types.ResponsesRequest{\n+\t\tModel:      \"public\",\n+\t\tInput:      json.RawMessage(`\"hello\"`),\n+\t\tToolChoice: json.RawMessage(`{\"type\":\"function\",\"name\":\"get_weather\"}`),\n+\t\tTools: json.RawMessage(`[\n+\t\t\t{\"type\": \"function\", \"name\": \"get_weather\", \"parameters\": {\"type\": \"object\"}},\n+\t\t\t{\"type\": \"code_interpreter\"}\n+\t\t]`),\n+\t}\n+\tchatReq, err := responsesToChatRequest(context.Background(), req, \"upstream-model\", nil)\n+\trequire.NoError(t, err)\n+\n+\tbody, err := marshalChatRequestBody(chatReq, \"upstream-model\")\n+\trequire.NoError(t, err)\n+\tvar parsed map[string]json.RawMessage\n+\trequire.NoError(t, json.Unmarshal(body, &parsed))\n+\trequire.JSONEq(t, `{\"type\":\"function\",\"function\":{\"name\":\"get_weather\"}}`, string(parsed[\"tool_choice\"]))\n+}\n+\n func TestResponsesToChatRequestDropsMissingFunctionToolChoice(t *testing.T) {\n \treq := &types.ResponsesRequest{\n \t\tModel:      \"public\","
+  }
+ ],
+ "test_files": [
+  "aigateway/handler/responses_adapter_test.go"
+ ]
+}

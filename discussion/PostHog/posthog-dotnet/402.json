@@ -3,8 +3,22 @@
  "number": 402,
  "url": "https://github.com/PostHog/posthog-dotnet/pull/402",
  "state": "open",
- "reviews": [],
- "review_comments": [],
+ "reviews": [
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-24T14:54:56Z",
+   "body": "Agent-drafted and reviewed by Manoel."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "member",
+   "path": "src/PostHog.AI/PostHogOpenAIHandler.cs",
+   "created_at": "2026-11-24T14:54:56Z",
+   "body": "Agent-drafted and reviewed by Manoel.\n\nblocking: Responses `instructions` are lost when `input` is missing\n\nThis PR adds `\"instructions\"` to the keys left out of `$ai_model_parameters` (line 338). However, `GetInputFromRequest` only turns it into a system message inside the `requestJson[\"input\"] != null` branch (lines 585–614). It also returns early for a `prompt` before reaching that branch.\n\n`input` is optional in the Responses API, for example with `previous_response_id`, `conversation` or a stored `prompt`. In those requests the system prompt is now in neither `$ai_input` nor `$ai_model_parameters`. Before this PR it was at least captured in `$ai_model_parameters[\"instructions\"]`, so this is a regression from the merge-base.\n\nThis is the same concern dustinbyrne raised on #400 (https://github.com/PostHog/posthog-dotnet/pull/400#discussion_r4672128668). #400's branch fixes it in `d5b67a1`, but this PR is stacked on the older `c5e4a15`.\n\nReproduction test, saved as `tests/PostHog.AI.Tests/PrReviewInstrDiagTests.cs`:\n```csharp\n#pragma warning disable CS0618\nusing System.Net;\nusing System.Text;\nusing System.Text.Json;\nusing Microsoft.Extensions.Logging;\nusing NSubstitute;\n\nnamespace PostHog.AI.Tests;\n\npublic sealed class PrReviewInstrDiagTests\n{\n    [Fact]\n    public async Task InstructionsKeptWhenInputAbsent()\n    {\n        var ph = Substitute.For<IPostHogClient>();\n        Dictionary<string, object>? captured = null;\n        ph.Capture(Arg.Any<string>(), Arg.Any<string>(), Arg.Do<Dictionary<string, object>>(d => captured = d), Arg.Any<GroupCollection?>(), Arg.Any<bool>(), Arg.Any<DateTimeOffset?>());\n        using var h = new PostHogOpenAIHandler(ph, Substitute.For<ILogger<PostHogOpenAIHandler>>()) { InnerHandler = new Stub() };\n        using var client = new HttpClient(h) { BaseAddress = new Uri(\"https://api.openai.com\") };\n        var req = new { model = \"gpt-5\", instructions = \"You are a pirate.\", previous_response_id = \"resp_1\" };\n        using var c = new StringContent(JsonSerializer.Serialize(req), Encoding.UTF8, \"application/json\");\n        using var r = await client.PostAsync(new Uri(\"/v1/responses\", UriKind.Relative), c);\n        var hasMp = captured!.TryGetValue(PostHogAIFieldNames.ModelParameters, out var m) && ((Dictionary<string, object>)m).ContainsKey(\"instructions\");\n        Assert.True(captured.ContainsKey(PostHogAIFieldNames.Input) || hasMp, \"instructions absent from both $ai_input and $ai_model_parameters\");\n    }\n\n    private sealed class Stub : HttpMessageHandler\n    {\n        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>\n            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(\"{\\\"id\\\":\\\"resp_2\\\",\\\"object\\\":\\\"response\\\",\\\"model\\\":\\\"gpt-5\\\",\\\"output\\\":[],\\\"usage\\\":{\\\"input_tokens\\\":1,\\\"output_tokens\\\":1,\\\"total_tokens\\\":2}}\", Encoding.UTF8, \"application/json\") });\n    }\n}\n```\nRun: `dotnet test tests/PostHog.AI.Tests -f net8.0 --filter \"FullyQualifiedName~PrReviewInstrDiagTests\"`\n\nReproduction: reproduced — the test above failed twice on head `013cacc` with \"instructions absent from both $ai_input and $ai_model_parameters\", and passed on merge-base `ea79fc9`."
+  }
+ ],
  "comments": [
   {
    "role": "bot",

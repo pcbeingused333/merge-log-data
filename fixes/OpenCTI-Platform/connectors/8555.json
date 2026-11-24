@@ -1,0 +1,26 @@
+{
+ "repo": "OpenCTI-Platform/connectors",
+ "number": 8555,
+ "url": "https://github.com/OpenCTI-Platform/connectors/pull/8555",
+ "title": "fix(cve): keep the shared HTTP session on a retryable status (#8491)",
+ "merged_at": "2026-11-24T16:08:45Z",
+ "files": [
+  {
+   "filename": "external-import/cve/src/services/client/api.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -49,7 +49,11 @@ async def close(self) -> None:\n             await self._session.close()\n \n     async def _reset_session(self) -> None:\n-        \"\"\"Drop current session so next retry gets a fresh TCP connection.\"\"\"\n+        \"\"\"Close the session after a connection error so the next attempt opens a new one.\n+\n+        A retryable HTTP status does not call this. That response arrived on a\n+        working connection, and concurrent CPE lookups share this session.\n+        \"\"\"\n         if self._session and not self._session.closed:\n             await self._session.close()\n         self._session = None\n@@ -151,7 +155,6 @@ async def request(self, api_url: str, params: dict | None = None):\n                             f\"[API] Retryable status {response.status}, \"\n                             f\"waiting {wait:.2f}s (attempt {attempt + 1}/{max_retries})\"\n                         )\n-                        await self._reset_session()\n                         await asyncio.sleep(wait)\n                         continue\n "
+  },
+  {
+   "filename": "external-import/cve/tests/tests_connector/test_api_client.py",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 1,
+   "patch": "@@ -21,10 +21,11 @@ def _build_context_manager_response(\n     status: int,\n     json_body=None,\n     text_body: str = \"\",\n+    headers: dict | None = None,\n ):\n     response = MagicMock()\n     response.status = status\n-    response.headers = {}\n+    response.headers = {} if headers is None else headers\n     response.json = AsyncMock(return_value=json_body)\n     response.text = AsyncMock(return_value=text_body)\n \n@@ -64,3 +65,30 @@ async def test_request_404_uses_error_message_from_body():\n     with patch.object(client, \"_get_session\", AsyncMock(return_value=mock_session)):\n         with pytest.raises(Exception, match=\"CVE not found\"):\n             await client.request(\"https://fake.url\")\n+\n+\n+async def test_request_retries_status_without_resetting_shared_session():\n+    \"\"\"A retryable status backs off on the shared session (#8491).\"\"\"\n+    client = _build_client()\n+    mock_session = MagicMock()\n+    mock_session.closed = False\n+    payload = {\"vulnerabilities\": [{\"cve\": {\"id\": \"CVE-2024-0001\"}}]}\n+    mock_session.get = MagicMock(\n+        side_effect=[\n+            _build_context_manager_response(\n+                status=429,\n+                headers={\"Retry-After\": \"0\"},\n+            ),\n+            _build_context_manager_response(status=200, json_body=payload),\n+        ]\n+    )\n+\n+    with (\n+        patch.object(client, \"_get_session\", AsyncMock(return_value=mock_session)),\n+        patch.object(client, \"_reset_session\", AsyncMock()) as reset_session,\n+        patch(\"src.services.client.api.asyncio.sleep\", AsyncMock()),\n+    ):\n+        result = await client.request(\"https://fake.url\")\n+\n+    assert result == payload\n+    reset_session.assert_not_awaited()"
+  }
+ ],
+ "test_files": [
+  "external-import/cve/tests/tests_connector/test_api_client.py"
+ ]
+}

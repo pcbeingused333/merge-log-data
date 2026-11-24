@@ -1,0 +1,33 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 331,
+ "url": "https://github.com/lofcz/LLMTornado/pull/331",
+ "title": "feat(tools): add ToolMetadata.KeepNullsInResult to keep null properties in tool results",
+ "merged_at": "2026-11-24T18:35:07Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.Tests/ToolRunnerTests.cs",
+   "status": "modified",
+   "additions": 31,
+   "deletions": 0,
+   "patch": "@@ -344,6 +344,37 @@ public async Task CallFuncToolAsync_ToolThrows_ReportsTheToolException()\n         Assert.That(result.Content, Does.Not.Contain(\"target of an invocation\"));\n     }\n \n+    [Description(\"Returns a record with a null column\")]\n+    public static object GetRecordWithNull()\n+    {\n+        return new { id = \"1\", deleted_at = (string?)null };\n+    }\n+\n+    [Test]\n+    public async Task Invoke_ObjectResultWithNullProperty_OmitsTheNullByDefault()\n+    {\n+        TornadoAgent agent = CreateTestAgent(GetRecordWithNull);\n+        FunctionCall call = CreateFunctionCall(\"GetRecordWithNull\", null, agent);\n+\n+        await call.Invoke(\"{}\");\n+\n+        Assert.That(call.Result, Is.Not.Null);\n+        Assert.That(call.Result!.Content, Is.EqualTo(\"{\\\"id\\\":\\\"1\\\"}\"));\n+    }\n+\n+    [Test]\n+    public async Task Invoke_ObjectResultWithNullProperty_KeepsTheNullWhenOptedIn()\n+    {\n+        Tool tool = new Tool(GetRecordWithNull, new ToolMetadata { KeepNullsInResult = true });\n+        tool.Serialize(new OpenAiEndpointProvider(LLmProviders.OpenAi));\n+        FunctionCall call = new FunctionCall { Name = \"GetRecordWithNull\", Tool = tool };\n+\n+        await call.Invoke(\"{}\");\n+\n+        Assert.That(call.Result, Is.Not.Null);\n+        Assert.That(call.Result!.Content, Is.EqualTo(\"{\\\"id\\\":\\\"1\\\",\\\"deleted_at\\\":null}\"));\n+    }\n+\n     [Test]\n     public async Task Invoke_ToolThrows_ReturnsTheToolExceptionNotTheReflectionWrapper()\n     {"
+  },
+  {
+   "filename": "src/LlmTornado/Chat/FunctionCall.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -283,7 +283,7 @@ public async ValueTask<MethodInvocationResult> Invoke(string data, CancellationT\n             }\n             else\n             {\n-                Result = new FunctionResult(this, invocationResult.Result as string ?? invocationResult.Result.ToJson(), FunctionResultSetContentModes.Passthrough);    \n+                Result = new FunctionResult(this, invocationResult.Result as string ?? (Tool.Metadata?.KeepNullsInResult is true && invocationResult.Result is not null ? JsonConvert.SerializeObject(invocationResult.Result, Formatting.None) : invocationResult.Result.ToJson()), FunctionResultSetContentModes.Passthrough);\n             }\n         }\n "
+  },
+  {
+   "filename": "src/LlmTornado/Code/PartialModels.cs",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -1501,6 +1501,11 @@ public class ToolMetadata\n     public List<ToolParamDefinition>? Params { get; set; }\n     public List<string>? Ignore { get; set; }\n \n+    /// <summary>\n+    /// When true, properties with a <c>null</c> value are kept in the JSON result of the tool delegate sent to the model. Default is false, nulls are omitted.\n+    /// </summary>\n+    public bool KeepNullsInResult { get; set; }\n+\n     public ToolMetadata()\n     {\n         "
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/ToolRunnerTests.cs"
+ ]
+}

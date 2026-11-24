@@ -1,0 +1,26 @@
+{
+ "repo": "StarTrail-org/LEANN",
+ "number": 477,
+ "url": "https://github.com/StarTrail-org/LEANN/pull/477",
+ "title": "fix(chat): join text blocks in AnthropicChat.ask instead of reading content[0]",
+ "merged_at": "2026-11-24T20:17:48Z",
+ "files": [
+  {
+   "filename": "packages/leann-core/src/leann/chat.py",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 2,
+   "patch": "@@ -929,8 +929,12 @@ def ask(self, prompt: str, **kwargs) -> str:\n \n             response = self.client.messages.create(**params)\n \n-            # Extract text from response\n-            response_text = response.content[0].text\n+            # Extract text from response. Models with thinking enabled return\n+            # non-text blocks (e.g. \"thinking\") before the text, so join only\n+            # the text blocks instead of reading content[0].\n+            response_text = \"\".join(\n+                block.text for block in response.content if getattr(block, \"type\", None) == \"text\"\n+            )\n \n             # Log token usage\n             print("
+  },
+  {
+   "filename": "tests/test_anthropic_default_model.py",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -44,3 +44,25 @@ def test_factory_keeps_an_explicit_model(self, mock_anthropic_cls):\n \n         assert isinstance(llm, AnthropicChat)\n         assert llm.model == \"claude-sonnet-5-5\"\n+\n+\n+class TestAnthropicAskThinkingBlock:\n+    @patch(\"anthropic.Anthropic\")\n+    def test_ask_skips_leading_thinking_block(self, mock_anthropic_cls):\n+        from types import SimpleNamespace\n+\n+        from leann.chat import AnthropicChat\n+\n+        response = SimpleNamespace(\n+            content=[\n+                SimpleNamespace(type=\"thinking\", thinking=\"let me think\"),\n+                SimpleNamespace(type=\"text\", text=\" the answer \"),\n+            ],\n+            usage=SimpleNamespace(input_tokens=1, output_tokens=2),\n+            stop_reason=\"end_turn\",\n+        )\n+        mock_anthropic_cls.return_value.messages.create.return_value = response\n+\n+        llm = AnthropicChat(model=\"claude-sonnet-5-5\", api_key=\"test-key\")\n+\n+        assert llm.ask(\"hi\") == \"the answer\""
+  }
+ ],
+ "test_files": [
+  "tests/test_anthropic_default_model.py"
+ ]
+}

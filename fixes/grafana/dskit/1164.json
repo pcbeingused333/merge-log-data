@@ -1,0 +1,26 @@
+{
+ "repo": "grafana/dskit",
+ "number": 1164,
+ "url": "https://github.com/grafana/dskit/pull/1164",
+ "title": "fix(modules): preserve service context values during startup",
+ "merged_at": "2026-11-24T14:37:50Z",
+ "files": [
+  {
+   "filename": "modules/module_service.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -78,9 +78,9 @@ func (w *moduleService) start(serviceContext context.Context) error {\n \t}\n \n \t// we don't want to let this service to stop until all dependant services are stopped,\n-\t// so we use independent context here\n+\t// so preserve context values without inheriting cancellation or deadlines.\n \tlevel.Info(w.logger).Log(\"msg\", \"starting\", \"module\", w.name)\n-\terr := w.service.StartAsync(context.Background())\n+\terr := w.service.StartAsync(context.WithoutCancel(serviceContext))\n \tif err != nil {\n \t\treturn errors.Wrapf(err, \"error starting module: %s\", w.name)\n \t}"
+  },
+  {
+   "filename": "modules/modules_test.go",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -351,6 +351,42 @@ func TestModuleWaitsForAllDependencies(t *testing.T) {\n \tassert.NoError(t, services.StopManagerAndAwaitStopped(context.Background(), servManager))\n }\n \n+func TestModuleService_PreservesContextValuesAndStopOrder(t *testing.T) {\n+\ttype contextKey struct{}\n+\tctx, cancel := context.WithCancel(context.WithValue(t.Context(), contextKey{}, \"value\"))\n+\tdefer cancel()\n+\n+\tdependent := services.NewIdleService(nil, nil)\n+\trequire.NoError(t, services.StartAndAwaitRunning(t.Context(), dependent))\n+\tt.Cleanup(dependent.StopAsync)\n+\n+\tvar underlyingContext context.Context\n+\tunderlying := services.NewIdleService(func(ctx context.Context) error {\n+\t\tunderlyingContext = ctx\n+\t\treturn nil\n+\t}, nil)\n+\twaitingForDependent := make(chan struct{})\n+\tnoDeps := func(string) map[string]services.Service { return nil }\n+\tmodule := NewModuleService(\"A\", log.NewNopLogger(), underlying, noDeps, func(string) map[string]services.Service {\n+\t\tclose(waitingForDependent)\n+\t\treturn map[string]services.Service{\"dependent\": dependent}\n+\t})\n+\tt.Cleanup(module.StopAsync)\n+\trequire.NoError(t, services.StartAndAwaitRunning(ctx, module))\n+\tassert.Equal(t, \"value\", underlyingContext.Value(contextKey{}))\n+\n+\t// Cancelling the context passed to StartAndAwaitRunning makes the module start its shutdown\n+\t// procedure, which first waits for its dependent service to stop.\n+\tcancel()\n+\t<-waitingForDependent\n+\tassert.NoError(t, underlyingContext.Err())\n+\tassert.Equal(t, services.Running, underlying.State())\n+\n+\trequire.NoError(t, services.StopAndAwaitTerminated(t.Context(), dependent))\n+\trequire.NoError(t, module.AwaitTerminated(t.Context()))\n+\tassert.Equal(t, services.Terminated, underlying.State())\n+}\n+\n func TestModuleService_InterruptedFastStartup(t *testing.T) {\n \tfinishStarting := make(chan struct{})\n \tsubserviceStarted := make(chan struct{})"
+  }
+ ],
+ "test_files": [
+  "modules/modules_test.go"
+ ]
+}

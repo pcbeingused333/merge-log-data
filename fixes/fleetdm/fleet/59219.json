@@ -1,0 +1,38 @@
+{
+ "repo": "fleetdm/fleet",
+ "number": 59219,
+ "url": "https://github.com/fleetdm/fleet/pull/59219",
+ "title": "Show syntax error when a saved report or policy loads",
+ "merged_at": "2026-11-24T22:20:28Z",
+ "files": [
+  {
+   "filename": "frontend/pages/policies/edit/components/PolicyForm/PolicyForm.tests.tsx",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 5,
+   "patch": "@@ -478,12 +478,10 @@ describe(\"PolicyForm - component\", () => {\n         />\n       );\n \n-      // Validation runs on editor blur / submit, not on mount: the user\n-      // should not see a syntax error before they interact with the editor.\n-      await new Promise((resolve) => setTimeout(resolve, 600));\n+      // The stored policy is validated as soon as it loads.\n       expect(\n-        screen.queryByText(/Syntax error\\. Please review before saving\\./)\n-      ).not.toBeInTheDocument();\n+        await screen.findByText(/Please review before saving\\./)\n+      ).toBeInTheDocument();\n \n       // Save stays enabled for syntactically invalid (but non-empty) SQL.\n       const saveButton = screen.getByRole(\"button\", { name: \"Save\" });"
+  },
+  {
+   "filename": "frontend/pages/policies/edit/components/PolicyForm/PolicyForm.tsx",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -410,6 +410,11 @@ const PolicyForm = ({\n       return;\n     }\n     setCompatiblePlatforms(lastEditedQueryBody);\n+    // Surface a syntax error in the stored policy as soon as it loads.\n+    if (lastEditedQueryBody?.trim()) {\n+      const { errors: loadErrors } = validateQuerySQL(lastEditedQueryBody);\n+      setErrors((prev) => ({ ...prev, query: loadErrors.query ?? undefined }));\n+    }\n     // eslint-disable-next-line react-hooks/exhaustive-deps\n   }, [policyIdForEdit, lastEditedQueryId, isNewTemplatePolicy]);\n "
+  },
+  {
+   "filename": "frontend/pages/queries/edit/components/EditQueryForm/EditQueryForm.tests.tsx",
+   "status": "modified",
+   "additions": 72,
+   "deletions": 5,
+   "patch": "@@ -179,7 +179,7 @@ describe(\"EditQueryForm - component\", () => {\n     expect(screen.getByText(\"Enter a report name\")).toBeInTheDocument();\n   });\n \n-  it(\"does not show a syntax error on mount for an invalid-SQL stored query\", async () => {\n+  it(\"shows a syntax error on load for an invalid-SQL stored query\", async () => {\n     const invalidSQL = \"SELEKT * FROM bogus\";\n     const render = createCustomRenderer({\n       withBackendMock: true,\n@@ -240,11 +240,78 @@ describe(\"EditQueryForm - component\", () => {\n       />\n     );\n \n-    // Give the former debounce window plenty of time to NOT fire.\n-    await new Promise((resolve) => setTimeout(resolve, 600));\n+    // The stored query is validated as soon as it loads.\n     expect(\n-      screen.queryByText(/Syntax error\\. Please review before saving\\./)\n-    ).not.toBeInTheDocument();\n+      await screen.findByText(/Please review before saving\\./)\n+    ).toBeInTheDocument();\n+  });\n+\n+  it(\"shows a syntax error on load in the read-only editor for an observer+\", async () => {\n+    const invalidSQL = \"SELEKT * FROM bogus\";\n+    const render = createCustomRenderer({\n+      withBackendMock: true,\n+      context: {\n+        query: {\n+          lastEditedQueryId: mockQuery.id,\n+          lastEditedQueryName: mockQuery.name,\n+          lastEditedQueryDescription: mockQuery.description,\n+          lastEditedQueryBody: invalidSQL,\n+          lastEditedQueryObserverCanRun: mockQuery.observer_can_run,\n+          lastEditedQueryFrequency: mockQuery.interval,\n+          lastEditedQueryAutomationsEnabled: mockQuery.automations_enabled,\n+          lastEditedQueryPlatforms: mockQuery.platform,\n+          lastEditedQueryMinOsqueryVersion: mockQuery.min_osquery_version,\n+          lastEditedQueryLoggingType: mockQuery.logging,\n+          setLastEditedQueryName: jest.fn(),\n+          setLastEditedQueryDescription: jest.fn(),\n+          setLastEditedQueryBody: jest.fn(),\n+          setLastEditedQueryObserverCanRun: jest.fn(),\n+          setLastEditedQueryFrequency: jest.fn(),\n+          setLastEditedQueryAutomationsEnabled: jest.fn(),\n+          setLastEditedQueryPlatforms: jest.fn(),\n+          setLastEditedQueryMinOsqueryVersion: jest.fn(),\n+          setLastEditedQueryLoggingType: jest.fn(),\n+        },\n+        app: {\n+          currentUser: createMockUser(),\n+          isGlobalObserver: true,\n+          isObserverPlus: true,\n+          isGlobalAdmin: false,\n+          isGlobalMaintainer: false,\n+          isOnGlobalTeam: true,\n+          isPremiumTier: false,\n+          isSandboxMode: false,\n+          config: createMockConfig(),\n+        },\n+      },\n+    });\n+\n+    render(\n+      <EditQueryForm\n+        router={mockRouter}\n+        location={mockLocation}\n+        queryIdForEdit={1}\n+        apiTeamIdForQuery={1}\n+        showOpenSchemaActionText\n+        storedQuery={createMockQuery({ query: invalidSQL })}\n+        isStoredQueryLoading={false}\n+        isQuerySaving={false}\n+        isQueryUpdating={false}\n+        onSubmitNewQuery={jest.fn()}\n+        onOsqueryTableSelect={jest.fn()}\n+        onUpdate={jest.fn()}\n+        onOpenSchemaSidebar={jest.fn()}\n+        renderLiveQueryWarning={jest.fn()}\n+        backendValidators={{}}\n+        showConfirmSaveChangesModal={false}\n+        setShowConfirmSaveChangesModal={jest.fn()}\n+      />\n+    );\n+\n+    // The stored query is validated as soon as it loads.\n+    expect(\n+      await screen.findByText(/Please review before saving\\./)\n+    ).toBeInTheDocument();\n   });\n \n   it(\"caps the report name input at 255 characters in edit mode\", () => {"
+  },
+  {
+   "filename": "frontend/pages/queries/edit/components/EditQueryForm/EditQueryForm.tsx",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -301,6 +301,14 @@ const EditQueryForm = ({\n   useEffect(() => {\n     if (!isStoredQueryLoading && queryIdForEdit === lastEditedQueryId) {\n       setCompatiblePlatforms(lastEditedQueryBody);\n+      // Surface a syntax error in the stored query as soon as it loads.\n+      if (lastEditedQueryBody?.trim()) {\n+        const { errors: loadErrors } = validateQuerySQL(lastEditedQueryBody);\n+        setErrors((prev) => ({\n+          ...prev,\n+          query: loadErrors.query ?? undefined,\n+        }));\n+      }\n     }\n     // eslint-disable-next-line react-hooks/exhaustive-deps\n   }, [queryIdForEdit, lastEditedQueryId, isStoredQueryLoading]);\n@@ -609,6 +617,7 @@ const EditQueryForm = ({\n       {showQueryEditor && (\n         <SQLEditor\n           value={lastEditedQueryBody}\n+          error={errors.query}\n           name=\"query editor\"\n           label=\"Query\"\n           wrapperClassName={`${baseClass}__text-editor-wrapper`}"
+  }
+ ],
+ "test_files": []
+}

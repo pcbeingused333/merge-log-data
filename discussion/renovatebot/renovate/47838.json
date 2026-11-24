@@ -3,7 +3,14 @@
  "number": 47838,
  "url": "https://github.com/renovatebot/renovate/pull/47838",
  "state": "open",
- "reviews": [],
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-24T16:15:24Z",
+   "body": "@pcbeingused333\n\n## Verdict\n\n> [!NOTE]\n> **Ready apart from two missing tests.** Merge confidence 4 / 5.\n> Nothing fails if the guard starts deleting the branch of an open PR, or if `isBranchAncestorOfBase` throws on a missing base.\n\n## Findings\n\n| # | Severity | Finding | Certainty | Where |\n|:---:|---|---|---|---|\n| 1 | Minor | No test keeps the branch of an open PR | Confirmed | [`branch/index.ts:693`](https://github.com/renovatebot/renovate/blob/e5c21a0e77743794866626c5da6dd2dbce6a29e8/lib/workers/repository/update/branch/index.ts#L693) |\n| 2 | Minor | No test covers a missing base branch | Confirmed | [`git/index.ts:995`](https://github.com/renovatebot/renovate/blob/e5c21a0e77743794866626c5da6dd2dbce6a29e8/lib/util/git/index.ts#L995) |\n\n<details><summary><b>1. No test keeps the branch of an open PR</b> · <code>Minor</code> · <code>Tests</code> · <code>Confirmed</code></summary>\n\n#### What goes wrong\n\nThe guard skips the deletion when a PR is open, as its comment says, but no test covers that half. If `!branchPr` is lost in a later change, Renovate deletes the head branch of an open PR whose commits are already in the base, the platform closes the PR, and every test still passes.\n\n#### Proof\n\nWith `!branchPr` removed from the condition, all 140 tests of `lib/workers/repository/update/branch/index.spec.ts` pass:\n\n```\n-    if (!commitSha && !branchPr) {\n+    if (!commitSha) {\n Test Files  1 passed (1)\n      Tests  140 passed (140)\n```\n\n#### Fix\n\nA test next to `deletes a reused branch that is already in the base instead of opening an empty PR`. It passes at `e5c21a0e7` and fails with the mutation above (`expected \"vi.fn()\" to not be called at all, but actually been called 1 times`). It still needs `prettier`:\n\n```ts\n    it('keeps a branch that is already in the base while its PR is open', async () => {\n      scm.branchExists.mockResolvedValue(true);\n      scm.isBranchModified.mockResolvedValue(false);\n      scm.isBranchAncestorOfBase.mockResolvedValue(true);\n      platform.getBranchPr.mockResolvedValueOnce(partial({ number: 5, state: 'open' }));\n      prWorker.ensurePr.mockResolvedValueOnce({ type: 'without-pr', prBlockedBy: 'AwaitingTests' });\n\n      await branchWorker.processBranch({ ...config, reuseExistingBranch: true, cacheFingerprintMatch: 'matched' });\n\n      expect(scm.deleteBranch).not.toHaveBeenCalled();\n      expect(prWorker.ensurePr).toHaveBeenCalledOnce();\n    });\n```\n\n</details>\n\n<details><summary><b>2. No test covers a missing base branch</b> · <code>Minor</code> · <code>Tests</code> · <code>Confirmed</code></summary>\n\n#### What goes wrong\n\nThe docstring of `isBranchAncestorOfBase` says \"False when either ref is missing\", but the tests cover only a missing branch. Without the `!baseBranchSha` check, the function runs `git rev-list --count null..<sha>` and throws instead of returning `false`, and no test notices.\n\n#### Proof\n\nWith `!baseBranchSha` removed, the only failure in `lib/util/git/index.spec.ts` is `excludes the origin/HEAD symbolic ref`, which also fails without this PR on my `git 2.39.5` and passes in CI:\n\n```\n-  if (!baseBranchSha || !branchSha) {\n+  if (!branchSha) {\n Test Files  1 failed (1)\n      Tests  1 failed | 148 passed (149)\n```\n\n#### Fix\n\nA test next to `returns false when the branch does not exist`. It passes at `e5c21a0e7` and fails with the mutation above (`promise rejected \"Error: fatal: ambiguous argument 'null..e… { …(2) }\" instead of resolving`):\n\n```ts\n      it('returns false when the base branch does not exist', async () => {\n        await expect(\n          git.isBranchAncestorOfBase('renovate/past_branch', 'not_found'),\n        ).resolves.toBeFalse();\n      });\n```\n\n</details>\n\n## What was checked\n\n<details><summary>At <code>e5c21a0e7</code>, 8 checks, 3 not checked</summary>\n\n| Check | Result |\n|---|---|\n| `lib/util/git/index.spec.ts`, `lib/workers/repository/update/branch/index.spec.ts` | 288 pass, and 1 also fails without this PR (`origin/HEAD`, local `git 2.39.5`) |\n| CI at the tip | 48 checks pass, `license/cla` pending |\n| Merge into `main` | clean, 294 commits behind |\n| Mutants of the new code | 9 run: 6 red, 1 equivalent (dropping `!commitSha`), 2 green (findings 1 and 2) |\n| Delete and recreate loop | none: a deleted branch returns `no-work` on the next run, a recreated one has a commit |\n| Swallowed errors in the caller's `catch` | safe: `syncGit()` is a no-op by then, so only a local `git rev-list` can fail, and the fallback opens the PR as before |\n| Closed PR with the same title | untouched: `prAlreadyExisted` runs first |\n| Other platforms | `GithubScm` and `GerritScm` inherit the method, `LocalFs` returns `false` |\n\n### Not checked\n\n- The full suite and the coverage gate ran only in CI.\n- No run of the built CLI against a real GitLab repository with a stale branch.\n- Collisions with other open PRs.\n\n</details>\n"
+  }
+ ],
  "review_comments": [],
  "comments": [
   {
@@ -20,6 +27,21 @@
    "role": "author",
    "created_at": "2026-11-22T03:12:20Z",
    "body": "Hi! Gentle ping on this one in case it got buried. Happy to adjust anything if needed. Thanks!"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-11-24T15:23:18Z",
+   "body": "Interested in this getting merged too! Good luck"
+  },
+  {
+   "role": "contributor",
+   "created_at": "2026-11-24T16:04:49Z",
+   "body": "@pcbeingused333, run a small review for the PR, because want for this to get merged\r\nHope you're okay with it :D\r\nJust wanna improve chances for it to get merged\r\n\r\nIf I overstepped or something, I'm really sorry\r\nSeems to be ready to get merged as it is right now anyway\r\n\r\nGood luck in getting this merged"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-24T17:39:03Z",
+   "body": "Thanks for the review. Added both tests in a9bd11d; each goes red when its guard condition (`!branchPr`, `!baseBranchSha`) is removed and green with the PR as is.\n\nThis comment was drafted with Claude Code.\n"
   }
  ]
 }

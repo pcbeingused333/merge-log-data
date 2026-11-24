@@ -3,7 +3,39 @@
  "number": 188,
  "url": "https://github.com/PostHog/coherence/pull/188",
  "state": "open",
- "reviews": [],
- "review_comments": [],
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-24T17:41:53Z",
+   "body": "Thanks for picking this up. Treating the 0.x launcher as an earlier form of Coherence's hooks is the right fix, and the `hostsWithHook` factoring is a nice step.\n\nI'm requesting changes for three correctness issues, each with an inline comment:\n\n1. **The pattern is too loose** (`hook-command.ts:15`). Any command ending in `coherence-hook <Event>` counts as Coherence's, so install could delete another tool's hook.\n2. **The two launcher patterns disagree** (`hook-command.ts:20`). A launcher under an event Coherence doesn't wire is never removed, while the session start keeps asking for a reinstall that can't clear it. We reproduced this with the PR's code.\n3. **`hooks --check` doesn't say why** (`version.ts:232`). It shows the launcher drift as a bare `stale`, without the reason its two siblings give.\n\nThe same comment on `version.ts:232` also asks for a spec bullet and an upgrade case, so the launcher form is wired everywhere the other earlier forms are.\n\nI've approved the workflow runs, so CI, Upgrade and Semgrep will run on this head.\n\nA follow-up for us, not for this PR: the three earlier forms (checkout-first search, narrow matcher, launcher) want to become one declared list that the session start, the check and the upgrade test all read. Then a fourth form can't miss one of those places."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "collaborator",
+   "path": "src/lifecycle/hook-command.ts",
+   "created_at": "2026-11-24T17:41:53Z",
+   "body": "**Matches more than the 0.x launcher, so install can delete another tool's hook.**\n\n`[\\s\"'/$]coherence-hook\"?\\s+<Event>` matches any command whose last path segment is `coherence-hook`. That includes `/usr/local/bin/coherence-hook Stop`, or some other tool's `coherence-hook` script. Through `isMine`, install would treat that hook as Coherence's and remove it.\n\n`Lifecycle.spec.md` warns against exactly this: a hook that only resembles Coherence's \"is never ours and is never touched\". Please anchor the pattern to where 0.x put the launcher, inside the host's own folder: `/.claude/coherence-hook` or `/.codex/coherence-hook`, quoted or not. That covers both forms the tests use, `\"$CLAUDE_PROJECT_DIR/.claude/coherence-hook\"` and `\"$codex_root/.codex/coherence-hook\"`."
+  },
+  {
+   "role": "collaborator",
+   "path": "src/lifecycle/hook-command.ts",
+   "created_at": "2026-11-24T17:41:53Z",
+   "body": "**This second copy of the launcher pattern disagrees with the one in `isOwnHook`, and the reinstall message can then never clear.**\n\n- `isLauncherHook` accepts the launcher under **any** event (`[A-Za-z]+`), and the session start uses it.\n- Install, uninstall and check decide what is Coherence's through `isMine` (`install.ts:99-100`), which only tries `HOOK_EVENTS` and `ANTIGRAVITY_EVENTS`.\n\nSo a 0.x launcher under an event Coherence doesn't wire, such as `Notification`, is never removed by install. Every session start would still tell the user to reinstall, and reinstalling would never make the message go away. We reproduced this with the PR's code.\n\nSuggested fix: keep one pattern. Have `isOwnHook` call `isLauncherHook` for the launcher branch, and have `isMine` take a launcher under any event, so the session start, install and uninstall agree. A test with a launcher under `Notification` would hold it."
+  },
+  {
+   "role": "collaborator",
+   "path": "src/lifecycle/version.ts",
+   "created_at": "2026-11-24T17:41:53Z",
+   "body": "**The launcher form is wired into the session start but not into the other places its two siblings use.**\n\n`EARLIER_SEARCH` and `earlierMatcher` each appear in three places: here, in `formatCheck` (`install.ts:614` and `:616`), and in `upgrade.e2e.ts:565-568`. Each also has its own spec bullet in `Lifecycle.spec.md` (\"hooks an earlier release wrote are named for reinstall\", and \"a narrow PreToolUse matcher is named for reinstall\"). The launcher form has only this one.\n\nPlease add:\n- **The check line.** In `formatCheck`, add `these hooks were ${EARLIER_LAUNCHER}; reinstall them` when a drifted entry is a launcher. Without it, `hooks --check` shows a launcher hook only as `stale`, which the spec rules out: a bare \"stale\" in the check doesn't say this drift is the one that runs the wrong Coherence.\n- **The spec bullet.** One for the launcher form, in the shape of its two siblings, so the two new tests back an invariant.\n- **An upgrade case.** In `upgrade.e2e.ts`, if 0.x settings are in reach of that test; otherwise say so in the PR."
+  },
+  {
+   "role": "collaborator",
+   "path": "src/lifecycle/version.ts",
+   "created_at": "2026-11-24T17:41:53Z",
+   "body": "Nit: `(c) => isLauncherHook(c)` can be `isLauncherHook`.\n\nSeparately, with `hostsWithHook` factored out, each session start now reads and parses each settings file once per earlier form. That's two or three times per file. Reading each file once and running every test over its commands would avoid that, though it can wait."
+  }
+ ],
  "comments": []
 }

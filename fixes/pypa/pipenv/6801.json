@@ -1,0 +1,33 @@
+{
+ "repo": "pypa/pipenv",
+ "number": 6801,
+ "url": "https://github.com/pypa/pipenv/pull/6801",
+ "title": "fix(uninstall): show pip's stderr when pip uninstall fails",
+ "merged_at": "2026-11-24T16:59:41Z",
+ "files": [
+  {
+   "filename": "news/uninstall-stderr.bugfix.rst",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+Show pip's error output when ``pipenv uninstall`` fails to uninstall a package, instead of only a generic message."
+  },
+  {
+   "filename": "pipenv/routines/uninstall.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -43,6 +43,8 @@ def _uninstall_from_environment(project: Project, package, system=False):\n         )\n         console.print(c.stdout, style=\"cyan\")\n         if c.returncode != 0:\n+            if c.stderr:\n+                console.print(c.stderr, style=\"yellow\")\n             console.print(f\"Error occurred while uninstalling package {package}.\")\n             return False\n     return True"
+  },
+  {
+   "filename": "tests/unit/test_uninstall_exit_code.py",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -78,3 +78,21 @@ def test_uninstall_from_environment_reports_failure_instead_of_raising(monkeypat\n     )\n \n     assert _uninstall_from_environment(project, \"requests\") is False\n+\n+\n+def test_uninstall_from_environment_prints_pip_stderr_on_failure(monkeypatch):\n+    \"\"\"The reason ``pip uninstall`` failed lives on stderr and must be shown.\"\"\"\n+    project = mock.MagicMock()\n+    project.environment.activated.return_value.__enter__.return_value = True\n+    monkeypatch.setattr(\"pipenv.routines.uninstall.project_python\", lambda *a, **k: \"py\")\n+    monkeypatch.setattr(\"pipenv.routines.uninstall.get_runnable_pip\", lambda: \"pip\")\n+    monkeypatch.setattr(\n+        \"pipenv.utils.processes.subprocess_run\",\n+        lambda *a, **k: mock.MagicMock(returncode=1, stdout=\"\", stderr=\"Permission denied: site-packages\"),\n+    )\n+\n+    with mock.patch(\"pipenv.routines.uninstall.console.print\") as print_mock:\n+        assert _uninstall_from_environment(project, \"requests\") is False\n+\n+    printed = \" \".join(str(call.args[0]) for call in print_mock.call_args_list)\n+    assert \"Permission denied: site-packages\" in printed"
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_uninstall_exit_code.py"
+ ]
+}
