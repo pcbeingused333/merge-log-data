@@ -1,0 +1,33 @@
+{
+ "repo": "go-co-op/gocron",
+ "number": 1017,
+ "url": "https://github.com/go-co-op/gocron/pull/1017",
+ "title": "fix(job): reject out-of-range weekly weekdays",
+ "merged_at": "2026-11-25T21:11:25Z",
+ "files": [
+  {
+   "filename": "errors.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -38,6 +38,7 @@ var (\n \tErrStopSchedulerTimedOut         = errors.New(\"gocron: timed out waiting for scheduler to stop\")\n \tErrWeeklyJobAtTimeNil            = errors.New(\"gocron: WeeklyJob: atTime within atTimes must not be nil\")\n \tErrWeeklyJobAtTimesNil           = errors.New(\"gocron: WeeklyJob: atTimes must not be nil\")\n+\tErrWeeklyJobDaysOfTheWeek        = errors.New(\"gocron: WeeklyJob: daysOfTheWeek must be between Sunday and Saturday inclusive\")\n \tErrWeeklyJobDaysOfTheWeekNil     = errors.New(\"gocron: WeeklyJob: daysOfTheWeek must not be nil\")\n \tErrWeeklyJobHours                = errors.New(\"gocron: WeeklyJob: atTimes hours must be between 0 and 23 inclusive\")\n \tErrWeeklyJobZeroInterval         = errors.New(\"gocron: WeeklyJob: interval must be greater than 0\")"
+  },
+  {
+   "filename": "job.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -461,6 +461,11 @@ func (w weeklyJobDefinition) setup(j *internalJob, location *time.Location, _ ti\n \t}\n \n \tdaysOfTheWeek := slices.Clone(w.daysOfTheWeek())\n+\tfor _, day := range daysOfTheWeek {\n+\t\tif day < time.Sunday || day > time.Saturday {\n+\t\t\treturn ErrWeeklyJobDaysOfTheWeek\n+\t\t}\n+\t}\n \tslices.Sort(daysOfTheWeek)\n \tws.daysOfWeek = daysOfTheWeek\n "
+  },
+  {
+   "filename": "scheduler_test.go",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 0,
+   "patch": "@@ -1129,6 +1129,36 @@ func TestScheduler_NewJobErrors(t *testing.T) {\n \t\t\tnil,\n \t\t\tErrWeeklyJobDaysOfTheWeekNil,\n \t\t},\n+\t\t{\n+\t\t\t\"weekly job weekday below Sunday\",\n+\t\t\tWeeklyJob(\n+\t\t\t\t1,\n+\t\t\t\tNewWeekdays(time.Sunday-1),\n+\t\t\t\tNewAtTimes(NewAtTime(12, 0, 0)),\n+\t\t\t),\n+\t\t\t[]JobOption{WithDaylightSavingsTimePolicy(DaylightSavingsTimeSkip)},\n+\t\t\tErrWeeklyJobDaysOfTheWeek,\n+\t\t},\n+\t\t{\n+\t\t\t\"weekly job weekday above Saturday\",\n+\t\t\tWeeklyJob(\n+\t\t\t\t1,\n+\t\t\t\tNewWeekdays(time.Saturday+1),\n+\t\t\t\tNewAtTimes(NewAtTime(12, 0, 0)),\n+\t\t\t),\n+\t\t\t[]JobOption{WithDaylightSavingsTimePolicy(DaylightSavingsTimeSkip)},\n+\t\t\tErrWeeklyJobDaysOfTheWeek,\n+\t\t},\n+\t\t{\n+\t\t\t\"weekly job valid and invalid weekdays\",\n+\t\t\tWeeklyJob(\n+\t\t\t\t1,\n+\t\t\t\tfunc() []time.Weekday { return []time.Weekday{time.Monday, 100} },\n+\t\t\t\tNewAtTimes(NewAtTime(12, 0, 0)),\n+\t\t\t),\n+\t\t\t[]JobOption{WithDaylightSavingsTimePolicy(DaylightSavingsTimeSkip)},\n+\t\t\tErrWeeklyJobDaysOfTheWeek,\n+\t\t},\n \t\t{\n \t\t\t\"weekly job hours out of range\",\n \t\t\tWeeklyJob("
+  }
+ ],
+ "test_files": [
+  "scheduler_test.go"
+ ]
+}

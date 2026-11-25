@@ -1,0 +1,33 @@
+{
+ "repo": "mailtrap/mailtrap-nodejs",
+ "number": 186,
+ "url": "https://github.com/mailtrap/mailtrap-nodejs/pull/186",
+ "title": "fix: preserve message body responses as text",
+ "merged_at": "2026-11-25T18:56:18Z",
+ "files": [
+  {
+   "filename": "src/__tests__/lib/api/resources/Messages.test.ts",
+   "status": "modified",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -377,6 +377,55 @@ describe(\"lib/api/resources/Messages: \", () => {\n     });\n   });\n \n+  describe.each([\n+    [\"getTextMessage\", \"txt\"],\n+    [\"getRawMessage\", \"raw\"],\n+    [\"getMessageHtmlSource\", \"htmlsource\"],\n+    [\"getHtmlMessage\", \"html\"],\n+    [\"getMessageAsEml\", \"eml\"],\n+  ] as const)(\"%s preserves response text\", (method, extension) => {\n+    it.each([\n+      \"123\",\n+      \"null\",\n+      \"true\",\n+      '{\"message\":\"hello\"}',\n+      '\"hello\"',\n+      \" 123\\n\",\n+      \"\",\n+    ])(\"returns %p unchanged\", async (body) => {\n+      const endpoint = `${GENERAL_ENDPOINT}/api/accounts/${accountId}/inboxes/${sandboxId}/messages/${messageId}/body.${extension}`;\n+      mock.onGet(endpoint).reply(200, body, {\n+        \"Content-Type\": \"text/plain\",\n+      });\n+\n+      const result = await messagesAPI[method](sandboxId, messageId);\n+\n+      expect(result).toBe(body);\n+    });\n+  });\n+\n+  it(\"extracts JSON errors from text message responses\", async () => {\n+    const endpoint = `${GENERAL_ENDPOINT}/api/accounts/${accountId}/inboxes/${sandboxId}/messages/${messageId}/body.txt`;\n+    mock.onGet(endpoint).reply(404, '{\"error\":\"Not found\"}', {\n+      \"Content-Type\": \"application/json\",\n+    });\n+\n+    await expect(\n+      messagesAPI.getTextMessage(sandboxId, messageId)\n+    ).rejects.toMatchObject({ message: \"Not found\" });\n+  });\n+\n+  it(\"extracts JSON errors sent as text/plain from text message responses\", async () => {\n+    const endpoint = `${GENERAL_ENDPOINT}/api/accounts/${accountId}/inboxes/${sandboxId}/messages/${messageId}/body.txt`;\n+    mock.onGet(endpoint).reply(401, '{\"error\":\"Incorrect API token\"}', {\n+      \"Content-Type\": \"text/plain\",\n+    });\n+\n+    await expect(\n+      messagesAPI.getTextMessage(sandboxId, messageId)\n+    ).rejects.toMatchObject({ message: \"Incorrect API token\" });\n+  });\n+\n   describe(\"getTextMessage(): \", () => {\n     it(\"successfully gets text message.\", async () => {\n       const endpoint = `${GENERAL_ENDPOINT}/api/accounts/${accountId}/inboxes/${sandboxId}/messages/${messageId}/body.txt`;"
+  },
+  {
+   "filename": "src/lib/api/resources/Messages.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 5,
+   "patch": "@@ -109,7 +109,7 @@ export default class MessagesApi {\n   public async getTextMessage(sandboxId: number, messageId: number) {\n     const url = `${this.messagesURL}/${sandboxId}/messages/${messageId}/body.txt`;\n \n-    return this.client.get<string, string>(url);\n+    return this.client.get<string, string>(url, { responseType: \"text\" });\n   }\n \n   /**\n@@ -118,7 +118,7 @@ export default class MessagesApi {\n   public async getRawMessage(sandboxId: number, messageId: number) {\n     const url = `${this.messagesURL}/${sandboxId}/messages/${messageId}/body.raw`;\n \n-    return this.client.get<string, string>(url);\n+    return this.client.get<string, string>(url, { responseType: \"text\" });\n   }\n \n   /**\n@@ -127,7 +127,7 @@ export default class MessagesApi {\n   public async getMessageHtmlSource(sandboxId: number, messageId: number) {\n     const url = `${this.messagesURL}/${sandboxId}/messages/${messageId}/body.htmlsource`;\n \n-    return this.client.get<string, string>(url);\n+    return this.client.get<string, string>(url, { responseType: \"text\" });\n   }\n \n   /**\n@@ -136,7 +136,7 @@ export default class MessagesApi {\n   public async getHtmlMessage(sandboxId: number, messageId: number) {\n     const url = `${this.messagesURL}/${sandboxId}/messages/${messageId}/body.html`;\n \n-    return this.client.get<string, string>(url);\n+    return this.client.get<string, string>(url, { responseType: \"text\" });\n   }\n \n   /**\n@@ -145,7 +145,7 @@ export default class MessagesApi {\n   public async getMessageAsEml(sandboxId: number, messageId: number) {\n     const url = `${this.messagesURL}/${sandboxId}/messages/${messageId}/body.eml`;\n \n-    return this.client.get<string, string>(url);\n+    return this.client.get<string, string>(url, { responseType: \"text\" });\n   }\n \n   /**"
+  },
+  {
+   "filename": "src/lib/axios-logger.ts",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 4,
+   "patch": "@@ -199,11 +199,19 @@ function extractErrorMessage(data: unknown, defaultMessage: string): string {\n  * Context information (status code, URL, etc.) is available in error.cause.\n  */\n function buildErrorMessage(error: AxiosError): string {\n-  const primaryMessage = error.response?.data\n-    ? extractErrorMessage(error.response.data, error.message)\n-    : error.message;\n+  let data: unknown = error.response?.data;\n+\n+  // Only decode bodies requested as raw text; axios already parsed the rest.\n+  if (typeof data === \"string\" && error.config?.responseType === \"text\") {\n+    try {\n+      const parsed: unknown = JSON.parse(data);\n+      if (parsed && typeof parsed === \"object\") data = parsed;\n+    } catch {\n+      // Plain-text error body, keep as is.\n+    }\n+  }\n \n-  return primaryMessage;\n+  return data ? extractErrorMessage(data, error.message) : error.message;\n }\n \n /**"
+  }
+ ],
+ "test_files": [
+  "src/__tests__/lib/api/resources/Messages.test.ts"
+ ]
+}

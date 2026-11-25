@@ -1,0 +1,34 @@
+{
+ "repo": "Tencent/WeKnora",
+ "number": 5607,
+ "url": "https://github.com/Tencent/WeKnora/pull/5607",
+ "title": "fix(notion): treat has_more without next_cursor as an incomplete data source query",
+ "merged_at": "2026-11-25T18:58:24Z",
+ "files": [
+  {
+   "filename": "internal/datasource/connector/notion/client.go",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 1,
+   "patch": "@@ -779,7 +779,19 @@ func (c *notionClient) queryDataSourceWindow(\n \t\t\t}\n \t\t}\n \n-\t\tif !resp.HasMore || resp.NextCursor == \"\" {\n+\t\tif resp.HasMore && resp.NextCursor == \"\" {\n+\t\t\t// has_more promises another page but no cursor can ask for it. Report\n+\t\t\t// the window as incomplete so the caller continues from a later\n+\t\t\t// created_time or surfaces the truncation, instead of reading the\n+\t\t\t// missing rows as deletions.\n+\t\t\tlogger.Warnf(ctx, \"[Notion] query %s returned has_more=true without a next_cursor after %d rows; \"+\n+\t\t\t\t\"treating the window as incomplete\", path, len(rows))\n+\t\t\tif incompleteReason == \"\" {\n+\t\t\t\tincompleteReason = \"has_more without next_cursor\"\n+\t\t\t}\n+\t\t\treturn rows, lastCreatedTime, incompleteReason, nil\n+\t\t}\n+\t\tif !resp.HasMore {\n \t\t\treturn rows, lastCreatedTime, incompleteReason, nil\n \t\t}\n \t\tnext, cursorErr := advancePaginationCursor(ctx, seenCursors, resp.NextCursor, page)"
+  },
+  {
+   "filename": "internal/datasource/connector/notion/query_truncation_test.go",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -237,3 +237,41 @@ func TestFetchPagePropagatesTruncationFromChildDatabase(t *testing.T) {\n \trequire.NoError(t, err)\n \trequire.True(t, truncated, \"a capped child database query must reach the incremental round\")\n }\n+\n+// has_more=true with no next_cursor promises rows the client cannot ask for. The\n+// query used to treat it as the end of the data source, so the missing rows were\n+// read as source-side deletions.\n+func TestQueryDatabaseAllReportsHasMoreWithoutCursor(t *testing.T) {\n+\tlogs := captureNotionLogs(t)\n+\tserver := newWindowQueryServer(t, windowQueryFake{\n+\t\trows: []windowTestRow{\n+\t\t\t{id: \"r1\", createdTime: \"2026-01-01T10:00:00Z\"},\n+\t\t\t{id: \"r2\", createdTime: \"2026-01-01T11:00:00Z\"},\n+\t\t},\n+\t\tpageSize:   1,\n+\t\tdropCursor: true,\n+\t})\n+\tclient := mustTestClient(t, \"test-token\", server.URL)\n+\n+\trecords, err := client.QueryDatabaseAll(context.Background(), \"ds-1\")\n+\trequire.ErrorIs(t, err, errQueryResultTruncated, \"an unfollowable has_more must not read as a complete result\")\n+\trequire.Equal(t, []string{\"r1\"}, recordIDs(records), \"rows already read stay available to the caller\")\n+\trequire.Contains(t, logs.String(), \"has_more=true without a next_cursor\")\n+}\n+\n+func TestFetchIncrementalHasMoreWithoutCursorSkipsDeletions(t *testing.T) {\n+\tserver := newWindowQueryServer(t, windowQueryFake{\n+\t\tsearchResults: []interface{}{truncationDataSourceRow()},\n+\t\trows:          createdTimeRows(\"r1\", \"r2\"),\n+\t\tpageSize:      1,\n+\t\tdropCursor:    true,\n+\t})\n+\tconfig := makeNotionConfig(&Config{APIKey: \"test-token\"}, server.URL, []string{\"ds-1\"})\n+\n+\titems, _, err := NewConnector().FetchIncremental(context.Background(), config, truncationPrevCursor())\n+\trequire.NoError(t, err)\n+\tfor _, item := range items {\n+\t\trequire.False(t, item.IsDeleted,\n+\t\t\t\"row %s was missing only because the query could not be continued\", item.ExternalID)\n+\t}\n+}"
+  },
+  {
+   "filename": "internal/datasource/connector/notion/query_windowing_test.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -60,6 +60,9 @@ type windowQueryFake struct {\n \talwaysIncomplete bool\n \t// omitCompleteMarker answers a complete window without request_status at all.\n \tomitCompleteMarker bool\n+\t// dropCursor answers has_more=true without a next_cursor, the response a\n+\t// client cannot follow.\n+\tdropCursor bool\n \n \t// searchResults is served from POST /v1/search when set.\n \tsearchResults []interface{}\n@@ -174,6 +177,9 @@ func (f windowQueryFake) answer(request map[string]interface{}) (map[string]inte\n \t}\n \tif hasMore {\n \t\tresponse[\"next_cursor\"] = strconv.Itoa(end)\n+\t\tif f.dropCursor {\n+\t\t\tresponse[\"next_cursor\"] = nil\n+\t\t}\n \t}\n \tswitch {\n \tcase capped && (!f.markerFirstPageOnly || offset == 0):"
+  }
+ ],
+ "test_files": [
+  "internal/datasource/connector/notion/query_truncation_test.go",
+  "internal/datasource/connector/notion/query_windowing_test.go"
+ ]
+}

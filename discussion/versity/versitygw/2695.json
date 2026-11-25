@@ -9,6 +9,12 @@
    "state": "CHANGES_REQUESTED",
    "submitted_at": "2026-11-23T13:11:36Z",
    "body": "Two related places have the same one-way rule:\n- `convert-posix` (`cmd/internal/gwcli/utils.go:399`) has its own `filepath.Rel` check that also accepts a sidecar containing the root. Please reuse the same helper so both commands agree.\n- `extra/example.conf` says nothing about nesting for `VGW_META_SIDECAR`, and `VGW_VERSIONING_DIR` only says \"must NOT be a subdirectory\". Please document \"must not be the same as, inside, or contain the root directory\"."
+  },
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-25T09:10:40Z",
+   "body": ""
   }
  ],
  "review_comments": [
@@ -41,6 +47,30 @@
    "path": "backend/posix/sidecardir_test.go",
    "created_at": "2026-11-23T13:09:42Z",
    "body": "This uses `meta.XattrMeta{}` with `SideCarDir` set, a combination the CLI never builds. Please use `meta.NewSideCar(sibling)` so the test runs the real sidecar setup."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/sidecardir_test.go",
+   "created_at": "2026-11-25T09:08:21Z",
+   "body": "This now also changes `--versioning-dir` validation (a parent of the root or the root itself is newly rejected, and scoutfs goes through the same path), but there is no versioning test. Please add `VersioningDir` cases: parent of root / equal / inside → `ErrDirsNested`, sibling → accepted. Please also assert the `invalid sidecar directory:` / `invalid versioning directory:` prefix, since naming the flag was the point of that change."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-25T09:09:00Z",
+   "body": "The walk up to the closest existing ancestor isn't needed. Every caller requires both dirs to exist: `validateSubDir` stats `dir` right after this check, the root is chdir'ed into or opened, and convert-posix stats the root and calls `NewSideCar` right after. Moving the `os.Stat` in `validateSubDir` before the nesting check and calling `filepath.EvalSymlinks` on both paths directly would drop this function and `TestCheckDirsNotNestedMissingDir`. It also removes the `real` variable that shadows the builtin (line 629)."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-25T09:09:40Z",
+   "body": "Nit: the message currently reads \"invalid sidecar directory: /d and the root directory /d/gwroot: directory must not be the same as, inside, or contain the root directory\".`ErrDirsNested = errors.New(\"must not be the same as, inside, or contain the root directory\")` and `fmt.Errorf(\"%v %w %v\", dir, ErrDirsNested, root)`, which gives \"invalid sidecar directory: /d must not be the same as, inside, or contain the root directory /d/gwroot\"."
+  },
+  {
+   "role": "contributor",
+   "path": "backend/posix/sidecardir_test.go",
+   "created_at": "2026-11-25T09:10:06Z",
+   "body": "Nit: if symlinks can't be created (e.g. Windows without the privilege), this skips the whole table, including the non-symlink cases. Please create the symlink only in the symlink cases, or move them to their own test. Also `real` on line 51 shadows the builtin; `realDir` would be clearer."
   }
  ],
  "comments": [
@@ -53,6 +83,11 @@
    "role": "author",
    "created_at": "2026-11-24T04:34:16Z",
    "body": "Thanks for the thorough review, all points are addressed in the new commit:\n- `validateSubDir` now rejects equal, inside, and containing directories (two-way check), so it also covers `--versioning-dir`; the repro (`--sidecar /d /d/gwroot`) is now refused at startup.\n- Both paths are compared after `EvalSymlinks`, resolving through the closest existing ancestor when a path does not exist yet.\n- The nesting error is the sentinel `posix.ErrDirsNested` and is wrapped at the call sites as `invalid sidecar directory: ...` / `invalid versioning directory: ...`.\n- `convert-posix` now calls the same exported helper (`posix.CheckDirsNotNested`) so both commands agree.\n- `extra/example.conf` documents \"must not be the same as, inside, or contain\" for `VGW_META_SIDECAR` and `VGW_VERSIONING_DIR`.\n- `sidecardir_test.go` is table-driven with `errors.Is` assertions and covers sidecar == root, ancestor of root, symlinked nesting in both directions, trailing separator, and root `.` with `../s3-sidecar` via `t.Chdir`; it uses `meta.NewSideCar`.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-25T12:44:09Z",
+   "body": "Addressed the latest review in the new commit:\n- Dropped the closest-existing-ancestor walk (and its test): `validateSubDir` now stats the directory before the nesting check, and `CheckDirsNotNested` calls `filepath.EvalSymlinks` on both paths.\n- The error now reads `invalid sidecar directory: <dir> must not be the same as, inside, or contain the root directory <root>`.\n- The nesting tests run each case for both `--sidecar` and `--versioning-dir`, asserting `ErrDirsNested` and the flag prefix.\n- Symlink cases are in their own test, so a platform without symlink support only skips those; `real` is renamed to `realDir`.\n\nThis comment was drafted with Claude Code.\n"
   }
  ]
 }

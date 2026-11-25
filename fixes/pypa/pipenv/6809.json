@@ -1,0 +1,33 @@
+{
+ "repo": "pypa/pipenv",
+ "number": 6809,
+ "url": "https://github.com/pypa/pipenv/pull/6809",
+ "title": "fix(requirements): keep shorthand markers with --no-lock",
+ "merged_at": "2026-11-25T16:51:30Z",
+ "files": [
+  {
+   "filename": "news/no-lock-shorthand-markers.bugfix.rst",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+Fixed ``pipenv requirements --no-lock`` dropping shorthand environment markers such as ``platform_machine`` from Pipfile entries."
+  },
+  {
+   "filename": "pipenv/utils/dependencies.py",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 6,
+   "patch": "@@ -2065,12 +2065,19 @@ def requirement_from_pipfile(package_name, package_spec, include_markers=True):\n     # Process markers\n     markers = \"\"\n     if include_markers:\n-        # Handle sys_platform and other common markers\n-        marker_parts = []\n-        if \"markers\" in package_spec and package_spec[\"markers\"]:\n-            marker_parts.append(package_spec[\"markers\"])\n-        if \"sys_platform\" in package_spec and package_spec[\"sys_platform\"]:\n-            marker_parts.append(f\"sys_platform {package_spec['sys_platform']}\")\n+        # Handle \"markers\" and the shorthand keys (sys_platform, platform_machine, ...)\n+        from pipenv.patched.pip._vendor.packaging.markers import default_environment\n+\n+        marker_parts = [\n+            f\"{key} {package_spec[key]}\"\n+            for key in default_environment()\n+            if package_spec.get(key)\n+        ]\n+        explicit = package_spec.get(\"markers\")\n+        if explicit:\n+            if marker_parts and re.search(r\"\\bor\\b\", explicit):\n+                explicit = f\"({explicit})\"\n+            marker_parts.insert(0, explicit)\n \n         if marker_parts:\n             markers = \"; \" + \" and \".join(marker_parts)"
+  },
+  {
+   "filename": "tests/unit/test_requirements_shorthand_markers.py",
+   "status": "added",
+   "additions": 47,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,47 @@\n+\"\"\"``pipenv requirements --no-lock`` keeps every shorthand marker key.\"\"\"\n+\n+import pytest\n+\n+from pipenv.patched.pip._vendor.packaging.markers import Marker\n+from pipenv.utils.dependencies import requirement_from_pipfile\n+\n+\n+@pytest.mark.parametrize(\n+    \"key,value\",\n+    [\n+        (\"platform_machine\", \"== 'arm64'\"),\n+        (\"platform_system\", \"== 'Linux'\"),\n+        (\"python_version\", \">= '3.10'\"),\n+        (\"os_name\", \"== 'nt'\"),\n+    ],\n+)\n+def test_shorthand_marker_kept_without_lock(key, value):\n+    spec = {\"version\": \"*\", key: value}\n+    assert requirement_from_pipfile(\"pkg\", spec) == f\"pkg; {key} {value}\"\n+\n+\n+def test_or_marker_is_grouped_before_combining_with_shorthand():\n+    spec = {\n+        \"version\": \"==1.0\",\n+        \"markers\": \"sys_platform == 'linux' or sys_platform == 'darwin'\",\n+        \"platform_machine\": \"== 'arm64'\",\n+    }\n+    assert requirement_from_pipfile(\"pkg\", spec) == (\n+        \"pkg==1.0; (sys_platform == 'linux' or sys_platform == 'darwin') \"\n+        \"and platform_machine == 'arm64'\"\n+    )\n+\n+\n+@pytest.mark.parametrize(\"separator\", [\" or \", \"\\tor\\t\"])\n+def test_or_marker_does_not_bypass_shorthand_restriction(separator):\n+    explicit = separator.join([\"sys_platform == 'linux'\", \"sys_platform == 'darwin'\"])\n+    spec = {\"version\": \"*\", \"markers\": explicit, \"platform_machine\": \"== 'arm64'\"}\n+    marker = Marker(requirement_from_pipfile(\"pkg\", spec).split(\";\", 1)[1].strip())\n+    env = {\"sys_platform\": \"linux\", \"platform_machine\": \"x86_64\"}\n+    assert not marker.evaluate(env)\n+    assert marker.evaluate({**env, \"platform_machine\": \"arm64\"})\n+\n+\n+def test_shorthand_marker_omitted_when_markers_excluded():\n+    spec = {\"version\": \"*\", \"platform_machine\": \"== 'arm64'\"}\n+    assert requirement_from_pipfile(\"pkg\", spec, include_markers=False) == \"pkg\""
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_requirements_shorthand_markers.py"
+ ]
+}

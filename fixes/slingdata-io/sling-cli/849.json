@@ -1,0 +1,33 @@
+{
+ "repo": "slingdata-io/sling-cli",
+ "number": 849,
+ "url": "https://github.com/slingdata-io/sling-cli/pull/849",
+ "title": "fix(excel): preserve late columns in row-only ranges",
+ "merged_at": "2026-11-25T10:03:38Z",
+ "files": [
+  {
+   "filename": "core/dbio/iop/sheet_excel.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 6,
+   "patch": "@@ -492,17 +492,12 @@ func (xls *Excel) normalizeRange(cellRange string, allRows [][]string) (string,\n \t\t\treturn \"\", g.Error(\"row range %d:%d exceeds sheet bounds (max row: %d)\", rowStart, rowEnd, len(allRows))\n \t\t}\n \n-\t\t// Scan rows to find max column with data (limit to SampleSize rows for performance)\n+\t\t// Use the widest selected row to determine the column range.\n \t\tmaxCol := 0\n-\t\tscannedRows := 0\n \t\tfor r := rowStartIdx; r <= rowEndIdx && r < len(allRows); r++ {\n \t\t\tif len(allRows[r]) > maxCol {\n \t\t\t\tmaxCol = len(allRows[r])\n \t\t\t}\n-\t\t\tscannedRows++\n-\t\t\tif scannedRows >= SampleSize {\n-\t\t\t\tbreak\n-\t\t\t}\n \t\t}\n \n \t\tif maxCol == 0 {"
+  },
+  {
+   "filename": "core/dbio/iop/sheet_excel_test.go",
+   "status": "modified",
+   "additions": 42,
+   "deletions": 0,
+   "patch": "@@ -539,3 +539,45 @@ func TestNewExcelDatasetDeletedFirstSheet(t *testing.T) {\n \t\tt.Fatalf(\"expected 2 rows (header + 1) from the first remaining sheet, got %d\", len(data.Rows))\n \t}\n }\n+\n+func TestNewExcelDatasetRowRangeWidth(t *testing.T) {\n+\toriginalSampleSize := SampleSize\n+\tSampleSize = 900\n+\tt.Cleanup(func() { SampleSize = originalSampleSize })\n+\n+\tf := excelize.NewFile()\n+\tt.Cleanup(func() { _ = f.Close() })\n+\tfor row := 1; row <= 901; row++ {\n+\t\tcell, err := excelize.CoordinatesToCellName(1, row)\n+\t\tif err != nil {\n+\t\t\tt.Fatal(err)\n+\t\t}\n+\t\tvalues := []interface{}{\"left\", \"right\"}\n+\t\tif row == 901 {\n+\t\t\tvalues = append(values, \"late value\")\n+\t\t}\n+\t\tif err := f.SetSheetRow(\"Sheet1\", cell, &values); err != nil {\n+\t\t\tt.Fatal(err)\n+\t\t}\n+\t}\n+\tbuf, err := f.WriteToBuffer()\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\n+\tfor _, sheetRange := range []string{\"1:901\", \"1:\", \"A1:C901\"} {\n+\t\tt.Run(sheetRange, func(t *testing.T) {\n+\t\t\tdata, err := NewExcelDataset(bytes.NewReader(buf.Bytes()), map[string]string{\"sheet\": \"Sheet1!\" + sheetRange})\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\t\t\tif len(data.Rows) != 900 {\n+\t\t\t\tt.Fatalf(\"got %d data rows, want 900\", len(data.Rows))\n+\t\t\t}\n+\t\t\tlastRow := data.Rows[len(data.Rows)-1]\n+\t\t\tif len(lastRow) != 3 || lastRow[2] != \"late value\" {\n+\t\t\t\tt.Fatalf(\"last row = %v, want third cell to contain %q\", lastRow, \"late value\")\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  },
+  {
+   "filename": "justfile",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -84,7 +84,7 @@ test-dbio-connection:\n # Test dbio iop (input/output processing)\n test-dbio-iop:\n     echo \"TESTING dbio iop\"\n-    infisical-load dev /dbio && cd core/dbio/iop && go test -timeout 5m -v -run 'TestParseDate|TestDetectDelimiter|TestFIX|TestConstraints|TestDuckDb|TestDuckMapLiteral|TestEnsureBinDuckDB|TestParquetDuckDb|TestIcebergReader|TestDeltaReader|TestPartition|TestExtractPartitionTimeValue|TestGetLowestPartTimeUnit|TestMatchedPartitionMask|TestGeneratePartURIsFromRange|TestDataset|TestValidateNames|TestExcelDateToTime|TestExcelNumFmtKind|TestExcelUseStoredNumbers|TestExcelNumberFormats|TestNormalizeNumberText|TestStreamProcessorCastThousands|TestBinaryToHex|TestBinaryToDecimal|TestArrow|TestFunctions|TestQueue|TestEvaluator|TestTransforms|TestColumnTyping|TestNativeTypeToGeneralClickhouse|TestRecordStream|TestDatastream|TestConsumeArrowRecords|TestParquetArrowWriter|TestUnwrap|TestApplySelect|TestSelector|TestFlattenRecord|TestCoerceUnsizedDecimalCast|TestNativeTypeToGeneralFirebird|TestDecomposedToRat|TestDecodeJSONIfBase64|TestEncodeRowAsJSONObject|TestCSVSkipLines|TestAvroScanEnd|TestReaderReadyRetriesFailedOpenAndClose|TestPause|TestParseModifiers|TestTokenizeModifiers|TestCollectInlineIndexes|TestMakeIndexName|TestGenerateCopyStatementEpochPartitionKey|TestGenerateCopyStatementPartitionSkipsFileSize|TestRenderStringMethodCallHint|TestOpenTunnelProxy_(ForwardsTraffic|UnreachableProxy)|TestSSHHostKey|TestSSHOptions|TestUntarGz|TestCommitChecksum|TestDataflowStats|TestFormatValue' && go test -race -count=1 -run 'TestCommitChecksumKeepsColumnStats|TestDatastreamLimitedConcurrentPush|TestPauseWhileStreamCloses|TestDatastreamStats|TestDataflowStats' . && cd -\n+    infisical-load dev /dbio && cd core/dbio/iop && go test -timeout 5m -v -run 'TestParseDate|TestDetectDelimiter|TestFIX|TestConstraints|TestDuckDb|TestDuckMapLiteral|TestEnsureBinDuckDB|TestParquetDuckDb|TestIcebergReader|TestDeltaReader|TestPartition|TestExtractPartitionTimeValue|TestGetLowestPartTimeUnit|TestMatchedPartitionMask|TestGeneratePartURIsFromRange|TestDataset|TestValidateNames|TestExcelDateToTime|TestExcelNumFmtKind|TestExcelUseStoredNumbers|TestExcelNumberFormats|TestNewExcelDatasetRowRangeWidth|TestNormalizeNumberText|TestStreamProcessorCastThousands|TestBinaryToHex|TestBinaryToDecimal|TestArrow|TestFunctions|TestQueue|TestEvaluator|TestTransforms|TestColumnTyping|TestNativeTypeToGeneralClickhouse|TestRecordStream|TestDatastream|TestConsumeArrowRecords|TestParquetArrowWriter|TestUnwrap|TestApplySelect|TestSelector|TestFlattenRecord|TestCoerceUnsizedDecimalCast|TestNativeTypeToGeneralFirebird|TestDecomposedToRat|TestDecodeJSONIfBase64|TestEncodeRowAsJSONObject|TestCSVSkipLines|TestAvroScanEnd|TestReaderReadyRetriesFailedOpenAndClose|TestPause|TestParseModifiers|TestTokenizeModifiers|TestCollectInlineIndexes|TestMakeIndexName|TestGenerateCopyStatementEpochPartitionKey|TestGenerateCopyStatementPartitionSkipsFileSize|TestRenderStringMethodCallHint|TestOpenTunnelProxy_(ForwardsTraffic|UnreachableProxy)|TestSSHHostKey|TestSSHOptions|TestUntarGz|TestCommitChecksum|TestDataflowStats|TestFormatValue' && go test -race -count=1 -run 'TestCommitChecksumKeepsColumnStats|TestDatastreamLimitedConcurrentPush|TestPauseWhileStreamCloses|TestDatastreamStats|TestDataflowStats' . && cd -\n \n # Test dbio database\n test-dbio-database:"
+  }
+ ],
+ "test_files": [
+  "core/dbio/iop/sheet_excel_test.go"
+ ]
+}

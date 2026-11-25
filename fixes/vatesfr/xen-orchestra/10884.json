@@ -1,0 +1,33 @@
+{
+ "repo": "vatesfr/xen-orchestra",
+ "number": 10884,
+ "url": "https://github.com/vatesfr/xen-orchestra/pull/10884",
+ "title": "fix(xo-collection): emit remove on the previous type when an indexed item changes type",
+ "merged_at": "2026-11-25T10:11:24Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.unreleased.md",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -15,6 +15,7 @@\n \n - [Backups/Merge] The background merge no longer crashes with `ENAMETOOLONG` when a VM's backups are locked by another job: it waits 5 minutes before trying again instead of retrying in a loop (PR [#10866](https://github.com/vatesfr/xen-orchestra/pull/10866))\n - [V2V] When the import of a disk fails before its transfer starts, the task shows the reason given by the migration engine (e.g. `could not connect: timed out`) instead of `stream has ended without data, was looking for 8 bytes` (PR [#10842](https://github.com/vatesfr/xen-orchestra/pull/10842))\n+- [XO6] A VM converted into a template no longer stays in the VM list and treeview, contribution by [@pcbeingused333](https://github.com/pcbeingused333), fixes issue [#10717](https://github.com/vatesfr/xen-orchestra/issues/10717) (PR [#10884](https://github.com/vatesfr/xen-orchestra/pull/10884))\n \n ### Packages to release\n \n@@ -34,5 +35,6 @@\n \n - @vates/nbd-client patch\n - @xen-orchestra/backups patch\n+- xo-collection patch\n \n <!--packages-end-->"
+  },
+  {
+   "filename": "packages/xo-collection/src/index.js",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 1,
+   "patch": "@@ -107,7 +107,14 @@ export class Index {\n       const type = getIndexType(value)\n \n       // Removes item from the previous type's list if any.\n-      if (prevType != null) delete itemsByType[prevType][key]\n+      if (prevType != null) {\n+        delete itemsByType[prevType][key]\n+\n+        // The item left this type: let the listeners of the previous type know.\n+        if (prevType !== type) {\n+          this.getEventEmitterByType(prevType)?.emit('remove', undefined, previousObj)\n+        }\n+      }\n \n       // Inserts item into the new type's list if any.\n       if (type != null) {"
+  },
+  {
+   "filename": "packages/xo-collection/src/index.test.js",
+   "status": "modified",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -135,6 +135,55 @@ describe('Index', function () {\n     })\n   })\n \n+  it('emits remove on the previous type when an item changes type', function () {\n+    const removed = []\n+    const updated = []\n+    byGroup.getEventEmitterByType('foo').on('remove', (_, prev) => removed.push(prev))\n+    byGroup.getEventEmitterByType('foo').on('update', value => updated.push(value))\n+\n+    const item1bis = {\n+      id: item1.id,\n+      group: 'bar',\n+    }\n+    col.update(item1bis)\n+\n+    return waitTicks().then(() => {\n+      assert.deepEqual(removed, [item1])\n+      assert.deepEqual(updated, [])\n+    })\n+  })\n+\n+  it('emits remove on the previous type when an item no longer has a type', function () {\n+    const removed = []\n+    byGroup.getEventEmitterByType('foo').on('remove', (_, prev) => removed.push(prev))\n+\n+    col.update({ id: item1.id })\n+\n+    return waitTicks().then(() => {\n+      assert.deepEqual(removed, [item1])\n+    })\n+  })\n+\n+  it('emits update, not remove, when an item keeps the same type', function () {\n+    const removed = []\n+    const updated = []\n+    const ee = byGroup.getEventEmitterByType('foo')\n+    ee.on('remove', (_, prev) => removed.push(prev))\n+    ee.on('update', (value, prev) => updated.push([value, prev]))\n+\n+    const item1bis = {\n+      id: item1.id,\n+      group: 'foo',\n+      newProp: true,\n+    }\n+    col.update(item1bis)\n+\n+    return waitTicks().then(() => {\n+      assert.deepEqual(removed, [])\n+      assert.deepEqual(updated, [[item1bis, item1]])\n+    })\n+  })\n+\n   it('correctly updates the value even if the same object has the same hash', function () {\n     const item1bis = {\n       id: item1.id,"
+  }
+ ],
+ "test_files": [
+  "packages/xo-collection/src/index.test.js"
+ ]
+}

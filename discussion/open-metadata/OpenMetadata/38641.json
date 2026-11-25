@@ -2,24 +2,100 @@
  "repo": "open-metadata/OpenMetadata",
  "number": 38641,
  "url": "https://github.com/open-metadata/OpenMetadata/pull/38641",
- "state": "open",
- "reviews": [],
- "review_comments": [],
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-25T11:42:59Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-25T12:53:25Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-25T14:05:48Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-25T14:16:16Z",
+   "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-25T15:52:21Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "openmetadata-ui/src/main/resources/ui/src/components/Classifications/ClassificationDetails/ClassificationDetails.tsx",
+   "created_at": "2026-11-25T11:42:59Z",
+   "body": "<details>\n<summary>⚠️ <b>Bug:</b> Failed domain save still shows the new domains</summary>\n\nThe new `onUpdate` calls `handleUpdateClassification`. TagsPage documents that handler as the non-throwing version for inline edits: it catches every error from `updateClassification` and resolves anyway (TagsPage.tsx, `handleUpdateClassification`). `saveDomainViaOnUpdate` in DomainSyncUtils.ts only skips `setActiveDomain(selectedDomain)` when `onUpdate` rejects.\n\nSo when the PATCH fails (403, conflict or network error), the user gets an error toast, but the Domains widget still shows the selection as if it had been saved. The `domains` prop never changes, so the sync effect never resets the widget, and the wrong domains stay on screen until the page reloads.\n\nFix: give the domain editor a save path that rejects on failure. For example, pass a throwing update prop down from TagsPage (`updateClassification`), or have this callback re-throw when the update fails.\n\n\n**Add a rejecting update prop (wired to TagsPage's `updateClassification`) and use it for domain saves, so DomainLabel keeps its previous state when the save fails.:**\n````\nonUpdate={async (updatedDomains) =>\n  updateClassificationOrThrow?.({\n    ...currentClassification,\n    domains: updatedDomains as EntityReference[],\n  })\n}\n````\n\n<!-- gitar:fix-applied --><kbd>✅ Fixed by `@pcbeingused333` in 8e609d1</kbd>\n\n<sub><!-- gitar:footer-start -->Reply for a change | Was this helpful? React with 👍 / 👎<!-- gitar:footer-end --></sub>\n\n</details>"
+  },
+  {
+   "role": "contributor",
+   "path": "openmetadata-ui/src/main/resources/ui/src/components/Classifications/ClassificationDetails/ClassificationDetails.tsx",
+   "created_at": "2026-11-25T12:53:25Z",
+   "body": "Fixed in 8e609d1. Dropped the `onUpdate` route through `handleUpdateClassification`, so the Domains panel saves through `DomainLabel`'s own API path, which keeps the previous domains and shows a single error toast when the PATCH fails. A browser test covers the rejected save (`TagsPage.browser.test.tsx`, \"keeps the saved domain on screen when the save is rejected\"). A throwing `updateClassification` prop wasn't used because it would show a second toast on top of `saveDomainViaOnUpdate`'s.\n"
+  },
+  {
+   "role": "bot",
+   "path": "openmetadata-ui/src/main/resources/ui/src/pages/TagsPage/TagsPage.tsx",
+   "created_at": "2026-11-25T14:05:48Z",
+   "body": "<details>\n<summary>💡 <b>Edge Case:</b> Domain save callback can write domains onto another classification</summary>\n\n`handleClassificationDomainsUpdate` merges the saved domains into whatever classification is current when the PATCH resolves (`prev && { ...prev, domains }`). It never checks that `prev` is the classification that was patched. Here is how it goes wrong: a user clicks Apply on classification A and selects classification B in the left panel before the GET+PATCH in `saveDomainViaApi` finishes. B's state then gets A's domains. B's Domains panel shows them, the Edit drawer pre-fills them, and saving that drawer would write them to B on the server. The fix is to pass the patched entity's id from `afterDomainUpdateAction` (`updated.id`) and merge only when `prev.id` matches.\n\n\n**Match the patched classification by id before merging its domains.:**\n````\n// ClassificationDetails.tsx\nafterDomainUpdateAction={(updated) =>\n  handleClassificationDomainsUpdate?.(updated.id, updated.domains)\n}\n\n// TagsPage.tsx\nconst handleClassificationDomainsUpdate = useCallback(\n  (id: string, domains?: EntityReference[]) =>\n    setCurrentClassification((prev) =>\n      prev?.id === id ? { ...prev, domains } : prev\n    ),\n  []\n);\n````\n\n<!-- gitar:fix-applied --><kbd>✅ Fixed by `@pcbeingused333` in 2c5cfe7</kbd>\n\n<sub><!-- gitar:footer-start -->Reply for a change | Was this helpful? React with 👍 / 👎<!-- gitar:footer-end --></sub>\n\n</details>"
+  },
+  {
+   "role": "contributor",
+   "path": "openmetadata-ui/src/main/resources/ui/src/pages/TagsPage/TagsPage.tsx",
+   "created_at": "2026-11-25T14:16:16Z",
+   "body": "Fixed in 2c5cfe7. The Domains panel is now keyed by classification id, so a save that resolves after switching cannot update the new panel's own state, and `handleClassificationDomainsUpdate` merges only when the patched id matches the current classification. The id guard alone would not cover the panel: `DomainLabel` was not remounted on a switch, so its own `setActiveDomain` from the late response still showed A's domains on B. A browser test holds the PATCH across a switch and checks B's panel and Edit drawer (`TagsPage.browser.test.tsx`, \"a domain save that lands after switching classification leaves the new one unchanged\"); it fails with either change removed. On the server side: saving the Edit drawer would not have written A's domains to B, since `updateClassification` compares against the same in-memory classification and produces no domain op.\n"
+  }
+ ],
  "comments": [
   {
    "role": "bot",
    "created_at": "2026-11-25T03:12:34Z",
-   "body": "<!-- pr-metadata-check -->\n### ❌ PR checklist incomplete\n\nThis PR cannot be merged until the following are addressed on its linked issue:\n\n- Linked issue #38592 is not added to the **Shipping** project.\n\nThe fields live on the **linked issue** in the **Shipping** project (open the issue → right sidebar → **Projects**). After you set them, **re-run this check** (or push a commit) — issue/project changes do not re-trigger it automatically.\n\n_Maintainers can bypass this check by adding the `skip-pr-checks` label._"
-  },
-  {
-   "role": "bot",
-   "created_at": "2026-11-25T03:14:44Z",
-   "body": "<details>\n<summary><b>Code Review</b> <kbd>✅ Approved</kbd> <kbd>🟡 Medium risk</kbd></summary>\n\nPassing classification identity and domains into the editor enables domain assignment updates; mistaken edits could misclassify content or affect its organization.\n\nPasses the classification's domains, fully qualified name, ID, and type directly to DomainLabel so assigned domains display and Apply can save changes through the classification API. Adds a regression test for clearing a domain via Apply. No issues found.\n\n</details>\n\n<details>\n<summary><b>Verification</b></summary>\n\n<b>Rules</b> <kbd>No rules evaluated</kbd>\n\n<details>\n<summary><b>Functional validation</b> <kbd>Not enabled</kbd></summary>\n\n[Set up](https://docs.gitar.ai/features/functional-validation)\n\n</details>\n\n<details>\n<summary><b>Auto-approval</b> <kbd>Not enabled</kbd></summary>\n\n[Set up](https://docs.gitar.ai/features/code-review/auto-approve)\n\n</details>\n\n<sub>For more verification details, comment `gitar display:verbose`.</sub>\n\n</details>\n\n<details>\n<summary><b>Options</b> </summary>\n\n<kbd>Display: compact</kbd> → Showing compact verification results.\n\nComment with these commands to change the behavior for this request:\n\n<table>\n<tr>\n<td><kbd>Compact</kbd></td>\n</tr>\n<tr>\n<td>\n\n```\ngitar display:verbose         \n```\n</td>\n</tr>\n</table>\n\n</details>\n\n<sub>Was this helpful? React with 👍 / 👎 | Powered by [Gitar](https://gitar.ai) — free for open source</sub>"
+   "body": "<!-- pr-metadata-check -->\n### ✅ PR checks passed\n\nThe linked issue has a description and all required **Shipping** project fields set. Thanks!"
   },
   {
    "role": "bot",
    "created_at": "2026-11-25T03:29:27Z",
-   "body": "<!-- ui-browser-tests -->\n### UI browser tests\n\n**Ran:** all test files (no impact map from main yet)\n\n**Result:** ❌ 1 failed · 1069 passed · 154 skipped\n"
+   "body": "<!-- ui-browser-tests -->\n### UI browser tests\n\n**Ran:** all test files (no impact map from main yet)\n\n**Result:** ✅ 1099 passed · 154 skipped\n\n**Changed code executed by these browser tests:** 6 / 6 lines (100%)\n\n| File | Changed lines | Executed | % |\n|---|---|---|---|\n| `src/components/Classifications/ClassificationDetails/ClassificationDetails.tsx` | 2 | 2 | 100% |\n| `src/pages/TagsPage/TagsPage.tsx` | 4 | 4 | 100% |\n\n<details><summary>Changed files no browser test loads</summary>\n\n- `src/components/Classifications/ClassificationDetails/ClassificationDetails.interface.ts`\n\n</details>\n"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-25T14:28:13Z",
+   "body": "<details>\n<summary><b>Code Review</b> <kbd>✅ Approved</kbd> <kbd>🟡 Medium risk</kbd> <kbd>2 closed / 2 findings</kbd></summary>\n\nRestoring classification-domain editing sends PATCH updates and changes domain associations, so a mistaken selection could misclassify related tags.\n\nRestores domain display and editing on the Classification page by reading domains from the classification itself and saving through its own PATCH path, with failed saves keeping the previously saved domains. Also fixes a flash of the tags table when creating a new classification, and hides the domain editor on the version history page. Resolved: a failed domain save no longer shows the new domains, and a late domain save can no longer write onto another classification. No issues remain open.\n\n<details>\n<summary><kbd>✅ 2 closed</kbd></summary>\n\n<details>\n<summary>✅ <b>Bug:</b> Failed domain save still shows the new domains</summary>\n\n> <kbd>📄 openmetadata-ui/src/main/resources/ui/src/components/Classifications/ClassificationDetails/ClassificationDetails.tsx:816-821</kbd>\n> The new `onUpdate` calls `handleUpdateClassification`. TagsPage documents that handler as the non-throwing version for inline edits: it catches every error from `updateClassification` and resolves anyway (TagsPage.tsx, `handleUpdateClassification`). `saveDomainViaOnUpdate` in DomainSyncUtils.ts only skips `setActiveDomain(selectedDomain)` when `onUpdate` rejects.\n>\n> So when the PATCH fails (403, conflict or network error), the user gets an error toast, but the Domains widget still shows the selection as if it had been saved. The `domains` prop never changes, so the sync effect never resets the widget, and the wrong domains stay on screen until the page reloads.\n>\n> Fix: give the domain editor a save path that rejects on failure. For example, pass a throwing update prop down from TagsPage (`updateClassification`), or have this callback re-throw when the update fails.\n\n</details>\n\n<details>\n<summary>✅ <b>Edge Case:</b> Domain save callback can write domains onto another classification</summary>\n\n> <kbd>📄 openmetadata-ui/src/main/resources/ui/src/pages/TagsPage/TagsPage.tsx:404-408</kbd> <kbd>📄 openmetadata-ui/src/main/resources/ui/src/components/Classifications/ClassificationDetails/ClassificationDetails.tsx:812-814</kbd> <kbd>📄 openmetadata-ui/src/main/resources/ui/src/components/Classifications/ClassificationDetails/ClassificationDetails.interface.ts:34</kbd>\n> `handleClassificationDomainsUpdate` merges the saved domains into whatever classification is current when the PATCH resolves (`prev && { ...prev, domains }`). It never checks that `prev` is the classification that was patched. Here is how it goes wrong: a user clicks Apply on classification A and selects classification B in the left panel before the GET+PATCH in `saveDomainViaApi` finishes. B's state then gets A's domains. B's Domains panel shows them, the Edit drawer pre-fills them, and saving that drawer would write them to B on the server. The fix is to pass the patched entity's id from `afterDomainUpdateAction` (`updated.id`) and merge only when `prev.id` matches.\n\n</details>\n\n</details>\n\n</details>\n\n<details>\n<summary><b>Verification</b></summary>\n\n<b>Rules</b> <kbd>No rules evaluated</kbd>\n\n<details>\n<summary><b>Functional validation</b> <kbd>Not enabled</kbd></summary>\n\n[Set up](https://docs.gitar.ai/features/functional-validation)\n\n</details>\n\n<details>\n<summary><b>Auto-approval</b> <kbd>Not enabled</kbd></summary>\n\n[Set up](https://docs.gitar.ai/features/code-review/auto-approve)\n\n</details>\n\n<sub>For more verification details, comment `gitar display:verbose`.</sub>\n\n</details>\n\n<details>\n<summary><b>Options</b> </summary>\n\n<kbd>Display: compact</kbd> → Showing compact verification results.\n\nComment with these commands to change the behavior for this request:\n\n<table>\n<tr>\n<td><kbd>Compact</kbd></td>\n</tr>\n<tr>\n<td>\n\n```\ngitar display:verbose         \n```\n</td>\n</tr>\n</table>\n\n</details>\n\n<sub>Was this helpful? React with 👍 / 👎 | Powered by [Gitar](https://gitar.ai) — free for open source</sub>\n\n<!-- gitar-dashboard-repost:01a210b2-cf38-7359-8910-a746b6c9a099:7165120468 -->"
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-25T16:21:09Z",
+   "body": "🤖 Backport to `2.0` is under way. It is built from openmetadata-collate, which holds the credentials needed to open a PR here, and it will comment again with the result — nothing is needed from you unless it reports otherwise."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-25T16:21:10Z",
+   "body": "🤖 Backport to `2.1` is under way. It is built from openmetadata-collate, which holds the credentials needed to open a PR here, and it will comment again with the result — nothing is needed from you unless it reports otherwise."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-25T16:25:58Z",
+   "body": "🤖 Backport to `2.1` opened as https://github.com/open-metadata/OpenMetadata/pull/38725. Claude resolved a cherry-pick conflict to build it. It merges itself once the checks pass, so read the diff now if this change is a sensitive one."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-25T16:26:45Z",
+   "body": "🤖 **Backport to `2.0` failed.** The conflict could not be resolved, so this change is not on that branch. [Resolver run](https://github.com/open-metadata/openmetadata-collate/actions/runs/45652859794)."
   }
  ]
 }

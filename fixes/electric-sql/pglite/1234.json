@@ -1,0 +1,33 @@
+{
+ "repo": "electric-sql/pglite",
+ "number": 1234,
+ "url": "https://github.com/electric-sql/pglite/pull/1234",
+ "title": "fix(pglite): persist truncates in idb:// filesystem",
+ "merged_at": "2026-11-25T11:11:09Z",
+ "files": [
+  {
+   "filename": ".changeset/idbfs-truncate-mtime.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+'@electric-sql/pglite': patch\n+---\n+\n+Fix `idb://` not persisting a file truncate (e.g. after `DELETE` + `VACUUM`) by updating the node mtime on truncate so IDBFS writes it back"
+  },
+  {
+   "filename": "packages/pglite/src/fs/idbfs.ts",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -19,6 +19,18 @@ export class IdbFs extends EmscriptenBuiltinFilesystem {\n           // as the fs will be persisted in the indexeddb as a database with\n           // the path as the name.\n           mod.FS.mkdirTree(`${PG_ROOT}/${this.dataDir}`)\n+          // Emscripten's FS.doTruncate does not update the node timestamps,\n+          // and IDBFS.reconcile only persists a file when its mtime differs\n+          // from the stored one. Without this, a truncate (e.g. VACUUM\n+          // shrinking a relation file) is never written back to IndexedDB.\n+          const doTruncate = mod.FS.doTruncate\n+          if (typeof doTruncate === 'function') {\n+            mod.FS.doTruncate = (stream: any, node: any, len: number) => {\n+              // doTruncate throws on failure, so this only runs on success\n+              doTruncate.call(mod.FS, stream, node, len)\n+              node.mtime = node.ctime = Date.now()\n+            }\n+          }\n           mod.FS.mount(idbfs, {}, `${PG_ROOT}/${this.dataDir}`)\n           mod.FS.symlink(`${PG_ROOT}/${this.dataDir}`, PGDATA)\n         },"
+  },
+  {
+   "filename": "packages/pglite/tests/targets/web/base.js",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -511,6 +511,33 @@ export function tests(env, dbFilename, target) {\n     })\n \n     if (dbFilename.startsWith('idb://')) {\n+      it(`idb persists a truncate`, async () => {\n+        const res = await evaluate(async () => {\n+          const { PGlite } = await import(PGLITE_PATH)\n+          const name = 'idb://truncate-persist'\n+          let pg = new PGlite(name)\n+          await pg.waitReady\n+          await pg.exec('CREATE TABLE t (id int, pad text)')\n+          await pg.exec(\n+            \"INSERT INTO t SELECT g, repeat('x', 1000) FROM generate_series(1, 300) g\",\n+          )\n+          await pg.exec('CHECKPOINT')\n+          await pg.exec('DELETE FROM t')\n+          await pg.exec('VACUUM t')\n+          await pg.exec('CHECKPOINT')\n+          await pg.close()\n+\n+          pg = new PGlite(name)\n+          await pg.waitReady\n+          const count = (await pg.query('SELECT count(*)::int AS n FROM t'))\n+            .rows[0].n\n+          await pg.close()\n+          return count\n+        })\n+\n+        expect(res).toBe(0)\n+      })\n+\n       it(`idb close and delete`, async () => {\n         const res = await evaluate(async () => {\n           await db.query('select 1;')"
+  }
+ ],
+ "test_files": [
+  "packages/pglite/tests/targets/web/base.js"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "Tencent/WeKnora",
+ "number": 5308,
+ "url": "https://github.com/Tencent/WeKnora/pull/5308",
+ "title": "fix(graph): keep valid items when extraction array contains non-objects",
+ "merged_at": "2026-11-25T18:50:40Z",
+ "files": [
+  {
+   "filename": "internal/application/service/chat_pipeline/extract_entity.go",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 1,
+   "patch": "@@ -433,13 +433,22 @@ func (f *Formater) parseOutput(ctx context.Context, text string) ([]map[string]i\n \t}\n \n \titemsList := make([]map[string]interface{}, 0)\n+\tskipped := 0\n \tfor _, item := range items {\n \t\tif itemMap, ok := item.(map[string]interface{}); ok {\n \t\t\titemsList = append(itemsList, itemMap)\n \t\t} else {\n-\t\t\treturn nil, fmt.Errorf(\"each item in the sequence must be a mapping.\")\n+\t\t\tskipped++\n \t\t}\n \t}\n+\t// A stray null/string among valid objects must not discard the valid\n+\t// ones; only an array with no object at all is an error.\n+\tif len(itemsList) == 0 && skipped > 0 {\n+\t\treturn nil, fmt.Errorf(\"each item in the sequence must be a mapping\")\n+\t}\n+\tif skipped > 0 {\n+\t\tlogger.Warnf(ctx, \"graph extraction: skipped %d non-object item(s), kept %d\", skipped, len(itemsList))\n+\t}\n \treturn itemsList, nil\n }\n "
+  },
+  {
+   "filename": "internal/application/service/chat_pipeline/extract_entity_test.go",
+   "status": "modified",
+   "additions": 53,
+   "deletions": 0,
+   "patch": "@@ -357,3 +357,56 @@ func TestExtractor_Extract_TruncatedProseIsNotDeclined(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+// A JSON array that mixes valid extraction objects with non-object items\n+// (null, strings) must keep the valid items instead of failing the whole\n+// chunk; an array with no object at all keeps failing.\n+func TestFormater_ParseGraph_NonObjectItems(t *testing.T) {\n+\tcases := []struct {\n+\t\tname      string\n+\t\tinput     string\n+\t\twantNodes int\n+\t\twantRels  int\n+\t\twantErr   bool\n+\t}{\n+\t\t{\n+\t\t\tname: \"null among valid items\",\n+\t\t\tinput: `[{\"entity\":\"A\"}, null, {\"entity\":\"B\"},\n+\t\t\t\t{\"entity1\":\"A\",\"entity2\":\"B\",\"relation\":\"controls\"}]`,\n+\t\t\twantNodes: 2,\n+\t\t\twantRels:  1,\n+\t\t},\n+\t\t{\n+\t\t\tname:      \"string among valid items\",\n+\t\t\tinput:     `[{\"entity\":\"A\"}, \"stray\", {\"entity\":\"B\"}]`,\n+\t\t\twantNodes: 2,\n+\t\t},\n+\t\t{\n+\t\t\tname:    \"no object at all still fails\",\n+\t\t\tinput:   `[null, \"x\", 3]`,\n+\t\t\twantErr: true,\n+\t\t},\n+\t\t{\n+\t\t\tname:  \"empty array is still no relations\",\n+\t\t\tinput: `[]`,\n+\t\t},\n+\t}\n+\tfor _, tc := range cases {\n+\t\tt.Run(tc.name, func(t *testing.T) {\n+\t\t\tgot, err := NewFormater().ParseGraph(context.Background(), tc.input)\n+\t\t\tif tc.wantErr {\n+\t\t\t\tif err == nil {\n+\t\t\t\t\tt.Fatalf(\"expected error, got %+v\", got)\n+\t\t\t\t}\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t\tif err != nil {\n+\t\t\t\tt.Fatalf(\"unexpected error: %v\", err)\n+\t\t\t}\n+\t\t\tif len(got.Node) != tc.wantNodes || len(got.Relation) != tc.wantRels {\n+\t\t\t\tt.Fatalf(\"got %d nodes %d relations, want %d/%d\",\n+\t\t\t\t\tlen(got.Node), len(got.Relation), tc.wantNodes, tc.wantRels)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/application/service/chat_pipeline/extract_entity_test.go"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "redis/mcp-redis",
+ "number": 206,
+ "url": "https://github.com/redis/mcp-redis/pull/206",
+ "title": "fix(cli): don't let CLI defaults override REDIS_* env config",
+ "merged_at": "2026-11-25T12:15:55Z",
+ "files": [
+  {
+   "filename": "src/main.py",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 12,
+   "patch": "@@ -28,17 +28,18 @@ def run(self):\n     \"--url\",\n     help=\"Redis connection URI (redis://user:pass@host:port/db or rediss:// for SSL)\",\n )\n-@click.option(\"--host\", default=\"127.0.0.1\", help=\"Redis host\")\n-@click.option(\"--port\", default=6379, type=int, help=\"Redis port\")\n-@click.option(\"--db\", default=0, type=int, help=\"Redis database number\")\n+@click.option(\"--host\", help=\"Redis host (env: REDIS_HOST, default 127.0.0.1)\")\n+@click.option(\"--port\", type=int, help=\"Redis port (env: REDIS_PORT, default 6379)\")\n+@click.option(\"--db\", type=int, help=\"Redis database number (env: REDIS_DB, default 0)\")\n @click.option(\"--username\", help=\"Redis username\")\n @click.option(\"--password\", help=\"Redis password\")\n @click.option(\"--ssl\", is_flag=True, help=\"Use SSL connection\")\n @click.option(\"--ssl-ca-path\", help=\"Path to CA certificate file\")\n @click.option(\"--ssl-keyfile\", help=\"Path to SSL key file\")\n @click.option(\"--ssl-certfile\", help=\"Path to SSL certificate file\")\n @click.option(\n-    \"--ssl-cert-reqs\", default=\"required\", help=\"SSL certificate requirements\"\n+    \"--ssl-cert-reqs\",\n+    help=\"SSL certificate requirements (env: REDIS_SSL_CERT_REQS, default required)\",\n )\n @click.option(\"--ssl-ca-certs\", help=\"Path to CA certificates file\")\n @click.option(\"--cluster-mode\", is_flag=True, help=\"Enable Redis cluster mode\")\n@@ -127,14 +128,20 @@ def cli(\n             sys.exit(1)\n     else:\n         # Set individual Redis parameters\n-        config = {\n-            \"host\": host,\n-            \"port\": port,\n-            \"db\": db,\n-            \"ssl\": ssl,\n-            \"cluster_mode\": cluster_mode,\n-        }\n-\n+        # Only forward options that were actually given, so that REDIS_* env\n+        # values are not overridden by CLI defaults.\n+        config = {}\n+\n+        if host is not None:\n+            config[\"host\"] = host\n+        if port is not None:\n+            config[\"port\"] = port\n+        if db is not None:\n+            config[\"db\"] = db\n+        if ssl:\n+            config[\"ssl\"] = ssl\n+        if cluster_mode:\n+            config[\"cluster_mode\"] = cluster_mode\n         if username:\n             config[\"username\"] = username\n         if password:"
+  },
+  {
+   "filename": "tests/test_main.py",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -245,3 +245,39 @@ def test_cli_url_overrides_individual_params(\n         call_args = mock_set_config.call_args[0][0]\n         assert call_args[\"host\"] == \"uri-host\"\n         assert call_args[\"port\"] == 9999\n+\n+\n+class TestCLIDefaultsDoNotOverrideEnv:\n+    \"\"\"CLI options that are not passed must not override REDIS_* env config (#156).\"\"\"\n+\n+    def setup_method(self):\n+        self.runner = CliRunner()\n+\n+    @patch(\"src.main.set_redis_config_from_cli\")\n+    @patch(\"src.main.RedisMCPServer\")\n+    def test_unset_options_are_not_forwarded(self, mock_server_class, mock_set_config):\n+        result = self.runner.invoke(cli, [])\n+\n+        assert result.exit_code == 0\n+        config = mock_set_config.call_args[0][0]\n+        for key in (\"host\", \"port\", \"db\", \"ssl\", \"cluster_mode\", \"ssl_cert_reqs\"):\n+            assert key not in config\n+\n+    @patch(\"src.main.set_redis_config_from_cli\")\n+    @patch(\"src.main.RedisMCPServer\")\n+    def test_env_values_survive_cli_without_flags(\n+        self, mock_server_class, mock_set_config, monkeypatch\n+    ):\n+        from src.common import config as cfg\n+\n+        monkeypatch.setitem(cfg.REDIS_CFG, \"host\", \"redis.example.com\")\n+        monkeypatch.setitem(cfg.REDIS_CFG, \"port\", 6380)\n+        monkeypatch.setitem(cfg.REDIS_CFG, \"ssl\", True)\n+        mock_set_config.side_effect = cfg.set_redis_config_from_cli\n+\n+        result = self.runner.invoke(cli, [])\n+\n+        assert result.exit_code == 0\n+        assert cfg.REDIS_CFG[\"host\"] == \"redis.example.com\"\n+        assert cfg.REDIS_CFG[\"port\"] == 6380\n+        assert cfg.REDIS_CFG[\"ssl\"] is True"
+  }
+ ],
+ "test_files": [
+  "tests/test_main.py"
+ ]
+}

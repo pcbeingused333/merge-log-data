@@ -1,0 +1,33 @@
+{
+ "repo": "pypa/pipenv",
+ "number": 6808,
+ "url": "https://github.com/pypa/pipenv/pull/6808",
+ "title": "fix: normalize package names written to pylock.toml",
+ "merged_at": "2026-11-25T13:08:15Z",
+ "files": [
+  {
+   "filename": "news/6807.bugfix.rst",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+Normalize package names in generated ``pylock.toml`` files as PEP 751 requires, so that pip no longer rejects dependencies such as ``jaraco.classes``."
+  },
+  {
+   "filename": "pipenv/utils/pylock.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 3,
+   "patch": "@@ -173,17 +173,21 @@ def from_lockfile(\n             for name, package_data in packages.items():\n                 marker = package_data.get(\"markers\")\n                 marker = f\"({group_marker}) and ({marker})\" if marker else group_marker\n+                # Pipfile.lock keys keep dots; PEP 751 names must be normalized.\n+                normalized_name = canonicalize_name(name)\n                 shared_entry = next(\n-                    (entry for original, entry in entries_by_name.get(name, [])\n+                    (entry for original, entry in entries_by_name.get(normalized_name, [])\n                      if _same_locked_package(original, package_data)),\n                     None,\n                 )\n                 if shared_entry is not None:\n                     shared_entry[\"marker\"] = f\"({shared_entry['marker']}) or ({marker})\"\n                     continue\n \n-                package: Dict[str, Any] = {\"name\": name, \"marker\": marker}\n-                entries_by_name.setdefault(name, []).append((package_data, package))\n+                package: Dict[str, Any] = {\"name\": normalized_name, \"marker\": marker}\n+                entries_by_name.setdefault(normalized_name, []).append(\n+                    (package_data, package)\n+                )\n \n                 # Add version if present and not a wildcard\n                 if \"version\" in package_data:"
+  },
+  {
+   "filename": "tests/unit/test_pylock_names.py",
+   "status": "added",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,35 @@\n+import json\n+\n+import pytest\n+\n+from pipenv.patched.pip._vendor.packaging.pylock import Pylock\n+from pipenv.utils.pylock import PylockFile\n+\n+\n+def _from_lockfile(tmp_path, **categories):\n+    path = tmp_path / \"Pipfile.lock\"\n+    path.write_text(json.dumps({\"_meta\": {}, **categories}))\n+    return PylockFile.from_lockfile(path)\n+\n+\n+@pytest.mark.parametrize(\n+    \"name, normalized\",\n+    [(\"jaraco.classes\", \"jaraco-classes\"), (\"Zope__Interface\", \"zope-interface\")],\n+)\n+def test_package_names_are_normalized(tmp_path, name, normalized):\n+    pylock = _from_lockfile(tmp_path, default={name: {\"path\": \"./pkg\"}})\n+\n+    assert [package[\"name\"] for package in pylock.packages] == [normalized]\n+\n+\n+def test_spellings_of_one_name_share_an_entry_across_categories(tmp_path):\n+    pylock = _from_lockfile(\n+        tmp_path,\n+        default={\"jaraco.classes\": {\"path\": \"./pkg\"}},\n+        develop={\"jaraco-classes\": {\"path\": \"./pkg\"}},\n+    )\n+\n+    assert [package[\"name\"] for package in pylock.packages] == [\"jaraco-classes\"]\n+    lockfile = pylock.convert_to_pipenv_lockfile()\n+    assert \"jaraco-classes\" in lockfile[\"default\"]\n+    assert \"jaraco-classes\" in lockfile[\"develop\"]"
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_pylock_names.py"
+ ]
+}

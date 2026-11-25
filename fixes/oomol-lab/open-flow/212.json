@@ -1,0 +1,26 @@
+{
+ "repo": "oomol-lab/open-flow",
+ "number": 212,
+ "url": "https://github.com/oomol-lab/open-flow/pull/212",
+ "title": "fix(openapi): enforce exclusive bounds for nullable schemas",
+ "merged_at": "2026-11-25T11:28:39Z",
+ "files": [
+  {
+   "filename": "packages/open-flow/src/openapi/common/openapi.test.ts",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 0,
+   "patch": "@@ -129,6 +129,27 @@ describe('OpenAPI fixed operations', () => {\n   })\n })\n \n+it.each([\n+  ['minimum', { minimum: 5, exclusiveMinimum: true }, 6],\n+  ['maximum', { maximum: 5, exclusiveMaximum: true }, 4],\n+])('enforces an exclusive %s in a nullable OpenAPI 3.0 request body', (_, bounds, valid) => {\n+  const documentValue = {\n+    openapi: '3.0.3',\n+    paths: {\n+      '/items': {\n+        post: {\n+          requestBody: { content: { 'application/json': { schema: { type: 'integer', nullable: true, ...bounds } } } },\n+          responses: { '204': { description: 'empty' } },\n+        },\n+      },\n+    },\n+  }\n+  const selected = selectOperation(documentValue, 'https://service.example/spec', '/items', 'post')\n+  expect(buildRequest(selected, { body: null }).init.body).toBe('null')\n+  expect(buildRequest(selected, { body: valid }).init.body).toBe(String(valid))\n+  expect(() => buildRequest(selected, { body: 5 })).toThrow('A request input does not match its schema.')\n+})\n+\n it('supports boolean schemas, vendor JSON media and schema defaults behind references', () => {\n   const documentValue = {\n     openapi: '3.1.0',"
+  },
+  {
+   "filename": "packages/open-flow/src/openapi/common/openapi.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -203,7 +203,6 @@ function schema(doc: ObjectValue, schemaValue: JsonValue): JsonValue {\n         result[key] = convert(child)\n       else result[key] = child\n     }\n-    if (source.nullable === true) return { anyOf: [result, { type: 'null' }] }\n     for (const key of ['minimum', 'maximum']) {\n       const exclusive = key == 'minimum' ? 'exclusiveMinimum' : 'exclusiveMaximum'\n       if (typeof result[exclusive] == 'boolean') {\n@@ -213,6 +212,7 @@ function schema(doc: ObjectValue, schemaValue: JsonValue): JsonValue {\n         } else delete result[exclusive]\n       }\n     }\n+    if (source.nullable === true) return { anyOf: [result, { type: 'null' }] }\n     return result\n   }\n   let converted = convert(schemaValue)"
+  }
+ ],
+ "test_files": [
+  "packages/open-flow/src/openapi/common/openapi.test.ts"
+ ]
+}

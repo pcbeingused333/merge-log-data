@@ -1,0 +1,33 @@
+{
+ "repo": "PostHog/posthog-dotnet",
+ "number": 402,
+ "url": "https://github.com/PostHog/posthog-dotnet/pull/402",
+ "title": "fix(ai): map max_completion_tokens to $ai_max_tokens in OpenAI handler",
+ "merged_at": "2026-11-25T09:01:57Z",
+ "files": [
+  {
+   "filename": ".changeset/max-completion-tokens.md",
+   "status": "added",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,5 @@\n+---\n+\"PostHog.AI\": patch\n+---\n+\n+The OpenAI handler now maps `max_completion_tokens` (used by reasoning models on Chat Completions) to `$ai_max_tokens`. Previously the limit was missing and appeared in `$ai_model_parameters` as a string."
+  },
+  {
+   "filename": "src/PostHog.AI/PostHogOpenAIHandler.cs",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 3,
+   "patch": "@@ -283,10 +283,14 @@ private void CaptureEvent(\n                             : temperature.ToString();\n                 }\n \n-                // Chat Completions uses \"max_tokens\"; the Responses API uses \"max_output_tokens\".\n+                // Chat Completions uses \"max_tokens\" (or \"max_completion_tokens\" for reasoning\n+                // models); the Responses API uses \"max_output_tokens\".\n                 if (\n-                    (requestJson[\"max_tokens\"] ?? requestJson[\"max_output_tokens\"])\n-                    is JsonValue maxTokens\n+                    (\n+                        requestJson[\"max_tokens\"]\n+                        ?? requestJson[\"max_completion_tokens\"]\n+                        ?? requestJson[\"max_output_tokens\"]\n+                    ) is JsonValue maxTokens\n                 )\n                 {\n                     eventProperties[PostHogAIFieldNames.MaxTokens] = maxTokens.TryGetValue<int>(\n@@ -330,6 +334,7 @@ out var streamBool\n                             && kvp.Key != \"temperature\"\n                             && kvp.Key != \"max_tokens\"\n                             && kvp.Key != \"max_output_tokens\"\n+                            && kvp.Key != \"max_completion_tokens\"\n                             && kvp.Key != \"instructions\"\n                             && kvp.Key != \"stream\"\n                             && kvp.Key != \"tools\""
+  },
+  {
+   "filename": "tests/PostHog.AI.Tests/PostHogOpenAIHandlerTests.cs",
+   "status": "modified",
+   "additions": 61,
+   "deletions": 0,
+   "patch": "@@ -128,6 +128,16 @@ private static bool HasResponsesInstructionsPayload(Dictionary<string, object> p\n             && !hasInstructionsParam;\n     }\n \n+    private static bool HasMaxCompletionTokensPayload(Dictionary<string, object> props)\n+    {\n+        var inModelParams =\n+            props.TryGetValue(PostHogAIFieldNames.ModelParameters, out var modelParams)\n+            && modelParams is Dictionary<string, object> dict\n+            && dict.ContainsKey(\"max_completion_tokens\");\n+\n+        return (int)props[PostHogAIFieldNames.MaxTokens] == 456 && !inModelParams;\n+    }\n+\n     [Fact]\n     public async Task SendAsyncCapturesResponsesApiInstructionsAndMaxOutputTokens()\n     {\n@@ -317,6 +327,57 @@ public async Task SendAsyncOmitsResponsesInstructionsWhenPrivacyModeIsTrue()\n             );\n     }\n \n+    [Fact]\n+    public async Task SendAsyncMapsMaxCompletionTokensToMaxTokens()\n+    {\n+        var requestBody = new\n+        {\n+            model = \"o3-mini\",\n+            messages = new[] { new { role = \"user\", content = \"Hello\" } },\n+            max_completion_tokens = 456,\n+        };\n+        var responseBody = new\n+        {\n+            id = \"chatcmpl-123\",\n+            @object = \"chat.completion\",\n+            model = \"o3-mini\",\n+            choices = Array.Empty<object>(),\n+            usage = new { prompt_tokens = 9, completion_tokens = 12, total_tokens = 21 },\n+        };\n+\n+        using var responseContent = new StringContent(\n+            JsonSerializer.Serialize(responseBody),\n+            Encoding.UTF8,\n+            \"application/json\"\n+        );\n+        _innerHandler.Response = new HttpResponseMessage(HttpStatusCode.OK)\n+        {\n+            Content = responseContent,\n+        };\n+        using var requestContent = new StringContent(\n+            JsonSerializer.Serialize(requestBody),\n+            Encoding.UTF8,\n+            \"application/json\"\n+        );\n+\n+        using var response = await _client.PostAsync(\n+            new Uri(\"/v1/chat/completions\", UriKind.Relative),\n+            requestContent\n+        );\n+        Assert.True(response.IsSuccessStatusCode);\n+\n+        _postHogClient\n+            .Received(1)\n+            .Capture(\n+                Arg.Any<string>(),\n+                PostHogAIFieldNames.Generation,\n+                Arg.Is<Dictionary<string, object>>(props => HasMaxCompletionTokensPayload(props)),\n+                null,\n+                false,\n+                Arg.Any<DateTimeOffset?>()\n+            );\n+    }\n+\n     [Fact]\n     public async Task SendAsyncCapturesEmbeddingEvent()\n     {"
+  }
+ ],
+ "test_files": [
+  "tests/PostHog.AI.Tests/PostHogOpenAIHandlerTests.cs"
+ ]
+}

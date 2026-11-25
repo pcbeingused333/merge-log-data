@@ -1,0 +1,22 @@
+{
+ "repo": "EverMind-AI/Raven",
+ "number": 1427,
+ "url": "https://github.com/EverMind-AI/Raven/pull/1427",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "member",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-25T14:28:43Z",
+   "body": "Approving.\n\nThe change is correct and well targeted. HermesScanner._read_conversation split the `hermes sessions export --format jsonl` stdout with raw.splitlines(), and str.splitlines() also breaks on U+2028, U+2029 and U+0085. RFC 8259 allows those characters literally inside a JSON string and json.loads accepts them, so a message carrying one was cut mid string and the whole session was rejected with HermesExportError. Splitting strictly on \"\\n\" hands each record to the parser intact.\n\nThe regression test is genuine, not incidental. Reverting only the production line to splitlines() turns the suite red with the same HermesExportError, and the base revision with only the test file applied fails identically. The ensure_ascii=False switch is what makes the test reproduce the bug: the default escapes U+2028 into a plain six character sequence. The pre-existing case is unchanged and no assertion was weakened.\n\nOne non-blocking note: the new boundary set no longer splits on a lone carriage return, which the base accepted. JSON Lines is LF delimited and a bare CR cannot appear unescaped inside a JSON string, so this should not be reachable in practice.\n\nGates pass, commitlint passes, merge-tree against current main is clean, and the importer and hermes suites are green.\n"
+  }
+ ],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "member",
+   "created_at": "2026-11-25T09:36:50Z",
+   "body": "## Windows compatibility review - PR #1427 @ b33ef7c4f045f01d402a624356472b1ab4cc683a\n\n**Scope:** two files against base 494ae78f75 (+6/-5): the Hermes importer's `_read_conversation` now splits the CLI's JSON-lines export on `\"\\n\"` instead of `str.splitlines()`, which also treats U+2028 LINE SEPARATOR, U+2029 PARAGRAPH SEPARATOR, and the other Unicode line boundaries as line ends; the test parametrizes a message containing those separators literally and parses the export with `ensure_ascii=False`.\n\n**No Windows compatibility issue found.** The change is platform-neutral and makes the split match the protocol: the export is one JSON object per `\\n` line, and a literal U+2028/U+2029 inside a JSON string value (which `ensure_ascii=False` emits unescaped) must not end a line. A trailing `\\r`, if a text layer ever translated the newline, is still removed by the existing `line.strip()`.\n\nChecks:\n\n- `str.splitlines()` is the wrong split for a line-delimited JSON protocol because its boundary set includes `\\x0b`, `\\x0c`, `\\x1c`-`\\x1e`, `\\x85`, U+2028, and U+2029; splitting strictly on `\\n` leaves such characters inside the JSON string for the parser.\n- The empty-line skip and `line.strip()` handling are unchanged, and no other behavior in the scanner is touched.\n\nTests (native Windows):\n\n- `tests/test_importer_hermes_scanner.py` -> 4 failed, 68 passed. The four failing IDs (`test_active_named_profile_resolves_under_profiles`, `test_active_profile_named_default_stays_at_the_root`, `test_missing_active_profile_file_stays_at_the_root`, `test_windows_fallback_without_localappdata_uses_home_appdata_local`) are identical on the base tree without the PR files, so they are inherited from the tree/host, not caused by this change. The parametrized export-lines test passes for both plain and U+2028/U+2029 content.\n- Tree: base 0ec7245f01 exported from the local store plus the two PR files at the head, every file blob-SHA verified. The PR's own base 494ae78f75 (7 commits, 96 files ahead) is not in the local object store and was not overlaid; its gap contains no `importer`/`hermes` file, so the files under test are exactly the head versions.\n- Command: `cd <tree> && RVTREE=<tree> PYTHONPYCACHEPREFIX=<cache> PYTHONUTF8=1 D:/projects/Raven/.venv/Scripts/python.exe -S /d/tmp/review-runner/runner.py tests/test_importer_hermes_scanner.py -q -p no:cacheprovider`.\n\nLimitations: the base comparison used 0ec7245f01 rather than the PR's exact base, disclosed above; no live hermes CLI.\n\n<!-- raven-windows-review:pr=1427;head=b33ef7c4f045f01d402a624356472b1ab4cc683a;reviewer=LivXue -->\n"
+  }
+ ]
+}

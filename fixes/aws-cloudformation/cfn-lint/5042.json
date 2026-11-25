@@ -1,0 +1,26 @@
+{
+ "repo": "aws-cloudformation/cfn-lint",
+ "number": 5042,
+ "url": "https://github.com/aws-cloudformation/cfn-lint/pull/5042",
+ "title": "fix: skip non-object Metadata cfn-lint config in get_directives",
+ "merged_at": "2026-11-25T18:31:12Z",
+ "files": [
+  {
+   "filename": "src/cfnlint/template/template.py",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 5,
+   "patch": "@@ -349,12 +349,18 @@ def get_directives(self) -> dict[str, list[str]]:\n                     metadata = resource_values.get(\"Metadata\")\n                     if not isinstance(metadata, dict):\n                         continue\n-                    ignore_rule_ids = (\n-                        metadata.get(\"cfn-lint\", {})\n-                        .get(\"config\", {})\n-                        .get(\"ignore_checks\", [])\n-                    )\n+                    cfn_lint_metadata = metadata.get(\"cfn-lint\", {})\n+                    if not isinstance(cfn_lint_metadata, dict):\n+                        continue\n+                    config = cfn_lint_metadata.get(\"config\", {})\n+                    if not isinstance(config, dict):\n+                        continue\n+                    ignore_rule_ids = config.get(\"ignore_checks\", [])\n+                    if not isinstance(ignore_rule_ids, list):\n+                        continue\n                     for ignore_rule_id in ignore_rule_ids:\n+                        if not isinstance(ignore_rule_id, str):\n+                            continue\n                         if ignore_rule_id not in results:\n                             results[ignore_rule_id] = []\n                         results[ignore_rule_id].append(resource_name)"
+  },
+  {
+   "filename": "test/unit/module/template/test_template.py",
+   "status": "modified",
+   "additions": 54,
+   "deletions": 0,
+   "patch": "@@ -1480,6 +1480,60 @@ def test_get_directives_non_dict_metadata(self):\n         directives = template.get_directives()\n         self.assertDictEqual(directives, {\"E3012\": [\"goodMetadata\"]})\n \n+    def test_get_directives_non_dict_cfn_lint_metadata(self):\n+        \"\"\"Test get_directives skips Metadata.cfn-lint / config that is not an object\"\"\"\n+        template_yaml = {\n+            \"Resources\": {\n+                \"stringCfnLint\": {\n+                    \"Metadata\": {\"cfn-lint\": \"foo\"},\n+                    \"Type\": \"AWS::S3::Bucket\",\n+                },\n+                \"listCfnLint\": {\n+                    \"Metadata\": {\"cfn-lint\": []},\n+                    \"Type\": \"AWS::S3::Bucket\",\n+                },\n+                \"stringConfig\": {\n+                    \"Metadata\": {\"cfn-lint\": {\"config\": \"foo\"}},\n+                    \"Type\": \"AWS::S3::Bucket\",\n+                },\n+                \"nullIgnoreChecks\": {\n+                    \"Metadata\": {\"cfn-lint\": {\"config\": {\"ignore_checks\": None}}},\n+                    \"Type\": \"AWS::S3::Bucket\",\n+                },\n+                \"intIgnoreChecks\": {\n+                    \"Metadata\": {\"cfn-lint\": {\"config\": {\"ignore_checks\": 1}}},\n+                    \"Type\": \"AWS::S3::Bucket\",\n+                },\n+                \"dictElementIgnoreChecks\": {\n+                    \"Metadata\": {\n+                        \"cfn-lint\": {\"config\": {\"ignore_checks\": [{\"E3012\": \"x\"}]}}\n+                    },\n+                    \"Type\": \"AWS::S3::Bucket\",\n+                },\n+                \"listElementIgnoreChecks\": {\n+                    \"Metadata\": {\n+                        \"cfn-lint\": {\"config\": {\"ignore_checks\": [[\"E3012\"]]}}\n+                    },\n+                    \"Type\": \"AWS::S3::Bucket\",\n+                },\n+                \"goodMetadata\": {\n+                    \"Metadata\": {\"cfn-lint\": {\"config\": {\"ignore_checks\": [\"E3012\"]}}},\n+                    \"Type\": \"AWS::S3::Bucket\",\n+                },\n+            }\n+        }\n+\n+        template = Template(\n+            \"test.yaml\",\n+            cfn_yaml.loads(\n+                json.dumps(\n+                    template_yaml, sort_keys=True, indent=4, separators=(\",\", \": \")\n+                )\n+            ),\n+        )\n+        directives = template.get_directives()\n+        self.assertDictEqual(directives, {\"E3012\": [\"goodMetadata\"]})\n+\n     def test_is_cdk_bad_type(self):\n         template = {\n             \"Resources\": {"
+  }
+ ],
+ "test_files": [
+  "test/unit/module/template/test_template.py"
+ ]
+}

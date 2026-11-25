@@ -1,0 +1,26 @@
+{
+ "repo": "EverMind-AI/Raven",
+ "number": 1427,
+ "url": "https://github.com/EverMind-AI/Raven/pull/1427",
+ "title": "fix(importer): preserve unicode separators in Hermes messages",
+ "merged_at": "2026-11-25T14:29:04Z",
+ "files": [
+  {
+   "filename": "raven/importer/scanners/hermes.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -244,7 +244,7 @@ async def _read_conversation(self, result: ScanResult) -> ImportSession:\n         except OSError as exc:\n             raise HermesExportError(f\"cannot run the hermes CLI ({exc}); session not imported\") from exc\n         messages: list[ImportMessage] = []\n-        for line in raw.splitlines():\n+        for line in raw.split(\"\\n\"):\n             stripped = line.strip()\n             if not stripped:\n                 continue"
+  },
+  {
+   "filename": "tests/test_importer_hermes_scanner.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 4,
+   "patch": "@@ -764,14 +764,15 @@ async def test_read_conversation_uses_session_id_export(tmp_path: Path) -> None:\n     assert export_call[-1] == \"-\"\n \n \n-async def test_read_conversation_tolerates_multiple_export_lines(tmp_path: Path) -> None:\n+@pytest.mark.parametrize(\"first_content\", [\"first\", \"first\\u2028line\\u2029end\\ntext\"])\n+async def test_read_conversation_tolerates_multiple_export_lines(tmp_path: Path, first_content: str) -> None:\n     home = _make_home(tmp_path)\n     sid = \"s1\"\n-    first = {\"id\": sid, \"messages\": [{\"role\": \"user\", \"content\": \"first\", \"timestamp\": 1.0}]}\n+    first = {\"id\": sid, \"messages\": [{\"role\": \"user\", \"content\": first_content, \"timestamp\": 1.0}]}\n     second = {\"id\": sid, \"messages\": [{\"role\": \"user\", \"content\": \"second\", \"timestamp\": 2.0}]}\n \n     async def cli(args: list[str]) -> str:\n-        return json.dumps(first) + \"\\n\" + json.dumps(second) + \"\\n\"\n+        return json.dumps(first, ensure_ascii=False) + \"\\n\" + json.dumps(second) + \"\\n\"\n \n     scanner = HermesScanner(hermes_home=home, run_cli=cli)\n     result = ScanResult(\n@@ -783,7 +784,7 @@ async def cli(args: list[str]) -> str:\n         mtime=0.0,\n     )\n     session = await scanner.read(result)\n-    assert [m.content for m in session.messages] == [\"first\", \"second\"]\n+    assert [m.content for m in session.messages] == [first_content, \"second\"]\n \n \n async def test_scan_conversations_logs_a_warning_for_unlisted_sessions("
+  }
+ ],
+ "test_files": [
+  "tests/test_importer_hermes_scanner.py"
+ ]
+}

@@ -9,6 +9,12 @@
    "state": "CHANGES_REQUESTED",
    "submitted_at": "2026-11-21T06:41:23Z",
    "body": "Spawned tabs now leave the active-session list without deleting the stored session, but the fix does not yet cover the full lifecycle in #4909. #4931 addresses the same issue and is a useful comparison for the detach wiring.\n\nValidation: On this commit, the server, TUI, supervisor, and root command package tests passed. Server and supervisor race tests and targeted `go vet` also passed. Two focused regression tests reproduced the server findings below. The initial-tab finding was verified by tracing the cleanup callbacks, not by an interactive TUI run.\n\nPrior threads: No reviews or review threads; there is no prior human-reviewed commit to compare against."
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-25T13:13:10Z",
+   "body": "<!-- ccr-overview-v2 -->\n\n### 🟡 Changes recommended\n\nDetachment can reset event IDs and race with reattachment or metadata writes, causing silent event loss, deletion of replacement registrations, and overwritten session updates.\n\n<details open>\n<summary><strong>3 open issues</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png\" alt=\"High severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Preserve event sequence continuity across detach and reattach](https://github.com/docker/docker-agent/pull/4930#discussion_r4695401080) · New\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png\" alt=\"High severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Drain metadata updates before marking a session inactive](https://github.com/docker/docker-agent/pull/4930#discussion_r4695401162) · New\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png\" alt=\"High severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Serialize detach with reattachment to avoid removing replacements](https://github.com/docker/docker-agent/pull/4930#discussion_r4695401249) · New\n</details>\n\n<details>\n<summary><strong>What changed in this PR</strong></summary>\n\nThis PR addresses retained TUI sessions in `--listen` mode by adding a detach lifecycle that releases session-manager state without deleting persisted sessions.\n\n**Changes:**\n- Add runtime detachment that cancels attachment state and clears event logs, recall handlers, and follow-up registrations.\n- Wire detachment into cleanup for both initial and spawned TUI tabs.\n- Add tests for state release, persisted-session preservation, reattachment, and cleanup behavior.\n\n| File | Description |\r\n| ---- | ----------- |\r\n| `pkg/​server/​session_manager.go` | Add runtime detachment and event-log release without tombstoning the session ID. |\r\n| `pkg/​server/​server_attached_test.go` | Test detachment, recall-handler cleanup, and reattachment. |\r\n| `cmd/​root/​run.go` | Detach initial and spawned sessions during TUI cleanup. |\r\n| `cmd/​root/​run_listen.go` | Add a detach-aware cleanup wrapper. |\r\n| `cmd/​root/​run_listen_test.go` | Test cleanup with and without a listening session manager. |\n</details>\n\n<sub>Review effort: Balanced</sub>"
   }
  ],
  "review_comments": [
@@ -29,6 +35,24 @@
    "path": "pkg/server/session_manager.go",
    "created_at": "2026-11-21T06:41:23Z",
    "body": "[blocking] `dropEventLog` permanently tombstones the session ID (`session_manager.go:329–341`). The stored session survives, but reattaching that same ID succeeds while `RegisterEventSource` silently refuses to register its new source (`session_manager.go:256–261`), so `/api/sessions/:id/events` returns 404. A focused attach → detach → reload → reattach test reproduced the rejected registration. Tear down the attachment's event log without marking the session deleted, and add a same-ID reattachment test."
+  },
+  {
+   "role": "bot",
+   "path": "pkg/server/session_manager.go",
+   "created_at": "2026-11-25T13:13:09Z",
+   "body": "Deleting the log also discards its sequence counter, so reattaching the same session ID restarts event IDs at 1. A client disconnected during detach can reconnect with its previous Last-Event-ID (for example, 100): the new log silently skips its buffered events without emitting a gap, and the Go remote client also discards live IDs up to 100 as duplicates. Preserve sequence continuity across attachments, or add explicit generation/reset handling that forces snapshot recovery instead of silently losing resumed-session events."
+  },
+  {
+   "role": "bot",
+   "path": "pkg/server/session_manager.go",
+   "created_at": "2026-11-25T13:13:09Z",
+   "body": "An active metadata update can still be inside `sessionStore.UpdateSession` when detach removes this registration, because that update holds `rs.modelSwitch`, not `sm.mux`. A later title, safety, or permissions update then takes the inactive-session path and can be overwritten by the older write. Retire the runtime and drain its metadata transaction before exposing it as inactive, following `deleteSession`'s pattern of waiting on `modelSwitch` outside `sm.mux`."
+  },
+  {
+   "role": "bot",
+   "path": "pkg/server/session_manager.go",
+   "created_at": "2026-11-25T13:13:09Z",
+   "body": "`AttachRuntime` does not take `sm.mux`, so a concurrent reattach can replace the entry after detach loads it but before this deletion. Detach then removes the replacement while canceling only the old runtime, and can also remove the replacement's event log or injector. Serialize attachment and detachment through a shared lifecycle boundary, including ancillary registrations, or scope teardown to the registration being detached."
   }
  ],
  "comments": [

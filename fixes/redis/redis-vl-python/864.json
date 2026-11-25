@@ -1,0 +1,26 @@
+{
+ "repo": "redis/redis-vl-python",
+ "number": 864,
+ "url": "https://github.com/redis/redis-vl-python/pull/864",
+ "title": "fix(rerank): honor rank_by in VoyageAIReranker",
+ "merged_at": "2026-11-25T09:12:56Z",
+ "files": [
+  {
+   "filename": "redisvl/utils/rerank/voyageai.py",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 3,
+   "patch": "@@ -108,11 +108,20 @@ def _preprocess(self, query: str, docs: list[dict[str, Any]] | list[str], **kwar\n         if not isinstance(docs, list):\n             raise ValueError(\"Docs to rerank should either be a list of str or dict.\")\n \n-        if all(isinstance(doc, dict) and \"content\" in doc for doc in docs):\n+        rank_by = kwargs.get(\"rank_by\", self.rank_by) or []\n+        rank_by = [rank_by] if isinstance(rank_by, str) else rank_by\n+\n+        if rank_by and all(isinstance(doc, dict) for doc in docs):\n+            texts = []\n+            for doc in docs:\n+                missing = [key for key in rank_by if key not in doc]\n+                if missing:\n+                    raise ValueError(f\"Document is missing rank_by field(s): {missing}\")\n+                texts.append(\" \".join(str(doc[key]) for key in rank_by))\n+        elif all(isinstance(doc, dict) and \"content\" in doc for doc in docs):\n             texts = [\n-                str(doc[\"content\"])\n+                str(doc[\"content\"]) if isinstance(doc, dict) else str(doc)\n                 for doc in docs\n-                if isinstance(doc, dict) and \"content\" in doc\n             ]\n         else:\n             texts = [str(doc) for doc in docs]"
+  },
+  {
+   "filename": "tests/unit/test_voyageai_reranker_rank_by.py",
+   "status": "added",
+   "additions": 47,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,47 @@\n+import sys\n+import types\n+from unittest.mock import MagicMock\n+\n+import pytest\n+\n+\n+@pytest.fixture\n+def reranker(monkeypatch):\n+    fake = types.ModuleType(\"voyageai\")\n+    fake.Client = MagicMock()\n+    fake.AsyncClient = MagicMock()\n+    monkeypatch.setitem(sys.modules, \"voyageai\", fake)\n+    from redisvl.utils.rerank.voyageai import VoyageAIReranker\n+\n+    return VoyageAIReranker(model=\"rerank-2\", api_config={\"api_key\": \"k\"}, rank_by=[\"text\"])\n+\n+\n+DOCS = [{\"text\": \"alpha\", \"id\": 1}, {\"text\": \"beta\", \"id\": 2}]\n+\n+\n+def test_rank_by_selects_field(reranker):\n+    kwargs, _ = reranker._preprocess(\"q\", DOCS)\n+    assert kwargs[\"documents\"] == [\"alpha\", \"beta\"]\n+\n+\n+def test_rank_by_multiple_fields_and_override(reranker):\n+    docs = [{\"text\": \"alpha\", \"title\": \"T1\"}, {\"text\": \"beta\", \"title\": \"T2\"}]\n+    kwargs, _ = reranker._preprocess(\"q\", docs, rank_by=[\"title\", \"text\"])\n+    assert kwargs[\"documents\"] == [\"T1 alpha\", \"T2 beta\"]\n+\n+\n+def test_rank_by_missing_field_raises(reranker):\n+    with pytest.raises(ValueError, match=\"rank_by\"):\n+        reranker._preprocess(\"q\", [{\"other\": \"x\"}])\n+\n+\n+def test_content_key_still_default(monkeypatch):\n+    fake = types.ModuleType(\"voyageai\")\n+    fake.Client = MagicMock()\n+    fake.AsyncClient = MagicMock()\n+    monkeypatch.setitem(sys.modules, \"voyageai\", fake)\n+    from redisvl.utils.rerank.voyageai import VoyageAIReranker\n+\n+    r = VoyageAIReranker(model=\"rerank-2\", api_config={\"api_key\": \"k\"})\n+    kwargs, _ = r._preprocess(\"q\", [{\"content\": \"a\"}, {\"content\": \"b\"}])\n+    assert kwargs[\"documents\"] == [\"a\", \"b\"]"
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_voyageai_reranker_rank_by.py"
+ ]
+}

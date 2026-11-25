@@ -1,0 +1,26 @@
+{
+ "repo": "Tencent/WeKnora",
+ "number": 5682,
+ "url": "https://github.com/Tencent/WeKnora/pull/5682",
+ "title": "fix(vlm): reject a truncated WeKnoraCloud VLM completion",
+ "merged_at": "2026-11-25T18:04:28Z",
+ "files": [
+  {
+   "filename": "internal/models/vlm/weknoracloud.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -94,6 +94,7 @@ type weKnoraCloudVLMResponse struct {\n \t\tMessage struct {\n \t\t\tContent string `json:\"content\"`\n \t\t} `json:\"message\"`\n+\t\tFinishReason string `json:\"finish_reason\"`\n \t} `json:\"choices\"`\n }\n \n@@ -185,6 +186,11 @@ func (v *WeKnoraCloudVLM) PredictWithOptions(\n \t\treturn \"\", fmt.Errorf(\"weknoracloud VLM: no choices in response\")\n \t}\n \n+\tif vlmResp.Choices[0].FinishReason == \"length\" {\n+\t\t// Partial output is incomplete and must not be indexed as successful OCR.\n+\t\treturn \"\", fmt.Errorf(\"%w at %d tokens (finish_reason=length)\", ErrTruncatedCompletion, defaultMaxToks)\n+\t}\n+\n \tcontent := vlmResp.Choices[0].Message.Content\n \tlogger.Infof(ctx, \"[VLM] WeKnoraCloud response received, len=%d\", len(content))\n \treturn content, nil"
+  },
+  {
+   "filename": "internal/models/vlm/weknoracloud_response_limit_test.go",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -126,3 +126,23 @@ func TestPredictTrimsPartialUTF8FromFailedResponse(t *testing.T) {\n \t\tt.Fatalf(\"error is not valid UTF-8: %q\", err)\n \t}\n }\n+\n+// A reply cut off by the output budget is incomplete OCR text and must surface\n+// as ErrTruncatedCompletion, like the remote and Ollama VLM providers, instead\n+// of being returned as a successful result.\n+func TestPredictRejectsTruncatedResponse(t *testing.T) {\n+\tserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {\n+\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n+\t\t_, _ = io.WriteString(w, `{\"choices\":[{\"message\":{\"content\":\"partial te\"},\"finish_reason\":\"length\"}]}`)\n+\t}))\n+\tdefer server.Close()\n+\n+\tvlm := newTestWeKnoraCloudVLM(server.URL, server.Client())\n+\tcontent, err := vlm.Predict(context.Background(), nil, \"describe this page\")\n+\tif !errors.Is(err, ErrTruncatedCompletion) {\n+\t\tt.Fatalf(\"Predict() error = %v, want ErrTruncatedCompletion\", err)\n+\t}\n+\tif content != \"\" {\n+\t\tt.Fatalf(\"Predict() content = %q, want empty\", content)\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/models/vlm/weknoracloud_response_limit_test.go"
+ ]
+}

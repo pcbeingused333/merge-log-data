@@ -1,0 +1,26 @@
+{
+ "repo": "bootandy/dust",
+ "number": 658,
+ "url": "https://github.com/bootandy/dust/pull/658",
+ "title": "fix: reject invalid regexes in --ignore-all-in-file",
+ "merged_at": "2026-11-25T09:46:25Z",
+ "files": [
+  {
+   "filename": "src/main.rs",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 8,
+   "patch": "@@ -19,7 +19,6 @@ use dir_walker::WalkData;\n use display::InitialDisplayData;\n use filter::AggregateData;\n use progress::PIndicator;\n-use regex::Error;\n use std::collections::HashSet;\n use std::env;\n use std::fs::{read, read_to_string};\n@@ -183,18 +182,15 @@ fn main() {\n         None => vec![],\n     };\n \n-    let ignore_from_file_result = match options.ignore_all_in_file {\n+    let ignore_from_file_lines = match options.ignore_all_in_file {\n         Some(ref val) => read_to_string(val)\n             .unwrap()\n             .lines()\n-            .map(Regex::new)\n-            .collect::<Vec<Result<Regex, Error>>>(),\n+            .map(String::from)\n+            .collect::<Vec<String>>(),\n         None => vec![],\n     };\n-    let ignore_from_file = ignore_from_file_result\n-        .into_iter()\n-        .filter_map(|x| x.ok())\n-        .collect::<Vec<Regex>>();\n+    let ignore_from_file = get_regex_value(Some(&ignore_from_file_lines));\n \n     let invert_filter_regexs = invert_filter_regexs\n         .into_iter()"
+  },
+  {
+   "filename": "tests/test_flags.rs",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -174,6 +174,25 @@ pub fn test_ignore_all_in_file() {\n     assert!(!output.contains(\".secret\"));\n }\n \n+#[test]\n+pub fn test_ignore_all_in_file_rejects_invalid_regex() {\n+    let temp_dir = tempfile::tempdir().unwrap();\n+    let ignore_file = temp_dir.path().join(\"ignore\");\n+    std::fs::write(&ignore_file, \"[secret\\n^other$\\n\").unwrap();\n+\n+    let mut cmd = cargo_bin_cmd!(\"dust\");\n+    cmd.arg(\"-P\")\n+        .arg(\"-I\")\n+        .arg(&ignore_file)\n+        .arg(\"tests/test_dir_hidden_entries/\");\n+    let finished = cmd.output().unwrap();\n+\n+    assert_eq!(finished.status.code(), Some(1));\n+    let stderr = str::from_utf8(&finished.stderr).unwrap();\n+    assert!(stderr.contains(\"Ignoring bad value for regex\"), \"{stderr}\");\n+    assert!(stderr.contains(\"[secret\"), \"{stderr}\");\n+}\n+\n #[test]\n pub fn test_files_from_flag_file() {\n     let output = build_command(vec!["
+  }
+ ],
+ "test_files": [
+  "tests/test_flags.rs"
+ ]
+}

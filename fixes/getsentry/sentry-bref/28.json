@@ -1,0 +1,26 @@
+{
+ "repo": "getsentry/sentry-bref",
+ "number": 28,
+ "url": "https://github.com/getsentry/sentry-bref/pull/28",
+ "title": "Finish AWS SDK spans on synchronous failures",
+ "merged_at": "2026-11-25T13:14:44Z",
+ "files": [
+  {
+   "filename": "src/AwsSdk/AwsSdkTracer.php",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 19,
+   "patch": "@@ -71,8 +71,32 @@ public static function trace(AwsClient $awsClient): void\n                     InternalErrors::log($e);\n                 }\n \n-                /** @var PromiseInterface $promise */\n-                $promise = $handler($command, $request);\n+                $recordFailure = static function ($reason) use ($call, $span): void {\n+                    try {\n+                        // Finish the span first so that its duration only covers the AWS call\n+                        $span?->finish();\n+                        $isAwsException = $reason instanceof AwsException;\n+                        self::recordResponse(\n+                            $call,\n+                            $span,\n+                            $isAwsException ? $reason->getRequest()?->getUri() : null,\n+                            $isAwsException ? $reason->getStatusCode() : null,\n+                            $isAwsException ? $reason->getAwsRequestId() : null,\n+                            $isAwsException ? ($reason->getResponse()?->getHeaderLine('x-amz-id-2') ?: null) : null,\n+                            true,\n+                        );\n+                    } catch (\\Throwable $e) {\n+                        InternalErrors::log($e);\n+                    }\n+                };\n+\n+                try {\n+                    /** @var PromiseInterface $promise */\n+                    $promise = $handler($command, $request);\n+                } catch (\\Throwable $e) {\n+                    $recordFailure($e);\n+                    throw $e;\n+                }\n \n                 $promise->then(static function ($result) use ($call, $span) {\n                     try {\n@@ -100,23 +124,8 @@ public static function trace(AwsClient $awsClient): void\n                     }\n \n                     return $result;\n-                }, static function ($reason) use ($call, $span): void {\n-                    try {\n-                        // Finish the span first so that its duration only covers the AWS call\n-                        $span?->finish();\n-                        $isAwsException = $reason instanceof AwsException;\n-                        self::recordResponse(\n-                            $call,\n-                            $span,\n-                            $isAwsException ? $reason->getRequest()?->getUri() : null,\n-                            $isAwsException ? $reason->getStatusCode() : null,\n-                            $isAwsException ? $reason->getAwsRequestId() : null,\n-                            $isAwsException ? ($reason->getResponse()?->getHeaderLine('x-amz-id-2') ?: null) : null,\n-                            true,\n-                        );\n-                    } catch (\\Throwable $e) {\n-                        InternalErrors::log($e);\n-                    }\n+                }, static function ($reason) use ($recordFailure): void {\n+                    $recordFailure($reason);\n                     throw $reason;\n                 });\n "
+  },
+  {
+   "filename": "tests/AwsSdk/AwsSdkTracerTest.php",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 0,
+   "patch": "@@ -130,6 +130,29 @@ public function testFinishesTheSpanWhenTheCallFails(): void\n         $this->assertSame($transaction, $hub->getSpan());\n     }\n \n+    public function testFinishesTheSpanWhenCommandValidationThrows(): void\n+    {\n+        $hub = SentrySdk::init();\n+        $transaction = new Transaction(new TransactionContext());\n+        $transaction->initSpanRecorder();\n+        $hub->setSpan($transaction);\n+\n+        $client = $this->createSqsClient();\n+        AwsSdkTracer::trace($client);\n+        try {\n+            $client->sendMessage(['QueueUrl' => self::QUEUE_URL]);\n+            $this->fail('The AWS SDK validation exception should be thrown');\n+        } catch (\\InvalidArgumentException $e) {\n+            $this->assertStringContainsString('MessageBody', $e->getMessage());\n+        }\n+\n+        $spans = $this->childSpans($transaction);\n+        $this->assertCount(1, $spans);\n+        $this->assertSame('SQS.SendMessage', $spans[0]->getDescription());\n+        $this->assertNotNull($spans[0]->getEndTimestamp());\n+        $this->assertEquals(SpanStatus::internalError(), $spans[0]->getStatus());\n+    }\n+\n     public function testFailedCallsAreMarkedAsErrors(): void\n     {\n         $hub = SentrySdk::init();"
+  }
+ ],
+ "test_files": [
+  "tests/AwsSdk/AwsSdkTracerTest.php"
+ ]
+}

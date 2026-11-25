@@ -1,0 +1,33 @@
+{
+ "repo": "fleetdm/fleet",
+ "number": 58218,
+ "url": "https://github.com/fleetdm/fleet/pull/58218",
+ "title": "Fix worker processing only 100 jobs per run with a read replica",
+ "merged_at": "2026-11-25T16:54:13Z",
+ "files": [
+  {
+   "filename": "changes/58214-worker-queue-read-primary",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+* Fixed the background worker processing only 100 jobs per run when a MySQL read replica is configured, by reading the job queue from the primary."
+  },
+  {
+   "filename": "server/datastore/mysql/jobs.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -83,6 +83,9 @@ LIMIT ?\n \n \tquery = fmt.Sprintf(query, nameClause)\n \targs = append(args, maxNumJobs)\n+\t// The queue is mutated on the primary (UpdateJob), so it must be read from\n+\t// there too, otherwise replica lag returns jobs that were already processed.\n+\tctx = ctxdb.RequirePrimary(ctx, true)\n \tvar jobs []*fleet.Job\n \terr := sqlx.SelectContext(ctx, ds.reader(ctx), &jobs, query, args...)\n \tif err != nil {"
+  },
+  {
+   "filename": "server/worker/worker_test.go",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -11,6 +11,7 @@ import (\n \t\"github.com/fleetdm/fleet/v4/server/datastore/mysql/mysqltest\"\n \t\"github.com/fleetdm/fleet/v4/server/fleet\"\n \t\"github.com/fleetdm/fleet/v4/server/mock\"\n+\t\"github.com/fleetdm/fleet/v4/server/platform/mysql/testing_utils\"\n \t\"github.com/fleetdm/fleet/v4/server/ptr\"\n \t\"github.com/jmoiron/sqlx\"\n \t\"github.com/stretchr/testify/require\"\n@@ -405,3 +406,37 @@ func TestWorkerWithRealDatastore(t *testing.T) {\n \trequire.Equal(t, 3, failedJob.Retries)\n \trequire.WithinDuration(t, beforeThirdTime.Add(time.Hour), failedJob.NotBefore, time.Minute)\n }\n+\n+// With a read replica, the queue must be read from the primary: UpdateJob\n+// writes to the primary, so a lagging replica would keep returning jobs that\n+// were already processed, ending the run after the first batch.\n+func TestWorkerBatchesWithReplica(t *testing.T) {\n+\tctx := t.Context()\n+\topts := &testing_utils.DatastoreTestOptions{DummyReplica: true}\n+\tds := mysqltest.CreateMySQLDSWithOptions(t, opts)\n+\t// a DB migration may create jobs\n+\tmysqltest.TruncateTables(t, ds)\n+\n+\tw := NewWorker(ds, slog.New(slog.DiscardHandler))\n+\n+\tvar processed int\n+\tw.Register(testJob{\n+\t\tname: \"test\",\n+\t\trun: func(ctx context.Context, argsJSON json.RawMessage) error {\n+\t\t\tprocessed++\n+\t\t\treturn nil\n+\t\t},\n+\t})\n+\n+\tconst numJobs = 250\n+\tfor range numJobs {\n+\t\targs := json.RawMessage(`\"job\"`)\n+\t\t_, err := ds.NewJob(ctx, &fleet.Job{Name: \"test\", Args: &args, State: fleet.JobStateQueued})\n+\t\trequire.NoError(t, err)\n+\t}\n+\t// replicate the queued jobs once, then let the replica lag behind\n+\topts.RunReplication()\n+\n+\trequire.NoError(t, w.ProcessJobs(ctx))\n+\trequire.Equal(t, numJobs, processed)\n+}"
+  }
+ ],
+ "test_files": [
+  "server/worker/worker_test.go"
+ ]
+}

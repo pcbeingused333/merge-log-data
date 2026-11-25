@@ -1,0 +1,26 @@
+{
+ "repo": "dgtlmoon/changedetection.io",
+ "number": 4786,
+ "url": "https://github.com/dgtlmoon/changedetection.io/pull/4786",
+ "title": "fix: count only the watches looked at in a partial changes report",
+ "merged_at": "2026-11-25T12:01:19Z",
+ "files": [
+  {
+   "filename": "changedetectionio/changes_report.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -150,10 +150,12 @@ def group_changes(watches, from_ts, to_ts, mode='net_change', context=1, max_lin\n     watches = list(watches)\n     deadline = time.monotonic() + time_budget if time_budget else None\n     incomplete = False\n+    checked = 0\n     for watch in watches:\n         if deadline and time.monotonic() > deadline:\n             incomplete = True\n             break\n+        checked += 1\n         time.sleep(0)\n         # last_changed only uses the cached newest history key (0 when it isn't known yet), so this rules out\n         # watches that haven't changed since `from` without reading anything. The rest read their history once.\n@@ -172,7 +174,7 @@ def group_changes(watches, from_ts, to_ts, mode='net_change', context=1, max_lin\n         'total': len(changed),\n         'offset': offset,\n         'limit': limit,\n-        'monitors_checked': len(watches),\n+        'monitors_checked': checked,\n         'changes_total': sum(r['changes'] for r in changed),\n         'incomplete': incomplete,\n         'watches': changed[offset:offset + limit] if limit else changed[offset:],"
+  },
+  {
+   "filename": "changedetectionio/tests/test_mcp.py",
+   "status": "modified",
+   "additions": 31,
+   "deletions": 0,
+   "patch": "@@ -414,6 +414,37 @@ def test_changes_time_budget():\n     assert 'Incomplete' in render_unified(report)\n \n \n+def test_changes_time_budget_counts_only_watches_looked_at(monkeypatch):\n+    \"\"\"monitors_checked is how many watches were looked at, not how many were asked for.\"\"\"\n+    import threading\n+    import time\n+    from changedetectionio.changes_report import group_changes, render_unified\n+\n+    # The time limit runs out while the first watch is being looked at. Only this thread's clock is moved, and\n+    # only forwards: the app's background threads from the other tests in this file keep the real one.\n+    real_monotonic = time.monotonic\n+    test_thread = threading.get_ident()\n+    looked_at = []\n+\n+    def clock():\n+        if threading.get_ident() != test_thread:\n+            return real_monotonic()\n+        return real_monotonic() + (1000 if looked_at else 0)\n+\n+    class UnchangedWatch:\n+        @property\n+        def last_changed(self):\n+            looked_at.append(self)\n+            return T0\n+\n+    monkeypatch.setattr(time, 'monotonic', clock)\n+    report = group_changes([UnchangedWatch() for _ in range(3)], T0, T0 + 100, time_budget=100)\n+\n+    assert len(looked_at) == 1\n+    assert report['incomplete'] is True and report['monitors_checked'] == 1\n+    assert '0 of 1 monitors changed' in render_unified(report)\n+\n+\n def test_mcp_snapshot_unfiltered(client, live_server, measure_memory_usage, datastore_path, monkeypatch):\n     \"\"\"get_snapshot unfiltered=true: the whole page from the HTML saved with the snapshot, for questions the filters\n     don't cover (\"the fried cheese prices on all my restaurant menus\" when the filter picks out the beer).\"\"\""
+  }
+ ],
+ "test_files": [
+  "changedetectionio/tests/test_mcp.py"
+ ]
+}

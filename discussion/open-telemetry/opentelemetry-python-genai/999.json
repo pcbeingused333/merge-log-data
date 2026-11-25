@@ -27,6 +27,18 @@
    "state": "COMMENTED",
    "submitted_at": "2026-11-07T04:31:04Z",
    "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-25T21:21:12Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-25T21:25:03Z",
+   "body": "<!-- ccr-overview-v2 -->\n\n### 🟡 Changes recommended\n\nTool-call buffering misroutes ID-less continuations and splits calls when IDs arrive late, producing incomplete or invalid argument strings.\n\n<details open>\n<summary><strong>3 open issues</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Delayed IDs create a duplicate buffer instead of filling the anonymous one](https://github.com/open-telemetry/opentelemetry-python-genai/pull/999#discussion_r4701047789) · New\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [ID-less continuations ignore remapped buffer indices](https://github.com/open-telemetry/opentelemetry-python-genai/pull/999#discussion_r4701047844) · New\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [ID-less fragments append to the wrong call buffer](https://github.com/open-telemetry/opentelemetry-python-genai/pull/999#discussion_r4701047892) · New\n</details>\n\n<details>\n<summary><strong>1 resolved since last review</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Handle interleaved repeated IDs when buffering parallel calls](https://github.com/open-telemetry/opentelemetry-python-genai/pull/999#discussion_r4400442700)\n</details>\n\n<sub>Review effort: Balanced</sub>"
   }
  ],
  "review_comments": [
@@ -53,13 +65,37 @@
    "path": "instrumentation/opentelemetry-instrumentation-genai-portkey/src/opentelemetry/instrumentation/genai/portkey/wrappers.py",
    "created_at": "2026-11-07T04:31:04Z",
    "body": "Thanks! I don't see that change on the branch yet: the head is still https://github.com/open-telemetry/opentelemetry-python-genai/commit/268ee8597985191d4f751efe50ce4b62326861d0 from Oct 28, and the `index is not None` path returns early. Could you push it, along with the repeated `index=0` test cases?"
+  },
+  {
+   "role": "author",
+   "path": "instrumentation/opentelemetry-instrumentation-genai-portkey/src/opentelemetry/instrumentation/genai/portkey/wrappers.py",
+   "created_at": "2026-11-25T21:21:12Z",
+   "body": "The change is on the branch now (16a566a): a new `id` opens a new call even when `index` is set, and a known `id` is looked up across all buffers so interleaved deltas stay two calls. `test_choice_buffer.py` covers repeated `index=0` with new ids and the interleaved repeated-id case. The client-level `test_streaming.py` case from your snippet still needs a cassette recorded with `PORTKEY_API_KEY` and `GEMINI_API_KEY`, which I don't have. Happy to add it if someone can share the recording.\n"
+  },
+  {
+   "role": "bot",
+   "path": "instrumentation/opentelemetry-instrumentation-genai-portkey/src/opentelemetry/instrumentation/genai/portkey/wrappers.py",
+   "created_at": "2026-11-25T21:25:03Z",
+   "body": "An occupied slot with no ID should still accept its first ID. An indexed delta `(index=0, id=None, name='f', arguments='{')` followed by `(index=0, id='call_1', arguments='}')` now creates two incomplete calls instead of filling the existing buffer's ID, bypassing the update in `append_tool_call`. Treat an anonymous buffer as available for the incoming ID and add a regression case for delayed IDs."
+  },
+  {
+   "role": "bot",
+   "path": "instrumentation/opentelemetry-instrumentation-genai-portkey/src/opentelemetry/instrumentation/genai/portkey/wrappers.py",
+   "created_at": "2026-11-25T21:25:03Z",
+   "body": "When a new ID reuses an occupied index, it moves to a new buffer, but an ID-less continuation still uses the original index. For example, `call_1` at index 0 with `{}`, then `call_2` at index 0 with `{`, then an ID-less `}` at index 0 produces `call_1: {}}` and `call_2: {`. Track the resolved buffer for each incoming index so continuations follow the remapped call, and extend the repeated-index test with an ID-less continuation."
+  },
+  {
+   "role": "bot",
+   "path": "instrumentation/opentelemetry-instrumentation-genai-portkey/src/opentelemetry/instrumentation/genai/portkey/wrappers.py",
+   "created_at": "2026-11-25T21:25:03Z",
+   "body": "The last allocated buffer is not necessarily the last call continued. With no indices, the sequence `call_1: {`, `call_2: {}`, `call_1: \"a\":`, then an ID-less `1}` appends the final fragment to `call_2`, leaving both argument strings invalid. Track the most recently resolved buffer, including known-ID matches, use it for ID-less/index-less continuations, and add a regression test for this sequence."
   }
  ],
  "comments": [
   {
    "role": "bot",
    "created_at": "2026-10-28T12:17:09Z",
-   "body": "<!-- pull-request-dashboard-status -->\n<!-- pull-request-dashboard-status-revision:24 -->\n<!-- pull-request-dashboard-author-nudge-episode:e4a264719c93403488de8e3ccffe9dfe -->\n## Pull request dashboard status\n\n**Waiting on the author** · refreshed 2026-11-24 23:37 UTC\n\nRespond to 1 review item (e.g. link a commit, explain why not, ask a follow-up):\n- **Inline threads:** [1](https://github.com/open-telemetry/opentelemetry-python-genai/pull/999#discussion_r4408102743)\n\n<details>\n<summary>Status above doesn't look right?</summary>\n\n<br>\n\n- **Just replied or pushed?** Anything around or after the refresh time above may not be picked up yet — give it a few minutes.\n- **Should this be with reviewers?** Comment `/dashboard route:reviewers` to route it to them.\n- **Anything wrong — including the routing?** [Report it](https://github.com/open-telemetry/shared-workflows/issues/new?template=incorrect-pr-dashboard-result.md&title=PR+dashboard+result+looks+incorrect&body=PR%3A+https%3A%2F%2Fgithub.com%2Fopen-telemetry%2Fopentelemetry-python-genai%2Fpull%2F999%0A%0ACurrent+live+status+comment%3A%0A%3E+%3C%21--+pull-request-dashboard-status+--%3E%0A%3E+%3C%21--+pull-request-dashboard-status-revision%3A24+--%3E%0A%3E+%3C%21--+pull-request-dashboard-author-nudge-episode%3Ae4a264719c93403488de8e3ccffe9dfe+--%3E%0A%3E+%23%23+Pull+request+dashboard+status%0A%3E+%0A%3E+%2A%2AWaiting+on+the+author%2A%2A+%C2%B7+refreshed+2026-11-24+23%3A37+UTC%0A%3E+%0A%3E+Respond+to+1+review+item+%28e.g.+link+a+commit%2C+explain+why+not%2C+ask+a+follow-up%29%3A%0A%3E+-+%2A%2AInline+threads%3A%2A%2A+%5B1%5D%28https%3A%2F%2Fgithub.com%2Fopen-telemetry%2Fopentelemetry-python-genai%2Fpull%2F999%23discussion_r4408102743%29%0A%0AWhat+looks+incorrect%3A%0A) with what you expected; it helps us improve the dashboard.\n\n</details>\n"
+   "body": "<!-- pull-request-dashboard-status -->\n<!-- pull-request-dashboard-status-revision:24 -->\n<!-- pull-request-dashboard-author-nudge-episode:e4a264719c93403488de8e3ccffe9dfe -->\n## Pull request dashboard status\n\n**Waiting on the author** · refreshed 2026-11-25 21:26 UTC\n\nRespond to 3 review items (e.g. link a commit, explain why not, ask a follow-up):\n- **Inline threads:** [1](https://github.com/open-telemetry/opentelemetry-python-genai/pull/999#discussion_r4701047789), [2](https://github.com/open-telemetry/opentelemetry-python-genai/pull/999#discussion_r4701047844), [3](https://github.com/open-telemetry/opentelemetry-python-genai/pull/999#discussion_r4701047892)\n\n<details>\n<summary>Status above doesn't look right?</summary>\n\n<br>\n\n- **Just replied or pushed?** Anything around or after the refresh time above may not be picked up yet — give it a few minutes.\n- **Should this be with reviewers?** Comment `/dashboard route:reviewers` to route it to them.\n- **Anything wrong — including the routing?** [Report it](https://github.com/open-telemetry/shared-workflows/issues/new?template=incorrect-pr-dashboard-result.md&title=PR+dashboard+result+looks+incorrect&body=PR%3A+https%3A%2F%2Fgithub.com%2Fopen-telemetry%2Fopentelemetry-python-genai%2Fpull%2F999%0A%0ACurrent+live+status+comment%3A%0A%3E+%3C%21--+pull-request-dashboard-status+--%3E%0A%3E+%3C%21--+pull-request-dashboard-status-revision%3A24+--%3E%0A%3E+%3C%21--+pull-request-dashboard-author-nudge-episode%3Ae4a264719c93403488de8e3ccffe9dfe+--%3E%0A%3E+%23%23+Pull+request+dashboard+status%0A%3E+%0A%3E+%2A%2AWaiting+on+the+author%2A%2A+%C2%B7+refreshed+2026-11-25+21%3A26+UTC%0A%3E+%0A%3E+Respond+to+3+review+items+%28e.g.+link+a+commit%2C+explain+why+not%2C+ask+a+follow-up%29%3A%0A%3E+-+%2A%2AInline+threads%3A%2A%2A+%5B1%5D%28https%3A%2F%2Fgithub.com%2Fopen-telemetry%2Fopentelemetry-python-genai%2Fpull%2F999%23discussion_r4701047789%29%2C+%5B2%5D%28https%3A%2F%2Fgithub.com%2Fopen-telemetry%2Fopentelemetry-python-genai%2Fpull%2F999%23discussion_r4701047844%29%2C+%5B3%5D%28https%3A%2F%2Fgithub.com%2Fopen-telemetry%2Fopentelemetry-python-genai%2Fpull%2F999%23discussion_r4701047892%29%0A%0AWhat+looks+incorrect%3A%0A) with what you expected; it helps us improve the dashboard.\n\n</details>\n"
   },
   {
    "role": "bot",

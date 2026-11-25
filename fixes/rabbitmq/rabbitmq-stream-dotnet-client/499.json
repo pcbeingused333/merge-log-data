@@ -1,0 +1,26 @@
+{
+ "repo": "rabbitmq/rabbitmq-stream-dotnet-client",
+ "number": 499,
+ "url": "https://github.com/rabbitmq/rabbitmq-stream-dotnet-client/pull/499",
+ "title": "fix: honor endpoint address family in DNS resolver",
+ "merged_at": "2026-11-25T12:35:06Z",
+ "files": [
+  {
+   "filename": "RabbitMQ.Stream.Client/DnsAddressResolver.cs",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 1,
+   "patch": "@@ -4,6 +4,7 @@\n \n using System;\n using System.Net;\n+using System.Net.Sockets;\n using System.Threading.Tasks;\n \n namespace RabbitMQ.Stream.Client\n@@ -22,8 +23,19 @@ public DnsAddressResolver(DnsEndPoint endPoint)\n         public EndPoint Resolve(string address, int port) => ResolveAsync(address, port).GetAwaiter().GetResult();\n         public async Task<EndPoint> ResolveAsync(string address, int port)\n         {\n-            var entries = await Dns.GetHostEntryAsync(((DnsEndPoint)EndPoint).Host).ConfigureAwait(false);\n+            var dnsEndPoint = (DnsEndPoint)EndPoint;\n+            var entries = await Dns.GetHostEntryAsync(dnsEndPoint.Host).ConfigureAwait(false);\n             var addressList = entries.AddressList;\n+            if (dnsEndPoint.AddressFamily != AddressFamily.Unspecified)\n+            {\n+                addressList = Array.FindAll(addressList, ip => ip.AddressFamily == dnsEndPoint.AddressFamily);\n+            }\n+\n+            if (addressList.Length == 0)\n+            {\n+                throw new SocketException((int)SocketError.NoData);\n+            }\n+\n             var targetIp = addressList[Random.Shared.Next(addressList.Length)];\n             return new IPEndPoint(targetIp, port);\n         }"
+  },
+  {
+   "filename": "Tests/DnsAddressResolverTests.cs",
+   "status": "added",
+   "additions": 44,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,44 @@\n+﻿// This source code is dual-licensed under the Apache License, version\n+// 2.0, and the Mozilla Public License, version 2.0.\n+// Copyright (c) 2017-2023 Broadcom. All Rights Reserved. The term \"Broadcom\" refers to Broadcom Inc. and/or its subsidiaries.\n+\n+using System.Linq;\n+using System.Net;\n+using System.Net.Sockets;\n+using System.Threading.Tasks;\n+using RabbitMQ.Stream.Client;\n+using Xunit;\n+\n+namespace Tests\n+{\n+    public class DnsAddressResolverTests\n+    {\n+        [Theory]\n+        [InlineData(AddressFamily.InterNetwork)]\n+        [InlineData(AddressFamily.InterNetworkV6)]\n+        [InlineData(AddressFamily.Unspecified)]\n+        public async Task ResolveAsyncHonorsAddressFamily(AddressFamily family)\n+        {\n+            const string host = \"localhost\";\n+            const int port = 5552;\n+            var addresses = (await Dns.GetHostEntryAsync(host)).AddressList;\n+            var eligible = addresses.Where(ip => family == AddressFamily.Unspecified || ip.AddressFamily == family).ToArray();\n+            var resolver = new DnsAddressResolver(new DnsEndPoint(host, port, family));\n+\n+            if (eligible.Length == 0)\n+            {\n+                var exception = await Assert.ThrowsAsync<SocketException>(() => resolver.ResolveAsync(host, port));\n+                Assert.Equal(SocketError.NoData, exception.SocketErrorCode);\n+                return;\n+            }\n+\n+            // Sample multiple times so a lucky pick on a dual-stack host cannot mask the bug.\n+            for (var attempt = 0; attempt < 32; attempt++)\n+            {\n+                var endpoint = Assert.IsType<IPEndPoint>(await resolver.ResolveAsync(host, port));\n+                Assert.Contains(endpoint.Address, eligible);\n+                Assert.Equal(port, endpoint.Port);\n+            }\n+        }\n+    }\n+}"
+  }
+ ],
+ "test_files": [
+  "Tests/DnsAddressResolverTests.cs"
+ ]
+}
