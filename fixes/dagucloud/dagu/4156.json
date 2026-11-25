@@ -1,0 +1,94 @@
+{
+ "repo": "dagucloud/dagu",
+ "number": 4156,
+ "url": "https://github.com/dagucloud/dagu/pull/4156",
+ "title": "Let new extract steps inherit the DAG model",
+ "merged_at": "2026-11-25T05:44:11Z",
+ "files": [
+  {
+   "filename": "ui/src/features/visual-editor/VisualEditor.tsx",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -444,8 +444,8 @@ export function VisualEditor(props: VisualEditorProps): ReactElement {\n     [model, validation?.issues, names]\n   );\n   const catalog = useMemo(\n-    () => buildActionCatalog(schema ?? {}, customActions),\n-    [schema, customActions]\n+    () => buildActionCatalog(schema ?? {}, customActions, model.hasLLM),\n+    [schema, customActions, model.hasLLM]\n   );\n   const formSchema = useMemo(\n     () => withLocalHarnesses(schema ?? {}, harnesses),"
+  },
+  {
+   "filename": "ui/src/features/visual-editor/canvas/__tests__/fixtures.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -49,6 +49,7 @@ export function makeModel(\n     parseErrors: [],\n     documentCount: 1,\n     dagType: 'graph',\n+    hasLLM: false,\n     stepsForm: 'array',\n     steps,\n     handlers: [],"
+  },
+  {
+   "filename": "ui/src/features/visual-editor/contracts.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -90,6 +90,8 @@ export interface DagDocModel {\n   parseErrors: { message: string; line: number; column: number }[];\n   documentCount: number; // only document 0 is edited; later documents are never changed\n   dagType: DagType;\n+  /** True when document 0 has a DAG-level `llm` block, which steps inherit. */\n+  hasLLM: boolean;\n   stepsForm: StepsForm;\n   steps: StepView[];\n   handlers: StepView[];"
+  },
+  {
+   "filename": "ui/src/features/visual-editor/doc/__tests__/issues.test.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -219,6 +219,7 @@ function modelOf(\n     parseErrors: [],\n     documentCount: 1,\n     dagType: 'graph',\n+    hasLLM: false,\n     stepsForm: 'array',\n     steps,\n     handlers,"
+  },
+  {
+   "filename": "ui/src/features/visual-editor/doc/__tests__/parse.test.ts",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -164,6 +164,12 @@ describe('forms', () => {\n     ]);\n   });\n \n+  it('reports a DAG-level llm block', () => {\n+    const steps = 'steps:\\n  - run: a\\n';\n+    expect(parseDagDoc(`llm:\\n  model: m\\n${steps}`).hasLLM).toBe(true);\n+    expect(parseDagDoc(steps).hasLLM).toBe(false);\n+  });\n+\n   it('chain type', () => {\n     const model = parseDagDoc(yamlChain);\n     expect(model.dagType).toBe('chain');\n@@ -461,6 +467,7 @@ describe('errors and documents', () => {\n       ],\n       documentCount: 1,\n       dagType: 'graph',\n+      hasLLM: false,\n       stepsForm: 'none',\n       steps: [],\n       handlers: [],\n@@ -517,6 +524,7 @@ describe('errors and documents', () => {\n       parseErrors: [],\n       documentCount: 0,\n       dagType: 'graph',\n+      hasLLM: false,\n       stepsForm: 'none',\n       steps: [],\n       handlers: [],"
+  },
+  {
+   "filename": "ui/src/features/visual-editor/doc/parse.ts",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -130,6 +130,7 @@ function buildModel(source: string, original?: Original): DagDocModel {\n     })),\n     documentCount: docs.length,\n     dagType: getDagType(doc),\n+    hasLLM: hasLLMBlock(doc),\n     stepsForm: stepsFormOf(doc),\n     steps: steps.map((s) => stepView(s, doc, ctx)),\n     handlers: handlers.map((s) => stepView(s, doc, ctx)),\n@@ -151,6 +152,7 @@ function modelWithoutSteps(\n     parseErrors,\n     documentCount,\n     dagType,\n+    hasLLM: false,\n     stepsForm: 'none',\n     steps: [],\n     handlers: [],\n@@ -166,6 +168,11 @@ function safeDagType(doc: Document): DagType {\n   }\n }\n \n+/** True when the document has a DAG-level `llm` block. */\n+function hasLLMBlock(doc: Document): boolean {\n+  return isMap(doc.contents) && isMap(doc.contents.get('llm'));\n+}\n+\n /** First line of a parser message, without its \" at line N, column M:\" tail. */\n function plainMessage(message: string): string {\n   const first = message.split('\\n')[0] ?? message;"
+  },
+  {
+   "filename": "ui/src/features/visual-editor/inspector/__tests__/actionTemplate.test.ts",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 2,
+   "patch": "@@ -56,8 +56,32 @@ describe('actionTemplate', () => {\n     });\n   });\n \n+  // The server rejects an extract step without a model; the user picks one.\n+  it.each(['browser.extract', 'computer.extract', 'xlsx.extract'])(\n+    'starts a %s step with a model to fill in',\n+    (action) => {\n+      expect(actionTemplate(action, null).with?.llm).toEqual({\n+        provider: 'anthropic',\n+        model: 'TODO',\n+      });\n+    }\n+  );\n+\n+  // A step-level llm block replaces the DAG-level one.\n+  it('lets a step inherit the llm block of the DAG', () => {\n+    expect(\n+      actionTemplate('browser.extract', null, { dagHasLLM: true }).with\n+    ).toEqual({\n+      url: 'https://example.com',\n+      instruction: 'TODO',\n+      schema: { type: 'object' },\n+    });\n+  });\n+\n   it('leaves the starter values out for a custom action', () => {\n-    expect(actionTemplate('http.request', withSchema, true).with).toEqual({\n+    expect(\n+      actionTemplate('http.request', withSchema, { keepEmptyWith: true }).with\n+    ).toEqual({\n       method: '',\n       url: '',\n       headers: {},\n@@ -72,7 +96,9 @@ describe('actionTemplate', () => {\n   });\n \n   it('keeps an empty with block on request', () => {\n-    expect(actionTemplate('send-slack', { type: 'object' }, true)).toEqual({\n+    expect(\n+      actionTemplate('send-slack', { type: 'object' }, { keepEmptyWith: true })\n+    ).toEqual({\n       action: 'send-slack',\n       with: {},\n     });"
+  },
+  {
+   "filename": "ui/src/features/visual-editor/inspector/__tests__/fixtures.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -172,6 +172,7 @@ export const modelHttpJq: DagDocModel = {\n   parseErrors: [],\n   documentCount: 1,\n   dagType: 'graph',\n+  hasLLM: false,\n   stepsForm: 'array',\n   steps: [\n     {"
+  },
+  {
+   "filename": "ui/src/features/visual-editor/inspector/actionTemplate.ts",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 2,
+   "patch": "@@ -58,7 +58,9 @@ export function requiredWithValues(\n   return values;\n }\n \n-const LLM = { provider: 'anthropic', model: 'claude-sonnet-4-5' };\n+// A placeholder for the user to replace: a fixed model ID goes stale once\n+// the provider retires it.\n+const LLM = { provider: 'anthropic', model: 'TODO' };\n const XLSX = 'file.xlsx';\n \n /**\n@@ -175,16 +177,22 @@ const STARTER: Record<string, Record<string, unknown>> = {\n  * The step that the palette inserts for an action. `with` holds the\n  * required fields only; it is left out when there is none, unless\n  * `keepEmptyWith` is set (custom actions always take a `with` block).\n+ * With `dagHasLLM`, a starter leaves its `llm` block out, so the step\n+ * inherits the DAG-level one.\n  */\n export function actionTemplate(\n   action: string,\n   withSchema: JSONSchema | null,\n-  keepEmptyWith = false\n+  options: { keepEmptyWith?: boolean; dagHasLLM?: boolean } = {}\n ): NewStep {\n+  const { keepEmptyWith = false, dagHasLLM = false } = options;\n   const starter = keepEmptyWith ? undefined : STARTER[action];\n   const values = starter\n     ? structuredClone(starter)\n     : requiredWithValues(withSchema);\n+  if (starter && dagHasLLM) {\n+    delete values.llm;\n+  }\n   if (Object.keys(values).length === 0 && !keepEmptyWith) {\n     return { action };\n   }"
+  },
+  {
+   "filename": "ui/src/features/visual-editor/inspector/catalog.ts",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 4,
+   "patch": "@@ -44,11 +44,13 @@ function builtinNames(schema: JSONSchema): string[] {\n /**\n  * Builds the action catalog: the core `run` entry, one entry for each\n  * builtin action of the schema (sorted by name), then the custom actions\n- * (sorted by name). A custom action with a builtin name is left out.\n+ * (sorted by name). A custom action with a builtin name is left out. With\n+ * `dagHasLLM`, the builtin templates inherit the DAG-level `llm` block.\n  */\n export function buildActionCatalog(\n   schema: JSONSchema,\n-  customActions: EditorCustomActionHint[]\n+  customActions: EditorCustomActionHint[],\n+  dagHasLLM = false\n ): ActionCatalogEntry[] {\n   const entries: ActionCatalogEntry[] = [RUN_ENTRY];\n   const taken = new Set<string>([RUN_ENTRY.name]);\n@@ -61,7 +63,7 @@ export function buildActionCatalog(\n       title: actionTitle(name),\n       description: actionDescription(withSchema?.description),\n       source: 'builtin',\n-      template: actionTemplate(name, withSchema),\n+      template: actionTemplate(name, withSchema, { dagHasLLM }),\n     });\n     taken.add(name);\n   }\n@@ -84,7 +86,7 @@ export function buildActionCatalog(\n       template: actionTemplate(\n         hint.name,\n         getActionWithSchema(schema, hint.name, [hint]),\n-        true\n+        { keepEmptyWith: true }\n       ),\n     });\n   }"
+  },
+  {
+   "filename": "ui/src/features/visual-editor/testing/fixtures.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -200,6 +200,7 @@ export const modelArraySteps: DagDocModel = {\n   parseErrors: [],\n   documentCount: 1,\n   dagType: 'graph',\n+  hasLLM: false,\n   stepsForm: 'array',\n   steps: [\n     {"
+  }
+ ],
+ "test_files": [
+  "ui/src/features/visual-editor/canvas/__tests__/fixtures.ts",
+  "ui/src/features/visual-editor/doc/__tests__/issues.test.ts",
+  "ui/src/features/visual-editor/doc/__tests__/parse.test.ts",
+  "ui/src/features/visual-editor/inspector/__tests__/actionTemplate.test.ts",
+  "ui/src/features/visual-editor/inspector/__tests__/fixtures.ts",
+  "ui/src/features/visual-editor/testing/fixtures.ts"
+ ]
+}

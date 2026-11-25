@@ -1,0 +1,34 @@
+{
+ "repo": "cocoindex-io/cocoindex",
+ "number": 2815,
+ "url": "https://github.com/cocoindex-io/cocoindex/pull/2815",
+ "title": "fix(google_drive): index folders and files that live in a shared drive",
+ "merged_at": "2026-11-25T07:38:23Z",
+ "files": [
+  {
+   "filename": "examples/cocoindex_agents/tests/fake_drive.py",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 3,
+   "patch": "@@ -108,7 +108,15 @@ def execute(self, num_retries: int = 0) -> object:\n class _Files:\n     drive: FakeDrive\n \n-    def list(self, *, q: str, fields: str, pageToken: str | None) -> _Request:\n+    def list(\n+        self,\n+        *,\n+        q: str,\n+        fields: str,\n+        pageToken: str | None,\n+        includeItemsFromAllDrives: bool,\n+        supportsAllDrives: bool,\n+    ) -> _Request:\n         self.drive.lists += 1\n         folder_id = q.split(\"'\")[1]\n         return _Request(\n@@ -121,10 +129,10 @@ def list(self, *, q: str, fields: str, pageToken: str | None) -> _Request:\n             }\n         )\n \n-    def get(self, *, fileId: str, fields: str) -> _Request:\n+    def get(self, *, fileId: str, fields: str, supportsAllDrives: bool) -> _Request:\n         return _Request(self.drive._metadata(fileId, self.drive.entries[fileId]))\n \n-    def get_media(self, *, fileId: str) -> _Request:\n+    def get_media(self, *, fileId: str, supportsAllDrives: bool) -> _Request:\n         self.drive.downloads += 1\n         return _Request(self.drive.entries[fileId].content)\n "
+  },
+  {
+   "filename": "python/cocoindex/connectors/google_drive/_source.py",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 1,
+   "patch": "@@ -143,6 +143,7 @@ def _fetch() -> file.FileMetadata:\n                 .get(\n                     fileId=self._info.file_id,\n                     fields=\"size, modifiedTime, md5Checksum\",\n+                    supportsAllDrives=True,\n                 )\n                 .execute(num_retries=_RETRIES)\n             )\n@@ -168,7 +169,9 @@ def _read_sync(self, size: int = -1) -> bytes:\n                 fileId=file_id, mimeType=export_mime\n             )\n         else:\n-            request = self._service.files().get_media(fileId=file_id)\n+            request = self._service.files().get_media(\n+                fileId=file_id, supportsAllDrives=True\n+            )\n         content: bytes = request.execute(num_retries=_RETRIES)\n         return content\n \n@@ -254,6 +257,10 @@ def _list_children(service: Any, folder_id: str) -> list[DriveFileInfo]:\n                     \" files(id, name, mimeType, size, modifiedTime, md5Checksum)\"\n                 ),\n                 pageToken=page_token,\n+                # Without these, Drive lists no children of a folder that\n+                # lives in a shared drive.\n+                includeItemsFromAllDrives=True,\n+                supportsAllDrives=True,\n             )\n             .execute(num_retries=_RETRIES)\n         )"
+  },
+  {
+   "filename": "python/tests/connectors/test_google_drive_source.py",
+   "status": "modified",
+   "additions": 46,
+   "deletions": 1,
+   "patch": "@@ -242,7 +242,15 @@ class _FakeDriveFiles:\n     def __init__(self, children: dict[str, list[dict[str, str]]]) -> None:\n         self.children = children\n \n-    def list(self, *, q: str, fields: str, pageToken: str | None) -> _FakeRequest:\n+    def list(\n+        self,\n+        *,\n+        q: str,\n+        fields: str,\n+        pageToken: str | None,\n+        includeItemsFromAllDrives: bool,\n+        supportsAllDrives: bool,\n+    ) -> _FakeRequest:\n         folder_id = q.split(\"'\")[1]\n         return _FakeRequest({\"files\": self.children[folder_id]})\n \n@@ -437,3 +445,40 @@ def test_a_rate_limited_listing_is_retried(monkeypatch: pytest.MonkeyPatch) -> N\n     files = list(list_files(GoogleDriveSourceSpec(\"unused.json\", [\"root\"])))\n     assert [f.file_path.resolve() for f in files] == [\"f1\"]\n     assert len(sleeps) == 2  # one backoff per refused attempt\n+\n+\n+@requires_google_drive\n+@pytest.mark.asyncio\n+async def test_requests_cover_shared_drives(monkeypatch: pytest.MonkeyPatch) -> None:\n+    \"\"\"A folder in a shared drive lists nothing, and its files give a 404, unless asked for.\"\"\"\n+    import json\n+    from urllib.parse import parse_qs, urlsplit\n+\n+    from googleapiclient.discovery import build\n+    from googleapiclient.http import HttpMockSequence\n+\n+    from cocoindex.connectors.google_drive import _source\n+\n+    listing = {\"files\": [_drive_entry(\"f1\", \"a.bin\", size=\"3\", md5Checksum=\"abc\")]}\n+    http = HttpMockSequence(\n+        [\n+            ({\"status\": \"200\"}, json.dumps(listing)),\n+            ({\"status\": \"200\"}, b\"abc\"),\n+            ({\"status\": \"200\"}, json.dumps({\"size\": \"3\"})),\n+        ]\n+    )\n+    service = build(\"drive\", \"v3\", http=http, static_discovery=True)\n+    monkeypatch.setattr(_source, \"_build_service\", lambda _: service)\n+\n+    [drive_file] = list_files(GoogleDriveSourceSpec(\"unused.json\", [\"root\"]))\n+    assert await drive_file.read() == b\"abc\"\n+    assert (await drive_file._fetch_metadata()).size == 3\n+\n+    list_query, media_query, get_query = (\n+        parse_qs(urlsplit(request[0]).query) for request in http.request_sequence\n+    )\n+    assert list_query[\"includeItemsFromAllDrives\"] == [\"true\"]\n+    assert list_query[\"supportsAllDrives\"] == [\"true\"]\n+    assert media_query[\"alt\"] == [\"media\"]\n+    assert media_query[\"supportsAllDrives\"] == [\"true\"]\n+    assert get_query[\"supportsAllDrives\"] == [\"true\"]"
+  }
+ ],
+ "test_files": [
+  "examples/cocoindex_agents/tests/fake_drive.py",
+  "python/tests/connectors/test_google_drive_source.py"
+ ]
+}

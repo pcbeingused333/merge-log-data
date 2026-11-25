@@ -1,0 +1,33 @@
+{
+ "repo": "pypa/pipenv",
+ "number": 6806,
+ "url": "https://github.com/pypa/pipenv/pull/6806",
+ "title": "fix(clean): show pip stderr when an uninstall fails",
+ "merged_at": "2026-11-25T05:15:41Z",
+ "files": [
+  {
+   "filename": "news/clean-uninstall-stderr.bugfix.rst",
+   "status": "added",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1 @@\n+``pipenv clean`` now displays pip's error output when a package cannot be uninstalled."
+  },
+  {
+   "filename": "pipenv/routines/clean.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -77,6 +77,8 @@ def remove_extraneous_packages(project, dry_run=False, bare=False, system=False)\n                 cmd, is_verbose=project.s.is_verbose(), catch_exceptions=False\n             )\n             if c.returncode != 0:\n+                if c.stderr:\n+                    err.print(c.stderr, markup=False)\n                 failure = True\n     return failure\n "
+  },
+  {
+   "filename": "tests/unit/test_clean_routine.py",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 4,
+   "patch": "@@ -59,8 +59,10 @@ def test_reports_uninstall_failure(clean_project, run_command):\n     assert remove_extraneous_packages(clean_project) is True\n \n \n-def test_failed_uninstall_does_not_stop_remaining_packages(clean_project, monkeypatch):\n-    \"\"\"The real ``run_command`` raises on a non-zero exit unless told not to.\"\"\"\n+@pytest.mark.parametrize(\"bare\", [False, True])\n+def test_failed_uninstall_reports_stderr_and_continues(\n+    clean_project, monkeypatch, capsys, bare\n+):\n     from pipenv.routines.clean import remove_extraneous_packages\n \n     clean_project.installed_package_names = [\"stale-a\", \"stale-b\"]\n@@ -69,11 +71,19 @@ def test_failed_uninstall_does_not_stop_remaining_packages(clean_project, monkey\n \n     def fake_subprocess_run(command, *args, **kwargs):\n         attempted.append(command[3])\n-        return mock.MagicMock(returncode=1, stdout=\"\", stderr=\"boom\")\n+        if command[3] == \"stale-a\":\n+            return mock.MagicMock(\n+                returncode=1, stdout=\"\", stderr=\"Permission denied: [red]\"\n+            )\n+        return mock.MagicMock(returncode=0, stdout=\"\", stderr=\"Successful uninstall\")\n \n     monkeypatch.setattr(\"pipenv.utils.processes.subprocess_run\", fake_subprocess_run)\n     monkeypatch.setattr(\"pipenv.routines.clean.project_python\", lambda *a, **k: \"py\")\n     monkeypatch.setattr(\"pipenv.routines.clean.get_runnable_pip\", lambda: \"pip\")\n \n-    assert remove_extraneous_packages(clean_project) is True\n+    assert remove_extraneous_packages(clean_project, bare=bare) is True\n     assert attempted == [\"stale-a\", \"stale-b\"]\n+    captured = capsys.readouterr()\n+    assert captured.err == \"Permission denied: [red]\\n\"\n+    if bare:\n+        assert captured.out == \"\""
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_clean_routine.py"
+ ]
+}

@@ -1,0 +1,42 @@
+{
+ "repo": "Kong/unirest-java",
+ "number": 619,
+ "url": "https://github.com/Kong/unirest-java/pull/619",
+ "title": "fix: keep responseEncoding when a request is copied by body()/field()",
+ "merged_at": "2026-11-25T00:36:20Z",
+ "files": [
+  {
+   "filename": "unirest-bdd-tests/src/test/java/BehaviorTests/AsStringTest.java",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -131,6 +131,28 @@ void unicodeResponseAsync() throws Exception {\n         assertAsync();\n     }\n \n+    @Test\n+    void responseCharsetIsKeptWhenABodyIsAdded() {\n+        var response = Unirest.post(MockServer.CP1250)\n+                .responseEncoding(\"windows-1250\")\n+                .body(\"hello\")\n+                .asString();\n+\n+        assertEquals(200, response.getStatus());\n+        assertEquals(\"šžýáíé\", response.getBody());\n+    }\n+\n+    @Test\n+    void responseCharsetIsKeptWhenAFieldIsAdded() {\n+        var response = Unirest.post(MockServer.CP1250)\n+                .responseEncoding(\"windows-1250\")\n+                .field(\"foo\", \"bar\")\n+                .asString();\n+\n+        assertEquals(200, response.getStatus());\n+        assertEquals(\"šžýáíé\", response.getBody());\n+    }\n+\n     @Test @Disabled\n     void canSetExpectedCharsetOfResponse() {\n         var response = Unirest.get(MockServer.WINDOWS_LATIN_1_FILE)"
+  },
+  {
+   "filename": "unirest-bdd-tests/src/test/java/BehaviorTests/MockServer.java",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -39,6 +39,7 @@\n import java.io.ByteArrayOutputStream;\n import java.io.File;\n import java.io.FileInputStream;\n+import java.nio.charset.Charset;\n import java.nio.charset.StandardCharsets;\n import java.util.*;\n import java.util.concurrent.CountDownLatch;\n@@ -80,6 +81,7 @@ public class MockServer {\n     public static final String DELETE = HOST + \"/delete\";\n     public static final String GZIP = HOST + \"/gzip\";\n     public static final String LATIN1 = HOST + \"/latin1\";\n+    public static final String CP1250 = HOST + \"/cp1250\";\n     public static final String EMPTY_GZIP = HOST + \"/empty-gzip\";\n     public static final String PATCH = HOST + \"/patch\";\n     public static final String INVALID_REQUEST = HOST + \"/invalid\";\n@@ -141,6 +143,7 @@ public static void reset() {\n             c.routes.query(\"/query\", MockServer::jsonResponse);\n             c.routes.get(\"/gzip\", MockServer::gzipResponse);\n             c.routes.get(\"/latin1\", MockServer::latin1Response);\n+            c.routes.post(\"/cp1250\", MockServer::cp1250Response);\n             c.routes.post(\"/empty-gzip\", MockServer::emptyGzipResponse);\n             c.routes.get(\"/redirect\", MockServer::redirect);\n             c.routes.post(\"/redirect\", MockServer::redirect);\n@@ -286,6 +289,11 @@ private static void latin1Response(Context context) {\n         context.result(\"caf\\u00e9\".getBytes(StandardCharsets.ISO_8859_1));\n     }\n \n+    private static void cp1250Response(Context context) {\n+        context.contentType(\"text/plain\");\n+        context.result(\"\\u0161\\u017e\\u00fd\\u00e1\\u00ed\\u00e9\".getBytes(Charset.forName(\"windows-1250\")));\n+    }\n+\n     private static void gzipResponse(Context context) {\n         context.header(\"Content-Encoding\", \"gzip\");\n         jsonResponse(context, true);"
+  },
+  {
+   "filename": "unirest/src/main/java/kong/unirest/core/BaseRequest.java",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -63,6 +63,7 @@ abstract class BaseRequest<R extends HttpRequest> implements HttpRequest<R> {\n         this.objectMapper = httpRequest.objectMapper;\n         this.version = httpRequest.version;\n         this.downloadMonitor = httpRequest.downloadMonitor;\n+        this.responseEncoding = httpRequest.responseEncoding;\n     }\n \n     BaseRequest(Config config, HttpMethod method, String url) {"
+  },
+  {
+   "filename": "unirest/src/test/java/kong/unirest/core/ResponseEncodingCopyTest.java",
+   "status": "added",
+   "additions": 81,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,81 @@\n+/**\n+ * The MIT License\n+ *\n+ * Copyright for portions of unirest-java are held by Kong Inc (c) 2013.\n+ *\n+ * Permission is hereby granted, free of charge, to any person obtaining\n+ * a copy of this software and associated documentation files (the\n+ * \"Software\"), to deal in the Software without restriction, including\n+ * without limitation the rights to use, copy, modify, merge, publish,\n+ * distribute, sublicense, and/or sell copies of the Software, and to\n+ * permit persons to whom the Software is furnished to do so, subject to\n+ * the following conditions:\n+ *\n+ * The above copyright notice and this permission notice shall be\n+ * included in all copies or substantial portions of the Software.\n+ *\n+ * THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND,\n+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF\n+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND\n+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE\n+ * LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION\n+ * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION\n+ * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.\n+ */\n+package kong.unirest.core;\n+\n+import org.junit.jupiter.api.Test;\n+\n+import java.lang.reflect.Proxy;\n+import java.util.concurrent.atomic.AtomicReference;\n+import java.util.function.Function;\n+\n+import static org.junit.jupiter.api.Assertions.assertEquals;\n+\n+class ResponseEncodingCopyTest {\n+\n+    @Test\n+    void responseEncodingSurvivesAddingABody() {\n+        assertEncoding(r -> r.responseEncoding(\"windows-1250\").body(\"hello\"));\n+    }\n+\n+    @Test\n+    void responseEncodingSurvivesAddingAField() {\n+        assertEncoding(r -> r.responseEncoding(\"windows-1250\").field(\"a\", \"b\"));\n+    }\n+\n+    @SuppressWarnings({\"unchecked\", \"rawtypes\"})\n+    private void assertEncoding(Function<HttpRequestWithBody, HttpRequest> build) {\n+        var seen = new AtomicReference<String>();\n+        var raw = (RawResponse) Proxy.newProxyInstance(getClass().getClassLoader(),\n+                new Class<?>[]{RawResponse.class}, (p, m, a) -> {\n+                    if (m.getName().equals(\"getContentAsString\") && a != null && a.length == 1) {\n+                        seen.set((String) a[0]);\n+                        return \"\";\n+                    }\n+                    if (m.getName().equals(\"getHeaders\")) {\n+                        return new Headers();\n+                    }\n+                    if (m.getReturnType() == int.class) {\n+                        return 200;\n+                    }\n+                    if (m.getReturnType() == boolean.class) {\n+                        return false;\n+                    }\n+                    return null;\n+                });\n+        var client = (Client) Proxy.newProxyInstance(getClass().getClassLoader(),\n+                new Class<?>[]{Client.class}, (p, m, a) -> {\n+                    if (m.getName().equals(\"request\")) {\n+                        return ((Function) a[1]).apply(raw);\n+                    }\n+                    return null;\n+                });\n+        var config = new Config();\n+        config.httpClient(client);\n+\n+        build.apply(new HttpRequestBody(config, HttpMethod.POST, \"http://localhost/\")).asString();\n+\n+        assertEquals(\"windows-1250\", seen.get());\n+    }\n+}"
+  }
+ ],
+ "test_files": [
+  "unirest-bdd-tests/src/test/java/BehaviorTests/AsStringTest.java",
+  "unirest-bdd-tests/src/test/java/BehaviorTests/MockServer.java",
+  "unirest/src/test/java/kong/unirest/core/ResponseEncodingCopyTest.java"
+ ]
+}

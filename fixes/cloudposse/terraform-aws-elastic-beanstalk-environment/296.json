@@ -1,0 +1,26 @@
+{
+ "repo": "cloudposse/terraform-aws-elastic-beanstalk-environment",
+ "number": 296,
+ "url": "https://github.com/cloudposse/terraform-aws-elastic-beanstalk-environment/pull/296",
+ "title": "fix: keep HTTP listener ARN known at plan time so the redirect rule is not recreated",
+ "merged_at": "2026-11-25T01:03:11Z",
+ "files": [
+  {
+   "filename": "main.tf",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -1059,9 +1059,15 @@ resource \"aws_route53_record\" \"dns_hostname\" {\n   }\n }\n \n+# Evaluated in a local so the data source does not reference the environment resource directly.\n+# A direct reference makes Terraform defer the read to apply time whenever the environment has pending changes.\n+locals {\n+  http_listener_load_balancer_arn = var.loadbalancer_is_shared ? var.shared_loadbalancer_arn : one(flatten(aws_elastic_beanstalk_environment.default[*].load_balancers))\n+}\n+\n data \"aws_lb_listener\" \"http\" {\n   count             = local.enabled && var.loadbalancer_redirect_http_to_https ? 1 : 0\n-  load_balancer_arn = var.loadbalancer_is_shared ? var.shared_loadbalancer_arn : one(aws_elastic_beanstalk_environment.default[0].load_balancers)\n+  load_balancer_arn = local.http_listener_load_balancer_arn\n   port              = var.application_port\n }\n "
+  },
+  {
+   "filename": "tests/redirect_listener.tftest.hcl",
+   "status": "added",
+   "additions": 61,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,61 @@\n+mock_provider \"aws\" {\n+  mock_data \"aws_iam_policy_document\" {\n+    defaults = { json = \"{\\\"Version\\\":\\\"2012-10-17\\\",\\\"Statement\\\":[]}\" }\n+  }\n+  mock_data \"aws_partition\" {\n+    defaults = { partition = \"aws\", dns_suffix = \"amazonaws.com\" }\n+  }\n+  mock_resource \"aws_iam_role\" {\n+    defaults = { arn = \"arn:aws:iam::111111111111:role/test\" }\n+  }\n+  mock_resource \"aws_iam_instance_profile\" {\n+    defaults = { arn = \"arn:aws:iam::111111111111:instance-profile/test\" }\n+  }\n+  mock_resource \"aws_security_group\" {\n+    defaults = { arn = \"arn:aws:ec2:us-east-2:111111111111:security-group/sg-12345678\", id = \"sg-12345678\" }\n+  }\n+  mock_resource \"aws_elastic_beanstalk_environment\" {\n+    defaults = { load_balancers = [\"arn:aws:elasticloadbalancing:us-east-2:111111111111:loadbalancer/app/awseb-test/abc\"] }\n+  }\n+  override_data {\n+    target = data.aws_lb_listener.http[0]\n+    values = { arn = \"arn:aws:elasticloadbalancing:us-east-2:111111111111:listener/app/awseb-test/abc/def\" }\n+  }\n+}\n+mock_provider \"random\" {}\n+\n+variables {\n+  enabled                             = true\n+  namespace                           = \"eg\"\n+  name                                = \"test\"\n+  region                              = \"us-east-2\"\n+  elastic_beanstalk_application_name  = \"app\"\n+  vpc_id                              = \"vpc-12345678\"\n+  application_subnets                 = [\"subnet-12345678\"]\n+  solution_stack_name                 = \"64bit Amazon Linux 2023 v4.3.0 running Docker\"\n+  loadbalancer_redirect_http_to_https = true\n+  loadbalancer_type                   = \"application\"\n+  env_vars                            = { FOO = \"1\" }\n+}\n+\n+run \"create\" {\n+  command = apply\n+}\n+\n+run \"update_env_var_keeps_listener_known\" {\n+  command = plan\n+  variables {\n+    env_vars = { FOO = \"2\" }\n+  }\n+  assert {\n+    condition     = aws_lb_listener_rule.redirect_http_to_https[0].listener_arn == \"arn:aws:elasticloadbalancing:us-east-2:111111111111:listener/app/awseb-test/abc/def\"\n+    error_message = \"listener_arn must stay known at plan time so the redirect rule is not replaced\"\n+  }\n+}\n+\n+run \"disabled_plans_cleanly\" {\n+  command = plan\n+  variables {\n+    enabled = false\n+  }\n+}"
+  }
+ ],
+ "test_files": [
+  "tests/redirect_listener.tftest.hcl"
+ ]
+}

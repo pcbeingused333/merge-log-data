@@ -1,0 +1,22 @@
+{
+ "repo": "OpenCSGs/csghub-charts",
+ "number": 824,
+ "url": "https://github.com/OpenCSGs/csghub-charts/pull/824",
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-25T06:25:45Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-11-25T06:24:23Z",
+   "body": "<img src=\"https://connector.orca.dev/github/mascots/B1.jpg\" width=\"20\" height=\"20\" alt=\"\"> **review-bot**\n\n**Verdict: approve-worthy.** The fix is correct and targeted. I confirmed the accounting binary binds `cfg.Accounting.Port` (`cmd/csghub-server/cmd/accounting/launch.go` in csghub-server), and `configmap.yaml:77` derives `OPENCSG_ACCOUNTING_SERVER_PORT` from `accounting.service.port`, so the container port, Service target and default probe do have to follow it. Ran the suite: 11/11 pass, and both new cases fail on the parent commit — they are genuine regression tests.\n\nFindings:\n\n- `charts/csghub/templates/csghub/accounting/service.yaml:26-27`, `charts/csghub/templates/csghub/accounting/deployment.yaml:141,168` — the saas payment container in these same files has the identical defect and is left untouched: its Service port follows `payment.service.port` (`configmap.yaml:218` feeds that value into `OPENCSG_PAYMENT_SERVER_PORT`) while `targetPort`, `containerPort` and the default liveness probe stay hardcoded at 8090. Setting `payment.service.port` will break payment exactly the way accounting was broken. I could not confirm the payment process binds `cfg.Payment.Port` — its launch code isn't in the public csghub-server repo — so verify that; if it does, apply the same two-line change here, same files, same root cause.\n- `charts/csghub/templates/csghub/accounting/deployment.yaml:103` — a user-supplied `accounting.livenessProbe` is rendered verbatim, so anyone overriding the port with a custom probe must update it by hand or hit the restart loop the description mentions. Intended, but worth a comment on `accounting` in `values.yaml` so it's discoverable.\n- `charts/csghub/values.yaml:640` — `accounting: {}` documents no keys at all; adding `# service.port: 8086  # process listen port, container port, Service port` is what makes the knob this PR fixes actually findable.\n\nMissing coverage:\n\n- No test pinning the promised behavior that a custom `accounting.livenessProbe` still renders unchanged under a non-default port — one case with `accounting.service.port: 18086` plus a custom probe would cover it.\n- If payment is fixed in this PR, it needs the same default-and-override asserts for `payment.service.port`.\n\nNothing blocking."
+  }
+ ]
+}

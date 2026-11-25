@@ -1,0 +1,26 @@
+{
+ "repo": "looplj/axonhub",
+ "number": 3097,
+ "url": "https://github.com/looplj/axonhub/pull/3097",
+ "title": "fix(moonshot): omit fixed sampling parameters for Kimi K2.6, K2.7 Code and K3",
+ "merged_at": "2026-11-25T04:12:29Z",
+ "files": [
+  {
+   "filename": "llm/transformer/moonshot/outbound.go",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -83,6 +83,14 @@ func (t *OutboundTransformer) TransformRequest(\n \t// Convert llm.Request to openai.Request first\n \toaiReq := openai.RequestFromLLM(ctx, llmReq, openai.ReasoningFieldContent)\n \n+\t// Let Moonshot apply the fixed sampling parameters for these models.\n+\tif hasFixedSamplingParams(llmReq.Model) {\n+\t\toaiReq.Temperature = nil\n+\t\toaiReq.TopP = nil\n+\t\toaiReq.PresencePenalty = nil\n+\t\toaiReq.FrequencyPenalty = nil\n+\t}\n+\n \t// Moonshot doesn't support json_schema, convert to json_object\n \tif oaiReq.ResponseFormat != nil && oaiReq.ResponseFormat.Type == \"json_schema\" {\n \t\toaiReq.ResponseFormat.Type = \"json_object\"\n@@ -117,3 +125,15 @@ func (t *OutboundTransformer) TransformRequest(\n \t\tAPIFormat: string(llm.APIFormatOpenAIChatCompletion),\n \t}, nil\n }\n+\n+// hasFixedSamplingParams reports whether the model rejects client-provided\n+// temperature, top_p, presence_penalty and frequency_penalty values.\n+func hasFixedSamplingParams(model string) bool {\n+\tswitch model {\n+\tcase \"kimi-k2.6\", \"kimi-k2.7-code\", \"kimi-k2.7-code-highspeed\",\n+\t\t\"kimi-k3\", \"kimi-k3.1-pro\", \"kimi-k3.1-pro-highspeed\":\n+\t\treturn true\n+\tdefault:\n+\t\treturn false\n+\t}\n+}"
+  },
+  {
+   "filename": "llm/transformer/moonshot/outbound_test.go",
+   "status": "modified",
+   "additions": 49,
+   "deletions": 0,
+   "patch": "@@ -255,3 +255,52 @@ func TestOutboundTransformer_TransformRequest_Errors(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestOutboundTransformer_TransformRequest_StripsFixedSamplingParams(t *testing.T) {\n+\ttransformer, err := NewOutboundTransformerWithConfig(&Config{\n+\t\tBaseURL:        \"https://api.moonshot.cn/v1\",\n+\t\tAPIKeyProvider: auth.NewStaticKeyProvider(\"test-api-key\"),\n+\t})\n+\trequire.NoError(t, err)\n+\n+\ttests := []struct {\n+\t\tmodel string\n+\t\tkeep  bool\n+\t}{\n+\t\t{model: \"kimi-k2.6\"},\n+\t\t{model: \"kimi-k2.7-code\"},\n+\t\t{model: \"kimi-k2.7-code-highspeed\"},\n+\t\t{model: \"kimi-k3\"},\n+\t\t{model: \"kimi-k3.1-pro\"},\n+\t\t{model: \"kimi-k3.1-pro-highspeed\"},\n+\t\t{model: \"kimi-k2-0905-preview\", keep: true},\n+\t\t{model: \"moonshot-v1-8k\", keep: true},\n+\t}\n+\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.model, func(t *testing.T) {\n+\t\t\tgot, err := transformer.TransformRequest(context.Background(), &llm.Request{\n+\t\t\t\tModel: tt.model,\n+\t\t\t\tMessages: []llm.Message{\n+\t\t\t\t\t{Role: \"user\", Content: llm.MessageContent{Content: lo.ToPtr(\"Hello\")}},\n+\t\t\t\t},\n+\t\t\t\tTemperature:      lo.ToPtr(0.2),\n+\t\t\t\tTopP:             lo.ToPtr(0.9),\n+\t\t\t\tPresencePenalty:  lo.ToPtr(0.1),\n+\t\t\t\tFrequencyPenalty: lo.ToPtr(0.1),\n+\t\t\t})\n+\t\t\trequire.NoError(t, err)\n+\n+\t\t\tvar body map[string]any\n+\t\t\trequire.NoError(t, json.Unmarshal(got.Body, &body))\n+\n+\t\t\tfor _, k := range []string{\"temperature\", \"top_p\", \"presence_penalty\", \"frequency_penalty\"} {\n+\t\t\t\tif tt.keep {\n+\t\t\t\t\tassert.Contains(t, body, k)\n+\t\t\t\t} else {\n+\t\t\t\t\tassert.NotContains(t, body, k)\n+\t\t\t\t}\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "llm/transformer/moonshot/outbound_test.go"
+ ]
+}

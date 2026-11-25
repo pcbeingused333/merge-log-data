@@ -1,0 +1,33 @@
+{
+ "repo": "pypa/pipenv",
+ "number": 6800,
+ "url": "https://github.com/pypa/pipenv/pull/6800",
+ "title": "fix(requirements): keep extras on file/path dependencies",
+ "merged_at": "2026-11-24T23:51:13Z",
+ "files": [
+  {
+   "filename": "news/requirements-path-extras.bugfix.rst",
+   "status": "added",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,2 @@\n+Keep the ``extras`` of file/path dependencies in ``pipenv requirements`` output\n+(with and without ``--no-lock``) instead of silently dropping them."
+  },
+  {
+   "filename": "pipenv/utils/dependencies.py",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 2,
+   "patch": "@@ -1877,6 +1877,17 @@ def add_index_to_pipfile_with_trust_check(project, index, trusted_hosts=None):\n     return index_name\n \n \n+def _location_with_extras(name, location, extras):\n+    \"\"\"Return a pip line for a file/path dependency, keeping its extras.\"\"\"\n+    if not extras:\n+        return location\n+    extras_str = f\"[{','.join(extras)}]\"\n+    if location.startswith((\"http:\", \"https:\", \"ftp:\", \"file:\")):\n+        # URLs need the PEP 508 \"name[extras] @ url\" form.\n+        return f\"{name}{extras_str} @ {location}\"\n+    return f\"{location}{extras_str}\"\n+\n+\n def requirement_from_lockfile(\n     package_name, package_info, include_hashes=True, include_markers=True\n ):\n@@ -1943,7 +1954,11 @@ def requirement_from_lockfile(\n             path = package_info[k]\n             if package_info.get(\"editable\") and is_editable_path(path):\n                 line.append(\"-e\")\n-            line.append(f\"{package_info[k]}\")\n+            line.append(\n+                _location_with_extras(\n+                    package_name, package_info[k], package_info.get(\"extras\")\n+                )\n+            )\n             if markers:\n                 line.append(markers)\n             pip_line = \" \".join(line)\n@@ -2069,7 +2084,9 @@ def requirement_from_pipfile(package_name, package_spec, include_markers=True):\n             parts = []\n             if package_spec.get(\"editable\") and is_editable_path(path):\n                 parts.append(\"-e\")\n-            parts.append(path)\n+            parts.append(\n+                _location_with_extras(package_name, path, package_spec.get(\"extras\"))\n+            )\n \n             if markers:\n                 parts.append(markers.strip())"
+  },
+  {
+   "filename": "tests/unit/test_requirements_file_extras.py",
+   "status": "added",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,29 @@\n+\"\"\"``pipenv requirements`` keeps extras on file/path entries (lock and --no-lock).\"\"\"\n+\n+import pytest\n+\n+from pipenv.utils.dependencies import (\n+    requirement_from_lockfile,\n+    requirement_from_pipfile,\n+)\n+\n+\n+@pytest.mark.parametrize(\"key\", [\"path\", \"file\"])\n+def test_local_path_extras_kept(key):\n+    spec = {key: \"./pkg\", \"extras\": [\"a\", \"b\"]}\n+    assert requirement_from_pipfile(\"pkg\", spec) == \"./pkg[a,b]\"\n+    assert requirement_from_lockfile(\"pkg\", spec) == \"./pkg[a,b]\"\n+\n+\n+@pytest.mark.parametrize(\"key\", [\"path\", \"file\"])\n+def test_url_extras_use_direct_reference(key):\n+    url = \"https://example.com/pkg-1.0-py3-none-any.whl\"\n+    spec = {key: url, \"extras\": [\"a\"]}\n+    expected = f\"pkg[a] @ {url}\"\n+    assert requirement_from_pipfile(\"pkg\", spec) == expected\n+    assert requirement_from_lockfile(\"pkg\", spec) == expected\n+\n+\n+def test_local_path_without_extras_unchanged():\n+    assert requirement_from_pipfile(\"pkg\", {\"path\": \"./pkg\"}) == \"./pkg\"\n+    assert requirement_from_lockfile(\"pkg\", {\"path\": \"./pkg\"}) == \"./pkg\""
+  }
+ ],
+ "test_files": [
+  "tests/unit/test_requirements_file_extras.py"
+ ]
+}

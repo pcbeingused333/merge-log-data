@@ -1,0 +1,26 @@
+{
+ "repo": "dataease/SQLBot",
+ "number": 1525,
+ "url": "https://github.com/dataease/SQLBot/pull/1525",
+ "title": "fix: preserve literal text in Excel datasource imports",
+ "merged_at": "2026-11-25T08:17:07Z",
+ "files": [
+  {
+   "filename": "backend/apps/datasource/utils/excel.py",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 2,
+   "patch": "@@ -55,12 +55,12 @@ def read_import_dataframe(save_path: str, sheet_name: str, field_mapping: dict):\n         column: 'object' if field_type == 'int' else USER_TYPE_TO_PANDAS.get(field_type, 'string')\n         for column, field_type in field_mapping.items()\n     }\n+    text_columns = [column for column, field_type in field_mapping.items() if field_type == 'string']\n     if is_csv_file(save_path):\n         # The CSV parser cannot read datetime64 dtypes directly.\n         datetime_columns = [column for column, field_type in field_mapping.items() if field_type == 'datetime']\n         for column in datetime_columns:\n             dtype_dict[column] = 'string'\n-        text_columns = [column for column, field_type in field_mapping.items() if field_type == 'string']\n         for column in text_columns:\n             del dtype_dict[column]\n         # CSV converters bypass pandas' default NA tokens for those columns.\n@@ -75,7 +75,19 @@ def read_import_dataframe(save_path: str, sheet_name: str, field_mapping: dict):\n             if column in df.columns:\n                 df[column] = df[column].astype(USER_TYPE_TO_PANDAS['datetime'])\n     else:\n-        df = pd.read_excel(save_path, sheet_name=sheet_name, engine='calamine', dtype=dtype_dict)\n+        with pd.ExcelFile(save_path, engine='calamine') as workbook:\n+            df = workbook.parse(sheet_name, dtype=dtype_dict)\n+            selected_text = [column for column in text_columns if column in df.columns]\n+            if selected_text:\n+                # Excel's parser applies the default NA tokens even with a\n+                # converter. Reparse only text columns with blanks as NA.\n+                df[selected_text] = workbook.parse(\n+                    sheet_name,\n+                    usecols=lambda column: column in selected_text,\n+                    dtype='string',\n+                    keep_default_na=False,\n+                    na_values=[''],\n+                )[selected_text]\n     for column, field_type in field_mapping.items():\n         if field_type == 'int' and column in df.columns:\n             try:"
+  },
+  {
+   "filename": "backend/tests/test_datasource_csv_extension.py",
+   "status": "modified",
+   "additions": 41,
+   "deletions": 0,
+   "patch": "@@ -91,3 +91,44 @@ def test_excel_reader_preserves_named_sheet(tmp_path):\n     assert sheet[\"sheetName\"] == \"Sales\"\n     frame = read_import_dataframe(str(path), \"Sales\", {\"units\": \"int\"})\n     assert frame[\"units\"].tolist() == [3]\n+\n+\n+def test_excel_import_keeps_literal_values_in_explicit_text_columns(tmp_path):\n+    path = tmp_path / \"regions.xlsx\"\n+    pd.DataFrame(\n+        {\n+            \"region\": [\"NA\", \"EU\", None, \"APAC\"],\n+            \"code\": [\"NULL\", \"001\", \"NaN\", None],\n+            \"units\": [\"NA\", 2.5, None, 9],\n+            \"price\": [\"NA\", 1.25, None, 3.5],\n+            \"created\": [\"NA\", \"2026-11-16\", None, \"2026-11-17\"],\n+            \"inferred\": [\"NA\", 1, None, 2],\n+        }\n+    ).to_excel(path, sheet_name=\"Sales\", engine=\"openpyxl\", index=False)\n+\n+    frame = read_import_dataframe(\n+        str(path),\n+        \"Sales\",\n+        {\n+            \"region\": \"string\",\n+            \"code\": \"string\",\n+            \"units\": \"int\",\n+            \"price\": \"float\",\n+            \"created\": \"datetime\",\n+        },\n+    )\n+\n+    pd.testing.assert_series_equal(\n+        frame[\"region\"],\n+        pd.Series([\"NA\", \"EU\", pd.NA, \"APAC\"], dtype=\"string\", name=\"region\"),\n+    )\n+    pd.testing.assert_series_equal(\n+        frame[\"code\"],\n+        pd.Series([\"NULL\", \"001\", \"NaN\", pd.NA], dtype=\"string\", name=\"code\"),\n+    )\n+    assert frame[\"units\"].tolist() == [pd.NA, 3, pd.NA, 9]\n+    assert frame[\"price\"].isna().tolist() == [True, False, True, False]\n+    assert frame.loc[1, \"price\"] == 1.25\n+    assert frame[\"created\"].isna().tolist() == [True, False, True, False]\n+    assert frame.loc[1, \"created\"] == pd.Timestamp(\"2026-11-16\")\n+    assert frame[\"inferred\"].isna().tolist() == [True, False, True, False]"
+  }
+ ],
+ "test_files": [
+  "backend/tests/test_datasource_csv_extension.py"
+ ]
+}

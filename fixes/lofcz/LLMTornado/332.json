@@ -1,0 +1,33 @@
+{
+ "repo": "lofcz/LLMTornado",
+ "number": 332,
+ "url": "https://github.com/lofcz/LLMTornado/pull/332",
+ "title": "fix(a2a): serialize refusal, userName and custom language metadata as JSON",
+ "merged_at": "2026-11-25T02:39:53Z",
+ "files": [
+  {
+   "filename": "src/LlmTornado.A2A/A2ATornadoExtension.ChatMessage.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -79,7 +79,7 @@ public static TextPart ToA2ATextPart(this ChatMessagePartExecutableCode code)\n         {\n             Text = code.Code ?? \"Code\",\n             Metadata = new Dictionary<string, JsonElement> {\n-                { \"Language\", JsonDocument.Parse($\"\\\"{(code.CustomLanguage != null ? code.CustomLanguage : code.Language)}\\\"\").RootElement }\n+                { \"Language\", JsonSerializer.SerializeToElement(code.CustomLanguage ?? code.Language.ToString()) }\n             }\n         };\n     }"
+  },
+  {
+   "filename": "src/LlmTornado.A2A/A2ATornadoExtension.cs",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 4,
+   "patch": "@@ -76,8 +76,8 @@ public static AgentMessage ToA2AAgentMessage(this ChatMessage chatMessage,\n \n         metadata ??= new Dictionary<string, JsonElement>();\n         metadata[\"tokens\"] = JsonDocument.Parse($\"{chatMessage.Tokens ?? 0}\").RootElement;\n-        metadata[\"refusal\"] = JsonDocument.Parse($\"\\\"{chatMessage.Refusal ?? \"\"}\\\"\").RootElement;\n-        metadata[\"userName\"] = JsonDocument.Parse($\"\\\"{chatMessage.Name ?? \"\"}\\\"\").RootElement;\n+        metadata[\"refusal\"] = JsonSerializer.SerializeToElement(chatMessage.Refusal ?? \"\");\n+        metadata[\"userName\"] = JsonSerializer.SerializeToElement(chatMessage.Name ?? \"\");\n \n         return new AgentMessage\n         {\n@@ -136,8 +136,8 @@ public static Artifact ToA2AArtifact(this ChatMessage chatMessage,\n \n         metadata ??= new Dictionary<string, JsonElement>();\n         metadata[\"tokens\"] = JsonDocument.Parse($\"{chatMessage.Tokens ?? 0}\").RootElement;\n-        metadata[\"refusal\"] = JsonDocument.Parse($\"\\\"{chatMessage.Refusal ?? \"\"}\\\"\").RootElement;\n-        metadata[\"userName\"] = JsonDocument.Parse($\"\\\"{chatMessage.Name ?? \"\"}\\\"\").RootElement;\n+        metadata[\"refusal\"] = JsonSerializer.SerializeToElement(chatMessage.Refusal ?? \"\");\n+        metadata[\"userName\"] = JsonSerializer.SerializeToElement(chatMessage.Name ?? \"\");\n \n         return new Artifact\n         {"
+  },
+  {
+   "filename": "src/LlmTornado.Tests/A2AMetadataEscapingTests.cs",
+   "status": "added",
+   "additions": 46,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,46 @@\n+using A2A;\n+using LlmTornado.A2A;\n+using LlmTornado.Chat;\n+using LlmTornado.Code;\n+\n+namespace LlmTornado.Tests;\n+\n+[TestFixture]\n+public class A2AMetadataEscapingTests\n+{\n+    private const string Tricky = \"say \\\"hi\\\"\\\\ \\n\\tend\";\n+\n+    private static ChatMessage Message() => new(ChatMessageRoles.Assistant, \"hello\")\n+    {\n+        Refusal = Tricky,\n+        Name = Tricky\n+    };\n+\n+    [Test]\n+    public void ToA2AAgentMessage_RefusalAndNameWithSpecialChars_RoundTrip()\n+    {\n+        AgentMessage msg = Message().ToA2AAgentMessage();\n+\n+        Assert.That(msg.Metadata![\"refusal\"].GetString(), Is.EqualTo(Tricky));\n+        Assert.That(msg.Metadata![\"userName\"].GetString(), Is.EqualTo(Tricky));\n+    }\n+\n+    [Test]\n+    public void ToA2AArtifact_RefusalAndNameWithSpecialChars_RoundTrip()\n+    {\n+        Artifact artifact = Message().ToA2AArtifact();\n+\n+        Assert.That(artifact.Metadata![\"refusal\"].GetString(), Is.EqualTo(Tricky));\n+        Assert.That(artifact.Metadata![\"userName\"].GetString(), Is.EqualTo(Tricky));\n+    }\n+\n+    [Test]\n+    public void ExecutableCodeWithSpecialCharsInCustomLanguage_RoundTrip()\n+    {\n+        ChatMessagePartExecutableCode code = new() { Code = \"x\", CustomLanguage = Tricky };\n+\n+        TextPart part = code.ToA2ATextPart();\n+\n+        Assert.That(part.Metadata![\"Language\"].GetString(), Is.EqualTo(Tricky));\n+    }\n+}"
+  }
+ ],
+ "test_files": [
+  "src/LlmTornado.Tests/A2AMetadataEscapingTests.cs"
+ ]
+}

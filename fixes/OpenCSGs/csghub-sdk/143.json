@@ -1,0 +1,26 @@
+{
+ "repo": "OpenCSGs/csghub-sdk",
+ "number": 143,
+ "url": "https://github.com/OpenCSGs/csghub-sdk/pull/143",
+ "title": "fix(download): do not retry 4xx in http_get and rewind after truncate",
+ "merged_at": "2026-11-25T08:33:46Z",
+ "files": [
+  {
+   "filename": "pycsghub/file_download.py",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -1,3 +1,4 @@\n+import contextlib\n import tempfile\n from functools import partial\n from http.cookiejar import CookieJar\n@@ -190,6 +191,7 @@ def http_get(*,\n                 else:\n                     if downloaded_size > 0:\n                         temp_file.truncate(0)\n+                        temp_file.seek(0)\n                         downloaded_size = temp_file.tell()\n                     total_content_length = int(content_length) if content_length is not None else None\n \n@@ -212,6 +214,13 @@ def http_get(*,\n                     progress.close()\n                 break\n             except Exception as e:\n+                status = e.response.status_code if isinstance(e, requests.HTTPError) and e.response is not None else None\n+                if status is not None and 400 <= status < 500 and status not in (408, 429):\n+                    # client errors (401/403/404...) will not succeed on retry\n+                    temp_file.close()  # Windows cannot remove an open file\n+                    with contextlib.suppress(OSError):\n+                        os.remove(temp_file.name)\n+                    raise\n                 retry = retry.increment('GET', url, error=e)\n                 retry.sleep()\n "
+  },
+  {
+   "filename": "tests/test_http_get.py",
+   "status": "added",
+   "additions": 70,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,70 @@\n+import os\n+from unittest import mock\n+\n+import pytest\n+import requests\n+\n+from pycsghub import file_download\n+\n+\n+class FakeResponse:\n+    def __init__(self, status=200, chunks=(), headers=None, fail_after=None):\n+        self.status_code = status\n+        self.headers = headers or {}\n+        self._chunks = chunks\n+        self._fail_after = fail_after\n+\n+    def raise_for_status(self):\n+        if self.status_code >= 400:\n+            raise requests.HTTPError(str(self.status_code), response=self)\n+\n+    def iter_content(self, chunk_size=None):\n+        for i, c in enumerate(self._chunks):\n+            if self._fail_after is not None and i >= self._fail_after:\n+                raise requests.ConnectionError(\"boom\")\n+            yield c\n+\n+\n+@pytest.fixture(autouse=True)\n+def no_sleep():\n+    with mock.patch(\"urllib3.util.retry.Retry.sleep\"):\n+        yield\n+\n+\n+def test_client_error_is_not_retried(tmp_path):\n+    with mock.patch.object(file_download.requests, \"get\", return_value=FakeResponse(401)) as get:\n+        with pytest.raises(requests.HTTPError):\n+            file_download.http_get(url=\"http://x/f\", local_dir=str(tmp_path), file_name=\"f\", quiet=True)\n+    assert get.call_count == 1\n+    assert os.listdir(tmp_path) == []\n+\n+\n+def test_server_error_is_retried(tmp_path):\n+    responses = [FakeResponse(503), FakeResponse(200, [b\"abc\"], {\"Content-Length\": \"3\"})]\n+    with mock.patch.object(file_download.requests, \"get\", side_effect=responses) as get:\n+        file_download.http_get(url=\"http://x/f\", local_dir=str(tmp_path), file_name=\"f\", quiet=True)\n+    assert get.call_count == 2\n+    assert (tmp_path / \"f\").read_bytes() == b\"abc\"\n+\n+\n+def test_restart_without_range_support_has_no_hole(tmp_path):\n+    # first attempt writes 4 bytes then drops; server has no Accept-Ranges,\n+    # so the second attempt resends the whole body from offset 0\n+    responses = [\n+        FakeResponse(200, [b\"ABCD\", b\"EF\"], {}, fail_after=1),\n+        FakeResponse(200, [b\"ABCDEF\"], {\"Content-Length\": \"6\"}),\n+    ]\n+    with mock.patch.object(file_download.requests, \"get\", side_effect=responses):\n+        file_download.http_get(url=\"http://x/f\", local_dir=str(tmp_path), file_name=\"f\", quiet=True)\n+    assert (tmp_path / \"f\").read_bytes() == b\"ABCDEF\"\n+\n+\n+def test_client_error_survives_temp_file_removal_failure(tmp_path):\n+    response = FakeResponse(401)\n+    with mock.patch.object(file_download.requests, \"get\", return_value=response) as get:\n+        with mock.patch.object(file_download.os, \"remove\", side_effect=PermissionError) as remove:\n+            with pytest.raises(requests.HTTPError) as error:\n+                file_download.http_get(url=\"http://x/f\", local_dir=str(tmp_path), file_name=\"f\", quiet=True)\n+    assert error.value.response is response\n+    remove.assert_called_once()\n+    get.assert_called_once()"
+  }
+ ],
+ "test_files": [
+  "tests/test_http_get.py"
+ ]
+}

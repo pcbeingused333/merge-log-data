@@ -2,8 +2,46 @@
  "repo": "OpenCSGs/csghub-sdk",
  "number": 143,
  "url": "https://github.com/OpenCSGs/csghub-sdk/pull/143",
- "state": "open",
- "reviews": [],
- "review_comments": [],
- "comments": []
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-25T07:04:25Z",
+   "body": "两处修复都对症，本地已实测验证过：3 个新用例在 PR head 全绿；把 `pycsghub/file_download.py` 还原成改动前版本再跑，`test_client_error_is_not_retried` 与 `test_restart_without_range_support_has_no_hole` 均失败，说明是有效回归网；全量 `pytest pycsghub/test` 在 main 与本分支同为 8 failed / 64 passed / 1 skipped，失败集合一致（既有的网络/token 依赖用例），无回归。\n\n下面 3 条来自逐行 review：**第 1 条（`os.remove` 掩盖原始错误）建议合并前处理**，另外 2 条可选、不阻塞。"
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-25T08:33:24Z",
+   "body": "lgtm"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "collaborator",
+   "path": "pycsghub/file_download.py",
+   "created_at": "2026-11-25T07:04:26Z",
+   "body": "**[可选] 416 被归进「重试无意义」的 4xx，但它是唯一「重置后能成功」的 4xx**\n\n场景：第一次尝试**已经把全部字节写完**，随后连接在收尾处断开（`iter_content` 抛 `ConnectionError` / `ChunkedEncodingError`）→ 重试时 `downloaded_size == 文件全长`，发出 `Range: bytes=<size>-` → 服务端普遍回 **416 Range Not Satisfiable**。\n\n改动前是 5 次重试后 `MaxRetryError`，改动后是立刻 416 失败，**两者都不能自愈**，所以这不是回归。但既然本 PR 正在给 4xx 分类，416 恰好值得单独处理——它只要把写入偏移重置为 0 就能成功：\n\n```python\nif status == 416 and not restarted_from_416:\n    # 上一次已写满全部字节却在收尾处断开：清掉 Range 从头重来一次\n    restarted_from_416 = True\n    temp_file.truncate(0)\n    temp_file.seek(0)\n    get_headers.pop('Range', None)\n    continue\n```\n\n注意要配一个「只重置一次」的标志位（如上），否则服务端持续返回 416 时会在这个 `while True` 里死循环。\n\n大文件 / LFS 下载里这条路径不算罕见，加上它能让「断在最后一刻」的下载自动恢复，而不是让用户重跑命令。"
+  },
+  {
+   "role": "collaborator",
+   "path": "pycsghub/file_download.py",
+   "created_at": "2026-11-25T07:04:26Z",
+   "body": "**[建议合并前处理] `os.remove` 失败会掩盖真正的错误原因**\n\n这条分支的全部价值就是让用户**立刻看到 401/403/404**，但目前的清理动作是「硬失败」的：\n\n```python\ntemp_file.close()          # 219\nos.remove(temp_file.name)  # 220  ← 若这里抛 OSError，下面的 raise 永远执行不到\nraise                      # 221\n```\n\nWindows 上文件被杀软/索引器短暂占用、目录权限不足、或文件已不存在时，`os.remove` 会抛 `PermissionError` / `FileNotFoundError`，用户最终看到的是「清理临时文件失败」，而**丢掉了唯一有诊断价值的信息（token 无效 / 文件不存在）**——恰好把这条快速失败路径的收益抵消掉了。\n\n清理本身是 best-effort，不该让它的异常覆盖原始错误：\n\n```python\ntemp_file.close()  # Windows cannot remove an open file\nwith contextlib.suppress(OSError):\n    os.remove(temp_file.name)\nraise\n```\n\n（`temp_file.close()` 保留是对的，Windows 必需；`with` 退出时会再 close 一次，幂等，没问题。文件末尾 size 校验分支的第 227 行 `os.remove` 是同样的写法，属既有代码，本 PR 不必一起改。）"
+  },
+  {
+   "role": "collaborator",
+   "path": "pycsghub/file_download.py",
+   "created_at": "2026-11-25T07:04:26Z",
+   "body": "**[可选] 对外的异常类型变了，属于公开 API 的契约面**\n\n改动前 4xx 最终冒泡的是 `urllib3.exceptions.MaxRetryError`（约 30s 退避之后），改动后是 `requests.HTTPError`（立即）。错误信息更清楚，方向是对的，但有两点需要确认：\n\n- `http_get` 在 `doc/sdk.md:44-56` 是**直接对外文档化的公开 API**，不只被 `file_download` / `snapshot_download` 内部调用；\n- 同一个函数在第 230 行已经用 SDK 自己的 `FileDownloadError` 表达「下载失败」。\n\n结果是：捕获 `MaxRetryError` 的既有调用方会静默漏捕获，同时 SDK 对外的错误面出现两种风格。建议二选一：\n\n1. 包一层，保持 SDK 错误面一致（新测试相应改成 `pytest.raises(FileDownloadError)`）：\n\n```python\nraise FileDownloadError(f\"download {url} failed with HTTP {status}\") from e\n```\n\n2. 或保持现状，但在 `doc/sdk.md` 里注明「4xx 直接抛 `requests.HTTPError`，不再重试」。\n\n倾向方案 1：`snapshot_download` / `file_download` 都会把这个异常抛给最终用户，统一的 SDK 异常类型更容易写 try/except，也和本文件已有的 `FileDownloadError` 一致。"
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-25T07:53:06Z",
+   "body": "已按建议处理：先关闭临时文件，再用 `contextlib.suppress(OSError)` 包住 `os.remove`，保留原始 HTTP 错误。新增回归测试模拟 401 和删除时的 `PermissionError`，确认调用方仍收到原始 HTTP 错误，且下载未重试。4 个下载测试均通过。\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
 }

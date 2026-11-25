@@ -1,0 +1,26 @@
+{
+ "repo": "NPC-Worldwide/npcpy",
+ "number": 382,
+ "url": "https://github.com/NPC-Worldwide/npcpy/pull/382",
+ "title": "fix(image): convert palette and grayscale-alpha modes before JPEG save in compress_image",
+ "merged_at": "2026-11-25T01:26:24Z",
+ "files": [
+  {
+   "filename": "npcpy/data/image.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -129,10 +129,16 @@ def compress_image(image_bytes, max_size=(800, 600)):\n     img.load()\n \n     \n-    if img.mode == \"RGBA\":\n+    has_alpha = img.mode in (\"RGBA\", \"LA\", \"PA\") or (\n+        img.mode == \"P\" and \"transparency\" in img.info\n+    )\n+    if has_alpha:\n+        img = img.convert(\"RGBA\")\n         background = Image.new(\"RGB\", img.size, (255, 255, 255))\n         background.paste(img, mask=img.split()[3])\n         img = background\n+    elif img.mode not in (\"RGB\", \"L\", \"CMYK\"):\n+        img = img.convert(\"RGB\")\n \n     \n     if img.size[0] > max_size[0] or img.size[1] > max_size[1]:"
+  },
+  {
+   "filename": "tests/test_image.py",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -263,3 +263,41 @@ def test_compress_image_different_formats():\n         print(\"Different format test skipped - PIL not available\")\n     except Exception as e:\n         print(f\"Different format test failed: {e}\")\n+\n+\n+def _png_bytes(img):\n+    import io\n+    buf = io.BytesIO()\n+    img.save(buf, format=\"PNG\")\n+    return buf.getvalue()\n+\n+\n+def test_compress_image_palette_and_grayscale_alpha_modes():\n+    \"\"\"PNG modes P, LA, 1, I;16 must not crash the JPEG save.\"\"\"\n+    import io\n+    from PIL import Image\n+\n+    images = [\n+        Image.new(\"P\", (32, 32)),\n+        Image.new(\"LA\", (32, 32), (128, 0)),\n+        Image.new(\"1\", (32, 32)),\n+        Image.new(\"I;16\", (32, 32)),\n+    ]\n+    for img in images:\n+        out = compress_image(_png_bytes(img))\n+        assert Image.open(io.BytesIO(out)).format == \"JPEG\", img.mode\n+\n+\n+def test_compress_image_transparent_pixels_become_white():\n+    import io\n+    from PIL import Image\n+\n+    la = Image.new(\"LA\", (8, 8), (0, 0))\n+    out = Image.open(io.BytesIO(compress_image(_png_bytes(la)))).convert(\"RGB\")\n+    assert min(out.getpixel((4, 4))) > 240\n+\n+    p = Image.new(\"P\", (8, 8), 0)\n+    p.putpalette([255, 0, 0] * 256)\n+    p.info[\"transparency\"] = 0\n+    out = Image.open(io.BytesIO(compress_image(_png_bytes(p)))).convert(\"RGB\")\n+    assert min(out.getpixel((4, 4))) > 240"
+  }
+ ],
+ "test_files": [
+  "tests/test_image.py"
+ ]
+}
