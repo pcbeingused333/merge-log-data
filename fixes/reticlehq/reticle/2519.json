@@ -1,0 +1,33 @@
+{
+ "repo": "reticlehq/reticle",
+ "number": 2519,
+ "url": "https://github.com/reticlehq/reticle/pull/2519",
+ "title": "fix(server): keep the real steps on the automatic recording when a nested one closes",
+ "merged_at": "2026-11-26T14:10:46Z",
+ "files": [
+  {
+   "filename": ".changes/2493-drive-flow-invoke.md",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+### Fixed\n+\n+- A recording opened and closed during an automatic recording no longer turns that span of the drive flow into an `invoke` step naming a flow that may not exist. The drive flow keeps the steps that ran (#2493)."
+  },
+  {
+   "filename": "server/src/language/flows/recording/tape/nested-recording.test.ts",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 1,
+   "patch": "@@ -1,5 +1,5 @@\n import { describe, expect, it } from 'vitest';\n-import { RecordingStore, type RecordedStep } from './recordings.js';\n+import { ambientRecordingOf, RecordingStore, type RecordedStep } from './recordings.js';\n \n /**\n  * Recording a SUB-FLOW, so a composite can be authored by driving rather than by hand.\n@@ -73,4 +73,24 @@ describe('recording a sub-flow inside another', () => {\n     store.stop('early');\n     expect(store.stop('late')?.steps.map((s) => s.invoke ?? s.args['id'])).toEqual(['b']);\n   });\n+\n+  // The ambient tape is saved on its own at session end, and the recording closed inside it may\n+  // never be saved: an invoke there names a document that does not exist (#2493).\n+  it('keeps the real steps on the ambient tape instead of an invoke', () => {\n+    const store = new RecordingStore();\n+    store.capture(step('open-drawer'), undefined, 's1');\n+\n+    store.start('close-drawer', 1, undefined, 's1');\n+    store.capture(step('closed'), undefined, 's1');\n+    store.stop('close-drawer');\n+\n+    store.capture(step('cancel'), undefined, 's1');\n+    const ambient = store.stop(ambientRecordingOf('s1'));\n+\n+    expect(ambient?.steps.map((s) => s.invoke ?? s.args['id'])).toEqual([\n+      'open-drawer',\n+      'closed',\n+      'cancel',\n+    ]);\n+  });\n });"
+  },
+  {
+   "filename": "server/src/language/flows/recording/tape/recordings.ts",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 1,
+   "patch": "@@ -414,6 +414,9 @@ export class RecordingStore {\n    * Only recordings this one opened OVER are rewritten. Overlapping spans are not nesting: a\n    * recording that began before this one did not contain it, and a document that invokes something\n    * it never drove replays a journey nobody took.\n+   *\n+   * An ambient tape is never rewritten. It is saved on its own at session end, and nothing says the\n+   * recording closed inside it will ever be saved: its `invoke` would name no document (#2493).\n    */\n   stop(name: string): ActiveRecording | undefined {\n     const rec = this.#active.get(name);\n@@ -425,7 +428,7 @@ export class RecordingStore {\n       const parent = this.#active.get(outer);\n       // Gone already, or somehow shorter than when we started: leave it exactly as it is rather\n       // than splice a range that no longer means what it meant.\n-      if (parent === undefined || parent.steps.length < mark) {\n+      if (isAmbient(outer) || parent === undefined || parent.steps.length < mark) {\n         continue;\n       }\n       parent.steps.splice(mark, parent.steps.length - mark, {"
+  }
+ ],
+ "test_files": [
+  "server/src/language/flows/recording/tape/nested-recording.test.ts"
+ ]
+}

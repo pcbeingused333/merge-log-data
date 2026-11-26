@@ -1,0 +1,26 @@
+{
+ "repo": "growthbook/growthbook-c-sharp",
+ "number": 137,
+ "url": "https://github.com/growthbook/growthbook-c-sharp/pull/137",
+ "title": "fix: discard incomplete SSE events on reconnect",
+ "merged_at": "2026-11-26T14:48:41Z",
+ "files": [
+  {
+   "filename": "GrowthBook.Tests/ApiTests/SSELifecycleTests.cs",
+   "status": "modified",
+   "additions": 31,
+   "deletions": 0,
+   "patch": "@@ -354,6 +354,37 @@ public async Task DeliveredEventsStillReachListeners()\n         received[0].Should().Contain(\"features\");\n     }\n \n+    [Fact]\n+    public async Task ReconnectDiscardsAnIncompleteEventFromThePreviousStream()\n+    {\n+        const string Payload = \"{\\\"features\\\":{}}\";\n+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));\n+        var handler = new ScriptedSseHandler(attempt =>\n+        {\n+            if (attempt == 1)\n+                return \"data: {\";\n+\n+            if (attempt == 2)\n+                return $\"data: {Payload}\\n\\n\";\n+\n+            cancellation.Cancel();\n+            return string.Empty;\n+        });\n+        using var client = CreateClient(handler);\n+        SetRetryTimeMs(client, 1);\n+\n+        var received = new List<string>();\n+        client.AddEventListener(null, sseEvent =>\n+        {\n+            received.Add(sseEvent.Data);\n+            return Task.CompletedTask;\n+        });\n+\n+        await client.ConnectAsync(cancellation.Token);\n+\n+        received.Should().Equal(Payload);\n+    }\n+\n     [Fact]\n     public async Task AZeroRetryDirectiveStillThrottlesReconnects()\n     {"
+  },
+  {
+   "filename": "GrowthBook/Api/SSE/SSEClient.cs",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 3,
+   "patch": "@@ -19,7 +19,6 @@ public class SSEClient : IDisposable\n         private readonly Dictionary<string, string> _headers;\n         private readonly string _httpClientName;\n         private readonly Dictionary<string, Func<SSEEvent, Task>> _eventListeners;\n-        private readonly SSEEventParser _parser;\n         \n         private const int MaxRetryDelayMs = 5 * 60 * 1000;\n         private const int MinRetryTimeMs = 1000;\n@@ -46,7 +45,6 @@ public SSEClient(ILogger<SSEClient> logger, IHttpClientFactory httpClientFactory\n             _headers = headers ?? new Dictionary<string, string>();\n             _httpClientName = httpClientName;\n             _eventListeners = new Dictionary<string, Func<SSEEvent, Task>>();\n-            _parser = new SSEEventParser();\n             _connectionStatus = SSEConnectionStatus.Disconnected;\n         }\n \n@@ -199,6 +197,7 @@ private async Task ConnectInternalAsync(CancellationToken cancellationToken)\n         /// </summary>\n         private async Task ProcessStreamAsync(StreamReader reader, CancellationToken cancellationToken)\n         {\n+            var parser = new SSEEventParser();\n             var buffer = new char[4096];\n \n             while (!cancellationToken.IsCancellationRequested)\n@@ -219,7 +218,7 @@ private async Task ProcessStreamAsync(StreamReader reader, CancellationToken can\n                 _currentRetryAttempt = 0;\n \n                 var data = new string(buffer, 0, bytesRead);\n-                var events = _parser.AppendData(data);\n+                var events = parser.AppendData(data);\n \n                 foreach (var sseEvent in events)\n                 {"
+  }
+ ],
+ "test_files": [
+  "GrowthBook.Tests/ApiTests/SSELifecycleTests.cs"
+ ]
+}

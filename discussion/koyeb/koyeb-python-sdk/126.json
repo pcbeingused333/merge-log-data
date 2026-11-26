@@ -2,8 +2,21 @@
  "repo": "koyeb/koyeb-python-sdk",
  "number": 126,
  "url": "https://github.com/koyeb/koyeb-python-sdk/pull/126",
- "state": "open",
- "reviews": [],
+ "state": "merged",
+ "reviews": [
+  {
+   "role": "member",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-26T09:59:38Z",
+   "body": ""
+  }
+ ],
  "review_comments": [],
- "comments": []
+ "comments": [
+  {
+   "role": "member",
+   "created_at": "2026-11-26T09:51:01Z",
+   "body": "## Code Review — 2 findings\n\n| # | Severity | Category | File | Lines | Description |\n|---|----------|----------|------|-------|-------------|\n| 1 | high | correctness | koyeb/sandbox/filesystem.py | 2573-2583 | Accumulating base64 text drops later writes when open() is used with encoding=\"base64\" |\n| 2 | high | resource | koyeb/sandbox/filesystem.py | 2573-2583 | Each write() re-uploads the whole file and the handle keeps it all in memory |\n\n---\n\n### 1. Accumulating base64 text drops later writes when open() is used with encoding=\"base64\"\n**File:** koyeb/sandbox/filesystem.py (lines 2573-2583) · **correctness** · Confidence: 80\nhttps://github.com/koyeb/koyeb-python-sdk/blob/9f4825dfcc52faba112b5e1bd33e612f65d1f41a/koyeb/sandbox/filesystem.py#L2573-L2583\nWith encoding=\"base64\" (the binary path documented on open()), each write() passes base64 text and the handle concatenates the encoded strings. Base64 cannot be concatenated once a chunk ends with padding: write(b64(b\"a\")) then write(b64(b\"b\")) sends \"YQ==Yg==\", and \\_put\\_body's base64.b64decode stops at the first padding, so the file contains b\"a\" and the second write is silently lost (reproduced against the PR head with the test fakes). The async twin (lines 2646-2656) has the same problem. Accumulating the decoded bytes instead, or decoding each chunk before concatenating, avoids it.\n\n---\n\n### 2. Each write() re-uploads the whole file and the handle keeps it all in memory\n**File:** koyeb/sandbox/filesystem.py (lines 2573-2583) · **resource** · Confidence: 75\nhttps://github.com/koyeb/koyeb-python-sdk/blob/9f4825dfcc52faba112b5e1bd33e612f65d1f41a/koyeb/sandbox/filesystem.py#L2573-L2583\nwrite() now sends self.\\_written + content on every call and stores it, so N writes of size k upload about k\\*N^2/2 bytes and hold the whole file in memory for the handle's lifetime. A loop writing a 100 MB file in 1 MB chunks uploads about 5 GB. That defeats the streamed /files routes. Buffering in write() and uploading once on close() (or on an explicit flush()) gives the same final file with a single upload; the async handle (lines 2646-2656) needs the same change.\n"
+  }
+ ]
 }

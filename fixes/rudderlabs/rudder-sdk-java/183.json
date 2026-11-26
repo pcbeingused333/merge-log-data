@@ -1,0 +1,26 @@
+{
+ "repo": "rudderlabs/rudder-sdk-java",
+ "number": 183,
+ "url": "https://github.com/rudderlabs/rudder-sdk-java/pull/183",
+ "title": "fix: avoid interrupting callers when rejecting oversized messages",
+ "merged_at": "2026-11-26T17:12:45Z",
+ "files": [
+  {
+   "filename": "analytics/src/main/java/com/rudderstack/sdk/java/analytics/internal/AnalyticsClient.java",
+   "status": "modified",
+   "additions": 0,
+   "deletions": 2,
+   "patch": "@@ -203,8 +203,6 @@ public void enqueue(Message message) {\n         } else {\n           log.print(\n               ERROR, \"Message was above individual limit. MessageId: %s\", message.messageId());\n-          throw new InterruptedException(\n-              \"Message was above individual limit. MessageId: \" + message.messageId());\n         }\n       } else {\n         messageQueue.put(message);"
+  },
+  {
+   "filename": "analytics/src/test/java/com/rudderstack/sdk/java/analytics/internal/RudderAnalyticsClientTest.java",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -704,6 +704,44 @@ public void checkForIndividualMessageSizeLessThanLimit() {\n     assertThat(msgActualSize).isLessThanOrEqualTo(sizeLimit);\n   }\n \n+  @Test\n+  public void oversizedMessageDoesNotInterruptSubsequentEnqueue() throws InterruptedException {\n+    AnalyticsClient client = newClient();\n+    Map<String, String> properties = new HashMap<String, String>();\n+    properties.put(\"property1\", generateDataOfSize(1024 * 33));\n+    TrackMessage oversized =\n+        TrackMessage.builder(\"Oversized\").userId(\"foo\").properties(properties).build();\n+    TrackMessage valid = TrackMessage.builder(\"Valid\").userId(\"foo\").build();\n+\n+    try {\n+      client.enqueue(oversized);\n+      client.enqueue(valid);\n+\n+      assertThat(Thread.currentThread().isInterrupted()).isFalse();\n+      verify(messageQueue, never()).put(oversized);\n+      verify(messageQueue).put(valid);\n+    } finally {\n+      Thread.interrupted();\n+      client.shutdown();\n+    }\n+  }\n+\n+  @Test\n+  public void enqueuePreservesRealInterruption() {\n+    AnalyticsClient client = newClient();\n+    TrackMessage message = TrackMessage.builder(\"Valid\").userId(\"foo\").build();\n+\n+    try {\n+      Thread.currentThread().interrupt();\n+      client.enqueue(message);\n+\n+      assertThat(Thread.currentThread().isInterrupted()).isTrue();\n+    } finally {\n+      Thread.interrupted();\n+      client.shutdown();\n+    }\n+  }\n+\n  /* * Individual Size check sad path regular chars (over the limit)*/\n   @Test\n   public void checkForIndividualMessageSizeOverLimit() {"
+  }
+ ],
+ "test_files": [
+  "analytics/src/test/java/com/rudderstack/sdk/java/analytics/internal/RudderAnalyticsClientTest.java"
+ ]
+}

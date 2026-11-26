@@ -1,0 +1,26 @@
+{
+ "repo": "FlowFuse/flowfuse",
+ "number": 9166,
+ "url": "https://github.com/FlowFuse/flowfuse/pull/9166",
+ "title": "fix: show team creation license errors",
+ "merged_at": "2026-11-26T17:18:02Z",
+ "files": [
+  {
+   "filename": "frontend/src/pages/team/create.vue",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -94,6 +94,7 @@ import FormRow from '../../components/FormRow.vue'\n \n import TeamTypeTile from '../../components/TeamTypeTile.vue'\n import { useHubspotHelper } from '../../composables/Hubspot.js'\n+import Alerts from '../../services/alerts.js'\n import slugify from '../../utils/slugify.js'\n \n import { useAccountAuthStore } from '@/stores/account-auth.js'\n@@ -271,6 +272,10 @@ export default {\n                 if (err.response.data) {\n                     if (/slug/.test(err.response.data.error)) {\n                         this.input.slugError = 'Slug already in use'\n+                    } else if (err.response.data.error === 'Error: license limit reached') {\n+                        Alerts.emit('Creating Team would exceed license limits', 'warning')\n+                    } else {\n+                        Alerts.emit(`Failed to create Team - ${err.response.data.error}`, 'warning')\n                     }\n                 }\n             }).finally(() => {"
+  },
+  {
+   "filename": "test/unit/frontend/pages/team/Create.spec.js",
+   "status": "added",
+   "additions": 53,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,53 @@\n+import { createTestingPinia } from '@pinia/testing'\n+import { enableAutoUnmount, flushPromises, shallowMount } from '@vue/test-utils'\n+import { afterEach, expect, test, vi } from 'vitest'\n+\n+import client from '../../../../../frontend/src/api/client.ts'\n+import teamTypesApi from '../../../../../frontend/src/api/teamTypes.js'\n+import CreateTeam from '../../../../../frontend/src/pages/team/create.vue'\n+import Alerts from '../../../../../frontend/src/services/alerts.js'\n+\n+enableAutoUnmount(afterEach)\n+afterEach(() => vi.restoreAllMocks())\n+\n+async function submitTeam (error) {\n+    vi.spyOn(CreateTeam.methods, 'checkSlug').mockImplementation(() => {})\n+    vi.spyOn(teamTypesApi, 'getTeamTypes').mockResolvedValue({ types: [{ id: 'type1', name: 'Starter', properties: {} }] })\n+    const post = vi.spyOn(client, 'post').mockRejectedValue({ response: { status: 400, data: { error } } })\n+    const wrapper = shallowMount(CreateTeam, {\n+        global: {\n+            plugins: [createTestingPinia({ createSpy: vi.fn, initialState: { 'account-settings': { features: { billing: false } } } })],\n+            stubs: {\n+                'ff-page': { template: '<div><slot /></div>' },\n+                'ff-page-header': true,\n+                'ff-loading': true,\n+                'ff-tile-selection': true,\n+                'ff-tile-selection-option': true,\n+                'ff-toggle-switch': true,\n+                'ff-button': true\n+            },\n+            mocks: { $route: { query: {} }, $router: { push: vi.fn() } }\n+        }\n+    })\n+    await flushPromises()\n+    await wrapper.setData({ input: { name: 'Development', slug: 'development' } })\n+    wrapper.vm.createTeam()\n+    await flushPromises()\n+    expect(post).toHaveBeenCalledWith('/api/v1/teams/', expect.objectContaining({ name: 'Development', slug: 'development' }))\n+    expect(wrapper.vm.loading).toBe(false)\n+    return wrapper\n+}\n+\n+test('shows the license limit error returned by team creation', async () => {\n+    const emit = vi.spyOn(Alerts, 'emit')\n+    const wrapper = await submitTeam('Error: license limit reached')\n+    expect(emit).toHaveBeenCalledWith('Creating Team would exceed license limits', 'warning')\n+    expect(wrapper.vm.input.slugError).toBe('')\n+})\n+\n+test('keeps duplicate slug errors on the slug field', async () => {\n+    const emit = vi.spyOn(Alerts, 'emit')\n+    const wrapper = await submitTeam('slug must be unique')\n+    expect(wrapper.vm.input.slugError).toBe('Slug already in use')\n+    expect(emit).not.toHaveBeenCalled()\n+})"
+  }
+ ],
+ "test_files": [
+  "test/unit/frontend/pages/team/Create.spec.js"
+ ]
+}

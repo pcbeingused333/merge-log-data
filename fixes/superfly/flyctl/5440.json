@@ -1,0 +1,26 @@
+{
+ "repo": "superfly/flyctl",
+ "number": 5440,
+ "url": "https://github.com/superfly/flyctl/pull/5440",
+ "title": "fix(volumes): select volume before resolving relative size",
+ "merged_at": "2026-11-26T17:36:39Z",
+ "files": [
+  {
+   "filename": "internal/command/volumes/extend.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 6,
+   "patch": "@@ -75,20 +75,20 @@ func runExtend(ctx context.Context) error {\n \t\treturn fmt.Errorf(\"Volume size must be specified\")\n \t}\n \n-\tif sizeFlag[0] == '+' {\n-\t\tvolume, err := flapsClient.GetVolume(ctx, appName, volID)\n+\tif volID == \"\" {\n+\t\tvolume, err := selectVolume(ctx, flapsClient, appName)\n \t\tif err != nil {\n \t\t\treturn err\n \t\t}\n-\t\tsizeGB += volume.SizeGb\n+\t\tvolID = volume.ID\n \t}\n \n-\tif volID == \"\" {\n-\t\tvolume, err := selectVolume(ctx, flapsClient, appName)\n+\tif sizeFlag[0] == '+' {\n+\t\tvolume, err := flapsClient.GetVolume(ctx, appName, volID)\n \t\tif err != nil {\n \t\t\treturn err\n \t\t}\n-\t\tvolID = volume.ID\n+\t\tsizeGB += volume.SizeGb\n \t}\n \n \tvar needsRestart bool"
+  },
+  {
+   "filename": "internal/command/volumes/extend_test.go",
+   "status": "added",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,38 @@\n+package volumes\n+\n+import (\n+\t\"context\"\n+\t\"testing\"\n+\n+\t\"github.com/stretchr/testify/require\"\n+\tfly \"github.com/superfly/fly-go\"\n+\t\"github.com/superfly/fly-go/flaps\"\n+\t\"github.com/superfly/flyctl/internal/appconfig\"\n+\t\"github.com/superfly/flyctl/internal/config\"\n+\t\"github.com/superfly/flyctl/internal/flag\"\n+\t\"github.com/superfly/flyctl/internal/flapsutil\"\n+\t\"github.com/superfly/flyctl/internal/mock\"\n+\t\"github.com/superfly/flyctl/iostreams\"\n+)\n+\n+func TestExtendWithoutIDNonInteractive(t *testing.T) {\n+\tfor _, size := range []string{\"10\", \"+10\"} {\n+\t\tt.Run(size, func(t *testing.T) {\n+\t\t\tcmd := newExtend()\n+\t\t\trequire.NoError(t, cmd.Flags().Parse([]string{\"--size\", size}))\n+\t\t\tios, _, _, _ := iostreams.Test()\n+\t\t\tctx := iostreams.NewContext(context.Background(), ios)\n+\t\t\tctx = config.NewContext(ctx, &config.Config{})\n+\t\t\tctx = appconfig.WithName(ctx, \"my-app\")\n+\t\t\tctx = flag.NewContext(ctx, cmd.Flags())\n+\t\t\tctx = flapsutil.NewContextWithClient(ctx, &mock.FlapsClient{\n+\t\t\t\tGetAppFunc: func(context.Context, string) (*flaps.App, error) { return &flaps.App{}, nil },\n+\t\t\t\tGetVolumeFunc: func(context.Context, string, string) (*fly.Volume, error) {\n+\t\t\t\t\tt.Error(\"must select a volume before looking up its size\")\n+\t\t\t\t\treturn &fly.Volume{}, nil\n+\t\t\t\t},\n+\t\t\t})\n+\t\t\trequire.EqualError(t, runExtend(ctx), \"volume ID must be specified when not running interactively\")\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/command/volumes/extend_test.go"
+ ]
+}

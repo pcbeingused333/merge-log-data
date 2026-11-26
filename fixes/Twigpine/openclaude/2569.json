@@ -1,0 +1,72 @@
+{
+ "repo": "Twigpine/openclaude",
+ "number": 2569,
+ "url": "https://github.com/Twigpine/openclaude/pull/2569",
+ "title": "fix(gemini): update retired Vertex default model to gemini-3.8-flash",
+ "merged_at": "2026-11-26T12:32:29Z",
+ "files": [
+  {
+   "filename": "docs/advanced-setup.md",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -118,11 +118,11 @@ npm i -g google-auth-library\n gcloud auth application-default login\n export GEMINI_VERTEX_PROJECT=my-gcp-project\n export GEMINI_VERTEX_LOCATION=global\n-openclaude --provider gemini-vertex --model gemini-2.5-flash\n+openclaude --provider gemini-vertex --model gemini-3.8-flash\n ```\n \n Alternatively set `CLAUDE_CODE_USE_GEMINI_VERTEX=1` and\n-`GEMINI_VERTEX_MODEL=gemini-2.5-flash`. Project aliases are checked in order:\n+`GEMINI_VERTEX_MODEL=gemini-3.8-flash`. Project aliases are checked in order:\n `GEMINI_VERTEX_PROJECT`, `GOOGLE_CLOUD_PROJECT`, `GCLOUD_PROJECT`,\n `GOOGLE_PROJECT_ID`. ADC may supply the project when none is set. ADC supports\n `GOOGLE_APPLICATION_CREDENTIALS` and the ambient Google credential chain."
+  },
+  {
+   "filename": "src/components/StartupScreen.test.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -466,7 +466,7 @@ test.each([\n     if (project) process.env.GEMINI_VERTEX_PROJECT = project\n     if (mode) process.env.GEMINI_VERTEX_AUTH_MODE = mode\n     expect(detectProvider()).toMatchObject({\n-      name: 'Gemini Vertex', model: 'gemini-2.5-flash',\n+      name: 'Gemini Vertex', model: 'gemini-3.8-flash',\n       baseUrl: 'https://aiplatform.googleapis.com/v1/projects/' + displayed + '/locations/global',\n     })\n   } finally {"
+  },
+  {
+   "filename": "src/services/api/providerConfig.envDiagnostics.test.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -201,8 +201,8 @@ test('uses current Gemini Vertex fallback model instead of OPENAI_MODEL when ver\n \n   const resolved = resolveProviderRequest()\n \n-  expect(resolved.requestedModel).toBe('gemini-2.5-flash')\n-  expect(resolved.resolvedModel).toBe('gemini-2.5-flash')\n+  expect(resolved.requestedModel).toBe('gemini-3.8-flash')\n+  expect(resolved.resolvedModel).toBe('gemini-3.8-flash')\n })\n \n test('exposes Gemini Vertex project and location from dedicated env vars', async () => {"
+  },
+  {
+   "filename": "src/utils/geminiAuth.test.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -209,7 +209,7 @@ describe('resolveGeminiCredential', () => {\n describe('Gemini auth helpers', () => {\n   test('defaults Vertex to global endpoint and current flash model', () => {\n     expect(getGeminiVertexLocation({})).toBe('global')\n-    expect(getGeminiVertexModel({})).toBe('gemini-2.5-flash')\n+    expect(getGeminiVertexModel({})).toBe('gemini-3.8-flash')\n   })\n \n   test('explicit GEMINI_VERTEX_* overrides win over defaults and Google fallbacks', () => {"
+  },
+  {
+   "filename": "src/utils/geminiAuth.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -78,7 +78,7 @@ export function getGeminiVertexProjectId(\n }\n \n const DEFAULT_GEMINI_VERTEX_LOCATION = 'global'\n-export const DEFAULT_GEMINI_VERTEX_MODEL = 'gemini-2.5-flash'\n+export const DEFAULT_GEMINI_VERTEX_MODEL = 'gemini-3.8-flash'\n \n export function getGeminiVertexLocation(\n   env: NodeJS.ProcessEnv = process.env,"
+  },
+  {
+   "filename": "src/utils/model/model.openai-shim-providers.test.ts",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 1,
+   "patch": "@@ -645,7 +645,18 @@ test('Vertex without a model override ignores a saved model from another provide\n   saveGlobalConfig(current => ({ ...current, model: 'claude-sonnet-4-6' }))\n   process.env.CLAUDE_CODE_USE_GEMINI_VERTEX = '1'\n   const { getUserSpecifiedModelSetting } = await importFreshModelModule()\n-  expect(getUserSpecifiedModelSetting()).toBe('gemini-2.5-flash')\n+  expect(getUserSpecifiedModelSetting()).toBe('gemini-3.8-flash')\n   process.env.GEMINI_VERTEX_MODEL = 'gemini-2.5-pro'\n   expect(getUserSpecifiedModelSetting()).toBe('gemini-2.5-pro')\n })\n+\n+test('Vertex sonnet, haiku and small-fast defaults use the current flash model', async () => {\n+  process.env.CLAUDE_CODE_USE_GEMINI_VERTEX = '1'\n+  delete process.env.GEMINI_VERTEX_MODEL\n+  const { getSmallFastModel, getDefaultSonnetModel, getDefaultHaikuModel, getDefaultMainLoopModelSetting } =\n+    await importFreshModelModule()\n+  const getters = [getSmallFastModel, getDefaultSonnetModel, getDefaultHaikuModel, getDefaultMainLoopModelSetting]\n+  for (const getModel of getters) expect(getModel()).toBe('gemini-3.8-flash')\n+  process.env.GEMINI_VERTEX_MODEL = 'gemini-2.5-pro'\n+  for (const getModel of getters) expect(getModel()).toBe('gemini-2.5-pro')\n+})"
+  },
+  {
+   "filename": "src/utils/model/model.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 5,
+   "patch": "@@ -1,4 +1,4 @@\n-import { getGeminiVertexModel } from '../geminiAuth.js'\n+import { DEFAULT_GEMINI_VERTEX_MODEL, getGeminiVertexModel } from '../geminiAuth.js'\n // biome-ignore-all assist/source/organizeImports: internal-only import markers must not be reordered\n /**\n  * Ensure that any model codenames introduced here are also added to\n@@ -95,7 +95,7 @@ export function getSmallFastModel(): ModelName {\n   // Gemini on Vertex AI: keep requests inside the same provider so background\n   // helper tasks don't try a non-existent Claude name on the Vertex endpoint.\n   if (getAPIProvider() === 'gemini-vertex') {\n-    return process.env.GEMINI_VERTEX_MODEL || 'gemini-2.5-flash'\n+    return process.env.GEMINI_VERTEX_MODEL || DEFAULT_GEMINI_VERTEX_MODEL\n   }\n   if (getAPIProvider() === 'mistral') {\n     return process.env.MISTRAL_MODEL || 'ministral-3b-latest'\n@@ -300,7 +300,7 @@ export function getDefaultSonnetModel(): ModelName {\n   }\n   // Gemini on Vertex AI\n   if (getAPIProvider() === 'gemini-vertex') {\n-    return process.env.GEMINI_VERTEX_MODEL || 'gemini-2.5-flash'\n+    return process.env.GEMINI_VERTEX_MODEL || DEFAULT_GEMINI_VERTEX_MODEL\n   }\n   // Mistral provider\n   if (getAPIProvider() === 'mistral') {\n@@ -368,7 +368,7 @@ export function getDefaultHaikuModel(): ModelName {\n   }\n   // Gemini on Vertex AI — Claude haiku is not available on this endpoint.\n   if (getAPIProvider() === 'gemini-vertex') {\n-    return process.env.GEMINI_VERTEX_MODEL || 'gemini-2.5-flash'\n+    return process.env.GEMINI_VERTEX_MODEL || DEFAULT_GEMINI_VERTEX_MODEL\n   }\n   // NVIDIA NIM\n   if (getAPIProvider() === 'nvidia-nim') {\n@@ -465,7 +465,7 @@ export function getDefaultMainLoopModelSetting(): ModelName | ModelAlias {\n   }\n   // Gemini on Vertex AI: always use the configured Vertex Gemini model\n   if (getAPIProvider() === 'gemini-vertex') {\n-    return process.env.GEMINI_VERTEX_MODEL || 'gemini-2.5-flash'\n+    return process.env.GEMINI_VERTEX_MODEL || DEFAULT_GEMINI_VERTEX_MODEL\n   }\n   if (getAPIProvider() === 'mistral') {\n     return process.env.MISTRAL_MODEL || 'devstral-latest'"
+  },
+  {
+   "filename": "src/utils/model/modelStrings.gemini-vertex.test.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -55,7 +55,7 @@ test.each(['flag'] as const)(\n         expect(typeof model).toBe('string')\n         expect(model.length).toBeGreaterThan(0)\n       }\n-      expect(output.native.main).toBe('gemini-2.5-flash')\n+      expect(output.native.main).toBe('gemini-3.8-flash')\n       expect(output.native.teammate).toBe('gemini-2.5-pro')\n       expect(output.overriddenTeammate).toBe('gemini-3.5-flash')\n       expect(output.restoredProvider).toBe('firstParty')"
+  }
+ ],
+ "test_files": [
+  "src/components/StartupScreen.test.ts",
+  "src/services/api/providerConfig.envDiagnostics.test.ts",
+  "src/utils/geminiAuth.test.ts",
+  "src/utils/model/model.openai-shim-providers.test.ts",
+  "src/utils/model/modelStrings.gemini-vertex.test.ts"
+ ]
+}

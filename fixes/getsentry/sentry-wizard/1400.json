@@ -1,0 +1,40 @@
+{
+ "repo": "getsentry/sentry-wizard",
+ "number": 1400,
+ "url": "https://github.com/getsentry/sentry-wizard/pull/1400",
+ "title": "fix(nextjs): Treat next.config.js as ESM in type module projects",
+ "merged_at": "2026-11-26T15:01:36Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -3,6 +3,7 @@\n ## Unreleased\n \n - fix(react-native): Do not change the Podfile or run `pod install` when the iOS project uses Swift Package Manager ([#1386](https://github.com/getsentry/sentry-wizard/pull/1386))\n+- fix(nextjs): Treat an existing `next.config.js` as ESM when `package.json` has `\"type\": \"module\"`, instead of appending CommonJS code to it ([#1400](https://github.com/getsentry/sentry-wizard/pull/1400))\n \n ## 9.1.0\n "
+  },
+  {
+   "filename": "src/nextjs/nextjs-wizard.ts",
+   "status": "modified",
+   "additions": 34,
+   "deletions": 28,
+   "patch": "@@ -68,6 +68,8 @@ import {\n   MIN_SDK_VERSION_WITH_CONFIG_SUBPATH,\n   getExampleApiRouteDynamicStrategy,\n   getWithSentryConfigImportPath,\n+  getNextConfigModifyStrategy,\n+  type NextConfigFileType,\n } from './utils';\n import { SENTRY_NEXTJS_ROOT_IMPORT_PATH } from './templates';\n import { warnIfNodeVersionUnsupportedBySdkV11 } from '../utils/node-version';\n@@ -816,7 +818,7 @@ async function createOrMergeNextJsFiles(\n       tunnelRoute: sdkConfigOptions.tunnelRoute,\n     });\n \n-    const nextConfigPossibleFilesMap = {\n+    const nextConfigPossibleFilesMap: Record<NextConfigFileType, string> = {\n       js: 'next.config.js',\n       mjs: 'next.config.mjs',\n       cjs: 'next.config.cjs',\n@@ -825,30 +827,34 @@ async function createOrMergeNextJsFiles(\n       cts: 'next.config.cts',\n     };\n \n-    const foundNextConfigFile = Object.entries(nextConfigPossibleFilesMap).find(\n-      ([, fileName]) => fs.existsSync(path.join(process.cwd(), fileName)),\n-    );\n+    // `type: \"module\"` makes Node load `.js` files as ESM. It also tells us\n+    // whether the user prefers ESM when we create a new config.\n+    let isTypeModule = false;\n+    try {\n+      const packageJsonText = await fs.promises.readFile(\n+        path.join(process.cwd(), 'package.json'),\n+        'utf8',\n+      );\n+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment\n+      const packageJson = JSON.parse(packageJsonText);\n+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access\n+      if (packageJson.type === 'module') {\n+        isTypeModule = true;\n+      }\n+    } catch {\n+      // noop\n+    }\n+\n+    const foundNextConfigFile = (\n+      Object.entries(nextConfigPossibleFilesMap) as [\n+        NextConfigFileType,\n+        string,\n+      ][]\n+    ).find(([, fileName]) => fs.existsSync(path.join(process.cwd(), fileName)));\n \n     if (!foundNextConfigFile) {\n       Sentry.setTag('next-config-strategy', 'create');\n \n-      // Try to figure out whether the user prefers ESM\n-      let isTypeModule = false;\n-      try {\n-        const packageJsonText = await fs.promises.readFile(\n-          path.join(process.cwd(), 'package.json'),\n-          'utf8',\n-        );\n-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment\n-        const packageJson = JSON.parse(packageJsonText);\n-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access\n-        if (packageJson.type === 'module') {\n-          isTypeModule = true;\n-        }\n-      } catch {\n-        // noop\n-      }\n-\n       // We are creating `next.config.(m)js` files by default as they are supported by the most Next.js versions\n       const configFilename = isTypeModule\n         ? nextConfigPossibleFilesMap.mjs\n@@ -879,7 +885,12 @@ async function createOrMergeNextJsFiles(\n     const [foundNextConfigFileType, foundNextConfigFileFilename] =\n       foundNextConfigFile;\n \n-    if (foundNextConfigFileType === 'js' || foundNextConfigFileType === 'cjs') {\n+    const modifyStrategy = getNextConfigModifyStrategy(\n+      foundNextConfigFileType,\n+      isTypeModule,\n+    );\n+\n+    if (modifyStrategy === 'append-cjs') {\n       Sentry.setTag('next-config-strategy', 'modify');\n \n       const nextConfigCjsContent = fs.readFileSync(\n@@ -925,12 +936,7 @@ async function createOrMergeNextJsFiles(\n       Sentry.setTag('next-config-mod-result', 'success');\n     }\n \n-    if (\n-      foundNextConfigFileType === 'mjs' ||\n-      foundNextConfigFileType === 'mts' ||\n-      foundNextConfigFileType === 'cts' ||\n-      foundNextConfigFileType === 'ts'\n-    ) {\n+    if (modifyStrategy === 'wrap-esm') {\n       const nextConfigMjsContent = fs.readFileSync(\n         path.join(process.cwd(), foundNextConfigFileFilename),\n         'utf8',"
+  },
+  {
+   "filename": "src/nextjs/utils.ts",
+   "status": "modified",
+   "additions": 26,
+   "deletions": 0,
+   "patch": "@@ -39,6 +39,32 @@ export function getWithSentryConfigImportPath(\n   return SENTRY_NEXTJS_CONFIG_IMPORT_PATH;\n }\n \n+export type NextConfigFileType = 'js' | 'mjs' | 'cjs' | 'ts' | 'mts' | 'cts';\n+\n+/**\n+ * Decides how to add `withSentryConfig` to an existing Next.js config file:\n+ * append CommonJS code, or wrap the default export with magicast.\n+ *\n+ * Node loads `.js` files as ESM when package.json has `\"type\": \"module\"`, so\n+ * appending `require`/`module.exports` to them would break the config.\n+ */\n+export function getNextConfigModifyStrategy(\n+  fileType: NextConfigFileType,\n+  isTypeModule: boolean,\n+): 'append-cjs' | 'wrap-esm' {\n+  switch (fileType) {\n+    case 'cjs':\n+      return 'append-cjs';\n+    case 'js':\n+      return isTypeModule ? 'wrap-esm' : 'append-cjs';\n+    case 'mjs':\n+    case 'ts':\n+    case 'mts':\n+    case 'cts':\n+      return 'wrap-esm';\n+  }\n+}\n+\n /** Minimum Next.js major supported by the Sentry Next.js SDK (v11 dropped Next.js 13). */\n export const MIN_SUPPORTED_NEXTJS_MAJOR = 14;\n "
+  },
+  {
+   "filename": "test/nextjs/utils.test.ts",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@ import {\n   hasRootLayoutFile,\n   getExampleApiRouteDynamicStrategy,\n   getWithSentryConfigImportPath,\n+  getNextConfigModifyStrategy,\n   isNextJsVersionSupported,\n } from '../../src/nextjs/utils';\n \n@@ -19,6 +20,30 @@ vi.mock('fs', () => ({\n }));\n \n describe('Next.js Utils', () => {\n+  describe('getNextConfigModifyStrategy', () => {\n+    it.each([\n+      ['js', false, 'append-cjs'],\n+      ['js', true, 'wrap-esm'],\n+      ['cjs', false, 'append-cjs'],\n+      ['cjs', true, 'append-cjs'],\n+      ['mjs', false, 'wrap-esm'],\n+      ['mjs', true, 'wrap-esm'],\n+      ['ts', false, 'wrap-esm'],\n+      ['ts', true, 'wrap-esm'],\n+      ['mts', false, 'wrap-esm'],\n+      ['mts', true, 'wrap-esm'],\n+      ['cts', false, 'wrap-esm'],\n+      ['cts', true, 'wrap-esm'],\n+    ] as const)(\n+      'returns %s with isTypeModule=%s -> %s',\n+      (fileType, isTypeModule, expected) => {\n+        expect(getNextConfigModifyStrategy(fileType, isTypeModule)).toBe(\n+          expected,\n+        );\n+      },\n+    );\n+  });\n+\n   describe('getNextJsVersionBucket', () => {\n     it('returns \"none\" for undefined version', () => {\n       expect(getNextJsVersionBucket(undefined)).toBe('none');"
+  }
+ ],
+ "test_files": [
+  "test/nextjs/utils.test.ts"
+ ]
+}

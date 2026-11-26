@@ -1,0 +1,29 @@
+{
+ "repo": "modelscope/evalscope",
+ "number": 2223,
+ "url": "https://github.com/modelscope/evalscope/pull/2223",
+ "state": "open",
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-26T14:28:11Z",
+   "body": ""
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "evalscope/agent/external/bridge/translate_anthropic.py",
+   "created_at": "2026-11-26T14:28:11Z",
+   "body": "<!-- dsh-action:v1 kind=finding fingerprint=282d1b0d44c1f956be4f384335ded222dc2e2265d3f5d846d28b0ffc1b14cd5a -->\n\n### 🟡 Medium · Anthropic streaming still reports zero input usage in message_start\n\nThe converted input-token count is only used in `message_delta` (and in the non-streaming response). `stream_anthropic_response` still emits `message_start` with `usage: {'input_tokens': 0, 'output_tokens': 0}` before the model resolves. Anthropic clients take prompt-side usage from `message_start`; the official SDK's stream accumulator carries `input_tokens` from that event and updates only `output_tokens` from `message_delta`. Consequently, a client such as Claude Code using the streamed response still observes 0 input and cache tokens, so the OpenAI→Anthropic half of this fix does not reach the primary streaming path. The added streaming test parses raw frames and asserts only the `message_delta` value, so it does not exercise the accumulated usage a client sees.\n\n**Evidence:** `sse_anthropic.py:65` hardcodes `'usage': {'input_tokens': 0, 'output_tokens': 0}` in the `message_start` frame, while the value produced here is passed to `anthropic_usage_payload` only at `sse_anthropic.py:112` for the `message_delta` frame. `tests/agent/external/test_bridge_usage_cache.py:76-77` reads the raw `message_delta` frame, not the usage accumulated by an Anthropic client; `tests/agent/external/test_walking_skeleton.py` also never asserts usage from the SDK's final message.\n\n**Suggested change:**\n\nMake the resolved usage available to `message_start` as well (e.g. defer that event until the generation resolves while keeping the connection alive with harmless SSE comments), or otherwise ensure the client-visible accumulated message carries the converted input/cache counts. Add an assertion on the official SDK's final message usage, not only on raw frames.\n\n<sub>correctness · confidence 80%</sub>"
+  }
+ ],
+ "comments": [
+  {
+   "role": "bot",
+   "created_at": "2026-11-26T14:28:17Z",
+   "body": "<!-- evalscope-pr-review {\"reviewed\": true, \"result_sha\": \"3ea29132d80dcd4f68f3036df1ec2ee739e32280\", \"outcome\": \"ai:findings\"} -->\n## EvalScope AI review\n\n**Findings to verify** · [3ea29132d80d](https://github.com/modelscope/evalscope/pull/2223/commits/3ea29132d80dcd4f68f3036df1ec2ee739e32280) · 2026-11-26 14:28:15 UTC · [Actions run](https://github.com/modelscope/evalscope/actions/runs/45837248412)\n\nStatic review · [CI Lite passed](https://github.com/modelscope/evalscope/actions/runs/45836942599) · [Lint passed](https://github.com/modelscope/evalscope/actions/runs/45836942927).\n\n**1 medium** · 1 inline · 0 in summary.\n"
+  }
+ ]
+}

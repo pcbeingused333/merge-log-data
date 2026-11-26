@@ -1,0 +1,26 @@
+{
+ "repo": "koyeb/koyeb-python-sdk",
+ "number": 126,
+ "url": "https://github.com/koyeb/koyeb-python-sdk/pull/126",
+ "title": "fix(sandbox): accumulate successive writes in SandboxFileIO write mode",
+ "merged_at": "2026-11-26T09:59:53Z",
+ "files": [
+  {
+   "filename": "koyeb/sandbox/filesystem.py",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -2537,6 +2537,7 @@ def __init__(\n         self.mode = mode\n         self.encoding = encoding\n         self._closed = False\n+        self._written: Optional[Union[str, bytes]] = None\n \n     def read(self) -> Union[str, bytes]:\n         \"\"\"Read file content synchronously\"\"\"\n@@ -2569,7 +2570,17 @@ def write(self, content: Union[str, bytes]) -> None:\n             except SandboxFileNotFoundError:\n                 pass\n \n+        accumulate = \"w\" in self.mode and \"a\" not in self.mode\n+        if accumulate:\n+            # write_file replaces the whole file, so accumulate across writes.\n+            if self._written is not None:\n+                if isinstance(self._written, bytes) != isinstance(content, bytes):\n+                    raise TypeError(\"Cannot mix bytes and str content in write mode\")\n+                content = self._written + content\n+\n         self.filesystem.write_file(self.path, content, encoding=self.encoding)\n+        if accumulate:\n+            self._written = content\n \n     def close(self) -> None:\n         \"\"\"Close the file\"\"\"\n@@ -2597,6 +2608,7 @@ def __init__(\n         self.mode = mode\n         self.encoding = encoding\n         self._closed = False\n+        self._written: Optional[Union[str, bytes]] = None\n \n     async def read(self) -> Union[str, bytes]:\n         \"\"\"Read file content asynchronously\"\"\"\n@@ -2631,7 +2643,17 @@ async def write(self, content: Union[str, bytes]) -> None:\n             except SandboxFileNotFoundError:\n                 pass\n \n+        accumulate = \"w\" in self.mode and \"a\" not in self.mode\n+        if accumulate:\n+            # write_file replaces the whole file, so accumulate across writes.\n+            if self._written is not None:\n+                if isinstance(self._written, bytes) != isinstance(content, bytes):\n+                    raise TypeError(\"Cannot mix bytes and str content in write mode\")\n+                content = self._written + content\n+\n         await self.filesystem.write_file(self.path, content, encoding=self.encoding)\n+        if accumulate:\n+            self._written = content\n \n     def close(self) -> None:\n         \"\"\"Close the file\"\"\""
+  },
+  {
+   "filename": "koyeb/sandbox/test_filesystem.py",
+   "status": "modified",
+   "additions": 41,
+   "deletions": 0,
+   "patch": "@@ -341,6 +341,25 @@ def test_read_write_modes(self):\n                 handle.write(\"data\")\n         self.assertEqual(client.calls[0][0], \"write_file\")\n \n+    def test_write_mode_accumulates_multiple_writes(self):\n+        client = _FakeSyncClient()\n+        with _fs(client) as fs:\n+            with fs.open(\"/b\", \"w\") as handle:\n+                handle.write(\"first\\n\")\n+                handle.write(\"second\\n\")\n+        self.assertEqual(client.calls[-1], (\"write_file\", \"/b\", \"first\\nsecond\\n\"))\n+\n+    def test_write_mode_retry_after_failed_write_does_not_duplicate(self):\n+        client = _FakeSyncClient()\n+        with _fs(client) as fs:\n+            with fs.open(\"/b\", \"w\") as handle:\n+                client.replies[\"write_file\"] = RuntimeError(\"boom\")\n+                with self.assertRaises(Exception):\n+                    handle.write(\"first\")\n+                del client.replies[\"write_file\"]\n+                handle.write(\"first\")\n+        self.assertEqual(client.calls[-1], (\"write_file\", \"/b\", \"first\"))\n+\n     def test_wrong_mode_raises(self):\n         with _fs(_FakeSyncClient()) as fs:\n             with self.assertRaises(ValueError):\n@@ -357,6 +376,28 @@ def test_closed_handle_raises(self):\n                 handle.read()\n \n \n+class TestAsyncSandboxFileIO(unittest.IsolatedAsyncioTestCase):\n+    async def test_write_mode_accumulates_multiple_writes(self):\n+        client = _FakeAsyncClient()\n+        with _async_fs(client) as fs:\n+            async with fs.open(\"/b\", \"w\") as handle:\n+                await handle.write(\"first\\n\")\n+                await handle.write(\"second\\n\")\n+        self.assertEqual(client.calls[-1], (\"write_file\", \"/b\", \"first\\nsecond\\n\"))\n+\n+\n+    async def test_write_mode_retry_after_failed_write_does_not_duplicate(self):\n+        client = _FakeAsyncClient()\n+        with _async_fs(client) as fs:\n+            async with fs.open(\"/b\", \"w\") as handle:\n+                client.replies[\"write_file\"] = RuntimeError(\"boom\")\n+                with self.assertRaises(Exception):\n+                    await handle.write(\"first\")\n+                del client.replies[\"write_file\"]\n+                await handle.write(\"first\")\n+        self.assertEqual(client.calls[-1], (\"write_file\", \"/b\", \"first\"))\n+\n+\n class TestAsyncReplyInterpretation(unittest.TestCase):\n     \"\"\"Async twin classifies through the same taxonomy.\"\"\"\n "
+  }
+ ],
+ "test_files": [
+  "koyeb/sandbox/test_filesystem.py"
+ ]
+}

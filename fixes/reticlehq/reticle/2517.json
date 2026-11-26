@@ -1,0 +1,54 @@
+{
+ "repo": "reticlehq/reticle",
+ "number": 2517,
+ "url": "https://github.com/reticlehq/reticle/pull/2517",
+ "title": "fix(server): flow_save last-journey refuses instead of saving an older journey",
+ "merged_at": "2026-11-26T14:45:20Z",
+ "files": [
+  {
+   "filename": ".changes/2491-last-journey-stale.md",
+   "status": "added",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,3 @@\n+### Fixed\n+\n+- **`@reticlehq/server` — `reticle_flow_save { flowName: \"last-journey\" }` could save an older journey.** A `reticle_act` with `steps` wrote `last-journey` only when it verified `yes`, so a journey that did not left the earlier one in place, and the save took it. Now that journey discards the older recording, and the save refuses with \"the last journey did not verify yes; nothing to keep\". Closes [#2491](https://github.com/reticlehq/reticle/issues/2491)."
+  },
+  {
+   "filename": "server/src/language/flows/flow-tools.ts",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -175,6 +175,10 @@ export const FLOW_TOOLS: ToolDef[] = [\n       const name = resolveAnnotateTarget(explicitName, deps.recordings.compiled());\n       const program = deps.recordings.getCompiled(name);\n       if (program === undefined) {\n+        const discarded = deps.recordings.discardReason(name);\n+        if (discarded !== undefined) {\n+          return Promise.resolve({ error: discarded, code: FlowErrorCode.NO_RECORDING });\n+        }\n         /*\n          * Name what DOES exist.\n          *"
+  },
+  {
+   "filename": "server/src/language/flows/recording/tape/recordings.ts",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -179,6 +179,8 @@ const CARRY_CAP = 32;\n export class RecordingStore {\n   readonly #active = new Map<string, ActiveRecording>();\n   readonly #compiled = new Map<string, CompiledProgram>();\n+  /** Why a compiled program was discarded, until a new one takes its name. */\n+  readonly #discarded = new Map<string, string>();\n   /** A navigation came after the last captured step — see markNavigated. */\n   #navigatedSinceStep = false;\n   /** Tabs with network mocks installed now, keyed by session ('' for none named). See markMocked. */\n@@ -440,6 +442,17 @@ export class RecordingStore {\n \n   saveCompiled(program: CompiledProgram): void {\n     this.#compiled.set(program.name, program);\n+    this.#discarded.delete(program.name);\n+  }\n+\n+  /** Drop a compiled program that a newer drive replaced with nothing worth keeping. */\n+  discardCompiled(name: string, reason: string): void {\n+    this.#compiled.delete(name);\n+    this.#discarded.set(name, reason);\n+  }\n+\n+  discardReason(name: string): string | undefined {\n+    return this.#discarded.get(name);\n   }\n \n   getCompiled(name: string): CompiledProgram | undefined {"
+  },
+  {
+   "filename": "server/src/surface/tools/act-sequence-saved-claims.test.ts",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 1,
+   "patch": "@@ -38,7 +38,7 @@ import { driveFlowsFrom } from '@/memory/journal/drive-flow.js';\n import type { Session } from '@/portal/session/session.js';\n import type { SessionManager } from '@/portal/session/session-manager.js';\n import { LIVE_CONTROL_TOOLS } from '@/portal/session/live-control-tools.js';\n-import { JOURNEY_RECORDING } from './act/sequence-grade.js';\n+import { JOURNEY_NOT_KEPT, JOURNEY_RECORDING } from './act/sequence-grade.js';\n \n const ORIGIN = 'http://localhost:5173';\n const SAVED_AS = 'four-claims';\n@@ -230,6 +230,22 @@ describe('a journey whose claims held keeps every claim when it is saved', () =>\n     expect(saved.assertions?.consequenceSteps).toBe(4);\n   });\n \n+  it('refuses to save an older journey when the newest one did not verify yes', async () => {\n+    const { result, deps, flows } = await driveAndKeep([signalled(1), signalled(2)]);\n+    expect(result.verified).toBe(Verified.YES);\n+    const failed = (await tool(ReticleTool.ACT_SEQUENCE).handler(deps, {\n+      steps: [signalled(3), { ...click(4), expect: { kind: 'signal', name: 'never' } }, click(5)],\n+      timeout_ms: 500,\n+    })) as { verified?: string; keep?: string };\n+    expect(failed.verified).not.toBe(Verified.YES);\n+    const saved = (await tool(ReticleTool.FLOW_SAVE).handler(deps, {\n+      flowName: JOURNEY_RECORDING,\n+      saveAs: SAVED_AS,\n+    })) as Saved;\n+    expect(saved.error).toBe(JOURNEY_NOT_KEPT);\n+    expect((await flows.load(SAVED_AS)).ok).toBe(false);\n+  });\n+\n   it('saves every claim from a recording the agent opened', async () => {\n     const recordings = new RecordingStore();\n     const flows = freshFlows();"
+  },
+  {
+   "filename": "server/src/surface/tools/act-sequence-tool.ts",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -56,6 +56,7 @@ import {\n import {\n   DeviationMode,\n   gradeSequence,\n+  JOURNEY_NOT_KEPT,\n   JOURNEY_RECORDING,\n   offerToKeep,\n   type StepExpectation,\n@@ -601,6 +602,9 @@ export const ACT_SEQUENCE_TOOL: ToolDef = {\n           session: session.id,\n           ...(pageBefore === undefined ? {} : { startPath: pageBefore }),\n         });\n+      } else {\n+        // An older journey left under this name would be saved as if it were this one.\n+        deps.recordings.discardCompiled(JOURNEY_RECORDING, JOURNEY_NOT_KEPT);\n       }\n       const tailStart =\n         DeviationMode.HALT === onDeviation && stoppedAt !== undefined"
+  },
+  {
+   "filename": "server/src/surface/tools/act/sequence-grade.ts",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -233,6 +233,9 @@ export function gradeSequence(\n /** The stopped recording a proved journey is held under, so the `keep` offer can be taken. */\n export const JOURNEY_RECORDING = 'last-journey';\n \n+/** Why saving `last-journey` refuses after a journey that was not offered for keeping. */\n+export const JOURNEY_NOT_KEPT = 'the last journey did not verify yes; nothing to keep';\n+\n export function offerToKeep(grade: SequenceGrade): string | undefined {\n   if (grade.verified !== Verified.YES || 0 === grade.declared) {\n     return undefined;"
+  }
+ ],
+ "test_files": [
+  "server/src/surface/tools/act-sequence-saved-claims.test.ts"
+ ]
+}

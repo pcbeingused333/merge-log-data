@@ -1,0 +1,42 @@
+{
+ "repo": "nix-community/home-manager",
+ "number": 10213,
+ "url": "https://github.com/nix-community/home-manager/pull/10213",
+ "title": "shpool: respect the systemd option",
+ "merged_at": "2026-11-26T15:14:47Z",
+ "files": [
+  {
+   "filename": "modules/services/shpool.nix",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -52,7 +52,7 @@ in\n \n   config = mkIf cfg.enable {\n \n-    systemd.user = {\n+    systemd.user = mkIf cfg.systemd {\n       services.shpool = {\n         Unit = {\n           Description = \"Shpool - Shell Session Pool\";"
+  },
+  {
+   "filename": "tests/modules/services/shpool/default-systemd.nix",
+   "status": "added",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,9 @@\n+{\n+  services.shpool.enable = true;\n+  test.stubs.shpool = { };\n+\n+  nmt.script = ''\n+    assertFileExists home-files/.config/systemd/user/shpool.service\n+    assertFileExists home-files/.config/systemd/user/shpool.socket\n+  '';\n+}"
+  },
+  {
+   "filename": "tests/modules/services/shpool/default.nix",
+   "status": "added",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,6 @@\n+{ lib, pkgs, ... }:\n+\n+lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {\n+  shpool-default-systemd = ./default-systemd.nix;\n+  shpool-systemd-disabled = ./systemd-disabled.nix;\n+}"
+  },
+  {
+   "filename": "tests/modules/services/shpool/systemd-disabled.nix",
+   "status": "added",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,20 @@\n+{ config, lib, ... }:\n+\n+{\n+  services.shpool = {\n+    enable = true;\n+    systemd = false;\n+    settings.motd = \"never\";\n+  };\n+\n+  test.stubs.shpool = { };\n+\n+  nmt.script = ''\n+    assertPathNotExists home-files/.config/systemd/user/shpool.service\n+    assertPathNotExists home-files/.config/systemd/user/shpool.socket\n+    assertFileRegex home-files/.config/shpool/config.toml '^motd = \"never\"$'\n+    if [[ ${lib.boolToString (lib.elem config.services.shpool.package config.home.packages)} != true ]]; then\n+      fail \"Expected shpool to be installed\"\n+    fi\n+  '';\n+}"
+  }
+ ],
+ "test_files": [
+  "tests/modules/services/shpool/default-systemd.nix",
+  "tests/modules/services/shpool/default.nix",
+  "tests/modules/services/shpool/systemd-disabled.nix"
+ ]
+}

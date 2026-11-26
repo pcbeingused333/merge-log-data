@@ -1,0 +1,26 @@
+{
+ "repo": "redis/go-redis",
+ "number": 4425,
+ "url": "https://github.com/redis/go-redis/pull/4425",
+ "title": "fix(cmd): omit empty time series selected labels",
+ "merged_at": "2026-11-26T13:13:21Z",
+ "files": [
+  {
+   "filename": "timeseries_args_test.go",
+   "status": "added",
+   "additions": 54,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,54 @@\n+package redis_test\n+\n+import (\n+\t\"context\"\n+\t\"slices\"\n+\t\"testing\"\n+\n+\t\"github.com/redis/go-redis/v9\"\n+)\n+\n+func TestTimeSeriesSelectedLabelsArgs(t *testing.T) {\n+\tctx := context.Background()\n+\tclient := redis.NewClient(&redis.Options{Addr: \"localhost:6379\"})\n+\tt.Cleanup(func() { _ = client.Close() })\n+\tpipeline := client.Pipeline()\n+\tfilters := []string{\"team=example\"}\n+\tcommands := []struct {\n+\t\tname string\n+\t\targs []interface{}\n+\t\trun  func([]interface{}) *redis.MapStringSliceInterfaceCmd\n+\t}{\n+\t\t{\"TS.MGET\", []interface{}{\"TS.MGET\"}, func(labels []interface{}) *redis.MapStringSliceInterfaceCmd {\n+\t\t\treturn pipeline.TSMGetWithArgs(ctx, filters, &redis.TSMGetOptions{SelectedLabels: labels})\n+\t\t}},\n+\t\t{\"TS.MRANGE\", []interface{}{\"TS.MRANGE\", 0, 100}, func(labels []interface{}) *redis.MapStringSliceInterfaceCmd {\n+\t\t\treturn pipeline.TSMRangeWithArgs(ctx, 0, 100, filters, &redis.TSMRangeOptions{SelectedLabels: labels})\n+\t\t}},\n+\t\t{\"TS.MREVRANGE\", []interface{}{\"TS.MREVRANGE\", 0, 100}, func(labels []interface{}) *redis.MapStringSliceInterfaceCmd {\n+\t\t\treturn pipeline.TSMRevRangeWithArgs(ctx, 0, 100, filters, &redis.TSMRevRangeOptions{SelectedLabels: labels})\n+\t\t}},\n+\t}\n+\tcases := []struct {\n+\t\tname   string\n+\t\tlabels []interface{}\n+\t}{\n+\t\t{name: \"nil\"},\n+\t\t{name: \"empty\", labels: []interface{}{}},\n+\t\t{name: \"nonempty\", labels: []interface{}{\"team\", \"region\"}},\n+\t}\n+\tfor _, command := range commands {\n+\t\tfor _, tc := range cases {\n+\t\t\tt.Run(command.name+\"/\"+tc.name, func(t *testing.T) {\n+\t\t\t\twant := slices.Clone(command.args)\n+\t\t\t\tif len(tc.labels) > 0 {\n+\t\t\t\t\twant = append(want, \"SELECTED_LABELS\", \"team\", \"region\")\n+\t\t\t\t}\n+\t\t\t\twant = append(want, \"FILTER\", filters[0])\n+\t\t\t\tif got := command.run(tc.labels).Args(); !slices.Equal(got, want) {\n+\t\t\t\t\tt.Errorf(\"Args() = %v, want %v\", got, want)\n+\t\t\t\t}\n+\t\t\t})\n+\t\t}\n+\t}\n+}"
+  },
+  {
+   "filename": "timeseries_commands.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 3,
+   "patch": "@@ -1080,7 +1080,7 @@ func (c cmdable) TSMRangeWithArgs(ctx context.Context, fromTimestamp int, toTime\n \t\tif options.WithLabels {\n \t\t\targs = append(args, \"WITHLABELS\")\n \t\t}\n-\t\tif options.SelectedLabels != nil {\n+\t\tif len(options.SelectedLabels) > 0 {\n \t\t\targs = append(args, \"SELECTED_LABELS\")\n \t\t\targs = append(args, options.SelectedLabels...)\n \t\t}\n@@ -1177,7 +1177,7 @@ func (c cmdable) TSMRevRangeWithArgs(ctx context.Context, fromTimestamp int, toT\n \t\tif options.WithLabels {\n \t\t\targs = append(args, \"WITHLABELS\")\n \t\t}\n-\t\tif options.SelectedLabels != nil {\n+\t\tif len(options.SelectedLabels) > 0 {\n \t\t\targs = append(args, \"SELECTED_LABELS\")\n \t\t\targs = append(args, options.SelectedLabels...)\n \t\t}\n@@ -1262,7 +1262,7 @@ func (c cmdable) TSMGetWithArgs(ctx context.Context, filters []string, options *\n \t\tif options.WithLabels {\n \t\t\targs = append(args, \"WITHLABELS\")\n \t\t}\n-\t\tif options.SelectedLabels != nil {\n+\t\tif len(options.SelectedLabels) > 0 {\n \t\t\targs = append(args, \"SELECTED_LABELS\")\n \t\t\targs = append(args, options.SelectedLabels...)\n \t\t}"
+  }
+ ],
+ "test_files": [
+  "timeseries_args_test.go"
+ ]
+}

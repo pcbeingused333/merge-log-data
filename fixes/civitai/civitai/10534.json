@@ -1,0 +1,26 @@
+{
+ "repo": "civitai/civitai",
+ "number": 10534,
+ "url": "https://github.com/civitai/civitai/pull/10534",
+ "title": "Fix pagination in the challenge winners list",
+ "merged_at": "2026-11-26T15:56:37Z",
+ "files": [
+  {
+   "filename": "src/server/services/__tests__/challenge-winners-visibility.pglite.test.ts",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 0,
+   "patch": "@@ -109,4 +109,27 @@ describe('getCompletedChallengesWithWinners visibility', () => {\n   it('leaves out user challenges while the user-challenge flag is off', async () => {\n     expect(await listed(false)).toEqual([VISIBLE]);\n   });\n+\n+  it('returns every challenge across two pages when end times tie', async () => {\n+    await db.exec(`\n+      INSERT INTO \"Challenge\" (id, \"coverImageId\", \"endsAt\")\n+        SELECT id, 10, (SELECT \"endsAt\" FROM \"Challenge\" WHERE id = ${VISIBLE})\n+        FROM generate_series(101, 120) AS ids(id);\n+      INSERT INTO \"ChallengeWinner\" (\"challengeId\", place, \"userId\")\n+        SELECT id, 1, 100 FROM generate_series(101, 120) AS ids(id);\n+    `);\n+\n+    const input = { limit: 20, isGreen: false };\n+    calls = 0;\n+    const first = await getCompletedChallengesWithWinners(input);\n+    expect(first.items.map((challenge) => challenge.id)).toEqual(\n+      Array.from({ length: 20 }, (_, index) => 120 - index)\n+    );\n+    expect(first.nextCursor).toBeDefined();\n+\n+    calls = 0;\n+    const second = await getCompletedChallengesWithWinners({ ...input, cursor: first.nextCursor });\n+    expect(second.items.map((challenge) => challenge.id)).toEqual([VISIBLE]);\n+    expect(second.nextCursor).toBeUndefined();\n+  });\n });"
+  },
+  {
+   "filename": "src/server/services/challenge.service.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -4145,7 +4145,7 @@ export async function getCompletedChallengesWithWinners(\n     conditions.push(Prisma.sql`(c.title ILIKE ${searchPattern} OR c.theme ILIKE ${searchPattern})`);\n   }\n \n-  // Cursor-based pagination: \"endsAt:id\"\n+  // The \"endsAt:id\" cursor points to the first challenge on the next page.\n   if (cursor) {\n     const lastColon = cursor.lastIndexOf(':');\n     if (lastColon !== -1) {\n@@ -4155,7 +4155,7 @@ export async function getCompletedChallengesWithWinners(\n       const endsAt = new Date(endsAtStr);\n       if (!isNaN(id) && !isNaN(endsAt.getTime())) {\n         conditions.push(\n-          Prisma.sql`(c.\"endsAt\" < ${endsAt} OR (c.\"endsAt\" = ${endsAt} AND c.id < ${id}))`\n+          Prisma.sql`(c.\"endsAt\" < ${endsAt} OR (c.\"endsAt\" = ${endsAt} AND c.id <= ${id}))`\n         );\n       }\n     }"
+  }
+ ],
+ "test_files": [
+  "src/server/services/__tests__/challenge-winners-visibility.pglite.test.ts"
+ ]
+}

@@ -15,6 +15,12 @@
    "state": "COMMENTED",
    "submitted_at": "2026-11-25T12:38:12Z",
    "body": ""
+  },
+  {
+   "role": "collaborator",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-26T12:11:49Z",
+   "body": "Appears that this new approach will panic if we pass in an already cancelled `context.Context` to the `NewBulkIndexer`. I've opened an issue upstream for this https://github.com/opensearch-project/opensearch-go/issues/1392\n\nAlso, this needs to run `make deps` or `go mod tidy` since it seems the `go.sum` is stale.\n\n"
   }
  ],
  "review_comments": [
@@ -29,6 +35,18 @@
    "path": "internal/impl/opensearch/integration_test.go",
    "created_at": "2026-11-25T12:38:05Z",
    "body": "Want to just confirm: have you run these locally?"
+  },
+  {
+   "role": "collaborator",
+   "path": "internal/impl/opensearch/output_test.go",
+   "created_at": "2026-11-26T12:09:46Z",
+   "body": "FYI this panics when the timeout is `0` and workers are greater than 1 -- since the upstream bulk indexer appears to have a bug."
+  },
+  {
+   "role": "collaborator",
+   "path": "internal/impl/opensearch/output_test.go",
+   "created_at": "2026-11-26T12:10:43Z",
+   "body": "IMO this entire test can be replaced with a simple additional integration test:\n\n```go\nfunc testOpenSearchInterruptWrite(urls []string, client *osapi.Client, t *testing.T) {\n\tctx, done := context.WithTimeout(context.Background(), time.Second*30)\n\tdefer done()\n\n\tm := outputFromConf(t, `\nindex: does_not_exist\nid: 'foo-${!count(\"interruptWriteTest\")}'\nurls: %v\naction: index\n`, urls)\n\n\trequire.NoError(t, m.Connect(ctx))\n\tdefer func() {\n\t\trequire.NoError(t, m.Close(ctx))\n\t}()\n\n\tcancelCtx, cancel := context.WithCancel(ctx)\n\tcancel()\n\terr := m.WriteBatch(cancelCtx, service.MessageBatch{\n\t\tservice.NewMessage([]byte(`{\"message\":\"hello world\",\"user\":\"1\"}`)),\n\t})\n\trequire.ErrorIs(t, err, context.Canceled)\n}\n```\n"
   }
  ],
  "comments": [

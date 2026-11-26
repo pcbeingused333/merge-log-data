@@ -1,0 +1,26 @@
+{
+ "repo": "dynamiq-ai/dynamiq",
+ "number": 1150,
+ "url": "https://github.com/dynamiq-ai/dynamiq/pull/1150",
+ "title": "fix(memory): return Pinecone filter-only search results oldest first",
+ "merged_at": "2026-11-26T10:19:00Z",
+ "files": [
+  {
+   "filename": "dynamiq/memory/backends/pinecone.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -189,6 +189,11 @@ def search(self, query: str | None = None, filters: dict | None = None, limit: i\n                     top_k=limit,\n                     exclude_document_embeddings=True,\n                 )\n+                # A zero vector scores every match alike, so the order is arbitrary. Return the\n+                # matches oldest first, like get_all and InMemory.search.\n+                documents = sorted(documents, key=lambda doc: (doc.metadata or {}).get(\"timestamp\") or 0)\n+                if limit and limit > 0:\n+                    documents = documents[-limit:]\n             else:\n                 return []\n "
+  },
+  {
+   "filename": "tests/unit/memory/test_backend_retrieval_contract.py",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -267,3 +267,41 @@ def test_qdrant_filter_only_search_with_limit_returns_the_most_recent(mocker):\n     result = backend.search(query=None, filters={\"user_id\": \"u\"}, limit=LIMIT)\n \n     assert [m.content for m in result] == [\"msg-7\", \"msg-8\", \"msg-9\"]\n+\n+\n+def test_pinecone_filter_only_search_returns_matches_oldest_first(mocker):\n+    \"\"\"The zero-vector query scores every match alike; the result must still be ordered by timestamp.\"\"\"\n+    from dynamiq.memory.backends.pinecone import Pinecone\n+\n+    store = mocker.Mock()\n+    store.dimension = 4\n+    # Returned in score-arbitrary order, as the zero-vector query gives no ordering.\n+    store._embedding_retrieval.return_value = [\n+        Document(id=str(i), content=f\"msg-{i}\", metadata={\"role\": \"user\", \"timestamp\": float(i)})\n+        for i in [5, 1, 9, 0, 7, 3, 8, 2, 6, 4]\n+    ]\n+    backend = Pinecone.model_construct(\n+        vector_store=store, embedder=mocker.Mock(), connection=mocker.Mock(), namespace=\"ns\"\n+    )\n+\n+    result = backend.search(query=None, filters={\"user_id\": \"u\"}, limit=TOTAL)\n+\n+    assert [m.content for m in result] == [f\"msg-{i}\" for i in range(TOTAL)]\n+\n+\n+def test_pinecone_filter_only_search_orders_a_match_without_timestamp_first(mocker):\n+    from dynamiq.memory.backends.pinecone import Pinecone\n+\n+    store = mocker.Mock()\n+    store.dimension = 4\n+    store._embedding_retrieval.return_value = [\n+        Document(id=\"b\", content=\"msg-b\", metadata={\"role\": \"user\", \"timestamp\": 2.0}),\n+        Document(id=\"a\", content=\"msg-a\", metadata={\"role\": \"user\", \"timestamp\": None}),\n+    ]\n+    backend = Pinecone.model_construct(\n+        vector_store=store, embedder=mocker.Mock(), connection=mocker.Mock(), namespace=\"ns\"\n+    )\n+\n+    result = backend.search(query=None, filters={\"user_id\": \"u\"}, limit=TOTAL)\n+\n+    assert [m.content for m in result] == [\"msg-a\", \"msg-b\"]"
+  }
+ ],
+ "test_files": [
+  "tests/unit/memory/test_backend_retrieval_contract.py"
+ ]
+}

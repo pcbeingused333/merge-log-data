@@ -1,0 +1,26 @@
+{
+ "repo": "odin-lang/Odin",
+ "number": 8483,
+ "url": "https://github.com/odin-lang/Odin/pull/8483",
+ "title": "fix(bytes): match each delimiter at its own length in split_multi",
+ "merged_at": "2026-11-26T09:55:11Z",
+ "files": [
+  {
+   "filename": "core/bytes/bytes.odin",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 17,
+   "patch": "@@ -1060,34 +1060,29 @@ trim_suffix :: proc(s, suffix: []byte) -> []byte {\n }\n \n split_multi :: proc(s: []byte, substrs: [][]byte, skip_empty := false, allocator := context.allocator, loc := #caller_location) -> [][]byte #no_bounds_check {\n-\tif s == nil || len(substrs) <= 0 {\n+\tif len(s) == 0 || len(substrs) <= 0 {\n \t\treturn nil\n \t}\n \n-\tsublen := len(substrs[0])\n-\n-\tfor substr in substrs[1:] {\n-\t\tsublen = min(sublen, len(substr))\n-\t}\n-\n-\tshared := len(s) - sublen\n-\n-\tif shared <= 0 {\n-\t\treturn nil\n+\t// disallow empty substrs\n+\tfor substr in substrs {\n+\t\tif len(substr) == 0 {\n+\t\t\treturn nil\n+\t\t}\n \t}\n \n \t// number, index, last\n \tn, i, l := 0, 0, 0\n \n \t// count results\n-\tfirst_pass: for i <= shared {\n+\tfirst_pass: for i < len(s) {\n \t\tfor substr in substrs {\n-\t\t\tif string(s[i:i+sublen]) == string(substr) {\n+\t\t\tif len(s) - i >= len(substr) && string(s[i:i+len(substr)]) == string(substr) {\n \t\t\t\tif !skip_empty || i - l > 0 {\n \t\t\t\t\tn += 1\n \t\t\t\t}\n \n-\t\t\t\ti += sublen\n+\t\t\t\ti += len(substr)\n \t\t\t\tl  = i\n \n \t\t\t\tcontinue first_pass\n@@ -1112,15 +1107,15 @@ split_multi :: proc(s: []byte, substrs: [][]byte, skip_empty := false, allocator\n \tn, i, l = 0, 0, 0\n \n \t// slice results\n-\tsecond_pass: for i <= shared {\n+\tsecond_pass: for i < len(s) {\n \t\tfor substr in substrs {\n-\t\t\tif string(s[i:i+sublen]) == string(substr) {\n+\t\t\tif len(s) - i >= len(substr) && string(s[i:i+len(substr)]) == string(substr) {\n \t\t\t\tif !skip_empty || i - l > 0 {\n \t\t\t\t\tbuf[n] = s[l:i]\n \t\t\t\t\tn += 1\n \t\t\t\t}\n \n-\t\t\t\ti += sublen\n+\t\t\t\ti += len(substr)\n \t\t\t\tl  = i\n \n \t\t\t\tcontinue second_pass"
+  },
+  {
+   "filename": "tests/core/bytes/test_core_bytes.odin",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 1,
+   "patch": "@@ -96,6 +96,41 @@ test_last_index_byte_bounds :: proc(t: ^testing.T) {\n \tidx := bytes.last_index_byte(transmute([]byte)(input[:len(input)-1]), '.')\n \ttesting.expect_value(t, idx, 10)\n }\n+@test\n+test_split_multi_mixed_lengths :: proc(t: ^testing.T) {\n+\t// Delimiters of different lengths must all be matched at their own length.\n+\tdelims := [][]byte{transmute([]byte)string(\"::\"), transmute([]byte)string(\",\")}\n+\ts := transmute([]byte)string(\"a::b,c\")\n+\tres := bytes.split_multi(s, delims)\n+\tdefer delete(res)\n+\tif testing.expect_value(t, len(res), 3) {\n+\t\ttesting.expect_value(t, string(res[0]), \"a\")\n+\t\ttesting.expect_value(t, string(res[1]), \"b\")\n+\t\ttesting.expect_value(t, string(res[2]), \"c\")\n+\t}\n+\n+\t// Delimiter longer than the shortest one at the very end of the input.\n+\tdelims2 := [][]byte{transmute([]byte)string(\",\"), transmute([]byte)string(\"::\")}\n+\tres2 := bytes.split_multi(transmute([]byte)string(\"a::b\"), delims2)\n+\tdefer delete(res2)\n+\tif testing.expect_value(t, len(res2), 2) {\n+\t\ttesting.expect_value(t, string(res2[0]), \"a\")\n+\t\ttesting.expect_value(t, string(res2[1]), \"b\")\n+\t}\n+}\n+\n+@test\n+test_split_multi_empty :: proc(t: ^testing.T) {\n+\tbuf := []byte{'a', ','}\n+\tres := bytes.split_multi(buf[2:], [][]byte{buf[1:]})\n+\tdefer delete(res)\n+\ttesting.expect_value(t, len(res), 0)\n+\n+\tres2 := bytes.split_multi(buf, [][]byte{buf[:0]})\n+\tdefer delete(res2)\n+\ttesting.expect_value(t, len(res2), 0)\n+}\n+\n \n @(private=\"file\")\n Hiccup_Reader :: struct {\n@@ -142,4 +177,4 @@ test_buffer_read_from_stall :: proc(t: ^testing.T) {\n \t\t\ttesting.expect_value(t, bytes.buffer_to_string(&b), data)\n \t\t}\n \t}\n-}\n\\ No newline at end of file\n+}"
+  }
+ ],
+ "test_files": [
+  "tests/core/bytes/test_core_bytes.odin"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "openmeterio/openmeter",
+ "number": 5460,
+ "url": "https://github.com/openmeterio/openmeter/pull/5460",
+ "title": "fix(llmcost): reject negative cache and reasoning token prices",
+ "merged_at": "2026-11-26T20:44:05Z",
+ "files": [
+  {
+   "filename": "openmeter/llmcost/llmcost.go",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 6,
+   "patch": "@@ -53,12 +53,19 @@ type ModelPricing struct {\n func (p ModelPricing) Validate() error {\n \tvar errs []error\n \n-\tif p.InputPerToken.IsNegative() {\n-\t\terrs = append(errs, ErrPriceMustBeNonNegative)\n-\t}\n-\n-\tif p.OutputPerToken.IsNegative() {\n-\t\terrs = append(errs, ErrPriceMustBeNonNegative)\n+\tfor _, field := range []struct {\n+\t\tname  string\n+\t\tprice *alpacadecimal.Decimal\n+\t}{\n+\t\t{\"input_per_token\", &p.InputPerToken},\n+\t\t{\"output_per_token\", &p.OutputPerToken},\n+\t\t{\"cache_read_per_token\", p.CacheReadPerToken},\n+\t\t{\"cache_write_per_token\", p.CacheWritePerToken},\n+\t\t{\"reasoning_per_token\", p.ReasoningPerToken},\n+\t} {\n+\t\tif field.price != nil && field.price.IsNegative() {\n+\t\t\terrs = append(errs, ErrPriceMustBeNonNegative.WithPathString(\"pricing\", field.name))\n+\t\t}\n \t}\n \n \treturn models.NewNillableGenericValidationError(errors.Join(errs...))"
+  },
+  {
+   "filename": "openmeter/llmcost/llmcost_test.go",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 9,
+   "patch": "@@ -7,6 +7,8 @@ import (\n \t\"github.com/alpacahq/alpacadecimal\"\n \t\"github.com/stretchr/testify/assert\"\n \t\"github.com/stretchr/testify/require\"\n+\n+\t\"github.com/openmeterio/openmeter/pkg/models\"\n )\n \n func TestPriceSourceValidate(t *testing.T) {\n@@ -38,20 +40,45 @@ func TestModelPricingValidate(t *testing.T) {\n \t\tassert.NoError(t, p.Validate())\n \t})\n \n-\tt.Run(\"negative input price\", func(t *testing.T) {\n-\t\tp := ModelPricing{\n-\t\t\tInputPerToken:  alpacadecimal.NewFromFloat(-0.001),\n-\t\t\tOutputPerToken: alpacadecimal.NewFromFloat(0.002),\n+\tt.Run(\"negative prices identify each field\", func(t *testing.T) {\n+\t\tnegative := alpacadecimal.NewFromFloat(-0.001)\n+\n+\t\tfor field, p := range map[string]ModelPricing{\n+\t\t\t\"input_per_token\":       {InputPerToken: negative},\n+\t\t\t\"output_per_token\":      {OutputPerToken: negative},\n+\t\t\t\"cache_read_per_token\":  {CacheReadPerToken: &negative},\n+\t\t\t\"cache_write_per_token\": {CacheWritePerToken: &negative},\n+\t\t\t\"reasoning_per_token\":   {ReasoningPerToken: &negative},\n+\t\t} {\n+\t\t\tt.Run(field, func(t *testing.T) {\n+\t\t\t\tissues, err := models.AsValidationIssues(p.Validate())\n+\t\t\t\trequire.NoError(t, err)\n+\t\t\t\tmodels.RequireValidationIssuesMatch(t, models.ValidationIssues{\n+\t\t\t\t\tErrPriceMustBeNonNegative.WithPathString(\"pricing\", field),\n+\t\t\t\t}, issues)\n+\t\t\t})\n \t\t}\n-\t\trequire.Error(t, p.Validate())\n \t})\n \n-\tt.Run(\"negative output price\", func(t *testing.T) {\n+\tt.Run(\"multiple negative prices report both fields\", func(t *testing.T) {\n+\t\tnegative := alpacadecimal.NewFromFloat(-0.001)\n+\t\tp := ModelPricing{CacheReadPerToken: &negative, ReasoningPerToken: &negative}\n+\t\tissues, err := models.AsValidationIssues(p.Validate())\n+\t\trequire.NoError(t, err)\n+\t\tmodels.RequireValidationIssuesMatch(t, models.ValidationIssues{\n+\t\t\tErrPriceMustBeNonNegative.WithPathString(\"pricing\", \"cache_read_per_token\"),\n+\t\t\tErrPriceMustBeNonNegative.WithPathString(\"pricing\", \"reasoning_per_token\"),\n+\t\t}, issues)\n+\t})\n+\n+\tt.Run(\"valid optional prices\", func(t *testing.T) {\n+\t\tvalid := alpacadecimal.NewFromFloat(0.001)\n \t\tp := ModelPricing{\n-\t\t\tInputPerToken:  alpacadecimal.NewFromFloat(0.001),\n-\t\t\tOutputPerToken: alpacadecimal.NewFromFloat(-0.002),\n+\t\t\tCacheReadPerToken:  &valid,\n+\t\t\tCacheWritePerToken: &valid,\n+\t\t\tReasoningPerToken:  &valid,\n \t\t}\n-\t\trequire.Error(t, p.Validate())\n+\t\tassert.NoError(t, p.Validate())\n \t})\n }\n "
+  }
+ ],
+ "test_files": [
+  "openmeter/llmcost/llmcost_test.go"
+ ]
+}

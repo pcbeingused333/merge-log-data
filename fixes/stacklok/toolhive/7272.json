@@ -1,0 +1,26 @@
+{
+ "repo": "stacklok/toolhive",
+ "number": 7272,
+ "url": "https://github.com/stacklok/toolhive/pull/7272",
+ "title": "fix(telemetry): truncate tool call arguments on a UTF-8 rune boundary",
+ "merged_at": "2026-11-26T09:30:52Z",
+ "files": [
+  {
+   "filename": "pkg/telemetry/middleware.go",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 6,
+   "patch": "@@ -585,17 +585,13 @@ func (m *HTTPMiddleware) sanitizeArguments(arguments map[string]interface{}) str\n \n \t\t// Limit value length and convert to string\n \t\tvalueStr := fmt.Sprintf(\"%v\", value)\n-\t\tif len(valueStr) > 100 {\n-\t\t\tvalueStr = valueStr[:100] + \"...\"\n-\t\t}\n+\t\tvalueStr = truncateUTF8(valueStr, 100)\n \n \t\tparts = append(parts, fmt.Sprintf(\"%s=%s\", key, valueStr))\n \t}\n \n \tresult := strings.Join(parts, \", \")\n-\tif len(result) > 200 {\n-\t\tresult = result[:200] + \"...\"\n-\t}\n+\tresult = truncateUTF8(result, 200)\n \n \treturn result\n }\n@@ -711,6 +707,20 @@ func (rw *responseWriter) Flush() {\n \t}\n }\n \n+// truncateUTF8 shortens s to at most maxBytes bytes, backing up to a UTF-8 rune\n+// boundary so a multi-byte character is never split, and appends \"...\" when\n+// the value was truncated.\n+func truncateUTF8(s string, maxBytes int) string {\n+\tif len(s) <= maxBytes {\n+\t\treturn s\n+\t}\n+\tlimit := maxBytes\n+\tfor limit > 0 && !utf8.RuneStart(s[limit]) {\n+\t\tlimit--\n+\t}\n+\treturn s[:limit] + \"...\"\n+}\n+\n // truncateLabelValue bounds a client-controlled metric label value to\n // maxLabelValueBytes, clamping on a UTF-8 rune boundary so the result is never\n // invalid UTF-8, and appending labelTruncationMarker to signal truncation."
+  },
+  {
+   "filename": "pkg/telemetry/middleware_test.go",
+   "status": "modified",
+   "additions": 28,
+   "deletions": 0,
+   "patch": "@@ -2680,3 +2680,31 @@ func dataPointAttributes(m metricdata.Metrics) []map[string]any {\n \t}\n \treturn out\n }\n+\n+func TestHTTPMiddleware_SanitizeArguments_MultiByteTruncation(t *testing.T) {\n+\tt.Parallel()\n+\n+\tmiddleware := &HTTPMiddleware{}\n+\n+\t// \"世\" is 3 bytes; 100 and 200 are not multiples of 3, so a byte-wise\n+\t// cut would split a character.\n+\tt.Run(\"long value\", func(t *testing.T) {\n+\t\tt.Parallel()\n+\t\tresult := middleware.sanitizeArguments(map[string]interface{}{\n+\t\t\t\"text\": strings.Repeat(\"世\", 100),\n+\t\t})\n+\t\tassert.True(t, utf8.ValidString(result), \"result must be valid UTF-8: %q\", result)\n+\t\tassert.True(t, strings.HasSuffix(result, \"...\"))\n+\t})\n+\n+\tt.Run(\"long joined result\", func(t *testing.T) {\n+\t\tt.Parallel()\n+\t\tresult := middleware.sanitizeArguments(map[string]interface{}{\n+\t\t\t\"a\": strings.Repeat(\"世\", 33),\n+\t\t\t\"b\": strings.Repeat(\"世\", 33),\n+\t\t\t\"c\": strings.Repeat(\"世\", 33),\n+\t\t})\n+\t\tassert.True(t, utf8.ValidString(result), \"result must be valid UTF-8: %q\", result)\n+\t\tassert.True(t, strings.HasSuffix(result, \"...\"))\n+\t})\n+}"
+  }
+ ],
+ "test_files": [
+  "pkg/telemetry/middleware_test.go"
+ ]
+}

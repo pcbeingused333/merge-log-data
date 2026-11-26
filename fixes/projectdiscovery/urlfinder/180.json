@@ -1,0 +1,26 @@
+{
+ "repo": "projectdiscovery/urlfinder",
+ "number": 180,
+ "url": "https://github.com/projectdiscovery/urlfinder/pull/180",
+ "title": "fix(runner): exit with non-zero status on invalid options",
+ "merged_at": "2026-11-26T16:06:01Z",
+ "files": [
+  {
+   "filename": "internal/runner/options.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 2,
+   "patch": "@@ -204,8 +204,7 @@ func ParseOptions() *Options {\n \t// invalid options have been used, exit.\n \terr = options.validateOptions()\n \tif err != nil {\n-\t\tgologger.Warning().Msgf(\"Program exiting: %s\\n\", err)\n-\t\tos.Exit(0)\n+\t\tgologger.Fatal().Msgf(\"Program exiting: %s\\n\", err)\n \t}\n \n \treturn options"
+  },
+  {
+   "filename": "internal/runner/options_test.go",
+   "status": "added",
+   "additions": 59,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,59 @@\n+package runner\n+\n+import (\n+\t\"errors\"\n+\t\"os\"\n+\t\"os/exec\"\n+\t\"strings\"\n+\t\"testing\"\n+\n+\t\"github.com/stretchr/testify/assert\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+const parseOptionsArgsEnv = \"URLFINDER_TEST_PARSE_ARGS\"\n+\n+// ParseOptions terminates the process, so it is run in a child test process.\n+func TestParseOptionsExitCode(t *testing.T) {\n+\tif args, ok := os.LookupEnv(parseOptionsArgsEnv); ok {\n+\t\tos.Args = append([]string{\"urlfinder\"}, strings.Fields(args)...)\n+\t\tParseOptions()\n+\t\tos.Exit(0)\n+\t}\n+\n+\ttests := []struct {\n+\t\tname string\n+\t\targs string\n+\t\tcode int\n+\t}{\n+\t\t{name: \"invalid match regex\", args: \"-d example.invalid -m=[\", code: 1},\n+\t\t{name: \"invalid filter regex\", args: \"-d example.invalid -f=[\", code: 1},\n+\t\t{name: \"zero timeout\", args: \"-d example.invalid -timeout=0\", code: 1},\n+\t\t{name: \"verbose and silent\", args: \"-d example.invalid -v -silent\", code: 1},\n+\t\t{name: \"unknown rate limit source\", args: \"-d example.invalid -rls unknown=1/s\", code: 1},\n+\t\t{name: \"version\", args: \"-version\", code: 0},\n+\t\t{name: \"list sources\", args: \"-ls\", code: 0},\n+\t}\n+\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\thome := t.TempDir()\n+\t\t\tcmd := exec.Command(os.Args[0], \"-test.run=^TestParseOptionsExitCode$\")\n+\t\t\tcmd.Env = append(os.Environ(),\n+\t\t\t\t\"HOME=\"+home,\n+\t\t\t\t\"XDG_CONFIG_HOME=\"+home,\n+\t\t\t\tparseOptionsArgsEnv+\"=-duc -nc \"+tt.args,\n+\t\t\t)\n+\t\t\toutput, err := cmd.CombinedOutput()\n+\n+\t\t\tcode := 0\n+\t\t\tvar exitErr *exec.ExitError\n+\t\t\tif errors.As(err, &exitErr) {\n+\t\t\t\tcode = exitErr.ExitCode()\n+\t\t\t} else {\n+\t\t\t\trequire.NoError(t, err)\n+\t\t\t}\n+\t\t\tassert.Equal(t, tt.code, code, \"output: %s\", output)\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/runner/options_test.go"
+ ]
+}

@@ -1,0 +1,40 @@
+{
+ "repo": "Kong/unirest-java",
+ "number": 626,
+ "url": "https://github.com/Kong/unirest-java/pull/626",
+ "title": "fix: return SSE stream from connect() when response caching is enabled",
+ "merged_at": "2026-11-26T14:49:16Z",
+ "files": [
+  {
+   "filename": "mkdocs/docs/caching.md",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 0,
+   "patch": "@@ -14,6 +14,8 @@ It is recommended that in high load systems consumers back the cache with a dedi\n ```\n Requests are matched on their method, URL, headers, body and response type. Requests that upload a File or InputStream are never answered from the cache because their content is only read when the request is sent.\n \n+Server-Sent Events (SSE) are never cached. SSE requests are always sent to the server, even when caching is enabled.\n+\n #### Advanced Options:\n You can use a builder to customize eviction rules:\n "
+  },
+  {
+   "filename": "unirest-bdd-tests/src/test/java/BehaviorTests/CachingTest.java",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 0,
+   "patch": "@@ -34,6 +34,7 @@\n import java.time.Instant;\n import java.time.temporal.ChronoUnit;\n import java.util.concurrent.TimeUnit;\n+import java.util.stream.Collectors;\n import java.util.stream.IntStream;\n \n import static com.google.common.collect.ImmutableMap.of;\n@@ -61,6 +62,20 @@ void canCacheResponsesForEqualRequests() {\n         assertEquals(r1, r2);\n     }\n \n+    @Test\n+    void cachingDoesNotDropSseStreams() {\n+        Unirest.config().cacheResponses(true);\n+        MockServer.Sse.keepAlive(false);\n+        MockServer.Sse.queueEvent(\"1\", \"message\", \"hi mom\");\n+\n+        var events = Unirest.sse(MockServer.SSE)\n+                .connect()\n+                .collect(Collectors.toList());\n+\n+        assertEquals(2, events.size());\n+        assertEquals(\"hi mom\", events.get(1).data());\n+    }\n+\n     @Test\n     void queryAlsoCaches() {\n         Unirest.config().cacheResponses(true);"
+  },
+  {
+   "filename": "unirest/src/main/java/kong/unirest/core/CacheManager.java",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -110,7 +110,7 @@ public CompletableFuture<Void> sse(SseRequest request, SseHandler handler) {\n \n         @Override\n         public Stream<Event> sse(SseRequest request) {\n-            return Stream.empty();\n+            return originalClient.sse(request);\n         }\n     }\n "
+  },
+  {
+   "filename": "unirest/src/main/java/kong/unirest/core/Config.java",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -675,6 +675,7 @@ public Config cookieSpec(String policy) {\n      * Enables or disables response caching with default options.\n      * <p>\n      * When enabled, HTTP responses will be cached.\n+     * Server-Sent Events (SSE) are not cached.\n      * </p>\n      *\n      * @param value {@code true} to enable caching, {@code false} to disable\n@@ -691,6 +692,9 @@ public Config cacheResponses(boolean value) {\n \n     /**\n      * Enables response caching with custom cache configuration.\n+     * <p>\n+     * Server-Sent Events (SSE) are not cached.\n+     * </p>\n      *\n      * @param value the cache builder with custom configuration\n      * @return this config object for method chaining"
+  }
+ ],
+ "test_files": [
+  "unirest-bdd-tests/src/test/java/BehaviorTests/CachingTest.java"
+ ]
+}
