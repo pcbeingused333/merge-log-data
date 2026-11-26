@@ -15,6 +15,11 @@
    "role": "contributor",
    "created_at": "2026-11-25T18:36:47Z",
    "body": "Thanks for tracking this down — the diagnosis is right and the regression test is a good one.\n\nOne problem before this can go in. Making the quantifier lazy changes *which* reference gets checked rather than how many: the pattern is still anchored, so `findall` returns a single match either way. It used to be the last reference in the string and now it's the first. That fixes the case in #5045, but it means `{{resolve:ssm:good}}{{resolve:ssm:bad:2:extra:more}}` now passes cleanly, and CloudFormation rolls that back with `Incorrect format is used in the following SSM reference`.\n\nCould you drop the anchors instead, so every reference is validated? That fixes #5045 and the missed references together. It needs a separate pattern for `DynamicReference` rather than a change to `REGEX_DYN_REF` itself — the five `re.match` callers and `Split.py`'s `re.fullmatch` rely on the leading `^.*` to match mid-string, and they'd start returning False.\n\nPlease also add test cases with two references in one string: two valid ones, and a malformed one in each position. There's no multi-reference coverage in that file today, which is why this was easy to miss.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-25T23:05:05Z",
+   "body": "Done: the anchors are gone in a separate `REGEX_DYN_REF_ALL` used only by E1050, `REGEX_DYN_REF` is back to what it was, and there are now two-reference cases (both valid, malformed first, malformed second). The new pattern treats `${...}` as one unit so `{{resolve:ssm:${Name}}}` keeps its closing brace.\n\nThis comment was drafted with Claude Code.\n"
   }
  ]
 }

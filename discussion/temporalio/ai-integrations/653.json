@@ -21,6 +21,12 @@
    "state": "COMMENTED",
    "submitted_at": "2026-11-18T23:20:00Z",
    "body": "Lint and all eight targeted MCP provider tests passed. A direct check reproduced the factory error regression described below."
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-25T22:01:09Z",
+   "body": "The patch handles ordinary async factory rejections, but its guard can introduce an unhandled rejection even when the factory’s Promise fulfilled.\n\n<!-- temporal-factory:review-1354076525-653-check-139538761845-7f74536a886bc3b3c4b567e283f57b06e6ddf652:publication -->"
   }
  ],
  "review_comments": [
@@ -41,6 +47,12 @@
    "path": "typescript/openai-agents/src/worker/mcp-provider.ts",
    "created_at": "2026-11-18T23:20:00Z",
    "body": "**[P2] Preserve the non-retryable error for customized Promises**\n\n`types.isPromise` also accepts native Promises with an overridden `catch` or a throwing `then` getter. For those factory results, `server.catch(...)` can throw before the Activity reaches `MCPServerFactoryTypeError`, so Temporal can retry a configuration error that previously failed immediately. Can we attach the rejection handler with `Promise.prototype.then.call(server, undefined, () => undefined)` and guard against synchronous attachment failures so the Activity still returns the documented non-retryable error? [Factory error contract](https://github.com/temporalio/ai-integrations/blob/7f01da8f809f28fecc692d86c1e3a56c6366e97a/typescript/openai-agents/README.md#L472)"
+  },
+  {
+   "role": "bot",
+   "path": "typescript/openai-agents/src/worker/mcp-provider.ts",
+   "created_at": "2026-11-25T22:01:09Z",
+   "body": "[P2] Discard fulfilled values in the Promise guard\n\nWith no fulfillment handler, `then` forwards the original Promise’s fulfilled value to a new, unobserved Promise, which reads the value’s `then` property again. In a direct Activity check using a Promise fulfilled with a proxy that was later revoked, the Activity returned `MCPServerFactoryTypeError` as expected, but the new Promise emitted an unhandled rejection that can terminate the Worker. Provide a no-op fulfillment handler as well as a rejection handler so the guard never reprocesses the discarded value."
   }
  ],
  "comments": [

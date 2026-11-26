@@ -1,0 +1,41 @@
+{
+ "repo": "dynamiq-ai/dynamiq",
+ "number": 1164,
+ "url": "https://github.com/dynamiq-ai/dynamiq/pull/1164",
+ "title": "fix(audio): keep the base URL path for Whisper and ElevenLabs without a trailing slash",
+ "merged_at": "2026-11-26T00:30:31Z",
+ "files": [
+  {
+   "filename": "dynamiq/nodes/audio/elevenlabs.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -40,13 +40,13 @@ def format_url(method: str, url: str, voice_id: str) -> str:\n         str: The modified URL.\n     \"\"\"\n     if url.rstrip(\"/\").endswith(\"v1\"):\n-        url = urljoin(url, method)\n+        url = urljoin(url.rstrip(\"/\") + \"/\", method)\n     if \"{voice_id}\" in url:\n         url = url.format(voice_id=voice_id)\n     elif url.rstrip(\"/\").endswith(\"text-to-speech\") or url.rstrip(\"/\").endswith(\n         \"speech-to-speech\"\n     ):\n-        url = urljoin(url, voice_id)\n+        url = urljoin(url.rstrip(\"/\") + \"/\", voice_id)\n     return url\n \n "
+  },
+  {
+   "filename": "dynamiq/nodes/audio/whisper.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -106,7 +106,7 @@ def get_transcription_with_http_request(self, model: str, audio: io.BytesIO):\n         Returns:\n             dict: transcription result.\n         \"\"\"\n-        connection_url = urljoin(self.connection.url, \"audio/transcriptions\")\n+        connection_url = urljoin(self.connection.url.rstrip(\"/\") + \"/\", \"audio/transcriptions\")\n         response = self.client.request(\n             method=self.connection.method,\n             url=connection_url,"
+  },
+  {
+   "filename": "tests/integration/nodes/audio/test_elevenlabs.py",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -391,3 +391,28 @@ def test_workflow_with_elevenlabssts_input_schema_output_filename(mock_elevenlab\n \n     audio_file = response.output[wf_elevenlabs.flow.nodes[0].id][\"output\"][\"files\"][0]\n     assert audio_file.name == \"input_level_name.mp3\"\n+\n+\n+@pytest.mark.parametrize(\n+    \"url\",\n+    [\n+        \"https://api.elevenlabs.io/v1\",\n+        \"https://api.elevenlabs.io/v1/\",\n+        \"https://api.elevenlabs.io/v1/text-to-speech\",\n+        \"https://api.elevenlabs.io/v1/text-to-speech/\",\n+        \"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}\",\n+        f\"https://api.elevenlabs.io/v1/text-to-speech/{Voices.Dave.value}\",\n+    ],\n+)\n+def test_elevenlabstts_request_url(mock_elevenlabs_response_text, requests_mock, url):\n+    connection = connections.ElevenLabs(url=url, api_key=\"api-key\")\n+    call_mock = requests_mock.post(\n+        url=f\"https://api.elevenlabs.io/v1/text-to-speech/{Voices.Dave.value}\",\n+        content=mock_elevenlabs_response_text,\n+    )\n+    node = ElevenLabsTTS(name=\"elevenlabs\", connection=connection, voice_id=Voices.Dave.value)\n+\n+    response = node.run(input_data={\"text\": \"Mock text\"})\n+\n+    assert response.status == RunnableStatus.SUCCESS\n+    assert call_mock.called_once"
+  },
+  {
+   "filename": "tests/integration/nodes/audio/test_whisper.py",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -50,3 +50,17 @@ def test_workflow_with_whisper_transcriber(\n         call_mock.last_request.headers.get(\"Authorization\")\n         == f\"Bearer {connection.api_key}\"\n     )\n+\n+\n+@pytest.mark.parametrize(\"base_url\", [\"https://your-url/v1\", \"https://your-url/v1/\"])\n+def test_whisper_keeps_base_url_path(mock_whisper_response_text, requests_mock, base_url):\n+    connection = connections.Whisper(url=base_url, api_key=\"api-key\")\n+    call_mock = requests_mock.post(\n+        url=\"https://your-url/v1/audio/transcriptions\", text=json.dumps({\"text\": mock_whisper_response_text})\n+    )\n+    node = WhisperSTT(name=\"whisper\", model=\"whisper-1\", connection=connection)\n+\n+    response = node.run(input_data={\"audio\": b\"bytes_data\"})\n+\n+    assert response.status == RunnableStatus.SUCCESS\n+    assert call_mock.called_once"
+  }
+ ],
+ "test_files": [
+  "tests/integration/nodes/audio/test_elevenlabs.py",
+  "tests/integration/nodes/audio/test_whisper.py"
+ ]
+}

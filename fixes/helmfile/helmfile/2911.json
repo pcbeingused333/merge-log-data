@@ -1,0 +1,33 @@
+{
+ "repo": "helmfile/helmfile",
+ "number": 2911,
+ "url": "https://github.com/helmfile/helmfile/pull/2911",
+ "title": "fix: apply --set overrides in write-values",
+ "merged_at": "2026-11-26T03:33:47Z",
+ "files": [
+  {
+   "filename": "docs/cli.md",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -576,6 +576,11 @@ helmfile print-env --output json\n helmfile print-env -e production\n ```\n \n+### write-values\n+\n+Use `helmfile write-values --set replicas=2` to override values in the generated YAML.\n+The command applies `--set` overrides after merging the release values and any files passed with `--values`.\n+\n ### status\n \n The `helmfile status` sub-command retrieves the status of releases in the state file by running `helm status` for each release."
+  },
+  {
+   "filename": "pkg/state/state.go",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -33,6 +33,7 @@ import (\n \t\"go.uber.org/zap\"\n \thelmchart \"helm.sh/helm/v3/pkg/chart\"\n \tcliv3 \"helm.sh/helm/v3/pkg/cli\"\n+\t\"helm.sh/helm/v3/pkg/strvals\"\n \tcliv4 \"helm.sh/helm/v4/pkg/cli\"\n \n \t\"github.com/helmfile/helmfile/pkg/agent/llm\"\n@@ -2784,6 +2785,16 @@ func (st *HelmState) WriteReleasesValues(helm helmexec.Interface, additionalValu\n \t\t\t}\n \t\t}\n \n+\t\tif len(opts.Set) > 0 {\n+\t\t\t// Normalize nested YAML maps to the string keys Helm's parser expects.\n+\t\t\tmerged = maputil.DeepCopyMap(merged)\n+\t\t\tfor _, value := range opts.Set {\n+\t\t\t\tif err := strvals.ParseInto(value, merged); err != nil {\n+\t\t\t\t\treturn []error{fmt.Errorf(\"applying --set for release %s: %w\", release.Name, err)}\n+\t\t\t\t}\n+\t\t\t}\n+\t\t}\n+\n \t\tvar buf bytes.Buffer\n \n \t\tencoder := yaml.NewEncoder(&buf)"
+  },
+  {
+   "filename": "pkg/state/state_test.go",
+   "status": "modified",
+   "additions": 40,
+   "deletions": 0,
+   "patch": "@@ -7922,3 +7922,43 @@ func TestHelmState_DiffReleases_FailedReleaseForcesUpgrade(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestWriteReleasesValuesAppliesSet(t *testing.T) {\n+\tdir := t.TempDir()\n+\tst := &HelmState{\n+\t\tRenderedValues: map[string]any{},\n+\t\tFilePath:       filepath.Join(dir, \"helmfile.yaml\"),\n+\t\tlogger:         logger,\n+\t\tfs:             filesystem.DefaultFileSystem(),\n+\t\tvalsRuntime:    valsRuntime,\n+\t}\n+\tst.Releases = []ReleaseSpec{{\n+\t\tName: \"example\",\n+\t\tValues: []any{map[string]any{\n+\t\t\t\"replicas\": 1,\n+\t\t\t\"image\":    map[string]any{\"tag\": \"release\", \"repository\": \"example\"},\n+\t\t}},\n+\t}}\n+\n+\tadditional := filepath.Join(dir, \"additional.yaml\")\n+\trequire.NoError(t, os.WriteFile(additional, []byte(\"replicas: 3\\n\"), 0600))\n+\toutput := filepath.Join(dir, \"output.yaml\")\n+\trequire.Empty(t, st.WriteReleasesValues(nil, []string{additional}, &WriteValuesOpts{\n+\t\tSet:                []string{\"replicas=2\", \"image.tag=override\"},\n+\t\tOutputFileTemplate: output,\n+\t}))\n+\n+\tdata, err := os.ReadFile(output)\n+\trequire.NoError(t, err)\n+\tvar got struct {\n+\t\tReplicas int\n+\t\tImage    struct {\n+\t\t\tTag        string\n+\t\t\tRepository string\n+\t\t}\n+\t}\n+\trequire.NoError(t, yaml.Unmarshal(data, &got))\n+\tassert.Equal(t, 2, got.Replicas)\n+\tassert.Equal(t, \"override\", got.Image.Tag)\n+\tassert.Equal(t, \"example\", got.Image.Repository)\n+}"
+  }
+ ],
+ "test_files": [
+  "pkg/state/state_test.go"
+ ]
+}

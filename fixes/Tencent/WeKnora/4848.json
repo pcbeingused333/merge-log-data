@@ -1,0 +1,33 @@
+{
+ "repo": "Tencent/WeKnora",
+ "number": 4848,
+ "url": "https://github.com/Tencent/WeKnora/pull/4848",
+ "title": "fix(web_search): clamp Google num and Tavily max_results to the API limits",
+ "merged_at": "2026-11-26T02:37:19Z",
+ "files": [
+  {
+   "filename": "internal/infrastructure/web_search/google.go",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 4,
+   "patch": "@@ -13,6 +13,9 @@ import (\n \t\"github.com/Tencent/WeKnora/internal/types/interfaces\"\n )\n \n+// googleMaxResults is the largest num value the Custom Search API accepts.\n+const googleMaxResults = 10\n+\n // GoogleProvider implements web search using Google Custom Search Engine API\n type GoogleProvider struct {\n \tsrv      *customsearch.Service\n@@ -67,11 +70,11 @@ func (p *GoogleProvider) Search(\n \tlogger.Infof(ctx, \"[WebSearch][Google] query=%q maxResults=%d engineID=%s\", query, maxResults, p.engineID)\n \tcseCall := p.srv.Cse.List().Context(ctx).Cx(p.engineID).Q(query)\n \n-\tif maxResults > 0 {\n-\t\tcseCall = cseCall.Num(int64(maxResults))\n-\t} else {\n-\t\tcseCall = cseCall.Num(5)\n+\t// The Custom Search API accepts num between 1 and 10 and answers 400 otherwise.\n+\tif maxResults <= 0 {\n+\t\tmaxResults = 5\n \t}\n+\tcseCall = cseCall.Num(int64(min(maxResults, googleMaxResults)))\n \tcseCall = cseCall.Hl(\"ch-zh\")\n \n \tresp, err := cseCall.Do()"
+  },
+  {
+   "filename": "internal/infrastructure/web_search/tavily.go",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 0,
+   "patch": "@@ -63,6 +63,12 @@ func (p *TavilyProvider) Search(\n \t}\n \tlogger.Infof(ctx, \"[WebSearch][Tavily] query=%q maxResults=%d url=%s\", query, maxResults, p.baseURL)\n \n+\t// Tavily accepts max_results up to 20; a zero or negative value would ask for nothing.\n+\tif maxResults <= 0 {\n+\t\tmaxResults = 5\n+\t}\n+\tmaxResults = min(maxResults, tavilyMaxResults)\n+\n \treqBody := tavilySearchRequest{\n \t\tAPIKey:     p.apiKey,\n \t\tQuery:      query,\n@@ -121,6 +127,9 @@ func (p *TavilyProvider) Search(\n \treturn results, nil\n }\n \n+// tavilyMaxResults is the largest max_results value the Tavily search API accepts.\n+const tavilyMaxResults = 20\n+\n // tavilySearchRequest defines the request body for Tavily search API\n type tavilySearchRequest struct {\n \tAPIKey     string `json:\"api_key\"`"
+  },
+  {
+   "filename": "internal/infrastructure/web_search/websearch_max_results_test.go",
+   "status": "added",
+   "additions": 58,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,58 @@\n+package web_search\n+\n+import (\n+\t\"context\"\n+\t\"encoding/json\"\n+\t\"io\"\n+\t\"net/http\"\n+\t\"strconv\"\n+\t\"strings\"\n+\t\"testing\"\n+\n+\t\"github.com/stretchr/testify/require\"\n+\t\"google.golang.org/api/customsearch/v1\"\n+\t\"google.golang.org/api/option\"\n+)\n+\n+type maxResultsTransport func(*http.Request) (*http.Response, error)\n+\n+func (f maxResultsTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }\n+\n+func TestGoogleSearchClampsNumToTheAPILimit(t *testing.T) {\n+\tfor _, tc := range []struct{ requested, num int }{{0, 5}, {3, 3}, {10, 10}, {11, 10}, {50, 10}} {\n+\t\tvar got string\n+\t\tclient := &http.Client{Transport: maxResultsTransport(func(r *http.Request) (*http.Response, error) {\n+\t\t\tgot = r.URL.Query().Get(\"num\")\n+\t\t\treturn &http.Response{\n+\t\t\t\tStatusCode: 200,\n+\t\t\t\tHeader:     http.Header{\"Content-Type\": {\"application/json\"}},\n+\t\t\t\tBody:       io.NopCloser(strings.NewReader(`{\"items\":[]}`)),\n+\t\t\t}, nil\n+\t\t})}\n+\t\tsrv, err := customsearch.NewService(context.Background(), option.WithAPIKey(\"k\"), option.WithHTTPClient(client))\n+\t\trequire.NoError(t, err)\n+\t\tp := &GoogleProvider{srv: srv, apiKey: \"k\", engineID: \"cx\"}\n+\n+\t\t_, err = p.Search(context.Background(), \"query\", tc.requested, false)\n+\t\trequire.NoError(t, err)\n+\t\trequire.Equal(t, strconv.Itoa(tc.num), got, \"requested %d\", tc.requested)\n+\t}\n+}\n+\n+func TestTavilySearchClampsMaxResultsToTheAPILimit(t *testing.T) {\n+\tfor _, tc := range []struct{ requested, sent int }{{0, 5}, {3, 3}, {20, 20}, {21, 20}, {50, 20}} {\n+\t\tvar got struct {\n+\t\t\tMaxResults int `json:\"max_results\"`\n+\t\t}\n+\t\tclient := &http.Client{Transport: maxResultsTransport(func(r *http.Request) (*http.Response, error) {\n+\t\t\tbody, _ := io.ReadAll(r.Body)\n+\t\t\trequire.NoError(t, json.Unmarshal(body, &got))\n+\t\t\treturn &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{\"results\":[]}`))}, nil\n+\t\t})}\n+\t\tp := &TavilyProvider{apiKey: \"k\", client: client, baseURL: defaultTavilySearchURL}\n+\n+\t\t_, err := p.Search(context.Background(), \"query\", tc.requested, false)\n+\t\trequire.NoError(t, err)\n+\t\trequire.Equal(t, tc.sent, got.MaxResults, \"requested %d\", tc.requested)\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/infrastructure/web_search/websearch_max_results_test.go"
+ ]
+}

@@ -9,6 +9,12 @@
    "state": "COMMENTED",
    "submitted_at": "2026-11-22T04:52:49Z",
    "body": "Thanks @pcbeingused333 , looks good, a few small remarks:\n\n1. **Overlap with #2279**: nothing to do here. Once this is merged, I'll rebase #2279, make the opt-out win over the level, and add integration tests for the combined case.\n2. **Warning**: \"cannot be declared to disable thinking\" reads oddly. It also fires for the flash-lite models, which have no flag and don't think by default, so \"default thinking applies\" is wrong there. Either give them `can_be_disabled: true` (budget 0 is accepted on them in the #2259 measurements), or use a separate message when the flag is missing.\n3. **Nit**: `LoggerFactory` is already imported; `ConcurrentHashMap` could be an import too.\n4. **Docs**: the Google GenAI section of `thinking/page.adoc` could mention `thinking.can_be_disabled`.\n"
+  },
+  {
+   "role": "collaborator",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-26T07:15:15Z",
+   "body": "@pcbeingused333 Thanks, the remarks are addressed in 93d0adc.\n\nI ran the same ITs on  key and Vertex credentials: all 44 pass. Your errors came from your account, not the code:\n\n- **429**: free-tier quota.\n- **404 on 2.5 models**: Google no longer serves them to new users. `GoogleGenAiToolResponseIT` still uses `gemini-2.5-flash`, hence your 4/4 errors. It passes here because I still has access with my pro account (will stop working on 1 dec 2026)\n- **Vertex**: `BlankTurnRePromptIT` hard-codes `us-central1`, where `gemini-3.8-flash` isn't available. It passes with `global`. Unrelated to this PR, I'll fix it separately.\n\nNone of the existing ITs calls `withoutThinking()`, so I wrote one that runs every catalog model against the real API, with both the API key and Vertex:\n\n- The 4 models with `can_be_disabled: true` think by default and return 0 thought tokens with `withoutThinking()`. Without your fix, they still think (229 thought tokens on `gemini-3.6-flash`).\n- The others get no `thinkingBudget`, the call still works, and the warning is logged.\n\nAll pass: 16/16 with the API key, 14/16 on Vertex (2 flash-lite models are not served in `global`). I'll push this IT in #2279.\n"
   }
  ],
  "review_comments": [

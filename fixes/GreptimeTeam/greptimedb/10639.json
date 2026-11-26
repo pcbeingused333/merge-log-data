@@ -1,0 +1,26 @@
+{
+ "repo": "GreptimeTeam/greptimedb",
+ "number": 10639,
+ "url": "https://github.com/GreptimeTeam/greptimedb/pull/10639",
+ "title": "fix: honor LIMIT when copying a table to a file",
+ "merged_at": "2026-11-26T05:05:50Z",
+ "files": [
+  {
+   "filename": "src/operator/src/statement/copy_table_to.rs",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 0,
+   "patch": "@@ -171,6 +171,13 @@ impl StatementExecutor {\n         for f in filters {\n             builder = builder.filter(f).context(BuildDfLogicalPlanSnafu)?;\n         }\n+        if let Some(limit) = req.limit {\n+            // DataFusion represents the fetch count as a signed 64-bit literal.\n+            let fetch = usize::try_from(limit.min(i64::MAX as u64)).unwrap_or(usize::MAX);\n+            builder = builder\n+                .limit(0, Some(fetch))\n+                .context(BuildDfLogicalPlanSnafu)?;\n+        }\n         let plan = builder.build().context(BuildDfLogicalPlanSnafu)?;\n \n         let output = self"
+  },
+  {
+   "filename": "tests-integration/tests/export_logical_tables.rs",
+   "status": "modified",
+   "additions": 51,
+   "deletions": 0,
+   "patch": "@@ -184,6 +184,57 @@ async fn roundtrip(instance: &Arc<Instance>) {\n     }\n }\n \n+#[tokio::test(flavor = \"multi_thread\")]\n+async fn copy_table_to_csv_respects_limit() {\n+    let standalone = GreptimeDbStandaloneBuilder::new(\"copy_table_to_csv_limit\")\n+        .build()\n+        .await;\n+    let instance = standalone.fe_instance();\n+    let destination = tempfile::tempdir_in(common_test_util::find_workspace_path(\".\")).unwrap();\n+    sql(\n+        instance,\n+        \"CREATE TABLE copy_source (ts TIMESTAMP TIME INDEX)\",\n+    )\n+    .await;\n+    sql(\n+        instance,\n+        \"INSERT INTO copy_source VALUES (1000), (2000), (3000)\",\n+    )\n+    .await;\n+\n+    for (name, filter, limit, expected_rows) in [\n+        (\"all\", \"\", \"\", 3),\n+        (\n+            \"limited\",\n+            \", start_time='1970-01-01T00:00:02Z'\",\n+            \"LIMIT 1\",\n+            1,\n+        ),\n+        (\"empty\", \"\", \"LIMIT 0\", 0),\n+        (\"large\", \"\", \"LIMIT 18446744073709551615\", 3),\n+    ] {\n+        let path = destination.path().join(format!(\"{name}.csv\"));\n+        let uri = url::Url::from_file_path(&path).unwrap();\n+        let output = sql(\n+            instance,\n+            &format!(\n+                \"COPY copy_source TO '{uri}' WITH (FORMAT='csv', timestamp_format='%S'{filter}) {limit}\"\n+            ),\n+        )\n+        .await;\n+        assert!(matches!(output.data, OutputData::AffectedRows(rows) if rows == expected_rows));\n+        let csv = std::fs::read_to_string(path).unwrap();\n+        let mut lines = csv.lines();\n+        if expected_rows > 0 || !csv.is_empty() {\n+            assert_eq!(lines.next(), Some(\"ts\"));\n+        }\n+        if name == \"limited\" {\n+            assert!(matches!(csv.lines().nth(1), Some(\"02\" | \"03\")));\n+        }\n+        assert_eq!(lines.count(), expected_rows);\n+    }\n+}\n+\n #[tokio::test(flavor = \"multi_thread\")]\n async fn physical_export_standalone_roundtrip() {\n     common_telemetry::init_default_ut_logging();"
+  }
+ ],
+ "test_files": [
+  "tests-integration/tests/export_logical_tables.rs"
+ ]
+}

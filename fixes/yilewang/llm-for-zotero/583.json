@@ -1,0 +1,26 @@
+{
+ "repo": "yilewang/llm-for-zotero",
+ "number": 583,
+ "url": "https://github.com/yilewang/llm-for-zotero/pull/583",
+ "title": "Preserve repeated text and reasoning deltas in native Gemini Agent streams",
+ "merged_at": "2026-11-25T23:19:54Z",
+ "files": [
+  {
+   "filename": "src/agent/model/geminiNative.ts",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 21,
+   "patch": "@@ -648,7 +648,6 @@ async function parseGeminiStepStream(\n   const decoder = new TextDecoder();\n   let buffer = \"\";\n   let text = \"\";\n-  let reasoningText = \"\";\n   let completion: ModelTurnCompletion = { status: \"complete\" };\n   // Streaming chunks each carry only the new parts; accumulate them all so\n   // the cached model turn keeps every functionCall and thoughtSignature\n@@ -664,28 +663,13 @@ async function parseGeminiStepStream(\n     const normalized = normalizeGeminiResponse(parsed);\n     completion = normalized.completion;\n     allParts.push(...normalized.responseParts);\n-    if (normalized.reasoningText) {\n-      let reasoningDelta = normalized.reasoningText;\n-      if (normalized.reasoningText.startsWith(reasoningText)) {\n-        reasoningDelta = normalized.reasoningText.slice(reasoningText.length);\n-        reasoningText = normalized.reasoningText;\n-      } else {\n-        reasoningText += reasoningDelta;\n-      }\n-      if (reasoningDelta && onReasoning) {\n-        await onReasoning({ details: reasoningDelta });\n-      }\n+    if (normalized.reasoningText && onReasoning) {\n+      await onReasoning({ details: normalized.reasoningText });\n     }\n     if (!normalized.text) return;\n-    let delta = normalized.text;\n-    if (normalized.text.startsWith(text)) {\n-      delta = normalized.text.slice(text.length);\n-      text = normalized.text;\n-    } else {\n-      text += delta;\n-    }\n-    if (delta && onTextDelta) {\n-      await onTextDelta(delta);\n+    text += normalized.text;\n+    if (onTextDelta) {\n+      await onTextDelta(normalized.text);\n     }\n   };\n "
+  },
+  {
+   "filename": "test-workflows/geminiNative.workflow.test.ts",
+   "status": "added",
+   "additions": 61,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,61 @@\n+import { assert } from \"chai\";\n+import { resolveAgentRuntimeRequest } from \"../src/agent/context/resolvedAgentRequest\";\n+import { GeminiNativeAgentAdapter } from \"../src/agent/model/geminiNative\";\n+\n+describe(\"Gemini native Agent streaming\", function () {\n+  it(\"preserves consecutive identical text and reasoning deltas\", async function () {\n+    const event = {\n+      candidates: [{ content: { parts: [{ text: \"ha\" }] } }],\n+    };\n+    const thoughtEvent = {\n+      candidates: [\n+        { content: { parts: [{ text: \"Thinking\", thought: true }] } },\n+      ],\n+    };\n+    const thoughtFrame = `data: ${JSON.stringify(thoughtEvent)}\\n\\n`;\n+    const frame = `data: ${JSON.stringify(event)}\\n\\n`;\n+    const originalGetGlobal = ztoolkit.getGlobal;\n+    ztoolkit.getGlobal = ((name: string) =>\n+      name === \"fetch\"\n+        ? async () =>\n+            new Response(thoughtFrame + thoughtFrame + frame + frame, {\n+              headers: { \"Content-Type\": \"text/event-stream\" },\n+            })\n+        : Reflect.apply(originalGetGlobal, ztoolkit, [\n+            name,\n+          ])) as typeof originalGetGlobal;\n+\n+    try {\n+      const deltas: string[] = [];\n+      const reasoning: string[] = [];\n+      const step = await new GeminiNativeAgentAdapter().runStep({\n+        request: resolveAgentRuntimeRequest({\n+          conversationKey: 1,\n+          mode: \"agent\",\n+          userText: \"Say haha\",\n+          apiBase: \"https://generativelanguage.googleapis.com/v1beta\",\n+          model: \"gemini-2.5-flash\",\n+        }),\n+        messages: [{ role: \"user\", content: \"Say haha\" }],\n+        tools: [],\n+        onReasoning({ details }) {\n+          if (details) reasoning.push(details);\n+        },\n+        onTextDelta(delta) {\n+          deltas.push(delta);\n+        },\n+      });\n+\n+      assert.deepEqual(\n+        { text: step.text, deltas, reasoning },\n+        {\n+          text: \"haha\",\n+          deltas: [\"ha\", \"ha\"],\n+          reasoning: [\"Thinking\", \"Thinking\"],\n+        },\n+      );\n+    } finally {\n+      ztoolkit.getGlobal = originalGetGlobal;\n+    }\n+  });\n+});"
+  }
+ ],
+ "test_files": [
+  "test-workflows/geminiNative.workflow.test.ts"
+ ]
+}

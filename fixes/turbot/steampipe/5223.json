@@ -1,0 +1,26 @@
+{
+ "repo": "turbot/steampipe",
+ "number": 5223,
+ "url": "https://github.com/turbot/steampipe/pull/5223",
+ "title": "Report schema query iteration errors",
+ "merged_at": "2026-11-26T03:28:10Z",
+ "files": [
+  {
+   "filename": "pkg/db/db_common/schema.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -140,6 +140,9 @@ func getSchemaRecordsFromRows(rows pgx.Rows) ([]schemaRecord, error) {\n \t\t}\n \t\trecords = append(records, t)\n \t}\n+\tif err := rows.Err(); err != nil {\n+\t\treturn nil, err\n+\t}\n \n \treturn records, nil\n }"
+  },
+  {
+   "filename": "pkg/db/db_common/schema_test.go",
+   "status": "added",
+   "additions": 45,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,45 @@\n+package db_common\n+\n+import (\n+\t\"errors\"\n+\t\"testing\"\n+\n+\t\"github.com/jackc/pgx/v5\"\n+)\n+\n+type schemaIterationRows struct {\n+\tpgx.Rows\n+\titerated bool\n+\terr      error\n+}\n+\n+func (r *schemaIterationRows) Next() bool {\n+\tif r.iterated {\n+\t\treturn false\n+\t}\n+\tr.iterated = true\n+\treturn true\n+}\n+\n+func (r *schemaIterationRows) Scan(dest ...any) error {\n+\tvalues := []string{\"example_table\", \"id\", \"\", \"NO\", \"integer\", \"int4\", \"public\", \"\", \"\"}\n+\tfor i, value := range values {\n+\t\t*dest[i].(*[]byte) = []byte(value)\n+\t}\n+\treturn nil\n+}\n+\n+func (r *schemaIterationRows) Err() error {\n+\treturn r.err\n+}\n+\n+func TestGetSchemaRecordsFromRowsIterationError(t *testing.T) {\n+\titerationErr := errors.New(\"schema iteration interrupted\")\n+\trecords, err := getSchemaRecordsFromRows(&schemaIterationRows{err: iterationErr})\n+\tif !errors.Is(err, iterationErr) {\n+\t\tt.Fatalf(\"got error %v, want %v\", err, iterationErr)\n+\t}\n+\tif records != nil {\n+\t\tt.Fatalf(\"got partial schema records after iteration error: %+v\", records)\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "pkg/db/db_common/schema_test.go"
+ ]
+}

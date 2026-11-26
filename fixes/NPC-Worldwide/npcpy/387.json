@@ -1,0 +1,26 @@
+{
+ "repo": "NPC-Worldwide/npcpy",
+ "number": 387,
+ "url": "https://github.com/NPC-Worldwide/npcpy/pull/387",
+ "title": "Fix agents2npc frontmatter delimiter parsing",
+ "merged_at": "2026-11-26T01:59:51Z",
+ "files": [
+  {
+   "filename": "npcpy/convert.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 4,
+   "patch": "@@ -63,10 +63,8 @@ def _load_compiled_yaml(path: str) -> Dict[str, Any]:\n \n def _parse_frontmatter(text: str) -> Tuple[Dict[str, Any], str]:\n     \"\"\"Split `---\\n...\\n---\\nbody` into (frontmatter_dict, body_str).\"\"\"\n-    if not text.startswith('---'):\n-        return {}, text\n-    parts = text.split('---', 2)\n-    if len(parts) < 3:\n+    parts = re.split(r'^---[ \\t]*\\r?$', text, maxsplit=2, flags=re.MULTILINE)\n+    if len(parts) < 3 or parts[0]:\n         return {}, text\n     try:\n         fm = yaml.safe_load(parts[1]) or {}"
+  },
+  {
+   "filename": "tests/test_convert.py",
+   "status": "added",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,29 @@\n+import pytest\n+import yaml\n+\n+from npcpy.convert import _cli_agents_to_npc\n+\n+\n+@pytest.mark.parametrize(\"description\", [\"Note with marker\", \"Note with --- marker\"])\n+def test_agents_to_npc_preserves_frontmatter_and_directive(tmp_path, description):\n+    source = tmp_path / \"agents.md\"\n+    directive = \"Check the report.\\n\\n---\\n\\nSummarize the findings.\"\n+    source.write_text(\n+        f\"---\\ndescription: {description}\\n\"\n+        \"name: reviewer\\nmodel: example-model\\nprovider: example-provider\\n\"\n+        \"tools:\\n  - search\\n  - summarize\\n\"\n+        f\"---\\n\\n{directive}\\n\",\n+        encoding=\"utf-8\",\n+    )\n+    output = tmp_path / \"npc_team\"\n+\n+    assert _cli_agents_to_npc([str(source), \"--out-dir\", str(output)]) == 0\n+\n+    (npc_file,) = output.glob(\"*.npc\")\n+    assert yaml.safe_load(npc_file.read_text(encoding=\"utf-8\")) == {\n+        \"name\": \"reviewer\",\n+        \"model\": \"example-model\",\n+        \"provider\": \"example-provider\",\n+        \"jinxes\": [\"search\", \"summarize\"],\n+        \"primary_directive\": directive,\n+    }"
+  }
+ ],
+ "test_files": [
+  "tests/test_convert.py"
+ ]
+}

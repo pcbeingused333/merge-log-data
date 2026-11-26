@@ -1,0 +1,41 @@
+{
+ "repo": "theopenco/llmgateway",
+ "number": 4954,
+ "url": "https://github.com/theopenco/llmgateway/pull/4954",
+ "title": "fix(gateway): include Gemini toolUsePromptTokenCount in non-streaming totalTokens",
+ "merged_at": "2026-11-26T04:43:20Z",
+ "files": [
+  {
+   "filename": "apps/gateway/src/chat/tools/extract-token-usage.spec.ts",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -823,6 +823,44 @@ describe(\"extractTokenUsage\", () => {\n \t\t\texpect(result.promptTokens).toBe(526);\n \t\t\texpect(result.imageInputTokens).toBe(516);\n \t\t});\n+\n+\t\tit(\"adds toolUsePromptTokenCount to the total\", () => {\n+\t\t\tconst result = extractTokenUsage(\n+\t\t\t\t{\n+\t\t\t\t\tusageMetadata: {\n+\t\t\t\t\t\tpromptTokenCount: 100,\n+\t\t\t\t\t\tcandidatesTokenCount: 40,\n+\t\t\t\t\t\ttoolUsePromptTokenCount: 25,\n+\t\t\t\t\t\ttotalTokenCount: 165,\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t\t\"google-ai-studio\",\n+\t\t\t);\n+\n+\t\t\texpect(result.promptTokens).toBe(100);\n+\t\t\texpect(result.completionTokens).toBe(40);\n+\t\t\texpect(result.totalTokens).toBe(165);\n+\t\t});\n+\n+\t\tit(\"does not double-count reasoning when toolUse equals thoughts\", () => {\n+\t\t\tconst result = extractTokenUsage(\n+\t\t\t\t{\n+\t\t\t\t\tusageMetadata: {\n+\t\t\t\t\t\tpromptTokenCount: 100,\n+\t\t\t\t\t\tcandidatesTokenCount: 40,\n+\t\t\t\t\t\tthoughtsTokenCount: 25,\n+\t\t\t\t\t\ttoolUsePromptTokenCount: 25,\n+\t\t\t\t\t\ttotalTokenCount: 190,\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t\t\"google-ai-studio\",\n+\t\t\t);\n+\n+\t\t\texpect(result.promptTokens).toBe(100);\n+\t\t\texpect(result.completionTokens).toBe(65);\n+\t\t\texpect(result.reasoningTokens).toBe(25);\n+\t\t\texpect(result.totalTokens).toBe(190);\n+\t\t});\n \t});\n });\n "
+  },
+  {
+   "filename": "apps/gateway/src/chat/tools/extract-token-usage.ts",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 3,
+   "patch": "@@ -114,6 +114,7 @@ export function extractTokenUsage(\n \tlet promptTokens = null;\n \tlet completionTokens = null;\n \tlet totalTokens = null;\n+\tlet toolUsePromptTokens = 0;\n \tlet reasoningTokens = null;\n \tlet cachedTokens = null;\n \tlet cacheCreationTokens = null;\n@@ -188,8 +189,11 @@ export function extractTokenUsage(\n \t\t\t\t// completionTokens includes reasoning for correct totals\n \t\t\t\tcompletionTokens = (rawCandidates ?? 0) + (reasoningTokens ?? 0);\n \n-\t\t\t\t// Calculate total\n-\t\t\t\ttotalTokens = (promptTokens ?? 0) + (completionTokens ?? 0);\n+\t\t\t\t// Calculate total; tokens the model read from tool results (e.g. Google\n+\t\t\t\t// Search grounding) are billed on top of the prompt and candidates\n+\t\t\t\ttoolUsePromptTokens = data.usageMetadata.toolUsePromptTokenCount ?? 0;\n+\t\t\t\ttotalTokens =\n+\t\t\t\t\t(promptTokens ?? 0) + (completionTokens ?? 0) + toolUsePromptTokens;\n \t\t\t}\n \t\t\tbreak;\n \t\tcase \"aws-bedrock\":\n@@ -353,11 +357,14 @@ export function extractTokenUsage(\n \t\t\tbreak;\n \t}\n \n+\t// Tool-use prompt tokens sit outside prompt + completion + reasoning, so keep\n+\t// them out of the reasoning-consistency check (otherwise toolUse == reasoning\n+\t// would double-count reasoning into completionTokens)\n \tcompletionTokens = normalizeCompletionTokens(\n \t\tpromptTokens,\n \t\tcompletionTokens,\n \t\treasoningTokens,\n-\t\ttotalTokens,\n+\t\ttotalTokens === null ? null : totalTokens - toolUsePromptTokens,\n \t);\n \n \treturn {"
+  },
+  {
+   "filename": "apps/gateway/src/chat/tools/parse-provider-response.spec.ts",
+   "status": "modified",
+   "additions": 51,
+   "deletions": 0,
+   "patch": "@@ -587,6 +587,57 @@ describe(\"parseProviderResponse\", () => {\n \t\t\texpect(result.promptTokens).toBe(268);\n \t\t\texpect(result.imageInputTokens).toBe(258);\n \t\t});\n+\n+\t\tit(\"adds toolUsePromptTokenCount to the total\", () => {\n+\t\t\tconst result = parseProviderResponse(\n+\t\t\t\t\"google-ai-studio\",\n+\t\t\t\t\"gemini-2.5-flash\",\n+\t\t\t\t{\n+\t\t\t\t\tcandidates: [\n+\t\t\t\t\t\t{\n+\t\t\t\t\t\t\tcontent: { role: \"model\", parts: [{ text: \"Answer\" }] },\n+\t\t\t\t\t\t\tfinishReason: \"STOP\",\n+\t\t\t\t\t\t},\n+\t\t\t\t\t],\n+\t\t\t\t\tusageMetadata: {\n+\t\t\t\t\t\tpromptTokenCount: 100,\n+\t\t\t\t\t\tcandidatesTokenCount: 40,\n+\t\t\t\t\t\ttoolUsePromptTokenCount: 25,\n+\t\t\t\t\t\ttotalTokenCount: 165,\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t);\n+\n+\t\t\texpect(result.promptTokens).toBe(100);\n+\t\t\texpect(result.completionTokens).toBe(40);\n+\t\t\texpect(result.totalTokens).toBe(165);\n+\t\t});\n+\n+\t\tit(\"does not double-count reasoning when toolUse equals thoughts\", () => {\n+\t\t\tconst result = parseProviderResponse(\n+\t\t\t\t\"google-ai-studio\",\n+\t\t\t\t\"gemini-2.5-flash\",\n+\t\t\t\t{\n+\t\t\t\t\tcandidates: [\n+\t\t\t\t\t\t{\n+\t\t\t\t\t\t\tcontent: { role: \"model\", parts: [{ text: \"Answer\" }] },\n+\t\t\t\t\t\t\tfinishReason: \"STOP\",\n+\t\t\t\t\t\t},\n+\t\t\t\t\t],\n+\t\t\t\t\tusageMetadata: {\n+\t\t\t\t\t\tpromptTokenCount: 100,\n+\t\t\t\t\t\tcandidatesTokenCount: 40,\n+\t\t\t\t\t\tthoughtsTokenCount: 25,\n+\t\t\t\t\t\ttoolUsePromptTokenCount: 25,\n+\t\t\t\t\t\ttotalTokenCount: 190,\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t);\n+\n+\t\t\texpect(result.promptTokens).toBe(100);\n+\t\t\texpect(result.completionTokens).toBe(65);\n+\t\t\texpect(result.totalTokens).toBe(190);\n+\t\t});\n \t});\n \n \tdescribe(\"google thought images\", () => {"
+  },
+  {
+   "filename": "apps/gateway/src/chat/tools/parse-provider-response.ts",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 2,
+   "patch": "@@ -127,6 +127,7 @@ export function parseProviderResponse(\n \tlet promptTokens = null;\n \tlet completionTokens = null;\n \tlet totalTokens = null;\n+\tlet toolUsePromptTokens = 0;\n \tlet reasoningTokens = null;\n \tlet cachedTokens = null;\n \tlet cacheCreationTokens = null;\n@@ -716,8 +717,11 @@ export function parseProviderResponse(\n \t\t\tcompletionTokens = rawCandidates + (reasoningTokens ?? 0);\n \n \t\t\t// Calculate totalTokens\n+\t\t\t// (tool-use prompt tokens, e.g. Google Search grounding, count on top)\n+\t\t\ttoolUsePromptTokens = json.usageMetadata?.toolUsePromptTokenCount ?? 0;\n \t\t\tif (promptTokens !== null) {\n-\t\t\t\ttotalTokens = promptTokens + (completionTokens ?? 0);\n+\t\t\t\ttotalTokens =\n+\t\t\t\t\tpromptTokens + (completionTokens ?? 0) + toolUsePromptTokens;\n \t\t\t}\n \t\t\tbreak;\n \t\t}\n@@ -1636,11 +1640,14 @@ export function parseProviderResponse(\n \t\treasoningContent = null;\n \t}\n \n+\t// Tool-use prompt tokens sit outside prompt + completion + reasoning, so keep\n+\t// them out of the reasoning-consistency check (otherwise toolUse == reasoning\n+\t// would double-count reasoning into completionTokens)\n \tcompletionTokens = normalizeCompletionTokens(\n \t\tpromptTokens,\n \t\tcompletionTokens,\n \t\treasoningTokens,\n-\t\ttotalTokens,\n+\t\ttotalTokens === null ? null : totalTokens - toolUsePromptTokens,\n \t);\n \n \treturn {"
+  }
+ ],
+ "test_files": [
+  "apps/gateway/src/chat/tools/extract-token-usage.spec.ts",
+  "apps/gateway/src/chat/tools/parse-provider-response.spec.ts"
+ ]
+}

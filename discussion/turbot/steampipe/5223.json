@@ -2,8 +2,14 @@
  "repo": "turbot/steampipe",
  "number": 5223,
  "url": "https://github.com/turbot/steampipe/pull/5223",
- "state": "open",
+ "state": "merged",
  "reviews": [],
  "review_comments": [],
- "comments": []
+ "comments": [
+  {
+   "role": "member",
+   "created_at": "2026-11-26T03:21:41Z",
+   "body": "Reviewed and checked. Thanks, this is a real bug, and the fix is the right one for pgx: `Rows.Next()` returns false both at the end of the rows and on an error, so `Rows.Err()` has to be checked after the loop.\n\n**Against a real Postgres 14.** I called `LoadSchemaMetadata` with a schema-shaped query that sends 2 of its 5 rows and then fails:\n\n| query | before (`develop`) | this PR |\n|---|---|---|\n| complete | 5 tables, no error | 5 tables, no error |\n| division by zero at row 3 | 2 tables, **no error** | `division by zero (SQLSTATE 22012)`, no tables |\n| `statement_timeout` at row 3 | 2 tables, **no error** | `canceling statement due to statement timeout (SQLSTATE 57014)`, no tables |\n\n**What a user sees now.** At the start of an interactive session, the error ends the session with `failed to load schemas: ...`, the same as when the schema query fails outright today. Before, it started with autocomplete silently missing tables. On a connection-update reload, the error is logged and the previous schema is kept, not replaced with a partial one.\n\n**Tests.** `TestGetSchemaRecordsFromRowsIterationError` passes with the fix and fails without it (`got error <nil>`). `go vet ./pkg/db/...` is clean, and `go test ./...` passes (23 packages).\n\nMerging once CI is green.\n"
+  }
+ ]
 }

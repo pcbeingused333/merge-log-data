@@ -3,7 +3,39 @@
  "number": 670,
  "url": "https://github.com/temporalio/ai-integrations/pull/670",
  "state": "open",
- "reviews": [],
- "review_comments": [],
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-25T22:08:26Z",
+   "body": "All nine focused tests passed, but a real MCP SDK handshake rejection still bypasses the classifier. The change also newly persists raw server error data in Workflow History and changes failure handling without migration guidance.\n\n<!-- temporal-factory:review-1354076525-670-check-139542044458-b322625111d1865cf515efc82bccbe5b9e3bc1b8:publication -->"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "typescript/openai-agents/src/worker/mcp-provider.ts",
+   "created_at": "2026-11-25T22:08:26Z",
+   "body": "[P2] Classify permanent MCP handshake errors in both Activities\n\nBoth Activities call `s.connect()` outside the classifier. With the shipped `MCPServerStdio`, a server that rejects `initialize` with `-32602` makes the Activity throw a raw `ProtocolError`, so Temporal retries the same handshake without ever reaching the tool request. I confirmed this against the installed SDK. Include `connect()` in the classification scope, as the Python stateless provider does, while leaving transport failures retryable (AGENTS.md:84–87)."
+  },
+  {
+   "role": "bot",
+   "path": "typescript/openai-agents/src/worker/mcp-provider.ts",
+   "created_at": "2026-11-25T22:08:26Z",
+   "body": "[P2] Keep raw MCP error data out of Workflow History\n\nIf an MCP server puts sensitive diagnostics in `error.data`, such as a credential-bearing URL, the new `details` field sends that data to Temporal and records it in Workflow History under the default converter. The previous failure conversion did not serialize this field. Keep the numeric code and omit the raw diagnostics unless there is a safe way to expose them (AGENTS.md:72)."
+  },
+  {
+   "role": "bot",
+   "path": "typescript/openai-agents/src/worker/mcp-provider.ts",
+   "created_at": "2026-11-25T22:08:26Z",
+   "body": "[P2] Preserve explicit ApplicationFailures from custom MCP servers\n\nWhen a custom server deliberately throws an `ApplicationFailure` with a protocol error as its cause, this classifier replaces the server's chosen type, details, and retry behavior. For example, a server that wraps `-32602` in a retryable failure while it refreshes a stale tool schema will now fail immediately. Preserve already-classified Temporal failures and inspect the causes of ordinary wrappers, as the Java sibling does (AGENTS.md:87)."
+  },
+  {
+   "role": "bot",
+   "path": "typescript/openai-agents/src/worker/mcp-provider.ts",
+   "created_at": "2026-11-25T22:08:27Z",
+   "body": "[P2] Give in-flight runs migration guidance for the new failure type\n\nAn Activity already waiting to retry a matching rejection can fail immediately on an upgraded Worker, and Workflow code that catches the previous `ApplicationFailure.type` (such as `ProtocolError`) will no longer match the new top-level type. The README describes the new behavior but not the upgrade impact. Call this out as breaking in the PR and explain how to handle both failure types during rollout, as required for changes that can alter recorded histories (AGENTS.md:75)."
+  }
+ ],
  "comments": []
 }

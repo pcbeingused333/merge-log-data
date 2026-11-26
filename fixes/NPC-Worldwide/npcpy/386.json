@@ -1,0 +1,26 @@
+{
+ "repo": "NPC-Worldwide/npcpy",
+ "number": 386,
+ "url": "https://github.com/NPC-Worldwide/npcpy/pull/386",
+ "title": "Honor explicit Kokoro language codes in text_to_speech",
+ "merged_at": "2026-11-26T01:57:50Z",
+ "files": [
+  {
+   "filename": "npcpy/gen/audio_gen.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -777,8 +777,8 @@ def text_to_speech(\n     if engine == \"kokoro\":\n         voice = voice or \"af_heart\"\n         voices = {v[\"id\"]: v for v in get_kokoro_voices()}\n-        lang_code = voices.get(voice, {}).get(\"lang\", \"a\")\n-        return tts_kokoro(text, voice=voice, lang_code=lang_code, **kwargs)\n+        kwargs.setdefault(\"lang_code\", voices.get(voice, {}).get(\"lang\", \"a\"))\n+        return tts_kokoro(text, voice=voice, **kwargs)\n \n     elif engine in (\"qwen3\", \"qwen3-tts\", \"qwen\"):\n         voice = voice or \"ryan\""
+  },
+  {
+   "filename": "tests/test_audio_gen_defaults.py",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 0,
+   "patch": "@@ -28,3 +28,25 @@ async def connect(url):\n \n     model = sent[0][\"setup\"][\"model\"].removeprefix(\"models/\")\n     assert model not in RETIRED\n+\n+\n+def test_kokoro_forwards_explicit_lang_code(monkeypatch):\n+    def fake_tts(text, *, voice, lang_code, speed):\n+        assert (text, voice, lang_code, speed) == (\"Bonjour\", \"ff_siwis\", \"f\", 1.2)\n+        return b\"wav\"\n+\n+    monkeypatch.setattr(audio_gen, \"tts_kokoro\", fake_tts)\n+\n+    assert audio_gen.text_to_speech(\n+        \"Bonjour\", engine=\"kokoro\", voice=\"ff_siwis\", lang_code=\"f\", speed=1.2\n+    ) == b\"wav\"\n+\n+\n+def test_kokoro_infers_lang_code_from_voice(monkeypatch):\n+    def fake_tts(text, *, voice, lang_code):\n+        assert (text, voice, lang_code) == (\"Hello\", \"bf_emma\", \"b\")\n+        return b\"wav\"\n+\n+    monkeypatch.setattr(audio_gen, \"tts_kokoro\", fake_tts)\n+\n+    assert audio_gen.text_to_speech(\"Hello\", engine=\"kokoro\", voice=\"bf_emma\") == b\"wav\""
+  }
+ ],
+ "test_files": [
+  "tests/test_audio_gen_defaults.py"
+ ]
+}

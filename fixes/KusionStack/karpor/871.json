@@ -1,0 +1,93 @@
+{
+ "repo": "KusionStack/karpor",
+ "number": 871,
+ "url": "https://github.com/KusionStack/karpor/pull/871",
+ "title": "fix(syncer): use the discovered Kind instead of trimming the plural name",
+ "merged_at": "2026-11-26T03:51:33Z",
+ "files": [
+  {
+   "filename": "pkg/syncer/resource_kind_test.go",
+   "status": "added",
+   "additions": 67,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,67 @@\n+// Copyright The Karpor Authors.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//     http://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+\n+package syncer\n+\n+import (\n+\t\"testing\"\n+\n+\tsearchv1beta1 \"github.com/KusionStack/karpor/pkg/kubernetes/apis/search/v1beta1\"\n+\t\"github.com/go-logr/logr\"\n+\t\"github.com/stretchr/testify/require\"\n+\tmetav1 \"k8s.io/apimachinery/pkg/apis/meta/v1\"\n+\tfakediscovery \"k8s.io/client-go/discovery/fake\"\n+\tclienttesting \"k8s.io/client-go/testing\"\n+)\n+\n+func Test_singleClusterSyncManager_resourceKind(t *testing.T) {\n+\tdiscoveryClient := &fakediscovery.FakeDiscovery{Fake: &clienttesting.Fake{}}\n+\tdiscoveryClient.Resources = []*metav1.APIResourceList{\n+\t\t{\n+\t\t\tGroupVersion: \"networking.k8s.io/v1\",\n+\t\t\tAPIResources: []metav1.APIResource{\n+\t\t\t\t{Name: \"ingresses\", Kind: \"Ingress\"},\n+\t\t\t\t{Name: \"ingresses/status\", Kind: \"Ingress\"},\n+\t\t\t\t{Name: \"networkpolicies\", Kind: \"NetworkPolicy\"},\n+\t\t\t},\n+\t\t},\n+\t\t{\n+\t\t\tGroupVersion: \"v1\",\n+\t\t\tAPIResources: []metav1.APIResource{\n+\t\t\t\t{Name: \"endpoints\", Kind: \"Endpoints\"},\n+\t\t\t\t{Name: \"pods\", Kind: \"Pod\"},\n+\t\t\t},\n+\t\t},\n+\t}\n+\ts := &singleClusterSyncManager{discoveryClient: discoveryClient, logger: logr.Discard()}\n+\n+\ttests := []struct {\n+\t\tapiVersion string\n+\t\tresource   string\n+\t\twant       string\n+\t}{\n+\t\t{\"networking.k8s.io/v1\", \"ingresses\", \"Ingress\"},\n+\t\t{\"networking.k8s.io/v1\", \"networkpolicies\", \"NetworkPolicy\"},\n+\t\t{\"v1\", \"endpoints\", \"Endpoints\"},\n+\t\t{\"v1\", \"pods\", \"Pod\"},\n+\t\t{\"v1\", \"unknowns\", \"\"},\n+\t\t{\"example.com/v1\", \"widgets\", \"\"},\n+\t}\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.apiVersion+\"/\"+tt.resource, func(t *testing.T) {\n+\t\t\trsr := &searchv1beta1.ResourceSyncRule{APIVersion: tt.apiVersion, Resource: tt.resource}\n+\t\t\trequire.Equal(t, tt.want, s.resourceKind(rsr))\n+\t\t})\n+\t}\n+}"
+  },
+  {
+   "filename": "pkg/syncer/single_cluster_sync_manager.go",
+   "status": "modified",
+   "additions": 20,
+   "deletions": 0,
+   "patch": "@@ -274,6 +274,25 @@ func (s *singleClusterSyncManager) GVKToGVR(gvk schema.GroupVersionKind) (schema\n \treturn resource.Resource, nil\n }\n \n+// resourceKind returns the Kind that API discovery reports for the resource of the rule,\n+// or an empty string when it cannot be resolved.\n+func (s *singleClusterSyncManager) resourceKind(rsr *searchv1beta1.ResourceSyncRule) string {\n+\tif s.discoveryClient == nil {\n+\t\treturn \"\"\n+\t}\n+\tresources, err := s.GetAPIResources(rsr.APIVersion)\n+\tif err != nil {\n+\t\ts.logger.Error(err, \"failed to resolve the kind of the resource\", \"apiVersion\", rsr.APIVersion, \"resource\", rsr.Resource)\n+\t\treturn \"\"\n+\t}\n+\tfor _, r := range resources.APIResources {\n+\t\tif r.Name == rsr.Resource {\n+\t\t\treturn r.Kind\n+\t\t}\n+\t}\n+\treturn \"\"\n+}\n+\n func (s *singleClusterSyncManager) GetAPIResources(apiVersion string) (*metav1.APIResourceList, error) {\n \tresources, err := s.discoveryClient.ServerResourcesForGroupVersion(apiVersion)\n \tif err != nil {\n@@ -330,6 +349,7 @@ func (s *singleClusterSyncManager) registerTmplFuncs() {\n func (s *singleClusterSyncManager) startResource(_ context.Context, gvr schema.GroupVersionResource, rsr *searchv1beta1.ResourceSyncRule) {\n \ts.logger.Info(\"create resource syncer\", \"rsr\", rsr)\n \tsyncer := NewResourceSyncer(s.clusterName, s.dynamicClient, *rsr, s.storage)\n+\tsyncer.kind = s.resourceKind(rsr)\n \ts.syncers.Store(gvr, syncer)\n \ts.controller.Watch(syncer.Source(), handler.Funcs{\n \t\tCreateFunc: func(ce event.CreateEvent, rli workqueue.RateLimitingInterface) {"
+  },
+  {
+   "filename": "pkg/syncer/syncer.go",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 5,
+   "patch": "@@ -65,6 +65,10 @@ type ResourceSyncer struct {\n \n \tlogger logr.Logger\n \n+\t// kind is the Kind of the synced resource as reported by API discovery.\n+\t// It is empty when discovery could not resolve it.\n+\tkind string\n+\n \ttransformFunc clientgocache.TransformFunc\n \tstartTime     time.Time\n }\n@@ -191,7 +195,7 @@ func (s *ResourceSyncer) purgeStorage(ctx context.Context) {\n \t}\n \n \t// TODO: Use interface instead of struct\n-\tesPurger := utils.NewESPurger(s.storage.(*elasticsearch.Storage), s.source.Cluster(), gvr, s.source, s.OnDelete)\n+\tesPurger := utils.NewESPurger(s.storage.(*elasticsearch.Storage), s.source.Cluster(), gvr, s.kind, s.source, s.OnDelete)\n \tif err := esPurger.Purge(ctx, s.startTime); err != nil {\n \t\ts.logger.Error(err, \"error in purging ES\")\n \t\treturn\n@@ -262,7 +266,7 @@ func (s *ResourceSyncer) sync(ctx context.Context, key string) error {\n \t\terr = s.saveResource(ctx, obj)\n \t} else {\n \t\top = \"delete\"\n-\t\tobj := genUnObj(s.SyncRule(), key)\n+\t\tobj := genUnObj(s.SyncRule(), s.kind, key)\n \t\terr = s.deleteResource(ctx, obj)\n \t\tif errors.Is(err, elasticsearch.ErrNotFound) {\n \t\t\ts.logger.Error(err, \"failed to sync\", \"key\", key, \"op\", op)\n@@ -323,11 +327,11 @@ func (s *ResourceSyncer) parseTransformer() (clientgocache.TransformFunc, error)\n \t}, nil\n }\n \n-// genUnObj creates a new unstructured.Unstructured object based on the ResourceSyncRule and key.\n-func genUnObj(sr v1beta1.ResourceSyncRule, key string) *unstructured.Unstructured {\n+// genUnObj creates a new unstructured.Unstructured object based on the ResourceSyncRule, its kind (if known) and key.\n+func genUnObj(sr v1beta1.ResourceSyncRule, kind, key string) *unstructured.Unstructured {\n \tobj := &unstructured.Unstructured{}\n \tobj.SetAPIVersion(sr.APIVersion)\n-\tobj.SetKind(sr.Resource[0 : len(sr.Resource)-1])\n+\tobj.SetKind(utils.ResourceKind(sr.Resource, kind))\n \tkeys := strings.Split(key, \"/\")\n \tif len(keys) == 1 {\n \t\tobj.SetName(keys[0])"
+  },
+  {
+   "filename": "pkg/syncer/syncer_test.go",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 1,
+   "patch": "@@ -35,6 +35,7 @@ func Test_genUnObj(t *testing.T) {\n \ttests := []struct {\n \t\tname string                     // Name of the test case\n \t\tsr   v1beta1.ResourceSyncRule   // Input parameter to genUnObj\n+\t\tkind string                     // Kind reported by discovery, empty when unknown\n \t\tkey  string                     // Input parameter to genUnObj\n \t\twant *unstructured.Unstructured // Expected result\n \t}{\n@@ -69,12 +70,46 @@ func Test_genUnObj(t *testing.T) {\n \t\t\t\treturn obj\n \t\t\t}(),\n \t\t},\n+\t\t{\n+\t\t\tname: \"Kind from discovery is used instead of trimming the plural\",\n+\t\t\tsr: v1beta1.ResourceSyncRule{\n+\t\t\t\tAPIVersion: \"networking.k8s.io/v1\",\n+\t\t\t\tResource:   \"ingresses\",\n+\t\t\t},\n+\t\t\tkind: \"Ingress\",\n+\t\t\tkey:  \"mynamespace/myingress\",\n+\t\t\twant: func() *unstructured.Unstructured {\n+\t\t\t\tobj := &unstructured.Unstructured{}\n+\t\t\t\tobj.SetAPIVersion(\"networking.k8s.io/v1\")\n+\t\t\t\tobj.SetKind(\"Ingress\")\n+\t\t\t\tobj.SetNamespace(\"mynamespace\")\n+\t\t\t\tobj.SetName(\"myingress\")\n+\t\t\t\treturn obj\n+\t\t\t}(),\n+\t\t},\n+\t\t{\n+\t\t\tname: \"Kind equal to the plural resource name\",\n+\t\t\tsr: v1beta1.ResourceSyncRule{\n+\t\t\t\tAPIVersion: \"v1\",\n+\t\t\t\tResource:   \"endpoints\",\n+\t\t\t},\n+\t\t\tkind: \"Endpoints\",\n+\t\t\tkey:  \"mynamespace/myendpoints\",\n+\t\t\twant: func() *unstructured.Unstructured {\n+\t\t\t\tobj := &unstructured.Unstructured{}\n+\t\t\t\tobj.SetAPIVersion(\"v1\")\n+\t\t\t\tobj.SetKind(\"Endpoints\")\n+\t\t\t\tobj.SetNamespace(\"mynamespace\")\n+\t\t\t\tobj.SetName(\"myendpoints\")\n+\t\t\t\treturn obj\n+\t\t\t}(),\n+\t\t},\n \t}\n \t// Iterate over the test cases\n \tfor _, tt := range tests {\n \t\tt.Run(tt.name, func(t *testing.T) {\n \t\t\t// Call the function under test\n-\t\t\tun := genUnObj(tt.sr, tt.key)\n+\t\t\tun := genUnObj(tt.sr, tt.kind, tt.key)\n \t\t\trequire.Equal(t, tt.want, un, \"The generated unstructured object does not match the expected value.\")\n \t\t})\n \t}"
+  },
+  {
+   "filename": "pkg/syncer/utils/elasticsearch_getter.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 5,
+   "patch": "@@ -32,21 +32,22 @@ type ESListerGetter struct {\n \tcluster  string\n \tesClient *elasticsearch.Storage\n \tgvr      schema.GroupVersionResource\n+\tkind     string\n }\n \n // NewESListerGetter creates a new instance of the ESListerGetter with the provided cluster name, Elasticsearch client, and GroupVersionResource.\n-func NewESListerGetter(cluster string, esClient *elasticsearch.Storage, gvr schema.GroupVersionResource) *ESListerGetter {\n+func NewESListerGetter(cluster string, esClient *elasticsearch.Storage, gvr schema.GroupVersionResource, kind string) *ESListerGetter {\n \treturn &ESListerGetter{\n \t\tcluster:  cluster,\n \t\tesClient: esClient,\n \t\tgvr:      gvr,\n+\t\tkind:     kind,\n \t}\n }\n \n // ListKeys returns a list of keys for the resources managed by the ESListerGetter.\n func (e *ESListerGetter) ListKeys() []string {\n-\tresource := e.gvr.Resource\n-\tkind := resource[0 : len(resource)-1]\n+\tkind := ResourceKind(e.gvr.Resource, e.kind)\n \tquery := make(map[string]interface{})\n \tquery[\"query\"] = esquery.Bool().Must(\n \t\tesquery.Term(\"cluster\", e.cluster),\n@@ -88,8 +89,7 @@ func (e *ESListerGetter) GetByKey(key string) (value interface{}, exists bool, e\n \t\treturn nil, false, fmt.Errorf(\"invalid key:%s\", key)\n \t}\n \n-\tresource := e.gvr.Resource\n-\tkind := resource[0 : len(resource)-1]\n+\tkind := ResourceKind(e.gvr.Resource, e.kind)\n \tquery := make(map[string]interface{})\n \tquery[\"query\"] = esquery.Bool().Must(\n \t\tesquery.Term(\"cluster\", e.cluster),"
+  },
+  {
+   "filename": "pkg/syncer/utils/elasticsearch_getter_test.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -65,7 +65,7 @@ func TestESListerGetter_ListKeys(t *testing.T) {\n \tfor _, tc := range testCases {\n \t\tt.Run(tc.name, func(t *testing.T) {\n \t\t\t// Call ListKeys method\n-\t\t\tesLister := NewESListerGetter(\"defalut\", &elasticsearch.Storage{}, tc.gvr)\n+\t\t\tesLister := NewESListerGetter(\"defalut\", &elasticsearch.Storage{}, tc.gvr, \"\")\n \t\t\tkeys := esLister.ListKeys()\n \n \t\t\t// Check the length of returned keys\n@@ -123,7 +123,7 @@ func TestESListerGetter_GetByKey(t *testing.T) {\n \tfor _, tc := range testCases {\n \t\tt.Run(tc.name, func(t *testing.T) {\n \t\t\t// Call ListKeys method\n-\t\t\tesLister := NewESListerGetter(\"defalut\", &elasticsearch.Storage{}, tc.gvr)\n+\t\t\tesLister := NewESListerGetter(\"defalut\", &elasticsearch.Storage{}, tc.gvr, \"\")\n \t\t\tvalue, exists, err := esLister.GetByKey(\"existing-namespace/default\")\n \n \t\t\t// Check error expectation"
+  },
+  {
+   "filename": "pkg/syncer/utils/importer.go",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 3,
+   "patch": "@@ -36,21 +36,22 @@ type ESImporter struct {\n \tcluster  string\n \tesClient *elasticsearch.Storage\n \tgvr      schema.GroupVersionResource\n+\tkind     string\n }\n \n // NewESImporter creates a new instance of the ESImporter struct with the provided Elasticsearch client, cluster name, and GroupVersionResource.\n-func NewESImporter(esClient *elasticsearch.Storage, cluster string, gvr schema.GroupVersionResource) *ESImporter {\n+func NewESImporter(esClient *elasticsearch.Storage, cluster string, gvr schema.GroupVersionResource, kind string) *ESImporter {\n \treturn &ESImporter{\n \t\tcluster:  cluster,\n \t\tesClient: esClient,\n \t\tgvr:      gvr,\n+\t\tkind:     kind,\n \t}\n }\n \n // ImportTo implements the Importer interface by importing data to the specified cache.Store within the given context. The method should be implemented to perform the actual data import.\n func (e *ESImporter) ImportTo(ctx context.Context, store cache.Store) error {\n-\tresource := e.gvr.Resource\n-\tkind := resource[0 : len(resource)-1]\n+\tkind := ResourceKind(e.gvr.Resource, e.kind)\n \tquery := make(map[string]interface{})\n \tquery[\"query\"] = esquery.Bool().Must(\n \t\tesquery.Term(\"cluster\", e.cluster),"
+  },
+  {
+   "filename": "pkg/syncer/utils/importer_test.go",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -66,7 +66,7 @@ func TestImportTo(t *testing.T) {\n \tfor _, tc := range testCases {\n \t\tt.Run(tc.name, func(t *testing.T) {\n \t\t\t// Call ListKeys method\n-\t\t\tesImporter := NewESImporter(&elasticsearch.Storage{}, \"defalut\", tc.gvr)\n+\t\t\tesImporter := NewESImporter(&elasticsearch.Storage{}, \"defalut\", tc.gvr, \"\")\n \t\t\terr := esImporter.ImportTo(context.TODO(), cache.NewResourceCache())\n \n \t\t\t// Check error expectation"
+  },
+  {
+   "filename": "pkg/syncer/utils/kind.go",
+   "status": "added",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,29 @@\n+// Copyright The Karpor Authors.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//     http://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+\n+package utils\n+\n+// ResourceKind returns the kind used to query the stored resources of a sync rule.\n+// kind is the Kind reported by API discovery for the resource; when it is unknown,\n+// the resource name with its last letter removed is used, which only works for\n+// plurals that are the kind plus an \"s\" (e.g. \"pods\").\n+func ResourceKind(resource, kind string) string {\n+\tif kind != \"\" {\n+\t\treturn kind\n+\t}\n+\tif resource == \"\" {\n+\t\treturn \"\"\n+\t}\n+\treturn resource[0 : len(resource)-1]\n+}"
+  },
+  {
+   "filename": "pkg/syncer/utils/kind_test.go",
+   "status": "added",
+   "additions": 37,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,37 @@\n+// Copyright The Karpor Authors.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//     http://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+\n+package utils\n+\n+import \"testing\"\n+\n+func TestResourceKind(t *testing.T) {\n+\ttests := []struct {\n+\t\tresource string\n+\t\tkind     string\n+\t\twant     string\n+\t}{\n+\t\t{\"ingresses\", \"Ingress\", \"Ingress\"},\n+\t\t{\"storageclasses\", \"StorageClass\", \"StorageClass\"},\n+\t\t{\"networkpolicies\", \"NetworkPolicy\", \"NetworkPolicy\"},\n+\t\t{\"endpoints\", \"Endpoints\", \"Endpoints\"},\n+\t\t{\"pods\", \"\", \"pod\"},\n+\t\t{\"\", \"\", \"\"},\n+\t}\n+\tfor _, tt := range tests {\n+\t\tif got := ResourceKind(tt.resource, tt.kind); got != tt.want {\n+\t\t\tt.Errorf(\"ResourceKind(%q, %q) = %q, want %q\", tt.resource, tt.kind, got, tt.want)\n+\t\t}\n+\t}\n+}"
+  },
+  {
+   "filename": "pkg/syncer/utils/purger.go",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 3,
+   "patch": "@@ -37,13 +37,14 @@ type Purger interface {\n var _ Purger = (*ESPurger)(nil)\n \n // NewESPurger creates an ESPurger which implements the Purger interface.\n-func NewESPurger(esClient *elasticsearch.Storage, cluster string, gvr schema.GroupVersionResource,\n+func NewESPurger(esClient *elasticsearch.Storage, cluster string, gvr schema.GroupVersionResource, kind string,\n \tstore cache.Store, onPurge func(obj client.Object),\n ) *ESPurger {\n \treturn &ESPurger{\n \t\tcluster:  cluster,\n \t\tesClient: esClient,\n \t\tgvr:      gvr,\n+\t\tkind:     kind,\n \t\tonPurge:  onPurge,\n \t\tstore:    store,\n \t\tlogger:   ctrl.Log.WithName(fmt.Sprintf(\"%s-es-purger\", gvr.Resource)),\n@@ -54,15 +55,15 @@ type ESPurger struct {\n \tcluster  string\n \tesClient *elasticsearch.Storage\n \tgvr      schema.GroupVersionResource\n+\tkind     string\n \tonPurge  func(obj client.Object)\n \tstore    cache.Store\n \tlogger   logr.Logger\n }\n \n // Purge calls onPurge for objects that do not exist in the cache but have not been deleted in ES.\n func (e *ESPurger) Purge(ctx context.Context, syncBefore time.Time) error {\n-\tresource := e.gvr.Resource\n-\tkind := resource[0 : len(resource)-1]\n+\tkind := ResourceKind(e.gvr.Resource, e.kind)\n \n \tquery := make(map[string]interface{})\n \tquery[\"query\"] = esquery.Bool().Must("
+  }
+ ],
+ "test_files": [
+  "pkg/syncer/resource_kind_test.go",
+  "pkg/syncer/syncer_test.go",
+  "pkg/syncer/utils/elasticsearch_getter_test.go",
+  "pkg/syncer/utils/importer_test.go",
+  "pkg/syncer/utils/kind_test.go"
+ ]
+}

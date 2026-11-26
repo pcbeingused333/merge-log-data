@@ -3,7 +3,39 @@
  "number": 671,
  "url": "https://github.com/temporalio/ai-integrations/pull/671",
  "state": "open",
- "reviews": [],
- "review_comments": [],
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-25T22:10:58Z",
+   "body": "All 18 MCP connection tests passed, but targeted checks showed that the new wrapper records raw server diagnostics in Temporal failures and misses permanent protocol errors during initialization and after SDK retries.\n\n<!-- temporal-factory:review-1354076525-671-check-139543281248-5f59b9c25d7f6c88e33dd04a72c61013daeb8ff6:publication -->"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "typescript/vercel-ai-sdk/src/activities.ts",
+   "created_at": "2026-11-25T22:10:58Z",
+   "body": "[P1] Keep raw MCP error data out of Event History\n\nWhen a server includes `error.data` in a JSON-RPC failure, passing the original `MCPClientError` as `cause` makes Temporal's default failure converter serialize the entire response error into a nested failure message. I verified that diagnostic data appears in the converted failure on HEAD but is absent when the original error escapes on base. This can persist sensitive tool arguments or server diagnostics in Event History; keep the code and a safe message without forwarding the raw cause, as required by AGENTS.md:72."
+  },
+  {
+   "role": "bot",
+   "path": "typescript/vercel-ai-sdk/src/activities.ts",
+   "created_at": "2026-11-25T22:10:58Z",
+   "body": "[P2] Classify protocol errors from MCP client initialization\n\nIf a factory calls `createMCPClient()` and the server rejects `initialize` with `-32602`, the Activity still fails retryably: the client promise is awaited before the classifier runs. I verified that both connection modes return a plain `MCPClientError` for this response. Apply the same code check to client acquisition while continuing to pass ordinary connection and factory failures through unchanged."
+  },
+  {
+   "role": "bot",
+   "path": "typescript/vercel-ai-sdk/src/activities.ts",
+   "created_at": "2026-11-25T22:10:58Z",
+   "body": "[P2] Recognize final MCP errors wrapped by SDK retries\n\nWith `createMCPClient({ maxRetries: 1 })`, a transient transport failure followed by an invalid-params response produces an outer `MCPClientError` without a `code`; the final `-32602` is on its `cause`. I reproduced this with the locked SDK. The top-level check lets Temporal start another Activity attempt even though the SDK classified the last response as final. Inspect the SDK wrapper's cause when classifying the failure so Temporal honors that verdict (AGENTS.md:84)."
+  },
+  {
+   "role": "bot",
+   "path": "typescript/vercel-ai-sdk/src/activities.ts",
+   "created_at": "2026-11-25T22:10:58Z",
+   "body": "[P2] Document the MCP failure change for in-flight runs\n\nAn MCP Activity already retrying when a Worker is upgraded can now stop on its next attempt and record `MCPProtocolError` instead of `MCPClientError`, so Workflow handlers matching the old failure type can take a different branch. The PR describes the new behavior but neither gates it nor calls it out as breaking with guidance for in-flight executions, as AGENTS.md:75 requires."
+  }
+ ],
  "comments": []
 }

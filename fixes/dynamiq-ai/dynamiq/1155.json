@@ -1,0 +1,26 @@
+{
+ "repo": "dynamiq-ai/dynamiq",
+ "number": 1155,
+ "url": "https://github.com/dynamiq-ai/dynamiq/pull/1155",
+ "title": "fix(memory): treat PostgreSQL list filters as membership",
+ "merged_at": "2026-11-26T00:23:56Z",
+ "files": [
+  {
+   "filename": "dynamiq/memory/backends/postgresql.py",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 2,
+   "patch": "@@ -302,8 +302,27 @@ def _build_where_clause(self, query: str | None, filters: dict | None) -> tuple[\n \n         if filters:\n             for key, value in filters.items():\n-                where_clauses.append(SQL(\"{metadata_col}->>%s = %s\").format(metadata_col=Identifier(self.metadata_col)))\n-                params.extend([key, str(value)])  # Compare as text\n+                if isinstance(value, list):\n+                    # A list means \"any of these\", matching InMemory, SQLite and DynamoDB.\n+                    # metadata->>key is text, so each item is stringified like the equality path.\n+                    # An empty IN () is invalid SQL and matches nothing.\n+                    if not value:\n+                        where_clauses.append(SQL(\"FALSE\"))\n+                        continue\n+                    placeholders = SQL(\", \").join(SQL(\"%s\") for _ in value)\n+                    where_clauses.append(\n+                        SQL(\"{metadata_col}->>%s IN ({placeholders})\").format(\n+                            metadata_col=Identifier(self.metadata_col),\n+                            placeholders=placeholders,\n+                        )\n+                    )\n+                    params.append(key)\n+                    params.extend(str(item) for item in value)\n+                else:\n+                    where_clauses.append(\n+                        SQL(\"{metadata_col}->>%s = %s\").format(metadata_col=Identifier(self.metadata_col))\n+                    )\n+                    params.extend([key, str(value)])  # Compare as text\n \n         if query:\n             where_clauses.append(SQL(\"{content_col} ILIKE %s\").format(content_col=Identifier(self.content_col)))"
+  },
+  {
+   "filename": "tests/unit/memory/test_postgresql_list_filters.py",
+   "status": "added",
+   "additions": 61,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,61 @@\n+\"\"\"PostgreSQL search filters must treat list values as membership.\n+\n+`_build_where_clause` compared `metadata->>key` to `str(value)`. A list such as\n+`session_id=[\"s-a\", \"s-b\"]` therefore looked for the text `\"['s-a', 's-b']\"` and\n+matched nothing. InMemory, SQLite and DynamoDB treat a list as \"the stored value\n+is one of these\".\n+\"\"\"\n+\n+from types import SimpleNamespace\n+\n+from dynamiq.memory.backends.postgresql import PostgreSQL\n+\n+\n+def _where(query, filters):\n+    # The method only reads the column names, so no database connection is needed.\n+    clause, params = PostgreSQL._build_where_clause(\n+        SimpleNamespace(metadata_col=\"metadata\", content_col=\"content\"),\n+        query,\n+        filters,\n+    )\n+    return clause.as_string(None), params\n+\n+\n+def test_list_filter_uses_membership():\n+    sql, params = _where(None, {\"session_id\": [\"s-a\", \"s-b\"]})\n+\n+    assert \" IN (%s, %s)\" in sql\n+    assert params == [\"session_id\", \"s-a\", \"s-b\"]\n+\n+\n+def test_scalar_filter_still_uses_equality():\n+    sql, params = _where(None, {\"session_id\": \"s-a\"})\n+\n+    assert \" IN \" not in sql\n+    assert params == [\"session_id\", \"s-a\"]\n+\n+\n+def test_list_values_are_compared_as_text():\n+    # metadata->>key returns text, the same as the scalar path's str(value).\n+    sql, params = _where(None, {\"n\": [1, 2]})\n+\n+    assert \" IN (%s, %s)\" in sql\n+    assert params == [\"n\", \"1\", \"2\"]\n+\n+\n+def test_empty_list_matches_nothing_without_an_empty_in():\n+    # IN () is a syntax error. An empty membership matches no row.\n+    sql, params = _where(None, {\"session_id\": []})\n+\n+    assert \"IN ()\" not in sql\n+    assert \"FALSE\" in sql\n+    assert params == []\n+\n+\n+def test_list_filter_is_anded_with_the_query_and_other_filters():\n+    sql, params = _where(\"hello\", {\"session_id\": [\"s-a\", \"s-b\"], \"user_id\": \"u1\"})\n+\n+    assert \" IN (%s, %s)\" in sql\n+    assert \"ILIKE\" in sql\n+    assert \" AND \" in sql\n+    assert params == [\"session_id\", \"s-a\", \"s-b\", \"user_id\", \"u1\", \"%hello%\"]"
+  }
+ ],
+ "test_files": [
+  "tests/unit/memory/test_postgresql_list_filters.py"
+ ]
+}
