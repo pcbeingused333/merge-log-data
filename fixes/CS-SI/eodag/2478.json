@@ -1,0 +1,26 @@
+{
+ "repo": "CS-SI/eodag",
+ "number": 2478,
+ "url": "https://github.com/CS-SI/eodag/pull/2478",
+ "title": "fix(download): do not repeat a sanitized product id in the output path",
+ "merged_at": "2026-11-27T08:55:22Z",
+ "files": [
+  {
+   "filename": "eodag/plugins/download/base.py",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 3,
+   "patch": "@@ -228,13 +228,20 @@ def _prepare_download(\n \n         prefix = os.path.abspath(output_dir)\n         sanitized_title = sanitize(product.properties[\"title\"])\n-        if sanitized_title == product.properties[\"title\"]:\n+        sanitized_id = sanitize(str(product.properties[\"id\"]))\n+        # Skip the id suffix when the title is already safe, or when sanitizing\n+        # the title yields the id. Hydroweb ids contain \"@\" and \":\", so the\n+        # suffix used to repeat the directory name past Windows MAX_PATH (#1881).\n+        if (\n+            sanitized_title == product.properties[\"title\"]\n+            or sanitized_title == sanitized_id\n+        ):\n             collision_avoidance_suffix = \"\"\n         else:\n-            collision_avoidance_suffix = \"-\" + sanitize(product.properties[\"id\"])\n+            collision_avoidance_suffix = \"-\" + sanitized_id\n         fs_path = os.path.join(\n             prefix,\n-            f\"{sanitize(product.properties['title'])}{collision_avoidance_suffix}{output_extension}\",\n+            f\"{sanitized_title}{collision_avoidance_suffix}{output_extension}\",\n         )\n         fs_dir_path = (\n             fs_path.replace(output_extension, \"\") if output_extension else fs_path"
+  },
+  {
+   "filename": "tests/units/test_download_plugins.py",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 1,
+   "patch": "@@ -34,7 +34,7 @@\n import responses\n from requests.structures import CaseInsensitiveDict\n \n-from eodag.utils import MockResponse, ProgressCallback\n+from eodag.utils import MockResponse, ProgressCallback, sanitize\n from eodag.utils.exceptions import (\n     DownloadError,\n     MisconfiguredError,\n@@ -341,6 +341,32 @@ def test_plugins_download_base_prepare_download_collision_avoidance(self):\n \n         self.assertEqual(fs_path, os.path.join(gettempdir(), \"needs_sanitize-also.zip\"))\n \n+    def test_plugins_download_base_prepare_download_id_not_doubled(self):\n+        \"\"\"A title that sanitizes to the product id must not be suffixed with that id.\n+\n+        Hydroweb titles contain ``@`` and ``:``. ``sanitize()`` rewrites those, then\n+        the collision suffix appends the same sanitized id. The directory is longer\n+        than Windows MAX_PATH and ``os.makedirs`` raises ``WinError 3`` (#1881).\n+        \"\"\"\n+        raw = (\n+            \"SWOT_LakeDatabaseSci_EU_21_20000101T000000_20991231T235959_\"\n+            \"20250331T170000_v202@hysope2:129cde75-fbbd-341f-811a-b56dd673262e:V1\"\n+        )\n+        self.product.properties[\"title\"] = raw\n+        self.product.properties[\"id\"] = raw\n+        self.product.location = self.product.remote_location = (\n+            \"http://example.test/item\"\n+        )\n+\n+        plugin = self.get_download_plugin(self.product)\n+\n+        with TemporaryDirectory() as output_dir:\n+            fs_path, _ = plugin._prepare_download(self.product, output_dir=output_dir)\n+\n+        self.assertEqual(os.path.basename(fs_path), sanitize(raw))\n+        windows_temp = \"C:\\\\Users\\\\johndoe\\\\AppData\\\\Local\\\\Temp\"\n+        self.assertLess(len(os.path.join(windows_temp, os.path.basename(fs_path))), 260)\n+\n     def test_plugins_download_base_prepare_download_dir_permission(self):\n         \"\"\"Download._prepare_download must check output directory permissions.\"\"\"\n         if os.name == \"nt\":"
+  }
+ ],
+ "test_files": [
+  "tests/units/test_download_plugins.py"
+ ]
+}

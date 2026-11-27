@@ -1,0 +1,33 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 750,
+ "url": "https://github.com/labring/aiproxy/pull/750",
+ "title": "fix(anthropic): map tool_choice none and required for Claude requests",
+ "merged_at": "2026-11-27T08:43:43Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/anthropic/gemini.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -682,6 +682,11 @@ func convertGeminiToolConfig(geminiReq *relaymodel.GeminiChatRequest) any {\n \t\t}\n \n \t\treturn map[string]any{\"type\": relaymodel.ToolChoiceAny}\n+\tcase relaymodel.GeminiFunctionCallingModeNone:\n+\t\t// Claude rejects tool_choice on requests that declare no tools\n+\t\tif len(convertGeminiTools(geminiReq)) > 0 {\n+\t\t\treturn map[string]any{\"type\": relaymodel.ToolChoiceNone}\n+\t\t}\n \t}\n \n \treturn nil"
+  },
+  {
+   "filename": "core/relay/adaptor/anthropic/openai.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 2,
+   "patch": "@@ -193,8 +193,11 @@ func openAIConvertRequest(\n \t\t\t\tclaudeToolChoice.Name = name\n \t\t\t}\n \t\t} else if toolChoiceType, ok := textRequest.ToolChoice.(string); ok {\n-\t\t\tif toolChoiceType == \"any\" {\n-\t\t\t\tclaudeToolChoice.Type = toolChoiceType\n+\t\t\tswitch toolChoiceType {\n+\t\t\tcase relaymodel.ToolChoiceNone:\n+\t\t\t\tclaudeToolChoice.Type = relaymodel.ToolChoiceNone\n+\t\t\tcase relaymodel.ToolChoiceRequired, relaymodel.ToolChoiceAny:\n+\t\t\t\tclaudeToolChoice.Type = relaymodel.ToolChoiceAny\n \t\t\t}\n \t\t}\n "
+  },
+  {
+   "filename": "core/relay/adaptor/anthropic/tool_choice_test.go",
+   "status": "added",
+   "additions": 71,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,71 @@\n+package anthropic_test\n+\n+import (\n+\t\"bytes\"\n+\t\"net/http\"\n+\t\"testing\"\n+\n+\t\"github.com/bytedance/sonic\"\n+\t\"github.com/labring/aiproxy/core/relay/adaptor/anthropic\"\n+\t\"github.com/labring/aiproxy/core/relay/meta\"\n+\t\"github.com/labring/aiproxy/core/relay/mode\"\n+\t\"github.com/stretchr/testify/assert\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+func TestOpenAIConvertRequest_ToolChoiceString(t *testing.T) {\n+\tfor choice, want := range map[string]string{\n+\t\t\"auto\":     \"auto\",\n+\t\t\"none\":     \"none\",\n+\t\t\"required\": \"any\",\n+\t\t\"any\":      \"any\",\n+\t} {\n+\t\tt.Run(choice, func(t *testing.T) {\n+\t\t\tbody := `{\"model\":\"claude-sonnet-4-20250514\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],` +\n+\t\t\t\t`\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"f\",\"parameters\":{\"type\":\"object\"}}}],` +\n+\t\t\t\t`\"tool_choice\":\"` + choice + `\"}`\n+\t\t\treq, err := http.NewRequestWithContext(\n+\t\t\t\tt.Context(),\n+\t\t\t\thttp.MethodPost,\n+\t\t\t\t\"http://localhost/v1/chat/completions\",\n+\t\t\t\tbytes.NewBufferString(body),\n+\t\t\t)\n+\t\t\trequire.NoError(t, err)\n+\n+\t\t\tclaudeReq, err := anthropic.OpenAIConvertRequest(&meta.Meta{\n+\t\t\t\tActualModel: \"claude-sonnet-4-20250514\",\n+\t\t\t\tOriginModel: \"claude-sonnet-4-20250514\",\n+\t\t\t\tMode:        mode.ChatCompletions,\n+\t\t\t}, req)\n+\t\t\trequire.NoError(t, err)\n+\n+\t\t\tdata, err := sonic.Marshal(claudeReq.ToolChoice)\n+\t\t\trequire.NoError(t, err)\n+\t\t\tassert.JSONEq(t, `{\"type\":\"`+want+`\"}`, string(data))\n+\t\t})\n+\t}\n+}\n+\n+func TestConvertGeminiRequestToStruct_ToolChoiceNone(t *testing.T) {\n+\tbody := `{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"hi\"}]}],` +\n+\t\t`\"tools\":[{\"functionDeclarations\":[{\"name\":\"f\",\"parameters\":{\"type\":\"object\"}}]}],` +\n+\t\t`\"toolConfig\":{\"functionCallingConfig\":{\"mode\":\"NONE\"}}}`\n+\treq, err := http.NewRequestWithContext(\n+\t\tt.Context(),\n+\t\thttp.MethodPost,\n+\t\t\"http://localhost/v1beta/models/claude-sonnet-4-20250514:generateContent\",\n+\t\tbytes.NewBufferString(body),\n+\t)\n+\trequire.NoError(t, err)\n+\n+\tclaudeReq, err := anthropic.ConvertGeminiRequestToStruct(&meta.Meta{\n+\t\tActualModel: \"claude-sonnet-4-20250514\",\n+\t\tOriginModel: \"claude-sonnet-4-20250514\",\n+\t\tMode:        mode.Gemini,\n+\t}, req)\n+\trequire.NoError(t, err)\n+\n+\tdata, err := sonic.Marshal(claudeReq.ToolChoice)\n+\trequire.NoError(t, err)\n+\tassert.JSONEq(t, `{\"type\":\"none\"}`, string(data))\n+}"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/anthropic/tool_choice_test.go"
+ ]
+}

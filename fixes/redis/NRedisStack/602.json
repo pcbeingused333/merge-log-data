@@ -1,0 +1,26 @@
+{
+ "repo": "redis/NRedisStack",
+ "number": 602,
+ "url": "https://github.com/redis/NRedisStack/pull/602",
+ "title": "fix: send EXPANSION keyword in BF.RESERVE",
+ "merged_at": "2026-11-27T10:49:39Z",
+ "files": [
+  {
+   "filename": "src/NRedisStack/Bloom/BloomCommandBuilder.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -72,6 +72,7 @@ public static SerializedCommand Reserve(RedisKey key, double errorRate, long cap\n \n         if (expansion != null)\n         {\n+            args.Add(BloomArgs.EXPANSION);\n             args.Add(expansion);\n         }\n "
+  },
+  {
+   "filename": "tests/NRedisStack.Tests/Bloom/BloomTests.cs",
+   "status": "modified",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -40,6 +40,41 @@ public async Task TestReserveBasicAsync(string endpointId)\n         Assert.False(await bf.ExistsAsync(key, \"item2\"));\n     }\n \n+    [Fact]\n+    public void TestReserveWithExpansionArgs()\n+    {\n+        var command = BloomCommandBuilder.Reserve(key, 0.01, 1000, expansion: 4);\n+\n+        Assert.Equal(\"BF.RESERVE\", command.Command);\n+        Assert.Equal(new object[] { (RedisKey)key, 0.01, 1000L, \"EXPANSION\", 4 }, command.Args);\n+    }\n+\n+    // The server only finds EXPANSION by its keyword and silently ignores a stray value, so the args test above\n+    // cannot tell whether the option took effect: read it back. 4 is used because the server default is 2.\n+    [Theory]\n+    [MemberData(nameof(EndpointsFixture.Env.AllEnvironments), MemberType = typeof(EndpointsFixture.Env))]\n+    public void TestReserveWithExpansion(string endpointId)\n+    {\n+        IDatabase db = GetCleanDatabase(endpointId);\n+        var bf = db.BF();\n+\n+        Assert.True(bf.Reserve(key, 0.001, 100L, expansion: 4));\n+\n+        Assert.Equal(4, bf.Info(key).ExpansionRate);\n+    }\n+\n+    [Theory]\n+    [MemberData(nameof(EndpointsFixture.Env.AllEnvironments), MemberType = typeof(EndpointsFixture.Env))]\n+    public async Task TestReserveWithExpansionAsync(string endpointId)\n+    {\n+        IDatabase db = GetCleanDatabase(endpointId);\n+        var bf = db.BF();\n+\n+        Assert.True(await bf.ReserveAsync(key, 0.001, 100L, expansion: 4));\n+\n+        Assert.Equal(4, (await bf.InfoAsync(key)).ExpansionRate);\n+    }\n+\n     [Theory]\n     [MemberData(nameof(EndpointsFixture.Env.AllEnvironments), MemberType = typeof(EndpointsFixture.Env))]\n     public void TestAddWhenExist(string endpointId)"
+  }
+ ],
+ "test_files": [
+  "tests/NRedisStack.Tests/Bloom/BloomTests.cs"
+ ]
+}

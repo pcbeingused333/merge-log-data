@@ -9,8 +9,39 @@
    "state": "COMMENTED",
    "submitted_at": "2026-11-26T11:03:37Z",
    "body": "<!-- ccr-overview-v2 -->\n\n### 🟢 Approval recommended\n\nNo active review issues are recorded for the change handling VirusTotal reports that omit SHA-256.\n\n**No open issues** 🎉\n\n<details>\n<summary><strong>What changed in this PR</strong></summary>\n\nThis PR fixes VirusTotal file enrichment failing when a report omits `sha256`, allowing the remaining enrichment steps to continue.\n\n**Changes:**\n- Falls back to the observable’s known SHA-256 when the response lacks one.\n- Skips indicator creation and logs the lookup hash when neither source provides SHA-256.\n- Adds regression tests for both fallback and skip behavior.\n\n| File | Description |\r\n| ---- | ----------- |\r\n| `internal-enrichment/​virustotal/​tests/​tests_virustotal/​test_virustotal.py` | Tests missing-SHA-256 handling and continued label updates. |\r\n| `internal-enrichment/​virustotal/​src/​virustotal/​processors/​file.py` | Adds defensive SHA-256 selection and warning-based indicator skipping. |\n</details>\n\n<sub>Review effort: Balanced</sub>"
+  },
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-27T16:46:58Z",
+   "body": ""
   }
  ],
- "review_comments": [],
- "comments": []
+ "review_comments": [
+  {
+   "role": "member",
+   "path": "internal-enrichment/virustotal/src/virustotal/processors/file.py",
+   "created_at": "2026-11-27T16:44:37Z",
+   "body": "**suggestion (non-blocking):** Fall back to SHA-1, then MD5, when building the indicator pattern.\n\nThe fallback to the observable's SHA-256 is good, but when neither VT nor the observable has a SHA-256 we skip the indicator even if a SHA-1 or MD5 is known. `FileProcessor._resolve_hash` already prefers SHA-256, then SHA-1, then MD5 to look the file up, so the indicator could follow the same order. `[file:hashes.'SHA-1' = '...']` and `[file:hashes.'MD5' = '...']` are valid STIX patterns, and an exact hash still makes a useful indicator (unlike `tlsh`/`vhash`/`permhash`, which are similarity hashes).\n\nCaveat: I have not confirmed against the real VT API that a file with no `sha256` still comes back with `sha1` or `md5`. The connector assumes it (see the comment on `VirusTotalBuilder.update_hashes` and `test_update_hashes_skips_missing_algos`), but that rests on a comment and fixtures, not on a real response. The fallback is cheap and harmless if the assumption is wrong, so it is still worth having.\n\nSomething along these lines:\n\n```python\nknown_hashes = self.stix_entity.get(\"hashes\", {})\nfor algo, vt_key in ((\"SHA-256\", \"sha256\"), (\"SHA-1\", \"sha1\"), (\"MD5\", \"md5\")):\n    value = attributes.get(vt_key) or known_hashes.get(algo)\n    if value:\n        builder.create_indicator_based_on(\n            self.connector.file_indicator_config,\n            f\"[file:hashes.'{algo}' = '{value}']\",\n        )\n        break\nelse:\n    self.helper.connector_logger.warning(\n        \"[VirusTotal] No hash available, indicator not created\",\n        meta={\"hash\": self._resolve_hash()},\n    )\n```\n\n**issue (non-blocking):** The hash is interpolated into the STIX pattern without validation, and the fallback now reads it from the observable's `hashes`, which is user-editable data in OpenCTI (before this PR only the VT value went in). A value with a quote, a bracket or stray whitespace gives a malformed or altered pattern. Please check the format before building the pattern (for example `re.fullmatch(r\"[0-9a-fA-F]{64}\", value)` for SHA-256, 40 for SHA-1, 32 for MD5) and skip that algorithm otherwise.\n\nIf you take this, the tests should cover the SHA-1-only and MD5-only cases and an invalid hash.\n"
+  },
+  {
+   "role": "member",
+   "path": "internal-enrichment/virustotal/tests/tests_virustotal/test_virustotal.py",
+   "created_at": "2026-11-27T16:44:37Z",
+   "body": "**suggestion (non-blocking):** Add a test for the case where VT does return `sha256`.\n\n`TestFileEnrichWithoutSha256` only covers reports without `sha256`. Nothing checks that, when `attributes[\"sha256\"]` is present, it wins over the observable's `hashes[\"SHA-256\"]`. If the precedence is swapped later (`known_sha256 or attributes.get(\"sha256\")`), no test fails, and the hash VT reports is the authoritative one.\n\nA test with `attributes={\"sha256\": \"c\" * 64}` and an observable carrying a different SHA-256 (`\"a\" * 64`), asserting that the pattern uses `c * 64`, would pin it down.\n\n**nitpick (non-blocking):** `test_skips_indicator_when_no_sha256_is_known` only calls `warning.assert_called_once()`. Asserting the message and the `meta` as well would stop the log content from regressing silently.\n"
+  },
+  {
+   "role": "member",
+   "path": "internal-enrichment/virustotal/src/virustotal/processors/file.py",
+   "created_at": "2026-11-27T16:44:37Z",
+   "body": "**nitpick (non-blocking):** Pass the context to the warning with `meta=`.\n\nUse a `meta=` context dict. The dict is passed positionally here, which works because it is the second parameter of `connector_logger.warning`, but `meta=` is clearer:\n\n```python\nself.helper.connector_logger.warning(\n    \"[VirusTotal] No SHA-256 available, indicator not created\",\n    meta={\"hash\": self._resolve_hash()},\n)\n```\n\n`processors/url.py` does the same positionally, so this is just a convention nit.\n"
+  }
+ ],
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-27T19:03:04Z",
+   "body": "Thanks for the review. Applied in 4bae9fb30b: the indicator now falls back from SHA-256 to SHA-1 to MD5, each value is checked against its hex format before it goes into the pattern, and the warning uses `meta=`. Added tests for the report SHA-256 winning over the observable's, the SHA-1 and MD5 cases and malformed values, and the skip test now asserts the message and `meta`. As in your caveat, what a report without `sha256` contains has not been checked against the live API.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
 }

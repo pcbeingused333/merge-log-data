@@ -3,13 +3,44 @@
  "number": 2710,
  "url": "https://github.com/versity/versitygw/pull/2710",
  "state": "open",
- "reviews": [],
- "review_comments": [],
+ "reviews": [
+  {
+   "role": "contributor",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-27T10:17:09Z",
+   "body": "Please add integration tests. CopyObject has no destination-owner integration test today. In `tests/integration/CopyObject.go`, add:\n- `CopyObject_expected_bucket_owner`: `ExpectedBucketOwner: &s.awsID` → success\n- `CopyObject_incorrect_expected_bucket_owner`: `s.awsID + \"something\"` → AccessDenied\n\nMirror the `DeleteObject_*expected_bucket_owner` tests and register both in `group-tests.go`.\n\n\ns3proxy also forwards `x-amz-source-expected-bucket-owner` upstream for `CopyObject`  and `UploadPartCopy`. With the correct gateway owner of the source bucket, both return 403 through s3proxy, on main and on this branch.\n\nposix and azure check this header against the gateway ACL of the source bucket. s3proxy should do the same using the meta-bucket ACL and not forward it. Please also fix it here !"
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "contributor",
+   "path": "s3api/controllers/object-put.go",
+   "created_at": "2026-11-27T08:09:26Z",
+   "body": "This fixes the no-header case, but forwarding the client's value upstream is still wrong. `x-amz-expected-bucket-owner` holds a gateway account. `ParseAcl` already checks it against the gateway bucket owner, and the upstream bucket owner is a different namespace.\n\nRepro with the s3 backend (gateway account `user`, upstream account `upuser`): `copy-object --expected-bucket-owner user` passes `ParseAcl`, then gets 403 from the upstream. PutObject, HeadObject and UploadPartCopy with the same header return 200. Against AWS the upstream answer is 400 `InvalidBucketOwnerAWSAccountID`. A real upstream account id is rejected by `ParseAcl` first, so no value can pass both checks.\n\nPlease make s3proxy `CopyObject` never forward it: set `input.ExpectedBucketOwner = nil` instead of the empty→nil normalization in `backend/s3proxy/s3.go` (~L1317). Alternatively, stop setting the field here and remove the leftover nil check in `posix.go` (~L6764). That check dates from 1874d3c3, when this field carried the requester's access key; no backend uses the value now. Either way CopyObject then matches every other action, none of which sends this field upstream."
+  },
+  {
+   "role": "contributor",
+   "path": "s3api/controllers/object-put_test.go",
+   "created_at": "2026-11-27T08:09:56Z",
+   "body": "This test locks in the forwarding, which is the part that's still wrong. `123456789012` is an AWS account id; with the gateway's `ParseAcl` it would be rejected with 403 before reaching the controller.\n\nThe regression test belongs in `backend/s3proxy/s3_test.go`: extend `captureHTTPClient` to record `req.Header`, then assert that `CopyObject` sends no `X-Amz-Expected-Bucket-Owner` upstream, both with the field empty and with it set."
+  },
+  {
+   "role": "contributor",
+   "path": "s3api/controllers/object-put_test.go",
+   "created_at": "2026-11-27T08:10:28Z",
+   "body": "Nits: the sibling subtest asserts with `assert.Equal` inside the mock; please do the same, or use `t.Run` per case instead of the anonymous `{hdr, want}` loop with `t.Fatalf`. Also `got %v` on a `*string` prints a pointer address, not the value."
+  }
+ ],
  "comments": [
   {
    "role": "collaborator",
    "created_at": "2026-11-24T17:02:12Z",
    "body": "This won't automatically run in continuous integration without approval. A member of the Versity organization must allow it."
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-27T10:47:52Z",
+   "body": "\nDone in the latest push:\n\n- Added `CopyObject_expected_bucket_owner` and `CopyObject_incorrect_expected_bucket_owner` and registered both. They pass against posix and against s3proxy with a meta bucket.\n- s3proxy `CopyObject` no longer forwards `x-amz-expected-bucket-owner`. I reverted the controller change and its test, and moved the regression test to `s3_test.go`, asserting on the upstream headers.\n- `CopyObject` and `UploadPartCopy` now check `x-amz-source-expected-bucket-owner` against the source bucket's meta-bucket ACL and don't forward it. Without a meta bucket a non-empty value gets AccessDenied.\n\nI also merged `main` to resolve a conflict in `s3_test.go`.\n\n\nThis comment was drafted with Claude Code.\n"
   }
  ]
 }

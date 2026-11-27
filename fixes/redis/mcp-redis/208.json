@@ -1,0 +1,26 @@
+{
+ "repo": "redis/mcp-redis",
+ "number": 208,
+ "url": "https://github.com/redis/mcp-redis/pull/208",
+ "title": "fix(cli): don't let CLI defaults override REDIS_ENTRAID_* env config",
+ "merged_at": "2026-11-27T12:20:40Z",
+ "files": [
+  {
+   "filename": "src/main.py",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 11,
+   "patch": "@@ -60,34 +60,30 @@ def run(self):\n @click.option(\n     \"--entraid-identity-type\",\n     type=click.Choice([\"system_assigned\", \"user_assigned\"]),\n-    default=\"system_assigned\",\n-    help=\"Managed identity type\",\n+    help=\"Managed identity type (env: REDIS_ENTRAID_IDENTITY_TYPE, default system_assigned)\",\n )\n @click.option(\n     \"--entraid-scopes\",\n-    default=\"https://redis.azure.com/.default\",\n-    help=\"Entra ID scopes (comma-separated)\",\n+    help=\"Entra ID scopes (comma-separated) (env: REDIS_ENTRAID_SCOPES, default https://redis.azure.com/.default)\",\n )\n @click.option(\n-    \"--entraid-resource\", default=\"https://redis.azure.com/\", help=\"Entra ID resource\"\n+    \"--entraid-resource\",\n+    help=\"Entra ID resource (env: REDIS_ENTRAID_RESOURCE, default https://redis.azure.com/)\",\n )\n @click.option(\n     \"--entraid-token-refresh-ratio\",\n     type=float,\n-    default=0.9,\n-    help=\"Token expiration refresh ratio\",\n+    help=\"Token expiration refresh ratio (env: REDIS_ENTRAID_TOKEN_EXPIRATION_REFRESH_RATIO, default 0.9)\",\n )\n @click.option(\n     \"--entraid-retry-max-attempts\",\n     type=int,\n-    default=3,\n-    help=\"Maximum retry attempts for token requests\",\n+    help=\"Maximum retry attempts for token requests (env: REDIS_ENTRAID_RETRY_MAX_ATTEMPTS, default 3)\",\n )\n @click.option(\n     \"--entraid-retry-delay-ms\",\n     type=int,\n-    default=100,\n-    help=\"Retry delay in milliseconds\",\n+    help=\"Retry delay in milliseconds (env: REDIS_ENTRAID_RETRY_DELAY_MS, default 100)\",\n )\n def cli(\n     url,"
+  },
+  {
+   "filename": "tests/test_main.py",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -281,3 +281,39 @@ def test_env_values_survive_cli_without_flags(\n         assert cfg.REDIS_CFG[\"host\"] == \"redis.example.com\"\n         assert cfg.REDIS_CFG[\"port\"] == 6380\n         assert cfg.REDIS_CFG[\"ssl\"] is True\n+\n+\n+class TestCLIDefaultsDoNotOverrideEntraIDEnv:\n+    \"\"\"Unset --entraid-* options must not override REDIS_ENTRAID_* config (#207).\"\"\"\n+\n+    def setup_method(self):\n+        self.runner = CliRunner()\n+\n+    @patch(\"src.main.set_entraid_config_from_cli\")\n+    @patch(\"src.main.RedisMCPServer\")\n+    def test_unset_options_are_not_forwarded(self, mock_server_class, mock_set_config):\n+        result = self.runner.invoke(cli, [])\n+\n+        assert result.exit_code == 0\n+        mock_set_config.assert_not_called()\n+\n+    @patch(\"src.main.RedisMCPServer\")\n+    def test_env_values_survive_cli_without_flags(self, mock_server_class, monkeypatch):\n+        from src.common import config as cfg\n+\n+        env_values = {\n+            \"identity_type\": \"user_assigned\",\n+            \"scopes\": \"custom-scope\",\n+            \"resource\": \"https://custom/\",\n+            \"token_expiration_refresh_ratio\": 0.5,\n+            \"retry_max_attempts\": 9,\n+            \"retry_delay_ms\": 500,\n+        }\n+        for key, value in env_values.items():\n+            monkeypatch.setitem(cfg.ENTRAID_CFG, key, value)\n+\n+        result = self.runner.invoke(cli, [])\n+\n+        assert result.exit_code == 0\n+        for key, value in env_values.items():\n+            assert cfg.ENTRAID_CFG[key] == value"
+  }
+ ],
+ "test_files": [
+  "tests/test_main.py"
+ ]
+}

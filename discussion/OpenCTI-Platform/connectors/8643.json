@@ -9,8 +9,69 @@
    "state": "COMMENTED",
    "submitted_at": "2026-11-26T06:57:52Z",
    "body": "<!-- ccr-overview-v2 -->\n\n### 🟢 Approval recommended\n\nNo active review issues are recorded for the fix to Kaspersky YARA rule parsing.\n\n**No open issues** 🎉\n\n<details>\n<summary><strong>What changed in this PR</strong></summary>\n\nFixes Kaspersky YARA parsing when a line begins with a closing brace followed by another rule’s header, preventing malformed indicator patterns and lost rules.\n\n**Changes:**\n- Separates the closing brace and recognized rule header before splitting rules.\n- Adds parametrized regression tests for LF and CRLF line endings and plain, `private`, and `global` headers.\n\n| File | Description |\r\n| ---- | ----------- |\r\n| `external-import/​kaspersky/​tests/​tests_connector/​test_yara.py` | Tests rule recovery across line endings and header variants. |\r\n| `external-import/​kaspersky/​src/​kaspersky/​utils/​yara.py` | Separates joined closing braces and rule headers for the existing splitter. |\n</details>\n\n<sub>Review effort: Balanced</sub>"
+  },
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-27T16:16:29Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-27T19:01:20Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-27T19:01:26Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-27T19:01:32Z",
+   "body": ""
   }
  ],
- "review_comments": [],
+ "review_comments": [
+  {
+   "role": "member",
+   "path": "external-import/kaspersky/src/kaspersky/utils/yara.py",
+   "created_at": "2026-11-27T16:16:29Z",
+   "body": "**nit (non-blocking):** the split brace is re-emitted as `line[0] + \"\\n\"`, so on a CRLF feed the first rule ends in `}\\n` while its other lines end in `\\r\\n`. The issue says the feed already has mixed endings, so this is probably harmless. If you want it byte-faithful, keep the original terminator, for example by taking it from the tail of `line`. The new test calls `.rstrip()` before comparing, so it wouldn't notice the difference."
+  },
+  {
+   "role": "member",
+   "path": "external-import/kaspersky/src/kaspersky/utils/yara.py",
+   "created_at": "2026-11-27T16:16:29Z",
+   "body": "**question (non-blocking):** the split only fires when a line starts with `}` and a rule header follows. A mid-line boundary (`... true }rule b {`) or a glued `}import \"x\"` would still not split. Does the feed produce either form? The rejected pattern in #7980 looks like the line-start form. `}import` can't matter for Master YARA, which uses `imports_at_top=True`. If you have a feed sample with a mid-line boundary, a regex split over the whole text would cover it. If not, this PR already fixes the reported case."
+  },
+  {
+   "role": "member",
+   "path": "external-import/kaspersky/tests/tests_connector/test_yara.py",
+   "created_at": "2026-11-27T16:16:29Z",
+   "body": "**suggestion (non-blocking):** the test covers only the positive path. Could you add a negative case that `}rule_b {` is not split, since `rule_b` doesn't start with `rule `? That would protect the `startswith(_RULE_STARTS)` guard. A case with three consecutive glued rules (`}rule b {` then `}rule c {` on separate lines) would also protect the `while` loop."
+  },
+  {
+   "role": "author",
+   "path": "external-import/kaspersky/src/kaspersky/utils/yara.py",
+   "created_at": "2026-11-27T19:01:20Z",
+   "body": "Done in 2d8f916: the re-emitted brace now keeps the original line terminator, and the test compares the end of the first rule exactly (no more `.rstrip()`).\n\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "path": "external-import/kaspersky/src/kaspersky/utils/yara.py",
+   "created_at": "2026-11-27T19:01:26Z",
+   "body": "I don't have a feed sample showing a mid-line boundary; the only form I know of is the line-start one from #7980. So I left the split limited to that case rather than running a regex over the whole text.\n\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "path": "external-import/kaspersky/tests/tests_connector/test_yara.py",
+   "created_at": "2026-11-27T19:01:32Z",
+   "body": "Added both in 2d8f916: `}rule_b {` is not split, and three rules glued on consecutive boundaries are all recovered. While doing this I noticed the `while` could never run twice (the remainder always starts with a rule header, never `}`), so it is now a plain `if`.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ],
  "comments": []
 }

@@ -1,0 +1,26 @@
+{
+ "repo": "Kong/unirest-java",
+ "number": 628,
+ "url": "https://github.com/Kong/unirest-java/pull/628",
+ "title": "keep the original request URL unchanged after asPaged",
+ "merged_at": "2026-11-27T13:55:39Z",
+ "files": [
+  {
+   "filename": "unirest-bdd-tests/src/test/java/BehaviorTests/AsPagedTest.java",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -86,6 +86,22 @@ void pagedRequestsAreUnique() {\n \n     }\n \n+    @Test\n+    void pagingDoesNotChangeTheUrlOfTheOriginalRequest() {\n+        var request = Unirest.get(MockServer.PAGED);\n+        MockServer.expectedPages(3);\n+        request.asPaged(r -> r.asString(), r -> r.getHeaders().getFirst(\"nextPage\"));\n+\n+        assertThat(request.getUrl()).isEqualTo(MockServer.PAGED);\n+\n+        // the mock server keeps counting pages, so this asks for two more after the first one\n+        MockServer.expectedPages(5);\n+        var second = request.asPaged(r -> r.asString(), r -> r.getHeaders().getFirst(\"nextPage\"));\n+\n+        assertThat(second).hasSize(3);\n+        assertThat(second.get(0).getRequestSummary().getUrl()).isEqualTo(MockServer.PAGED);\n+    }\n+\n     @Test\n     void credentialsAreNotSentToADifferentOrigin() {\n         var links = new ArrayDeque<>(List.of(\"http://127.0.0.1:4567/paged\"));"
+  },
+  {
+   "filename": "unirest/src/main/java/kong/unirest/core/BaseRequest.java",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 3,
+   "patch": "@@ -341,12 +341,11 @@ public CompletableFuture<HttpResponse<File>> asFileAsync(String path, Callback<F\n     @Override\n     public <T> PagedList<T> asPaged(Function<HttpRequest, HttpResponse> mappingFunction, Function<HttpResponse<T>, String> linkExtractor) {\n         PagedList<T> all = new PagedList<>();\n-        Path origin = this.url;\n         String nextLink = this.getUrl();\n         do {\n-            this.url = new Path(nextLink, config.getDefaultBaseUrl());\n             BaseRequest<R> t = RequestFactory.copy(this);\n-            if (!origin.isSameOrigin(this.url)) {\n+            t.url = new Path(nextLink, config.getDefaultBaseUrl());\n+            if (!this.url.isSameOrigin(t.url)) {\n                 t.headers.remove(HeaderNames.AUTHORIZATION);\n                 t.headers.remove(\"Cookie\");\n             }"
+  }
+ ],
+ "test_files": [
+  "unirest-bdd-tests/src/test/java/BehaviorTests/AsPagedTest.java"
+ ]
+}

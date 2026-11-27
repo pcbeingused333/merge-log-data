@@ -1,0 +1,26 @@
+{
+ "repo": "crowdin/crowdin-api-client-java",
+ "number": 447,
+ "url": "https://github.com/crowdin/crowdin-api-client-java/pull/447",
+ "title": "fix: URL-encode search, filter and croql query parameters",
+ "merged_at": "2026-11-27T12:43:39Z",
+ "files": [
+  {
+   "filename": "src/main/java/com/crowdin/client/core/http/HttpClient.java",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -3,6 +3,7 @@\n import com.crowdin.client.core.http.exceptions.HttpBadRequestException;\n import com.crowdin.client.core.http.exceptions.HttpException;\n import com.crowdin.client.core.http.impl.http.ApacheHttpClient;\n+import com.crowdin.client.core.http.impl.util.RequestEncoder;\n import com.crowdin.client.core.model.ClientConfig;\n import com.crowdin.client.core.model.EnumConverter;\n import com.crowdin.client.translations.model.ProjectBuildResponseList;\n@@ -61,6 +62,10 @@ default String appendUrlParams(String url, Map<String, ? extends Optional> urlPa\n                         value = DateTimeFormatter.ISO_INSTANT.format(((Date) entry.getValue().get()).toInstant());\n                     } else {\n                         value = entry.getValue().get().toString();\n+                        // free-text values may contain spaces or reserved characters\n+                        if (entry.getKey().equals(\"search\") || entry.getKey().equals(\"filter\") || entry.getKey().equals(\"croql\")) {\n+                            value = RequestEncoder.encodeSpaces((String) value);\n+                        }\n                     }\n                     return entry.getKey() + \"=\" + value.toString();\n                 })"
+  },
+  {
+   "filename": "src/test/java/com/crowdin/client/core/http/HttpClientTest.java",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -42,4 +42,17 @@ public void appendUrlParamsTest_dateIsFormattedAsIso8601() {\n         String urlWithParams = client.appendUrlParams(url, urlParams);\n         assertEquals(url + \"?lastSeenFrom=2019-10-23T11:44:02Z\", urlWithParams);\n     }\n+\n+    @Test\n+    public void appendUrlParamsTest_freeTextParamsAreEncoded() {\n+        String url = \"test.com\";\n+        Map<String, Optional<Object>> urlParams = new LinkedHashMap<>();\n+        urlParams.put(\"search\", Optional.of(\"Q&A #1\"));\n+        urlParams.put(\"filter\", Optional.of(\"a+b=100%\"));\n+        urlParams.put(\"croql\", Optional.of(\"text contains \\\"x\\\"\"));\n+        urlParams.put(\"orderBy\", Optional.of(\"id%20desc\"));\n+        HttpClient client = new TestHttpClient();\n+        String urlWithParams = client.appendUrlParams(url, urlParams);\n+        assertEquals(url + \"?search=Q%26A%20%231&filter=a%2Bb%3D100%25&croql=text%20contains%20%22x%22&orderBy=id%20desc\", urlWithParams);\n+    }\n }"
+  }
+ ],
+ "test_files": [
+  "src/test/java/com/crowdin/client/core/http/HttpClientTest.java"
+ ]
+}

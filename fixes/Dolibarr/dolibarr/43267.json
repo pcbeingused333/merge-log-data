@@ -1,0 +1,26 @@
+{
+ "repo": "Dolibarr/dolibarr",
+ "number": 43267,
+ "url": "https://github.com/Dolibarr/dolibarr/pull/43267",
+ "title": "FIX #43236 Quadratus export: pad lib_alpha to 7 chars so account lines keep their width",
+ "merged_at": "2026-11-27T17:41:08Z",
+ "files": [
+  {
+   "filename": "htdocs/accountancy/class/accountancyexport.class.php",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -949,11 +949,11 @@ public function exportQuadratus($objectLines, $exportFile = null, $archiveFileLi\n \t\t\t\t$tab['lib_compte'] = str_pad(self::trunc($line->subledger_label, 30), 30);\n \n \t\t\t\tif ($line->doc_type == 'customer_invoice') {\n-\t\t\t\t\t$tab['lib_alpha'] = strtoupper(self::trunc(dol_string_unaccent($line->subledger_label), 7));\n+\t\t\t\t\t$tab['lib_alpha'] = str_pad(strtoupper(self::trunc(dol_string_unaccent($line->subledger_label), 7)), 7);\n \t\t\t\t\t$tab['filler'] = str_repeat(' ', 52);\n \t\t\t\t\t$tab['coll_compte'] = str_pad(self::trunc(getDolGlobalString('ACCOUNTING_ACCOUNT_CUSTOMER'), 8), 8);\n \t\t\t\t} elseif ($line->doc_type == 'supplier_invoice') {\n-\t\t\t\t\t$tab['lib_alpha'] = strtoupper(self::trunc(dol_string_unaccent($line->subledger_label), 7));\n+\t\t\t\t\t$tab['lib_alpha'] = str_pad(strtoupper(self::trunc(dol_string_unaccent($line->subledger_label), 7)), 7);\n \t\t\t\t\t$tab['filler'] = str_repeat(' ', 52);\n \t\t\t\t\t$tab['coll_compte'] = str_pad(self::trunc(getDolGlobalString('ACCOUNTING_ACCOUNT_SUPPLIER'), 8), 8);\n \t\t\t\t} else {"
+  },
+  {
+   "filename": "test/phpunit/AccountancyExportQuadratusTest.php",
+   "status": "added",
+   "additions": 89,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,89 @@\n+<?php\n+/*\n+ * This program is free software; you can redistribute it and/or modify\n+ * it under the terms of the GNU General Public License as published by\n+ * the Free Software Foundation; either version 3 of the License, or\n+ * (at your option) any later version.\n+ *\n+ * \\file       test/phpunit/AccountancyExportQuadratusTest.php\n+ * \\ingroup    test\n+ * \\brief      PHPUnit test for the Quadratus export fixed-width layout\n+ */\n+\n+use PHPUnit\\Framework\\TestCase;\n+\n+// This test does not need a database: only the pure formatting code of the class is used.\n+if (!defined('DOL_DOCUMENT_ROOT')) {\n+\tdefine('DOL_DOCUMENT_ROOT', dirname(__FILE__).'/../../htdocs');\n+}\n+if (!defined('DOL_CLASS_PATH')) {\n+\tdefine('DOL_CLASS_PATH', '/class/');\n+}\n+if (!class_exists('DoliDB', false)) {\n+\t/**\n+\t * Minimal stand-in: the export code only stores the handler\n+\t */\n+\tabstract class DoliDB\n+\t{\n+\t}\n+}\n+require_once DOL_DOCUMENT_ROOT.'/core/lib/functions.lib.php';\n+require_once dirname(__FILE__).'/../../htdocs/accountancy/class/accountancyexport.class.php';\n+\n+/**\n+ * Class for PHPUnit tests\n+ *\n+ * @backupGlobals disabled\n+ */\n+class AccountancyExportQuadratusTest extends TestCase\n+{\n+\t/**\n+\t * The \"C\" (account) line must keep its fixed width whatever the length of the third party name.\n+\t *\n+\t * @return void\n+\t */\n+\tpublic function testQuadratusAccountLineWidthWithShortName()\n+\t{\n+\t\tglobal $conf, $hookmanager;\n+\n+\t\t$conf = new stdClass();\n+\t\t$conf->cache = array();\n+\t\t$conf->tzuserinputkey = \"tzserver\";\n+\t\t$conf->global = new stdClass();\n+\t\t$conf->currency = \"EUR\";\n+\t\t$db = $this->createMock(DoliDB::class);\n+\t\t$hookmanager = $this->createMock(HookManager::class);\n+\n+\t\t$lengths = array();\n+\t\tforeach (array('LONGET', 'AB', 'A VERY LONG THIRDPARTY NAME') as $name) {\n+\t\t\t$line = new stdClass();\n+\t\t\t$line->doc_ref = 'FA2611-0001';\n+\t\t\t$line->label_operation = 'Invoice';\n+\t\t\t$line->numero_compte = '411000';\n+\t\t\t$line->label_compte = 'Customers';\n+\t\t\t$line->subledger_account = '0LONGET';\n+\t\t\t$line->subledger_label = $name;\n+\t\t\t$line->doc_type = 'customer_invoice';\n+\t\t\t$line->doc_date = 1795132800;\n+\t\t\t$line->code_journal = 'VT';\n+\t\t\t$line->piece_num = 1;\n+\t\t\t$line->sens = 'D';\n+\t\t\t$line->debit = 10;\n+\t\t\t$line->credit = 0;\n+\t\t\t$line->date_lim_reglement = 0;\n+\n+\t\t\t$export = new AccountancyExport($db);\n+\t\t\t$file = fopen('php://memory', 'w+');\n+\t\t\t$export->exportQuadratus(array($line), $file);\n+\t\t\trewind($file);\n+\t\t\t$content = stream_get_contents($file);\n+\t\t\tfclose($file);\n+\n+\t\t\t$rows = explode(\"\\r\\n\", $content);\n+\t\t\t$this->assertSame('C', substr($rows[0], 0, 1));\n+\t\t\t$lengths[] = strlen($rows[0]);\n+\t\t}\n+\n+\t\t$this->assertSame(array($lengths[2], $lengths[2], $lengths[2]), $lengths, 'C line width must not depend on the third party name length');\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "test/phpunit/AccountancyExportQuadratusTest.php"
+ ]
+}

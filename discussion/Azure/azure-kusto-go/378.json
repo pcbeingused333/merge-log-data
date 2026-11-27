@@ -33,6 +33,12 @@
    "state": "COMMENTED",
    "submitted_at": "2026-11-27T08:24:33Z",
    "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-27T08:55:37Z",
+   "body": "<!-- ccr-overview-v2 -->\n\n### 🟡 Changes recommended\n\nStorage retries can mask seekable-source errors and leave a gzip producer blocked, while the timing-based regression test can miss stale-pipe failures.\n\n<details open>\n<summary><strong>3 open issues</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Preserve source errors instead of retrying them as storage failures](https://github.com/Azure/azure-kusto-go/pull/378#discussion_r4717383520) · New\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Check retry limit before creating a gzip producer](https://github.com/Azure/azure-kusto-go/pull/378#discussion_r4717383568) · New\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Test both producer release orders to catch stale pipe overwrites](https://github.com/Azure/azure-kusto-go/pull/378#discussion_r4717383608) · New\n</details>\n\n<details>\n<summary><strong>2 resolved since last review</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png\" alt=\"High severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Capture the pipe writer before starting the producer](https://github.com/Azure/azure-kusto-go/pull/378#discussion_r4712363159)\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Assert failed reads produce an invalid gzip stream](https://github.com/Azure/azure-kusto-go/pull/378#discussion_r4712363204)\n</details>\n\n<sub>Review effort: Max</sub>"
   }
  ],
  "review_comments": [
@@ -71,6 +77,24 @@
    "path": "azkustoingest/internal/gzip/gzip_test.go",
    "created_at": "2026-11-27T08:24:33Z",
    "body": "Agreed. The test now keeps the compressed bytes and asserts that decompressing them fails, both for an error returned with data and for an error after a successful read.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "bot",
+   "path": "azkustoingest/internal/gzip/gzip.go",
+   "created_at": "2026-11-27T08:55:37Z",
+   "body": "For a seekable reader, this newly propagated source error enters `UploadReaderToBlob`'s storage retry loop and is replaced by a generic upload or retry-limit error if it persists. Preserve the source error and return it without storage retries; the compressed local-file path in `azkustoingest/internal/queued/queued.go:393–394` needs the same treatment."
+  },
+  {
+   "role": "bot",
+   "path": "azkustoingest/internal/gzip/gzip.go",
+   "created_at": "2026-11-27T08:55:37Z",
+   "body": "With a seekable source that repeatedly returns data and an error and at least four storage containers, the queued retry loop creates a fourth gzip producer before checking its retry limit. It then returns without reading or closing that producer, leaving it blocked on the pipe. Move the limit check before `gzip.Compress` in `azkustoingest/internal/queued/queued.go:202–209` and close unused streamers on early exits."
+  },
+  {
+   "role": "bot",
+   "path": "azkustoingest/internal/gzip/gzip_test.go",
+   "created_at": "2026-11-27T08:55:37Z",
+   "body": "The 100 ms sleep does not ensure the first producer has exited, so the stale-pipe regression can pass unnoticed. Releasing that producer before the second stream finishes also lets the second size write hide a stale overwrite at lines 161–162. Use `synctest.Test` and `synctest.Wait()` to exercise both release orders, checking the size after the first producer exits in the late-release case."
   }
  ],
  "comments": []

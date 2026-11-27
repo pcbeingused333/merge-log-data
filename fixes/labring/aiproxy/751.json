@@ -1,0 +1,34 @@
+{
+ "repo": "labring/aiproxy",
+ "number": 751,
+ "url": "https://github.com/labring/aiproxy/pull/751",
+ "title": "fix(relay): keep Claude tool_choice none and convert it for the Responses API",
+ "merged_at": "2026-11-27T09:05:34Z",
+ "files": [
+  {
+   "filename": "core/relay/adaptor/gemini/claude_test.go",
+   "status": "modified",
+   "additions": 38,
+   "deletions": 0,
+   "patch": "@@ -377,3 +377,41 @@ func TestClaudeStreamHandlerCachedUsageNotDoubleCounted(t *testing.T) {\n \trequire.EqualValues(t, 80, *delta.Usage.CacheReadInputTokens)\n \trequire.EqualValues(t, 10, *delta.Usage.OutputTokens)\n }\n+\n+func TestConvertClaudeRequest_ToolChoiceNone(t *testing.T) {\n+\tchannel := &model.Channel{\n+\t\tType: model.ChannelTypeGoogleGemini,\n+\t}\n+\tmeta := meta.NewMeta(channel, 0, \"gemini-2.5-pro\", model.ModelConfig{})\n+\treqBody := map[string]any{\n+\t\t\"model\": \"gemini-2.5-pro\",\n+\t\t\"tools\": []map[string]any{\n+\t\t\t{\"name\": \"get_weather\", \"input_schema\": map[string]any{\"type\": \"object\"}},\n+\t\t},\n+\t\t\"tool_choice\": map[string]any{\"type\": \"none\"},\n+\t\t\"messages\":    []map[string]any{{\"role\": \"user\", \"content\": \"Hello\"}},\n+\t}\n+\n+\tdata, err := json.Marshal(reqBody)\n+\trequire.NoError(t, err)\n+\treq, _ := http.NewRequestWithContext(\n+\t\tt.Context(),\n+\t\thttp.MethodPost,\n+\t\t\"/v1/messages\",\n+\t\tbytes.NewReader(data),\n+\t)\n+\n+\tresult, err := gemini.ConvertClaudeRequest(meta, req)\n+\trequire.NoError(t, err)\n+\n+\tbody, _ := io.ReadAll(result.Body)\n+\n+\tvar geminiReq relaymodel.GeminiChatRequest\n+\trequire.NoError(t, json.Unmarshal(body, &geminiReq))\n+\trequire.NotNil(t, geminiReq.ToolConfig)\n+\trequire.Equal(\n+\t\tt,\n+\t\trelaymodel.GeminiFunctionCallingModeNone,\n+\t\tgeminiReq.ToolConfig.FunctionCallingConfig.Mode,\n+\t)\n+}"
+  },
+  {
+   "filename": "core/relay/adaptor/openai/claude.go",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -340,6 +340,8 @@ func convertClaudeToolChoice(toolChoice any) any {\n \t\t\t\treturn relaymodel.ToolChoiceRequired\n \t\t\tcase relaymodel.ToolChoiceAuto:\n \t\t\t\treturn relaymodel.ToolChoiceAuto\n+\t\t\tcase relaymodel.ToolChoiceNone:\n+\t\t\t\treturn relaymodel.ToolChoiceNone\n \t\t\t}\n \t\t}\n \t}\n@@ -835,7 +837,9 @@ func ConvertClaudeToResponsesRequest(\n \t}\n \n \tif openAIRequest.ToolChoice != nil {\n-\t\tresponsesReq.ToolChoice = openAIRequest.ToolChoice\n+\t\tresponsesReq.ToolChoice = convertChatToolChoiceToResponseToolChoice(\n+\t\t\topenAIRequest.ToolChoice,\n+\t\t)\n \t}\n \n \tapplyReasoningToResponsesRequestForModel("
+  },
+  {
+   "filename": "core/relay/adaptor/openai/claude_test.go",
+   "status": "modified",
+   "additions": 75,
+   "deletions": 0,
+   "patch": "@@ -1109,3 +1109,78 @@ func TestConvertResponsesToClaudeResponseContentFilterStopReason(t *testing.T) {\n \tassert.Len(t, resp.Content, 1)\n \tassert.Equal(t, relaymodel.ClaudeStopReasonRefusal, resp.StopReason)\n }\n+\n+func TestConvertClaudeRequest_ToolChoice(t *testing.T) {\n+\tt.Parallel()\n+\n+\ttests := []struct {\n+\t\tname         string\n+\t\ttoolChoice   string\n+\t\twantChat     any\n+\t\twantResponse any\n+\t}{\n+\t\t{\n+\t\t\tname:         \"none\",\n+\t\t\ttoolChoice:   `{\"type\":\"none\"}`,\n+\t\t\twantChat:     \"none\",\n+\t\t\twantResponse: \"none\",\n+\t\t},\n+\t\t{\n+\t\t\tname:         \"auto\",\n+\t\t\ttoolChoice:   `{\"type\":\"auto\"}`,\n+\t\t\twantChat:     \"auto\",\n+\t\t\twantResponse: \"auto\",\n+\t\t},\n+\t\t{\n+\t\t\tname:         \"any\",\n+\t\t\ttoolChoice:   `{\"type\":\"any\"}`,\n+\t\t\twantChat:     \"required\",\n+\t\t\twantResponse: \"required\",\n+\t\t},\n+\t\t{\n+\t\t\tname:       \"tool\",\n+\t\t\ttoolChoice: `{\"type\":\"tool\",\"name\":\"get_weather\"}`,\n+\t\t\twantChat: map[string]any{\n+\t\t\t\t\"type\":     \"function\",\n+\t\t\t\t\"function\": map[string]any{\"name\": \"get_weather\"},\n+\t\t\t},\n+\t\t\twantResponse: map[string]any{\"type\": \"function\", \"name\": \"get_weather\"},\n+\t\t},\n+\t}\n+\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tt.Parallel()\n+\n+\t\t\trequestJSON := `{\n+\t\t\t\t\"model\": \"claude\",\n+\t\t\t\t\"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}],\n+\t\t\t\t\"max_tokens\": 1024,\n+\t\t\t\t\"tools\": [{\"name\": \"get_weather\", \"input_schema\": {\"type\": \"object\"}}],\n+\t\t\t\t\"tool_choice\": ` + tt.toolChoice + `\n+\t\t\t}`\n+\t\t\tnewRequest := func() *http.Request {\n+\t\t\t\treq := httptest.NewRequestWithContext(t.Context(),\n+\t\t\t\t\thttp.MethodPost,\n+\t\t\t\t\t\"/v1/messages\",\n+\t\t\t\t\tbytes.NewReader([]byte(requestJSON)),\n+\t\t\t\t)\n+\t\t\t\treq.Header.Set(\"Content-Type\", \"application/json\")\n+\n+\t\t\t\treturn req\n+\t\t\t}\n+\t\t\tm := &meta.Meta{ActualModel: \"gpt-5-codex\"}\n+\n+\t\t\tchatReq, err := openai.ConvertClaudeRequestModel(m, newRequest())\n+\t\t\trequire.NoError(t, err)\n+\t\t\tassert.Equal(t, tt.wantChat, chatReq.ToolChoice)\n+\n+\t\t\tresult, err := openai.ConvertClaudeToResponsesRequest(m, newRequest())\n+\t\t\trequire.NoError(t, err)\n+\n+\t\t\tvar responsesReq relaymodel.CreateResponseRequest\n+\t\t\trequire.NoError(t, json.NewDecoder(result.Body).Decode(&responsesReq))\n+\t\t\tassert.Equal(t, tt.wantResponse, responsesReq.ToolChoice)\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "core/relay/adaptor/gemini/claude_test.go",
+  "core/relay/adaptor/openai/claude_test.go"
+ ]
+}

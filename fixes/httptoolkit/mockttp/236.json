@@ -1,0 +1,26 @@
+{
+ "repo": "httptoolkit/mockttp",
+ "number": 236,
+ "url": "https://github.com/httptoolkit/mockttp/pull/236",
+ "title": "fix: honour falsy json overrides when beforeRequest returns the original body",
+ "merged_at": "2026-11-27T16:01:46Z",
+ "files": [
+  {
+   "filename": "src/rules/requests/request-step-impls.ts",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 1,
+   "patch": "@@ -452,7 +452,7 @@ function returnsOriginalBody(\n     resultingHeaders: Headers\n ) {\n     if (result?.rawBody) return result.rawBody === originalBody.buffer;\n-    if (result?.json) return false;\n+    if (result?.json !== undefined) return false;\n \n     const returnedBody: unknown = result?.body;\n     const isSameBody = returnedBody === originalBody || returnedBody === originalBody.buffer;"
+  },
+  {
+   "filename": "test/integration/proxying/http-proxying.spec.ts",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -811,6 +811,25 @@ nodeOnly(() => {\n                 expect(response).to.deep.equal({ hello: \"world\" });\n             });\n \n+            it(\"should rewrite a spread request's body with a falsy JSON value\", async () => {\n+                await remoteServer.forAnyRequest().thenCallback(async (req) => ({\n+                    status: 200,\n+                    body: await req.body.getText()\n+                }));\n+\n+                for (const value of [false, 0, '', null]) {\n+                    await server.reset();\n+                    await server.forPost(remoteServer.urlFor(\"/\")).thenPassThrough({\n+                        beforeRequest: (req) => ({ ...req, body: req.body.buffer, json: value })\n+                    });\n+\n+                    const response = await request.post(remoteServer.urlFor(\"/\"), {\n+                        body: 'original body'\n+                    });\n+                    expect(response).to.equal(JSON.stringify(value));\n+                }\n+            });\n+\n             it(\"should be able to rewrite a request's body as JSON and encode it automatically\", async () => {\n                 await remoteServer.forAnyRequest().thenCallback(async (req) => ({\n                     status: 200,"
+  }
+ ],
+ "test_files": [
+  "test/integration/proxying/http-proxying.spec.ts"
+ ]
+}

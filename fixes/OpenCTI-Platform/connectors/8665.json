@@ -1,0 +1,26 @@
+{
+ "repo": "OpenCTI-Platform/connectors",
+ "number": 8665,
+ "url": "https://github.com/OpenCTI-Platform/connectors/pull/8665",
+ "title": "fix(connectors-sdk): wrap malformed JSON body errors in BaseClientApi (#7299)",
+ "merged_at": "2026-11-27T16:21:05Z",
+ "files": [
+  {
+   "filename": "connectors-sdk/connectors_sdk/client/base_client_api.py",
+   "status": "modified",
+   "additions": 9,
+   "deletions": 2,
+   "patch": "@@ -321,7 +321,7 @@ def _request(self, method: str, path: str, **kwargs: Any) -> Any:\n             ApiNotFoundError: On 404.\n             ApiRateLimitError: On 429 after retries exhausted.\n             ApiServerError: On 5xx after retries exhausted.\n-            ApiClientError: On other HTTP errors.\n+            ApiClientError: On other HTTP errors, or on a malformed JSON body.\n         \"\"\"\n         response = self._raw_request(method, path, **kwargs)\n \n@@ -367,7 +367,14 @@ def _parse_response(self, response: requests.Response) -> Any:\n         content_type = response.headers.get(\"Content-Type\", \"\").lower()\n \n         if \"application/json\" in content_type:\n-            return response.json()\n+            try:\n+                return response.json()\n+            except (ValueError, requests.exceptions.JSONDecodeError) as err:\n+                raise ApiClientError(\n+                    f\"Malformed JSON response body: {err}\",\n+                    status_code=response.status_code,\n+                    response_body=self._safe_response_body(response),\n+                ) from err\n \n         if content_type.startswith(\"text/\"):\n             return response.text or None"
+  },
+  {
+   "filename": "connectors-sdk/tests/test_client/test_base_client_api.py",
+   "status": "modified",
+   "additions": 11,
+   "deletions": 0,
+   "patch": "@@ -498,6 +498,17 @@ def test_parse_response_json_charset(self, client):\n         result = client._parse_response(resp)\n         assert result == {\"ok\": True}\n \n+    def test_parse_response_malformed_json_raises_api_client_error(self, client):\n+        resp = requests.Response()\n+        resp.status_code = 200\n+        resp.headers[\"Content-Type\"] = \"application/json\"\n+        resp._content = b'{\"key\": '\n+        with pytest.raises(ApiClientError) as exc_info:\n+            client._parse_response(resp)\n+        assert exc_info.value.status_code == 200\n+        assert exc_info.value.response_body == '{\"key\": '\n+        assert isinstance(exc_info.value.__cause__, ValueError)\n+\n     def test_parse_response_no_content_type_tries_json(self, client):\n         \"\"\"When Content-Type is missing, tries JSON parsing.\"\"\"\n         resp = _mock_response(json_data={\"fallback\": True}, text='{\"fallback\": true}')"
+  }
+ ],
+ "test_files": [
+  "connectors-sdk/tests/test_client/test_base_client_api.py"
+ ]
+}

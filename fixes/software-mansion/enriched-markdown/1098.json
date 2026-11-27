@@ -1,0 +1,55 @@
+{
+ "repo": "software-mansion/enriched-markdown",
+ "number": 1098,
+ "url": "https://github.com/software-mansion/enriched-markdown/pull/1098",
+ "title": "fix(web): draw an image inline when its paragraph, heading or cell also holds other content",
+ "merged_at": "2026-11-27T15:55:37Z",
+ "files": [
+  {
+   "filename": "docs-md/WEB.md",
+   "status": "modified",
+   "additions": 0,
+   "deletions": 1,
+   "patch": "@@ -86,6 +86,5 @@ exception: it is mapped to `data-testid`.\n \n - Editor features — see [Web Editor](WEB_INPUT.md#not-supported-on-web) for what `EnrichedMarkdownTextInput` does not support on web.\n - Particle spoilers — every spoiler uses the solid cover.\n-- Inline images inside formatting — an image next to text renders inline only as a direct child of its paragraph. Inside a spoiler, link or emphasis it renders as a block image, and a spoiler holding one becomes a full-width block.\n - Configurable link `target` — all links open in a new tab (`target=\"_blank\"`). Use `onLinkPress` for custom navigation.\n - Link pills — `linkVariants[pattern].pill` is ignored; such links render as ordinary links with the variant's colors and font."
+  },
+  {
+   "filename": "docs/docs/react-native/guides/web-support.md",
+   "status": "modified",
+   "additions": 0,
+   "deletions": 1,
+   "patch": "@@ -383,7 +383,6 @@ unknown DOM attributes. Use `id`, `aria-label` and CSS rather than `nativeID`,\n - Editor features - `EnrichedMarkdownTextInput` runs on web but covers less than on native. See [Web editor](/react-native/guides/web-editor#not-supported-on-web).\n - Code-block syntax highlighting - fenced code blocks render as plain monospaced text with no per-token colors, no header bar and no copy button\n - Particle spoilers - every spoiler uses the solid cover, whatever `spoilerOverlay` says\n-- Inline images inside formatting - an image next to text renders inline only as a direct child of its paragraph. Inside a spoiler, link or emphasis it renders as a block image, and a spoiler holding one becomes a full-width block. Native draws such an image inline whenever anything precedes it in the paragraph\n - Configurable link `target` - all links open in a new tab (`target=\"_blank\" rel=\"noopener noreferrer\"`). Use `onLinkPress` for custom navigation.\n - Line clamping - `numberOfLines` and `ellipsizeMode` are native-only and are not part of the web props type\n - Clipboard integration - the web build never writes to the clipboard, so none of the [copy options](/user-experience/copy-options) apply"
+  },
+  {
+   "filename": "packages/react-native-enriched-markdown/src/web/__tests__/inlineImages.test.tsx",
+   "status": "added",
+   "additions": 68,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,68 @@\n+/**\n+ * @jest-environment jsdom\n+ */\n+import { act } from 'react';\n+import { createRoot, type Root } from 'react-dom/client';\n+import { TextEncoder } from 'util';\n+import { loadParser } from '../parseMarkdown';\n+\n+jest.mock('react-native', () => ({\n+  Platform: { OS: 'web' },\n+  processColor: (color: unknown) => color,\n+}));\n+\n+globalThis.TextEncoder ??= TextEncoder as typeof globalThis.TextEncoder;\n+const { EnrichedMarkdownText } =\n+  require('../EnrichedMarkdownText') as typeof import('../EnrichedMarkdownText');\n+\n+(\n+  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }\n+).IS_REACT_ACT_ENVIRONMENT = true;\n+\n+let container: HTMLDivElement;\n+let root: Root;\n+\n+beforeAll(() => loadParser());\n+\n+beforeEach(() => {\n+  container = document.createElement('div');\n+  document.body.appendChild(container);\n+  root = createRoot(container);\n+});\n+\n+afterEach(() => {\n+  act(() => root.unmount());\n+  container.remove();\n+});\n+\n+function imageIsInline(markdown: string): boolean {\n+  act(() => root.render(<EnrichedMarkdownText markdown={markdown} />));\n+  return container.querySelector('img')!.style.display !== 'block';\n+}\n+\n+// An image is inline when its paragraph, heading or table cell holds anything\n+// besides images, however deeply the image is wrapped (#1081).\n+it.each([\n+  'Play [![](https://example.com/t.png) Catan](https://example.com) tonight',\n+  'See [![badge](https://example.com/b.svg)](https://example.com) for status',\n+  'text **![](https://example.com/x.png)**',\n+  '# Title ![](https://example.com/x.png)',\n+  '| a |\\n| --- |\\n| text ![](https://example.com/x.png) |',\n+])('draws an image next to text inline: %s', (markdown) => {\n+  expect(imageIsInline(markdown)).toBe(true);\n+});\n+\n+it.each([\n+  '![](https://example.com/x.png)',\n+  '[![badge](https://example.com/b.svg)](https://example.com)',\n+])('keeps an image alone in its paragraph a block: %s', (markdown) => {\n+  expect(imageIsInline(markdown)).toBe(false);\n+});\n+\n+// An image-only spoiler wraps its image in a cover box, which flows inline next to text.\n+it('draws an image-only spoiler next to text inline', () => {\n+  imageIsInline('text ||![](https://example.com/x.png)||');\n+  expect(container.querySelector('img')!.parentElement!.style.display).toBe(\n+    'inline-block'\n+  );\n+});"
+  },
+  {
+   "filename": "packages/react-native-enriched-markdown/src/web/__tests__/spoiler.test.tsx",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 3,
+   "patch": "@@ -261,7 +261,7 @@ it('moves focus to the link when Enter reveals a spoiler inside it', () => {\n   expect(document.activeElement).toBe(container.querySelector('a'));\n });\n \n-it('keeps an image in a spoiler with text unpressable until revealed, under a block cover', () => {\n+it('keeps an inline image in a spoiler with text unpressable until revealed', () => {\n   render({\n     markdown: '||photo ![tree](https://example.com/tree.png) here||',\n     markdownStyle: { spoiler: { color: 'rgb(1, 2, 3)' } },\n@@ -270,8 +270,9 @@ it('keeps an image in a spoiler with text unpressable until revealed, under a bl\n \n   const spoiler = onlySpoiler();\n   const img = container.querySelector('img')!;\n-  expect(img.style.display).toBe('block');\n-  expect(spoiler.style.display).toBe('block');\n+  // Inline beside its text, as on native (#1081), so the cover stays inline.\n+  expect(img.style.display).not.toBe('block');\n+  expect(spoiler.style.display).not.toBe('block');\n   expect(spoiler.style.backgroundColor).toBe('rgb(1, 2, 3)');\n   expect(img.hasAttribute('role')).toBe(false);\n "
+  },
+  {
+   "filename": "packages/react-native-enriched-markdown/src/web/renderers/InlineRenderers.tsx",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 6,
+   "patch": "@@ -1,7 +1,7 @@\n import { useContext, useState } from 'react';\n import type { CSSProperties, KeyboardEvent, MouseEvent } from 'react';\n import type { ASTNode, RendererProps, RendererMap } from '../types';\n-import { extractNodeText, hasBlockImage, hasNonImageContent } from '../utils';\n+import { extractNodeText, hasNonImageContent } from '../utils';\n import { KaTeXRenderer } from './KaTeXRenderer';\n import {\n   ConcealedSpoilerContext,\n@@ -93,15 +93,11 @@ function SpoilerRenderer({ node, styles, renderChildren }: RendererProps) {\n \n   const isActive = !isRevealed && !isAncestorConcealed;\n   const isImageOnly = !hasNonImageContent(node);\n-  const baseCoverStyle = isRevealed\n+  const coverStyle = isRevealed\n     ? styles.spoilerRevealed\n     : isImageOnly\n       ? { ...styles.spoilerRevealed, cursor: 'pointer' }\n       : styles.spoiler;\n-  const coverStyle =\n-    !isImageOnly && hasBlockImage(node)\n-      ? { ...baseCoverStyle, display: 'block' }\n-      : baseCoverStyle;\n \n   return (\n     <span"
+  },
+  {
+   "filename": "packages/react-native-enriched-markdown/src/web/utils.ts",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 21,
+   "patch": "@@ -1,4 +1,4 @@\n-import type { ASTNode } from './types';\n+import type { ASTNode, NodeType } from './types';\n \n /**\n  * Whether `text` has a letter to resolve `dir=\"auto\"` from. Chromium resolves\n@@ -56,30 +56,32 @@ export function hasNonImageContent(node: ASTNode): boolean {\n   return node.children.some(hasNonImageContent);\n }\n \n+const TEXT_BLOCKS = new Set<NodeType>([\n+  'Paragraph',\n+  'Heading',\n+  'TableCell',\n+  'TableHeaderCell',\n+]);\n+\n+function stampImagesInline(node: ASTNode): void {\n+  if (node.type === 'Image') {\n+    node.attributes = { ...node.attributes, isInline: true };\n+    return;\n+  }\n+  node.children?.forEach(stampImagesInline);\n+}\n+\n /**\n- * Stamps Image nodes with `isInline` when they appear inside a paragraph\n- * that also contains other content (text, links, etc.).\n- * Matches native behavior: sole-child images are block-level, mixed are inline.\n+ * Stamps Image nodes with `isInline` when their paragraph, heading or table\n+ * cell holds anything besides images, at any depth - so an image inside a\n+ * link, emphasis or spoiler next to text is inline too. An image alone in its\n+ * block (or only wrapped in a link) stays block-level, as on native.\n  * Mutates the AST in-place (safe: called once on the freshly-parsed result).\n  */\n export function markInlineImages(node: ASTNode): void {\n-  if (node.type === 'Paragraph' && node.children) {\n-    const hasNonImageChild = node.children.some(\n-      (child) => child.type !== 'Image'\n-    );\n-    if (hasNonImageChild) {\n-      for (const child of node.children) {\n-        if (child.type === 'Image') {\n-          child.attributes = { ...child.attributes, isInline: true };\n-        }\n-      }\n-    }\n+  if (TEXT_BLOCKS.has(node.type)) {\n+    if (hasNonImageContent(node)) stampImagesInline(node);\n+    return;\n   }\n   node.children?.forEach(markInlineImages);\n }\n-\n-/** Whether a node holds a block-level image (one not stamped inline). */\n-export function hasBlockImage(node: ASTNode): boolean {\n-  if (node.type === 'Image') return !node.attributes?.isInline;\n-  return node.children?.some(hasBlockImage) ?? false;\n-}"
+  }
+ ],
+ "test_files": [
+  "packages/react-native-enriched-markdown/src/web/__tests__/inlineImages.test.tsx",
+  "packages/react-native-enriched-markdown/src/web/__tests__/spoiler.test.tsx"
+ ]
+}

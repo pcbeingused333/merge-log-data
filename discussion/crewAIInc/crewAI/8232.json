@@ -2,7 +2,7 @@
  "repo": "crewAIInc/crewAI",
  "number": 8232,
  "url": "https://github.com/crewAIInc/crewAI/pull/8232",
- "state": "open",
+ "state": "closed",
  "reviews": [
   {
    "role": "bot",
@@ -125,7 +125,7 @@
   {
    "role": "bot",
    "created_at": "2026-10-16T19:45:39Z",
-   "body": "<!-- strix-pr-review:master -->\n## Strix Security Review\n\n<!-- strix-pr-review:unreviewed-commits -->\n> [!WARNING]\n> This pull request has **24 commits** after the last Strix review (`255ee13`). Strix has **not** reviewed these changes.\n> Automatic review on push is off for this repository. To review the latest changes, tag `@strix-security` in a comment, or [turn on re-review on push](https://app.strix.ai/repositories/60614550-3e9e-4537-af38-dcefce1735e3).\n<!-- /strix-pr-review:unreviewed-commits -->\n\nNo security issues found.\n\n<details>\n<summary>Review summary</summary>\n\nReviewed the four changed files. The PR adds `_invoke_after_llm_call_hooks` invocations to async native provider paths (OpenAI, Anthropic, Bedrock) and to Bedrock's sync streaming handler, so `after_llm_call` hooks (e.g. output redaction) run on `acall()`/streaming paths the same way they already run on the sync `call()` paths. The helper is a no-op when the executor has already dispatched hooks, and it correctly ignores non-string responses. The changes faithfully mirror the existing sync implementations: arguments (`messages`/`input`, `response`, `from_agent`) match the in-scope locals and the surrounding `_emit_call_completed_event` calls, and the OpenAI streaming additions guard `_finalize_streaming_response`'s non-string results with `isinstance(result, str)`. The test file adds only test coverage. No security controls were removed, no new attacker-controllable sink was introduced, and no authentication, authorization, injection, crypto, or data-exposure surface changed. No security vulnerabilities identified.\n\n</details>\n\n<sub>Updated for `255ee13`.</sub>\n\n---\n*Reviewed by [Strix](https://strix.ai)*\n<sub>[Re-run review](https://app.strix.ai/api/pr-reviews/rerun?review_id=b313c568-74a4-455a-b1e2-a0dc66955864) · [Configure security review settings](https://app.strix.ai/repositories/60614550-3e9e-4537-af38-dcefce1735e3)</sub>"
+   "body": "<!-- strix-pr-review:master -->\n## Strix Security Review\n\n<!-- strix-pr-review:unreviewed-commits -->\n> [!WARNING]\n> This pull request has **310 commits** after the last Strix review (`255ee13`). Strix has **not** reviewed these changes.\n> Automatic review on push is off for this repository. To review the latest changes, tag `@strix-security` in a comment, or [turn on re-review on push](https://app.strix.ai/repositories/60614550-3e9e-4537-af38-dcefce1735e3).\n<!-- /strix-pr-review:unreviewed-commits -->\n\nNo security issues found.\n\n<details>\n<summary>Review summary</summary>\n\nReviewed the four changed files. The PR adds `_invoke_after_llm_call_hooks` invocations to async native provider paths (OpenAI, Anthropic, Bedrock) and to Bedrock's sync streaming handler, so `after_llm_call` hooks (e.g. output redaction) run on `acall()`/streaming paths the same way they already run on the sync `call()` paths. The helper is a no-op when the executor has already dispatched hooks, and it correctly ignores non-string responses. The changes faithfully mirror the existing sync implementations: arguments (`messages`/`input`, `response`, `from_agent`) match the in-scope locals and the surrounding `_emit_call_completed_event` calls, and the OpenAI streaming additions guard `_finalize_streaming_response`'s non-string results with `isinstance(result, str)`. The test file adds only test coverage. No security controls were removed, no new attacker-controllable sink was introduced, and no authentication, authorization, injection, crypto, or data-exposure surface changed. No security vulnerabilities identified.\n\n</details>\n\n<sub>Updated for `255ee13`.</sub>\n\n---\n*Reviewed by [Strix](https://strix.ai)*\n<sub>[Re-run review](https://app.strix.ai/api/pr-reviews/rerun?review_id=b313c568-74a4-455a-b1e2-a0dc66955864) · [Configure security review settings](https://app.strix.ai/repositories/60614550-3e9e-4537-af38-dcefce1735e3)</sub>"
   },
   {
    "role": "bot",
@@ -171,6 +171,21 @@
    "role": "author",
    "created_at": "2026-11-25T13:39:11Z",
    "body": "Hi @VANDRANKI, I've addressed the feedback above. Could you take another look when you have a moment? Thanks!"
+  },
+  {
+   "role": "none",
+   "created_at": "2026-11-27T17:28:34Z",
+   "body": "Community check, not a maintainer review.\n\n@pcbeingused333 the head is still 18162ba, the one I checked on 11-07, so there is no new code for me to re-check. I closed the gaps I left then. One thing changed on main in the meantime.\n\n**The LiteLLM part is already on main.** #9360 (merged 11-11) made the same `llm.py` change. When I merge your head into current main (77237ae), `llm.py` comes out identical to main's. What this PR still adds is the native OpenAI, Anthropic and Bedrock work.\n\n**The two LiteLLM tests.** With `litellm` 1.105.3 installed in a side directory, both `TestLiteLLMAfterHooksAsync` tests pass. `tests/hooks/test_llm_hooks.py` gives 36 passed on main plus your PR. Your version of that file against current main's source gives 30 passed and 6 failed, and the 2 LiteLLM tests are among the passes. Both of them fail on the commit before #9360.\n\n**Native Anthropic and OpenAI Responses.** I had only read these. This time I ran them with fake clients and a global after hook that replaces `SECRET` and counts its runs.\n\n| path | main, `call()` | main, `acall()` | PR, `call()` | PR, `acall()` |\n|---|---|---|---|---|\n| Anthropic | 1 | 0 | 1 | 1 |\n| Anthropic, streaming | 1 | 0 | 1 | 1 |\n| OpenAI Responses | 1 | 0 | 1 | 1 |\n| OpenAI Responses, streaming | 1 | 0 | 1 | 1 |\n| LiteLLM | 1 | 1 | 1 | 1 |\n| LiteLLM, streaming | 1 | 1 | 1 | 1 |\n\nThe numbers are hook runs. In every row with 1 the text came back redacted, and in every row with 0 it did not. So the gap on the four native `acall()` rows is real on main, your head fixes it, and nothing runs the hook twice.\n\nI found no blocker. If you rebase, the description and the diff can drop the `llm.py` part. The streaming LiteLLM test is still worth keeping, because the test #9360 added only covers the non-streaming call. Tests for the Anthropic and Responses rows would close the last untested part of your change.\n\nNot run: a real provider call, tool-use turns on these two providers, the rest of the crewAI suite."
+  },
+  {
+   "role": "bot",
+   "created_at": "2026-11-27T19:35:02Z",
+   "body": "Thanks for the pull request.\n\nFirst-time contributors need an associated open issue before we can review a PR.\n\n1. Open an issue with a [template](https://github.com/crewAIInc/crewAI/issues/new/choose), or pick an existing open one.\n2. Open a new PR (or reopen this one) whose title or body mentions that issue, for example `#123`.\n\nSee the [contributing guide](https://github.com/crewAIInc/crewAI/blob/main/.github/CONTRIBUTING.md).\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-27T19:35:50Z",
+   "body": "\nThanks for running the Anthropic and Responses rows. I merged current main into the branch (no conflicts): `llm.py` is now identical to main's since #9360, and the description no longer claims that part. The streaming LiteLLM test stays.\n\nI also added tests for the Anthropic and OpenAI Responses `acall()` paths, with and without streaming, each asserting the redacted text and a single hook run. `test_llm_hooks.py` gives 40 passed; the four new cases fail against main's sources.\n\nThis reply was drafted with Claude Code.\n"
   }
  ]
 }

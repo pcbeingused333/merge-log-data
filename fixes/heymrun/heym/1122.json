@@ -1,0 +1,26 @@
+{
+ "repo": "heymrun/heym",
+ "number": 1122,
+ "url": "https://github.com/heymrun/heym/pull/1122",
+ "title": "fix(llm): keep Gemini tool parameters named like schema keywords",
+ "merged_at": "2026-11-27T14:39:24Z",
+ "files": [
+  {
+   "filename": "backend/app/services/llm_transport_gemini.py",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 1,
+   "patch": "@@ -50,7 +50,16 @@ class GeminiHistory:\n \n def _clean_schema(value: Any) -> Any:\n     if isinstance(value, dict):\n-        return {k: _clean_schema(v) for k, v in value.items() if k not in _UNSUPPORTED_SCHEMA_KEYS}\n+        cleaned: dict[str, Any] = {}\n+        for key, item in value.items():\n+            if key in _UNSUPPORTED_SCHEMA_KEYS:\n+                continue\n+            if key == \"properties\" and isinstance(item, dict):\n+                # These keys are parameter names, which may spell a schema keyword.\n+                cleaned[key] = {name: _clean_schema(schema) for name, schema in item.items()}\n+            else:\n+                cleaned[key] = _clean_schema(item)\n+        return cleaned\n     if isinstance(value, list):\n         return [_clean_schema(item) for item in value]\n     return value"
+  },
+  {
+   "filename": "backend/tests/test_llm_transport_gemini.py",
+   "status": "modified",
+   "additions": 23,
+   "deletions": 0,
+   "patch": "@@ -136,6 +136,29 @@ def test_declarations_drop_what_gemini_does_not_know(self) -> None:\n         self.assertEqual(parameters[\"required\"], [\"workflow_id\"])\n         self.assertIn(\"additionalProperties\", TOOL[\"function\"][\"parameters\"])\n \n+    def test_parameters_named_like_schema_keywords_are_kept(self) -> None:\n+        names = [\"title\", \"default\", \"examples\", \"definitions\", \"additionalProperties\"]\n+        item = {\"type\": \"object\", \"title\": \"Item\", \"properties\": {\"title\": {\"type\": \"string\"}}}\n+        properties: dict[str, Any] = {name: {\"type\": \"string\", \"title\": name} for name in names}\n+        properties[\"properties\"] = {\"type\": \"array\", \"items\": item}\n+        tool = {\n+            \"type\": \"function\",\n+            \"function\": {\n+                \"name\": \"create_page\",\n+                \"parameters\": {\"type\": \"object\", \"properties\": properties, \"required\": names},\n+            },\n+        }\n+\n+        parameters = self._build(tools=[tool])[\"tools\"][0][\"functionDeclarations\"][0][\"parameters\"]\n+\n+        for name in names:\n+            self.assertEqual(parameters[\"properties\"][name], {\"type\": \"string\"})\n+        self.assertEqual(\n+            parameters[\"properties\"][\"properties\"][\"items\"],\n+            {\"type\": \"object\", \"properties\": {\"title\": {\"type\": \"string\"}}},\n+        )\n+        self.assertEqual(parameters[\"required\"], names)\n+\n     def test_tool_choice_vocabulary_is_translated(self) -> None:\n         def mode(choice: str | None) -> str:\n             return self._build([TOOL], tool_choice=choice)[\"toolConfig\"][\"functionCallingConfig\"]["
+  }
+ ],
+ "test_files": [
+  "backend/tests/test_llm_transport_gemini.py"
+ ]
+}

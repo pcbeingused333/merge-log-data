@@ -1,0 +1,33 @@
+{
+ "repo": "aws-cloudformation/cfn-lint",
+ "number": 5050,
+ "url": "https://github.com/aws-cloudformation/cfn-lint/pull/5050",
+ "title": "fix(E1050): validate every dynamic reference in a string",
+ "merged_at": "2026-11-27T20:23:39Z",
+ "files": [
+  {
+   "filename": "src/cfnlint/helpers.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -170,6 +170,9 @@\n     re.I | re.S,\n )\n REGEX_DYN_REF = re.compile(r\"^.*{{(resolve:.+)}}.*$\")\n+# Unanchored so that findall returns every reference in a string.\n+# A ${...} Fn::Sub variable is consumed whole so its brace does not end the match.\n+REGEX_DYN_REF_ALL = re.compile(r\"{{(resolve:(?:\\$\\{[^}]*\\}|.)+?)}}\")\n REGEX_DYN_REF_SPACES = re.compile(\n     r\"\\{\\{\\s+resolve\\s*:\\s*(?:ssm|ssm-secure|secretsmanager)\\s*:\"\n )"
+  },
+  {
+   "filename": "src/cfnlint/rules/functions/DynamicReference.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -6,7 +6,7 @@\n from collections import deque\n from typing import Any\n \n-from cfnlint.helpers import REGEX_DYN_REF\n+from cfnlint.helpers import REGEX_DYN_REF_ALL\n from cfnlint.jsonschema import ValidationError, Validator\n from cfnlint.rules.functions._BaseFn import BaseFn\n \n@@ -102,7 +102,7 @@ def dynamicReference(\n             ),\n         )\n \n-        for v in REGEX_DYN_REF.findall(instance):\n+        for v in REGEX_DYN_REF_ALL.findall(instance):\n             parts = v.split(\":\")\n \n             found = False"
+  },
+  {
+   "filename": "test/unit/rules/functions/test_dynamic_reference.py",
+   "status": "modified",
+   "additions": 67,
+   "deletions": 0,
+   "patch": "@@ -40,6 +40,73 @@ def context(cfn):\n @pytest.mark.parametrize(\n     \"name,instance,schema,child_rules,expected\",\n     [\n+        (\n+            \"Valid SSM Parameter followed by later closing braces\",\n+            '{\"ami\":\"{{resolve:ssm:Parameter}}\",\"cache\":{\"ttl\":600}}',\n+            {\"type\": \"test\"},\n+            {\n+                \"E1051\": _TestRule(),\n+                \"E1027\": _TestRule(),\n+                \"W1051\": _TestRule(),\n+            },\n+            [],\n+        ),\n+        (\n+            \"Two valid references in one string\",\n+            \"{{resolve:ssm:good}}{{resolve:ssm:other}}\",\n+            {\"type\": \"test\"},\n+            {\n+                \"E1051\": _TestRule(),\n+                \"E1027\": _TestRule(),\n+                \"W1051\": _TestRule(),\n+            },\n+            [],\n+        ),\n+        (\n+            \"Malformed first of two references\",\n+            \"{{resolve:ssm:bad:2:extra:more}}{{resolve:ssm:good}}\",\n+            {\"type\": \"test\"},\n+            {\n+                \"E1051\": _TestRule(),\n+                \"E1027\": _TestRule(),\n+                \"W1051\": _TestRule(),\n+            },\n+            [\n+                ValidationError(\n+                    \"expected maximum item count: 4, found: 6\",\n+                    validator=\"maxItems\",\n+                    rule=DynamicReference(),\n+                )\n+            ],\n+        ),\n+        (\n+            \"Malformed second of two references\",\n+            \"{{resolve:ssm:good}}{{resolve:ssm:bad:2:extra:more}}\",\n+            {\"type\": \"test\"},\n+            {\n+                \"E1051\": _TestRule(),\n+                \"E1027\": _TestRule(),\n+                \"W1051\": _TestRule(),\n+            },\n+            [\n+                ValidationError(\n+                    \"expected maximum item count: 4, found: 6\",\n+                    validator=\"maxItems\",\n+                    rule=DynamicReference(),\n+                )\n+            ],\n+        ),\n+        (\n+            \"Valid SSM Parameter with a substitution variable\",\n+            \"{{resolve:ssm:${Name}}}\",\n+            {\"type\": \"test\"},\n+            {\n+                \"E1051\": _TestRule(),\n+                \"E1027\": _TestRule(),\n+                \"W1051\": _TestRule(),\n+            },\n+            [],\n+        ),\n         (\n             \"Valid SSM Parameter\",\n             \"{{resolve:ssm:Parameter}}\","
+  }
+ ],
+ "test_files": [
+  "test/unit/rules/functions/test_dynamic_reference.py"
+ ]
+}

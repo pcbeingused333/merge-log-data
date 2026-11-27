@@ -1,0 +1,24 @@
+{
+ "repo": "xberg-io/liter-llm",
+ "number": 510,
+ "url": "https://github.com/xberg-io/liter-llm/pull/510",
+ "title": "fix(vertex): keep system and assistant content parts in Gemini requests",
+ "merged_at": "2026-11-27T13:20:44Z",
+ "files": [
+  {
+   "filename": "crates/liter-llm/src/provider/vertex/gemini_request.rs",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 11,
+   "patch": "@@ -92,11 +92,7 @@ fn convert_messages(messages: &[Value]) -> (Vec<Value>, Vec<Value>) {\n         let content = msg.get(\"content\");\n \n         match role {\n-            \"system\" | \"developer\" => {\n-                if let Some(text) = content.and_then(|c| c.as_str()) {\n-                    system_parts.push(json!({\"text\": text}));\n-                }\n-            }\n+            \"system\" | \"developer\" => system_parts.extend(text_parts(content)),\n             \"user\" => {\n                 let parts = convert_user_content_to_gemini(content);\n                 contents.push(json!({\"role\": \"user\", \"parts\": parts}));\n@@ -151,15 +147,29 @@ fn tool_result_name<'a>(msg: &'a Value, call_names: &HashMap<&str, &'a str>) ->\n         .unwrap_or(\"tool\")\n }\n \n+/// The non-empty text of a message's `content`, given as a string or as an array of\n+/// `{\"type\": \"text\"}` parts, as Gemini text parts.\n+fn text_parts(content: Option<&Value>) -> Vec<Value> {\n+    let texts: Vec<&str> = match content {\n+        Some(Value::String(text)) => vec![text],\n+        Some(Value::Array(parts)) => parts\n+            .iter()\n+            .filter(|part| part.get(\"type\").and_then(Value::as_str) == Some(\"text\"))\n+            .filter_map(|part| part.get(\"text\").and_then(Value::as_str))\n+            .collect(),\n+        _ => vec![],\n+    };\n+    texts\n+        .into_iter()\n+        .filter(|text| !text.is_empty())\n+        .map(|text| json!({\"text\": text}))\n+        .collect()\n+}\n+\n /// An assistant turn as a Gemini `model` turn: non-empty text plus one\n /// `functionCall` part per tool call, or a single empty text part.\n fn model_message(msg: &Value, content: Option<&Value>) -> Value {\n-    let mut parts: Vec<Value> = vec![];\n-    if let Some(text) = content.and_then(|c| c.as_str())\n-        && !text.is_empty()\n-    {\n-        parts.push(json!({\"text\": text}));\n-    }\n+    let mut parts = text_parts(content);\n     if let Some(tool_calls) = msg.get(\"tool_calls\").and_then(|t| t.as_array()) {\n         for tc in tool_calls {\n             parts.push(json!({"
+  },
+  {
+   "filename": "crates/liter-llm/src/provider/vertex/tests.rs",
+   "status": "modified",
+   "additions": 41,
+   "deletions": 0,
+   "patch": "@@ -1011,3 +1011,44 @@ fn next_models_page_url_is_none_on_the_last_page() {\n         None\n     );\n }\n+\n+#[test]\n+fn gemini_request_keeps_system_content_parts() {\n+    let mut body = json!({\n+        \"model\": \"gemini-2.5-flash\",\n+        \"messages\": [\n+            {\"role\": \"system\", \"content\": [\n+                {\"type\": \"text\", \"text\": \"Be terse.\"},\n+                {\"type\": \"text\", \"text\": \"\"},\n+                {\"type\": \"text\", \"text\": \"Answer in French.\"}\n+            ]},\n+            {\"role\": \"user\", \"content\": \"hi\"}\n+        ]\n+    });\n+\n+    transform_gemini_request(&mut body).expect(\"request should transform\");\n+\n+    assert_eq!(\n+        body[\"systemInstruction\"][\"parts\"],\n+        json!([{\"text\": \"Be terse.\"}, {\"text\": \"Answer in French.\"}])\n+    );\n+}\n+\n+#[test]\n+fn gemini_request_keeps_assistant_content_parts() {\n+    let mut body = json!({\n+        \"model\": \"gemini-2.5-flash\",\n+        \"messages\": [\n+            {\"role\": \"user\", \"content\": \"hi\"},\n+            {\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"Bonjour.\"}]},\n+            {\"role\": \"user\", \"content\": \"again\"}\n+        ]\n+    });\n+\n+    transform_gemini_request(&mut body).expect(\"request should transform\");\n+\n+    assert_eq!(\n+        body[\"contents\"][1],\n+        json!({\"role\": \"model\", \"parts\": [{\"text\": \"Bonjour.\"}]})\n+    );\n+}"
+  }
+ ],
+ "test_files": []
+}

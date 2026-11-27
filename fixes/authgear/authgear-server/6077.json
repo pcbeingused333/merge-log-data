@@ -1,0 +1,33 @@
+{
+ "repo": "authgear/authgear-server",
+ "number": 6077,
+ "url": "https://github.com/authgear/authgear-server/pull/6077",
+ "title": "[Portal] Fix Analytics date range showing the previous day west of UTC",
+ "merged_at": "2026-11-27T11:32:09Z",
+ "files": [
+  {
+   "filename": "portal/src/graphql/portal/AnalyticsScreen.tsx",
+   "status": "modified",
+   "additions": 31,
+   "deletions": 9,
+   "patch": "@@ -23,14 +23,18 @@ import AuditLogDateRangeDialog from \"../../components/audit-log/AuditLogDateRang\n import { AuditLogDateRangeFilterDropdown } from \"../../components/audit-log/AuditLogDateRangeFilterDropdown\";\n import { AuditLogDateRangePresetKey } from \"../../components/audit-log/dateRangePresets\";\n import { useSystemConfig } from \"../../context/SystemConfigContext\";\n-import { parseDate } from \"../../util/date\";\n+import { parseDate, utcDateToLocalDate } from \"../../util/date\";\n \n function truncateTimeAndReplaceTimezoneToUTC(date: Date): Date {\n   return new Date(\n     Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())\n   );\n }\n \n+function toDisplayDate(date: Date | null | undefined): Date | undefined {\n+  return date == null ? undefined : utcDateToLocalDate(date);\n+}\n+\n const AnalyticsScreenContent: React.VFC = function AnalyticsScreenContent() {\n   const [dateRangeDialogHidden, setDateRangeDialogHidden] = useState(true);\n \n@@ -109,6 +113,24 @@ const AnalyticsScreenContent: React.VFC = function AnalyticsScreenContent() {\n     return yesterday;\n   }, [yesterday]);\n \n+  // The state holds UTC midnights; the picker and the label need local days.\n+  const displayRange = useMemo(\n+    () => ({\n+      from: toDisplayDate(rangeFrom),\n+      to: toDisplayDate(rangeTo),\n+    }),\n+    [rangeFrom, rangeTo]\n+  );\n+  const dialogRange = useMemo(\n+    () => ({\n+      from: toDisplayDate(uncommittedRangeFrom),\n+      to: toDisplayDate(uncommittedRangeTo),\n+      min: toDisplayDate(minDate),\n+      max: toDisplayDate(maxDate),\n+    }),\n+    [uncommittedRangeFrom, uncommittedRangeTo, minDate, maxDate]\n+  );\n+\n   const rangeToStr = useMemo(() => {\n     return rangeTo ? rangeTo.toISOString().split(\"T\")[0] : \"\";\n   }, [rangeTo]);\n@@ -279,8 +301,8 @@ const AnalyticsScreenContent: React.VFC = function AnalyticsScreenContent() {\n               presets={[\"last7Days\", \"last30Days\", \"custom\"]}\n               value={dateRangePreset}\n               onChange={onChangeDateRangePreset}\n-              rangeFrom={rangeFrom}\n-              rangeTo={rangeTo}\n+              rangeFrom={displayRange.from}\n+              rangeTo={displayRange.to}\n               onOpenCustomDateRangeDialog={onOpenCustomDateRangeDialog}\n             />\n             {loading ? (\n@@ -314,12 +336,12 @@ const AnalyticsScreenContent: React.VFC = function AnalyticsScreenContent() {\n           \"AuditLogScreen.date-range.start-date\"\n         )}\n         toDatePickerLabel={renderToString(\"AuditLogScreen.date-range.end-date\")}\n-        rangeFrom={uncommittedRangeFrom ?? undefined}\n-        rangeTo={uncommittedRangeTo ?? undefined}\n-        fromDatePickerMinDate={minDate}\n-        fromDatePickerMaxDate={maxDate}\n-        toDatePickerMinDate={minDate}\n-        toDatePickerMaxDate={maxDate}\n+        rangeFrom={dialogRange.from}\n+        rangeTo={dialogRange.to}\n+        fromDatePickerMinDate={dialogRange.min}\n+        fromDatePickerMaxDate={dialogRange.max}\n+        toDatePickerMinDate={dialogRange.min}\n+        toDatePickerMaxDate={dialogRange.max}\n         onSelectRangeFrom={onSelectRangeFrom}\n         onSelectRangeTo={onSelectRangeTo}\n         onCommitDateRange={commitDateRange}"
+  },
+  {
+   "filename": "portal/src/util/date.test.ts",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 1,
+   "patch": "@@ -1,5 +1,11 @@\n import { describe, it, expect } from \"@jest/globals\";\n-import { isoWeekLabels, monthLabel, parseDate } from \"./date\";\n+import { DateTime } from \"luxon\";\n+import {\n+  isoWeekLabels,\n+  monthLabel,\n+  parseDate,\n+  utcDateToLocalDate,\n+} from \"./date\";\n \n describe(\"isoWeekLabels\", () => {\n   it(\"convert ios to ios week label YYYY-Www\", () => {\n@@ -21,3 +27,12 @@ describe(\"parseDate\", () => {\n     );\n   });\n });\n+\n+describe(\"utcDateToLocalDate\", () => {\n+  it(\"keeps the UTC calendar day in the local time zone\", () => {\n+    for (const day of [\"2026-01-01\", \"2026-03-08\", \"2026-11-24\"]) {\n+      const local = utcDateToLocalDate(parseDate(day));\n+      expect(DateTime.fromJSDate(local).toISODate()).toEqual(day);\n+    }\n+  });\n+});"
+  },
+  {
+   "filename": "portal/src/util/date.ts",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -44,3 +44,9 @@ export function addDays(date: Date, days: number): Date {\n   result.setDate(result.getDate() + days);\n   return result;\n }\n+\n+// Date pickers and date labels read a Date in the local time zone, so a UTC\n+// midnight shows as the previous day west of UTC.\n+export function utcDateToLocalDate(date: Date): Date {\n+  return new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());\n+}"
+  }
+ ],
+ "test_files": [
+  "portal/src/util/date.test.ts"
+ ]
+}

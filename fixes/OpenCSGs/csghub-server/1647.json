@@ -1,0 +1,26 @@
+{
+ "repo": "OpenCSGs/csghub-server",
+ "number": 1647,
+ "url": "https://github.com/OpenCSGs/csghub-server/pull/1647",
+ "title": "fix(aigateway): forward explicit zero temperature and top_p in Responses adapter",
+ "merged_at": "2026-11-27T14:28:05Z",
+ "files": [
+  {
+   "filename": "aigateway/handler/responses_adapter.go",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -82,6 +82,14 @@ func responsesToChatRequestResolved(ctx context.Context, req *types.ResponsesReq\n \t\tTemperature: floatPtrValue(req.Temperature),\n \t\tTopP:        floatPtrValue(req.TopP),\n \t}\n+\t// The float64 fields are omitempty, so an explicit 0 must go through RawJSON\n+\t// or the upstream applies its own default.\n+\tif req.Temperature != nil && *req.Temperature == 0 {\n+\t\tmergeChatRawJSON(chatReq, \"temperature\", 0)\n+\t}\n+\tif req.TopP != nil && *req.TopP == 0 {\n+\t\tmergeChatRawJSON(chatReq, \"top_p\", 0)\n+\t}\n \t// Convert tools before messages so history remapping can consult the aliases.\n \tif len(req.Tools) > 0 {\n \t\tchatTools, err := responsesToolsToChatTools(ctx, req.Tools, modelName, toolAliases)"
+  },
+  {
+   "filename": "aigateway/handler/responses_adapter_test.go",
+   "status": "modified",
+   "additions": 26,
+   "deletions": 0,
+   "patch": "@@ -2870,3 +2870,29 @@ func TestCaptureChatStreamUsageKeepsUsageDetails(t *testing.T) {\n \trequire.NotNil(t, w.usage.OutputTokensDetails)\n \trequire.Equal(t, int64(25), w.usage.OutputTokensDetails.ReasoningTokens)\n }\n+\n+func TestResponsesToChatRequestKeepsZeroSamplingParams(t *testing.T) {\n+\tmarshal := func(t *testing.T, body string) map[string]any {\n+\t\tvar req types.ResponsesRequest\n+\t\trequire.NoError(t, json.Unmarshal([]byte(body), &req))\n+\t\tchatReq, err := responsesToChatRequest(context.Background(), &req, \"model\", nil)\n+\t\trequire.NoError(t, err)\n+\t\tdata, err := json.Marshal(chatReq)\n+\t\trequire.NoError(t, err)\n+\t\tvar got map[string]any\n+\t\trequire.NoError(t, json.Unmarshal(data, &got))\n+\t\treturn got\n+\t}\n+\n+\tt.Run(\"explicit zero is forwarded\", func(t *testing.T) {\n+\t\tgot := marshal(t, `{\"model\":\"model\",\"input\":\"hi\",\"temperature\":0,\"top_p\":0}`)\n+\t\trequire.Equal(t, float64(0), got[\"temperature\"])\n+\t\trequire.Equal(t, float64(0), got[\"top_p\"])\n+\t})\n+\n+\tt.Run(\"unset stays absent\", func(t *testing.T) {\n+\t\tgot := marshal(t, `{\"model\":\"model\",\"input\":\"hi\"}`)\n+\t\trequire.NotContains(t, got, \"temperature\")\n+\t\trequire.NotContains(t, got, \"top_p\")\n+\t})\n+}"
+  }
+ ],
+ "test_files": [
+  "aigateway/handler/responses_adapter_test.go"
+ ]
+}

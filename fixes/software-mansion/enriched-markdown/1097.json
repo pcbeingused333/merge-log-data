@@ -1,0 +1,33 @@
+{
+ "repo": "software-mansion/enriched-markdown",
+ "number": 1097,
+ "url": "https://github.com/software-mansion/enriched-markdown/pull/1097",
+ "title": "fix(web): leave modified clicks on browser-openable links to the browser",
+ "merged_at": "2026-11-27T15:55:21Z",
+ "files": [
+  {
+   "filename": "docs/docs/react-native/guides/web-support.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -286,6 +286,7 @@ All core `EnrichedMarkdownText` features are supported on web, including:\n - Most `markdownStyle` options - see [Ignored style keys](#ignored-style-keys) for the exceptions\n - Spoilers (`||text||`) - concealed under a solid box in `spoiler.color` with `spoiler.solid.borderRadius` corners, revealed by a click or by Enter/Space (the cover fades out over 450 ms, instantly under `prefers-reduced-motion`). As on native, a link or pressable image inside a concealed spoiler does nothing until the spoiler is revealed. A concealed spoiler inside a link reveals instead of following the link: a click on it, or Enter on a link whose whole label is concealed, reveals it first, and a right-click on it does not fire `onLinkLongPress`. A revealed spoiler stays revealed while more Markdown streams in after it (native conceals on any new `markdown`), but conceals again when its own text changes or when the Markdown before it changes structure, for example when a closing `**` wraps it in bold. Web always draws this solid cover: the particle preset and `spoilerOverlay` are native-only\n - `onLinkPress`, `onLinkLongPress` (mapped to the `contextmenu` event), `onImagePress`, `onTaskListItemPress` and `onCodeBlockPress`\n+- Modified link clicks - a Cmd/Ctrl/Shift/Alt-click on a relative link or an `http`, `https`, `mailto`, `tel` or `sms` link is left to the browser (new tab, new window) and does not fire `onLinkPress`. Links with other schemes, such as custom mentions, still fire `onLinkPress`\n - `onCodeBlockPress` - makes fenced code blocks clickable and keyboard-activatable (Enter/Space) with a button role; it does not fire while code text is selected\n - `onImagePress` - makes rendered images focusable and keyboard-activatable (Enter/Space) with a button role; the browser's right-click menu is preserved\n - [`renderers`](/react-native/guides/custom-block-renderers) - React replacements for standalone images, standalone links, `<video>` blocks and code blocks, with the same block ids and placements as native; the element replaces the block in the DOM and keeps its spacing"
+  },
+  {
+   "filename": "packages/react-native-enriched-markdown/src/web/__tests__/linkClick.test.tsx",
+   "status": "added",
+   "additions": 80,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,80 @@\n+/**\n+ * @jest-environment jsdom\n+ */\n+import { act } from 'react';\n+import { createRoot, type Root } from 'react-dom/client';\n+import { TextEncoder } from 'util';\n+import { loadParser } from '../parseMarkdown';\n+\n+jest.mock('react-native', () => ({\n+  Platform: { OS: 'web' },\n+  processColor: (color: unknown) => color,\n+}));\n+\n+globalThis.TextEncoder ??= TextEncoder as typeof globalThis.TextEncoder;\n+const { EnrichedMarkdownText } =\n+  require('../EnrichedMarkdownText') as typeof import('../EnrichedMarkdownText');\n+\n+(\n+  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }\n+).IS_REACT_ACT_ENVIRONMENT = true;\n+\n+let container: HTMLDivElement;\n+let root: Root;\n+\n+beforeAll(() => loadParser());\n+\n+beforeEach(() => {\n+  container = document.createElement('div');\n+  document.body.appendChild(container);\n+  root = createRoot(container);\n+});\n+\n+afterEach(() => {\n+  act(() => root.unmount());\n+  container.remove();\n+});\n+\n+function clickLink(url: string, init: MouseEventInit = {}) {\n+  const onLinkPress = jest.fn();\n+  act(() =>\n+    root.render(\n+      <EnrichedMarkdownText\n+        markdown={`[link](${url})`}\n+        onLinkPress={onLinkPress}\n+      />\n+    )\n+  );\n+  const event = new MouseEvent('click', {\n+    bubbles: true,\n+    cancelable: true,\n+    ...init,\n+  });\n+  act(() => {\n+    container.querySelector('a')!.dispatchEvent(event);\n+  });\n+  return { onLinkPress, prevented: event.defaultPrevented };\n+}\n+\n+it('sends a plain click to onLinkPress', () => {\n+  const { onLinkPress, prevented } = clickLink('https://example.com');\n+  expect(onLinkPress).toHaveBeenCalledWith({ url: 'https://example.com' });\n+  expect(prevented).toBe(true);\n+});\n+\n+it.each([\n+  ['https://example.com', { metaKey: true }],\n+  ['docs/page', { ctrlKey: true }],\n+  ['../page', { shiftKey: true }],\n+  ['tel:123', { metaKey: true }],\n+])('leaves a modified click on %s to the browser', (url, init) => {\n+  const { onLinkPress, prevented } = clickLink(url, init);\n+  expect(onLinkPress).not.toHaveBeenCalled();\n+  expect(prevented).toBe(false);\n+});\n+\n+it('sends a modified click on a custom scheme to onLinkPress', () => {\n+  const { onLinkPress, prevented } = clickLink('user://42', { metaKey: true });\n+  expect(onLinkPress).toHaveBeenCalledWith({ url: 'user://42' });\n+  expect(prevented).toBe(true);\n+});"
+  },
+  {
+   "filename": "packages/react-native-enriched-markdown/src/web/renderers/InlineRenderers.tsx",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -136,6 +136,15 @@ function CodeRenderer({ node, styles, renderChildren }: RendererProps) {\n   );\n }\n \n+const URL_SCHEME = /^([a-z][a-z0-9+.-]*):/i;\n+const BROWSER_SCHEMES = new Set(['http', 'https', 'mailto', 'tel', 'sms']);\n+\n+// Relative URLs and the schemes above are links the browser can open itself.\n+function isBrowserOpenable(url: string): boolean {\n+  const scheme = URL_SCHEME.exec(url.trim())?.[1];\n+  return !scheme || BROWSER_SCHEMES.has(scheme.toLowerCase());\n+}\n+\n function LinkRenderer({\n   node,\n   style,\n@@ -158,6 +167,11 @@ function LinkRenderer({\n   }\n \n   const handleClick = (event: MouseEvent) => {\n+    // As in web routers, a modified click (new tab, new window) stays with the browser.\n+    const isModified =\n+      event.metaKey || event.ctrlKey || event.shiftKey || event.altKey;\n+    if (isModified && isBrowserOpenable(url)) return;\n+\n     if (callbacks.onLinkPress) {\n       event.preventDefault();\n       callbacks.onLinkPress({ url });"
+  }
+ ],
+ "test_files": [
+  "packages/react-native-enriched-markdown/src/web/__tests__/linkClick.test.tsx"
+ ]
+}

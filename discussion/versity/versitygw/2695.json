@@ -21,6 +21,18 @@
    "state": "CHANGES_REQUESTED",
    "submitted_at": "2026-11-26T17:33:05Z",
    "body": ""
+  },
+  {
+   "role": "contributor",
+   "state": "DISMISSED",
+   "submitted_at": "2026-11-27T11:10:08Z",
+   "body": ""
+  },
+  {
+   "role": "member",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-27T17:20:43Z",
+   "body": ""
   }
  ],
  "review_comments": [
@@ -83,6 +95,12 @@
    "path": "backend/posix/posix.go",
    "created_at": "2026-11-26T17:32:59Z",
    "body": "Nit: with `AbsolutePaths` (no chdir), a missing root now fails here first and gets blamed on the other flag: `invalid versioning directory: resolve \"/x/typo\": lstat /x/typo: no such file or directory`. Without the flag it's `open /x/typo: ...`. Saying `resolve root directory %q` here would make that clear. Also, the doc comment on line 594 has a doubled \"so\": \"...cannot hide the nesting, so both must exist\"."
+  },
+  {
+   "role": "member",
+   "path": "backend/posix/posix.go",
+   "created_at": "2026-11-27T17:20:43Z",
+   "body": "`EvalSymlinks` does not normalize case, so on case-insensitive filesystems (macOS APFS default, Windows/NTFS) the string-prefix comparison can still miss the nesting. Verified on APFS against this head:\n\n```\nCheckDirsNotNested(<tmp>/gwroot, <tmp>/GWROOT/inner) = <nil>\n```\n\nThat's a sidecar inside the root being accepted. Same `RemoveAll` hazard as the original report, just via a different spelling of the path. Bind mounts would slip through the same way.\n\nSince both dirs must exist here anyway, comparing by file identity rather than by string would close this:\n\n```go\n// isWithin reports whether child is parent or below it, by file identity.\nfunc isWithin(child, parent string) bool {\n\tpfi, err := os.Stat(parent)\n\tif err != nil {\n\t\treturn false\n\t}\n\tfor d := child; ; d = filepath.Dir(d) {\n\t\tif fi, err := os.Stat(d); err == nil && os.SameFile(fi, pfi) {\n\t\t\treturn true\n\t\t}\n\t\tif filepath.Dir(d) == d {\n\t\t\treturn false\n\t\t}\n\t}\n}\n```\n\nand then `if isWithin(realDir, realRoot) || isWithin(realRoot, realDir)` (the existing string check could stay as a fast path). A test case that skips when the temp fs is case-sensitive would cover it.\n"
   }
  ],
  "comments": [
@@ -100,6 +118,16 @@
    "role": "author",
    "created_at": "2026-11-25T12:44:09Z",
    "body": "Addressed the latest review in the new commit:\n- Dropped the closest-existing-ancestor walk (and its test): `validateSubDir` now stats the directory before the nesting check, and `CheckDirsNotNested` calls `filepath.EvalSymlinks` on both paths.\n- The error now reads `invalid sidecar directory: <dir> must not be the same as, inside, or contain the root directory <root>`.\n- The nesting tests run each case for both `--sidecar` and `--versioning-dir`, asserting `ErrDirsNested` and the flag prefix.\n- Symlink cases are in their own test, so a platform without symlink support only skips those; `real` is renamed to `realDir`.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-27T09:11:17Z",
+   "body": "Addressed both nits in the new commit: a root that cannot be resolved now reports `resolve root directory \"...\": ...`, and the doubled \"so\" in the `CheckDirsNotNested` doc comment is reworded.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "created_at": "2026-11-27T19:04:02Z",
+   "body": "Good catch. The new commit compares by file identity (`os.SameFile` walking up the parents, as in your snippet), which replaces the string-prefix check, so `isDirBelowRoot` is removed. `TestAuxDirNestingCaseInsensitive` covers inside / same / parent with a different case and skips on case-sensitive filesystems; run on a case-insensitive NTFS mount, its cases fail without the fix and pass with it. Bind mounts were not tested separately.\n\nThis comment was drafted with Claude Code.\n"
   }
  ]
 }

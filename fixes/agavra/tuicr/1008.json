@@ -1,0 +1,69 @@
+{
+ "repo": "agavra/tuicr",
+ "number": 1008,
+ "url": "https://github.com/agavra/tuicr/pull/1008",
+ "title": "feat(input): support half and full page motions in visual mode",
+ "merged_at": "2026-11-27T11:34:12Z",
+ "files": [
+  {
+   "filename": "docs/KEYBINDINGS.md",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -228,14 +228,16 @@ from the checkout, never copied.\n | Key | Action |\n |-----|--------|\n | `j` / `k` | Extend selection down / up |\n+| `Ctrl-d` / `Ctrl-u` | Extend selection by half a page down / up |\n+| `Ctrl-f` / `Ctrl-b`, `PageDown` / `PageUp` | Extend selection by a full page down / up |\n | `c` / `Enter` | Create comment for selected range |\n | `s` | Start an editable suggestion prefilled with the selected code lines |\n | `y` | Copy the selected source lines to the clipboard and leave visual mode |\n | `Esc` / `v` / `V` | Cancel selection |\n \n Range comments must stay within one file: if the selection spans files, `c` / `Enter` warns \"Invalid selection\" and cancels visual mode without creating a comment.\n \n-In side-by-side view the selection stays in the pane it started in: `j` / `k` step over rows that have no line on that side, and `y` copies only that pane's text.\n+In side-by-side view the selection stays in the pane it started in: the motions above skip rows that have no line on that side, and `y` copies only that pane's text.\n \n Suggestions replace whole lines on the new side of a single diff hunk. Selections\n across gaps (including deleted-only rows) or expanded context are rejected."
+  },
+  {
+   "filename": "e2e/scenarios/input/visual_selection_page_motions.py",
+   "status": "added",
+   "additions": 40,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,40 @@\n+#!/usr/bin/env python3\n+# Covers #996: in visual mode, Ctrl-d/Ctrl-u and Ctrl-f/Ctrl-b/PageDown/PageUp move by half and\n+# full pages and extend the selection. Before, only j/k and the arrows did anything there.\n+from e2e import Scenario, repos, scenario\n+\n+\n+@scenario\n+def main(s: Scenario) -> None:\n+    repo = repos.empty_repo(s.dir / \"repo\")\n+    repos.write(repo / \"lines.txt\", \"seed\\n\")\n+    repos.git(repo, \"add\", \"-A\")\n+    repos.git(repo, \"commit\", \"-qm\", \"initial\")\n+    repos.write(repo / \"lines.txt\", \"\".join(f\"row-{n:03}\\n\" for n in range(1, 201)))\n+\n+    clipboard = s.fake_clipboard()\n+    tui = s.start(cwd=repo, keep=True)\n+    tui.wait_for(\"Unstaged changes\").keys(\"Enter\")\n+    tui.wait_for(\"Files · 0/1\")\n+\n+    def selected() -> int:\n+        tui.keys(\"y\").settle()\n+        rows = [line for line in clipboard.text().splitlines() if line.startswith(\"row-\")]\n+        assert rows[0] == \"row-001\", f\"selection lost its anchor: {rows[:3]}\"\n+        return len(rows)\n+\n+    def after(*keys: str) -> int:\n+        tui.keys(\"g\", \"g\").settle()\n+        tui.cursor_on(r\"row-001\")\n+        tui.keys(\"v\", *keys).settle()\n+        return selected()\n+\n+    half = after(\"C-d\")\n+    assert half > 2, f\"Ctrl-d did not extend the selection: {half} rows\"\n+    for key in (\"C-f\", \"PageDown\"):\n+        full = after(key)\n+        assert full > half, f\"{key} did not extend by a full page: {full} rows\"\n+        for back in (\"C-b\", \"PageUp\"):\n+            assert after(key, back) < full, f\"{back} did not shrink the selection after {key}\"\n+    assert after(\"C-d\", \"C-u\") < half, \"Ctrl-u did not shrink the selection\"\n+    tui.quit()"
+  },
+  {
+   "filename": "src/app/tests/default_keys_tests.rs",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -345,6 +345,10 @@ fn visual() -> Vec<Row> {\n     vec![\n         bind([ch('j'), code(Down)], A::CursorDown(1)),\n         bind([ch('k'), code(Up)], A::CursorUp(1)),\n+        bind([ctrl('d')], A::HalfPageDown),\n+        bind([ctrl('u')], A::HalfPageUp),\n+        bind([ctrl('f'), code(PageDown)], A::PageDown),\n+        bind([ctrl('b'), code(PageUp)], A::PageUp),\n         bind([ch('c'), code(Enter)], A::AddRangeComment),\n         bind([ch('s')], A::AddRangeSuggestion),\n         bind([ch('y')], A::ExportToClipboard),"
+  },
+  {
+   "filename": "src/app/tests/sbs_comment_side_tests.rs",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -1003,3 +1003,22 @@ fn range_comment_ignores_a_head_row_empty_on_the_selection_side() {\n         Some((LineRange::new(1, 1), LineSide::New))\n     );\n }\n+\n+#[test]\n+fn visual_page_motions_skip_rows_empty_on_the_selection_side() {\n+    // (patch, text the selection must end on)\n+    for (patch, last) in [\n+        (\"@@ -1,5 +1,2 @@\\n a\\n-x\\n-y\\n-z\\n b\\n\", \"b\"),\n+        (\"@@ -1,4 +1,1 @@\\n a\\n-x\\n-y\\n-z\\n\", \"a\"),\n+    ] {\n+        let mut app = suggestion_app_from_patch_in_view(patch, DiffViewMode::SideBySide);\n+        app.diff_state.viewport_height = 4;\n+        let anchor = app.visual_selection.unwrap().anchor.annotation_idx;\n+        app.move_cursor_to_annotation(anchor);\n+\n+        crate::handler::handle_visual_action(&mut app, Action::HalfPageDown);\n+\n+        let head = app.visual_selection.unwrap().head.annotation_idx;\n+        assert_eq!(app.content_for_side(head, LineSide::New), Some(last));\n+    }\n+}"
+  },
+  {
+   "filename": "src/app/visual.rs",
+   "status": "modified",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -58,6 +58,39 @@ impl App {\n         self.visual_cursor_move(lines, false);\n     }\n \n+    /// Visual-mode half/full page down: pages like normal mode, then extends\n+    /// the selection to the new cursor row.\n+    pub fn visual_page_down(&mut self, row_budget: usize) {\n+        self.page_down(row_budget);\n+        self.extend_visual_after_page(true);\n+    }\n+\n+    /// Mirror of [`Self::visual_page_down`].\n+    pub fn visual_page_up(&mut self, row_budget: usize) {\n+        self.page_up(row_budget);\n+        self.extend_visual_after_page(false);\n+    }\n+\n+    /// A page can land on a side-by-side row with nothing on the selection's\n+    /// side: step on in the paging direction, or back when none is left.\n+    fn extend_visual_after_page(&mut self, down: bool) {\n+        let Some(side) = self.visual_selection.map(|sel| sel.anchor.side) else {\n+            return;\n+        };\n+        if self.diff_view_mode == DiffViewMode::SideBySide {\n+            for direction in [down, !down] {\n+                while !self.row_covers_side(self.diff_state.cursor_line, side) {\n+                    let current = self.diff_state.cursor_line;\n+                    self.step_cursor(direction);\n+                    if self.diff_state.cursor_line == current {\n+                        break;\n+                    }\n+                }\n+            }\n+        }\n+        self.extend_visual_to_cursor();\n+    }\n+\n     fn visual_cursor_move(&mut self, lines: usize, down: bool) {\n         let Some(side) = self.visual_selection.map(|sel| sel.anchor.side) else {\n             return;"
+  },
+  {
+   "filename": "src/handler.rs",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 4,
+   "patch": "@@ -2126,10 +2126,10 @@ pub fn handle_visual_action(app: &mut App, action: Action) {\n         Action::QuitHint => app.set_message(QUIT_HINT_MESSAGE),\n         Action::ScrollViewDown(n) | Action::MouseScrollDown(n) => app.scroll_view_down(n),\n         Action::ScrollViewUp(n) | Action::MouseScrollUp(n) => app.scroll_view_up(n),\n-        Action::HalfPageDown => app.page_down(app.diff_state.viewport_height / 2),\n-        Action::HalfPageUp => app.page_up(app.diff_state.viewport_height / 2),\n-        Action::PageDown => app.page_down(app.diff_state.viewport_height),\n-        Action::PageUp => app.page_up(app.diff_state.viewport_height),\n+        Action::HalfPageDown => app.visual_page_down(app.diff_state.viewport_height / 2),\n+        Action::HalfPageUp => app.visual_page_up(app.diff_state.viewport_height / 2),\n+        Action::PageDown => app.visual_page_down(app.diff_state.viewport_height),\n+        Action::PageUp => app.visual_page_up(app.diff_state.viewport_height),\n         _ => {}\n     }\n     clear_visual_if_cursor_offscreen(app);"
+  },
+  {
+   "filename": "src/input/keybindings.rs",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 0,
+   "patch": "@@ -670,6 +670,12 @@ fn map_visual_mode_with_q_quits(key: KeyEvent, q_quits: bool) -> Action {\n         // Extend selection\n         (KeyCode::Char('j') | KeyCode::Down, KeyModifiers::NONE) => Action::CursorDown(1),\n         (KeyCode::Char('k') | KeyCode::Up, KeyModifiers::NONE) => Action::CursorUp(1),\n+        (KeyCode::Char('d'), KeyModifiers::CONTROL) => Action::HalfPageDown,\n+        (KeyCode::Char('u'), KeyModifiers::CONTROL) => Action::HalfPageUp,\n+        (KeyCode::Char('f'), KeyModifiers::CONTROL) => Action::PageDown,\n+        (KeyCode::Char('b'), KeyModifiers::CONTROL) => Action::PageUp,\n+        (KeyCode::PageDown, KeyModifiers::NONE) => Action::PageDown,\n+        (KeyCode::PageUp, KeyModifiers::NONE) => Action::PageUp,\n         (KeyCode::Char('c'), KeyModifiers::NONE) => Action::AddRangeComment,\n         (KeyCode::Char('s'), KeyModifiers::NONE) => Action::AddRangeSuggestion,\n         (KeyCode::Enter, KeyModifiers::NONE) => Action::AddRangeComment,"
+  },
+  {
+   "filename": "src/ui/help_popup.rs",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -722,6 +722,20 @@ pub fn render_help(frame: &mut Frame, app: &mut App) {\n             ),\n             Span::raw(\"Extend selection down/up\"),\n         ]),\n+        Line::from(vec![\n+            Span::styled(\n+                \"  C-d/C-u   \",\n+                Style::default().add_modifier(Modifier::BOLD),\n+            ),\n+            Span::raw(\"Extend selection half page down/up\"),\n+        ]),\n+        Line::from(vec![\n+            Span::styled(\n+                \"  C-f/C-b   \",\n+                Style::default().add_modifier(Modifier::BOLD),\n+            ),\n+            Span::raw(\"Extend selection a page down/up (PgDn/PgUp)\"),\n+        ]),\n         Line::from(vec![\n             Span::styled(\n                 \"  c/Enter   \","
+  }
+ ],
+ "test_files": [
+  "src/app/tests/default_keys_tests.rs",
+  "src/app/tests/sbs_comment_side_tests.rs"
+ ]
+}

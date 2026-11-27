@@ -1,0 +1,26 @@
+{
+ "repo": "OpenCSGs/csglite",
+ "number": 348,
+ "url": "https://github.com/OpenCSGs/csglite/pull/348",
+ "title": "fix: count pretokenized embedding input in usage",
+ "merged_at": "2026-11-27T09:16:55Z",
+ "files": [
+  {
+   "filename": "internal/server/handlers_openai_embeddings.go",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 2,
+   "patch": "@@ -291,14 +291,33 @@ func estimateEmbeddingInputTokens(input interface{}) int {\n \tcase string:\n \t\treturn estimateAnthropicTokens(v)\n \tcase []interface{}:\n+\t\tif isEmbeddingTokenIDs(v) {\n+\t\t\treturn len(v)\n+\t\t}\n \t\ttotal := 0\n \t\tfor _, item := range v {\n-\t\t\tif s, ok := item.(string); ok {\n-\t\t\t\ttotal += estimateAnthropicTokens(s)\n+\t\t\tswitch item := item.(type) {\n+\t\t\tcase string:\n+\t\t\t\ttotal += estimateAnthropicTokens(item)\n+\t\t\tcase []interface{}:\n+\t\t\t\tif isEmbeddingTokenIDs(item) {\n+\t\t\t\t\ttotal += len(item)\n+\t\t\t\t}\n \t\t\t}\n \t\t}\n \t\treturn total\n \tdefault:\n \t\treturn int(math.Max(1, float64(estimateAnthropicTokens(fmt.Sprint(input)))))\n \t}\n }\n+\n+func isEmbeddingTokenIDs(input []interface{}) bool {\n+\t// JSON numbers decoded into interface{} are float64.\n+\tfor _, item := range input {\n+\t\tid, ok := item.(float64)\n+\t\tif !ok || id < 0 || id != math.Trunc(id) {\n+\t\t\treturn false\n+\t\t}\n+\t}\n+\treturn true\n+}"
+  },
+  {
+   "filename": "internal/server/handlers_openai_embeddings_test.go",
+   "status": "added",
+   "additions": 33,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,33 @@\n+package server\n+\n+import (\n+\t\"encoding/json\"\n+\t\"testing\"\n+\n+\t\"github.com/opencsgs/csglite/pkg/api\"\n+)\n+\n+func TestOpenAIEmbeddingPromptTokens(t *testing.T) {\n+\tfor _, tc := range []struct {\n+\t\tname  string\n+\t\tinput string\n+\t\tbody  string\n+\t\twant  int\n+\t}{\n+\t\t{\"token IDs\", \"[10,20,30]\", `{\"data\":[]}`, 3},\n+\t\t{\"batch of token IDs\", \"[[10,20],[30,40,50]]\", `{\"usage\":{\"prompt_tokens\":0}}`, 5},\n+\t\t{\"upstream usage\", \"[10,20,30]\", `{\"usage\":{\"prompt_tokens\":7}}`, 7},\n+\t\t{\"text\", `\"hello\"`, `{}`, estimateAnthropicTokens(\"hello\")},\n+\t\t{\"batch of text\", `[\"hello\",\"world\"]`, `{}`, estimateAnthropicTokens(\"hello\") + estimateAnthropicTokens(\"world\")},\n+\t} {\n+\t\tt.Run(tc.name, func(t *testing.T) {\n+\t\t\tvar req api.OpenAIEmbeddingsRequest\n+\t\t\tif err := json.Unmarshal([]byte(`{\"model\":\"embedding\",\"input\":`+tc.input+`}`), &req); err != nil {\n+\t\t\t\tt.Fatal(err)\n+\t\t\t}\n+\t\t\tif got := openAIEmbeddingPromptTokens([]byte(tc.body), req.Input); got != tc.want {\n+\t\t\t\tt.Fatalf(\"prompt tokens = %d, want %d\", got, tc.want)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/server/handlers_openai_embeddings_test.go"
+ ]
+}

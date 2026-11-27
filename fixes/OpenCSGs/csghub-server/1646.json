@@ -1,0 +1,26 @@
+{
+ "repo": "OpenCSGs/csghub-server",
+ "number": 1646,
+ "url": "https://github.com/OpenCSGs/csghub-server/pull/1646",
+ "title": "fix(aigateway): nest flat json_schema text.format for Chat upstreams",
+ "merged_at": "2026-11-27T14:27:20Z",
+ "files": [
+  {
+   "filename": "aigateway/handler/responses_adapter.go",
+   "status": "modified",
+   "additions": 22,
+   "deletions": 1,
+   "patch": "@@ -135,7 +135,7 @@ func responsesToChatRequestResolved(ctx context.Context, req *types.ResponsesReq\n \t\tvar textObj map[string]json.RawMessage\n \t\tif err := json.Unmarshal(req.Text, &textObj); err == nil {\n \t\t\tif format, ok := textObj[\"format\"]; ok {\n-\t\t\t\tmergeChatRawJSONRaw(chatReq, \"response_format\", format)\n+\t\t\t\tmergeChatRawJSONRaw(chatReq, \"response_format\", responsesTextFormatToChatResponseFormat(format))\n \t\t\t}\n \t\t}\n \t}\n@@ -148,6 +148,27 @@ func responsesToChatRequestResolved(ctx context.Context, req *types.ResponsesReq\n \treturn chatReq, toolAliases, nil\n }\n \n+// responsesTextFormatToChatResponseFormat nests the fields of a flat Responses\n+// {\"type\":\"json_schema\",...} format under \"json_schema\", as Chat Completions\n+// expects. Other formats have the same shape in both APIs.\n+func responsesTextFormatToChatResponseFormat(raw json.RawMessage) json.RawMessage {\n+\tvar format map[string]json.RawMessage\n+\tif err := json.Unmarshal(raw, &format); err != nil {\n+\t\treturn raw\n+\t}\n+\tvar formatType string\n+\t_ = json.Unmarshal(format[\"type\"], &formatType)\n+\tif _, nested := format[\"json_schema\"]; formatType != \"json_schema\" || nested {\n+\t\treturn raw\n+\t}\n+\tdelete(format, \"type\")\n+\tconverted, err := json.Marshal(map[string]any{\"type\": formatType, \"json_schema\": format})\n+\tif err != nil {\n+\t\treturn raw\n+\t}\n+\treturn converted\n+}\n+\n func mergeChatRawJSON(chatReq *types.ChatCompletionRequest, key string, value any) {\n \trawValue, err := json.Marshal(value)\n \tif err != nil {"
+  },
+  {
+   "filename": "aigateway/handler/responses_adapter_test.go",
+   "status": "modified",
+   "additions": 36,
+   "deletions": 0,
+   "patch": "@@ -354,6 +354,42 @@ func TestResponsesToChatRequestMapsStringInputAndInstructions(t *testing.T) {\n \trequire.Len(t, chatReq.Messages, 2)\n }\n \n+func TestResponsesToChatRequestMapsTextFormatToResponseFormat(t *testing.T) {\n+\tcases := map[string]struct {\n+\t\tformat string\n+\t\twant   string\n+\t}{\n+\t\t\"flat json_schema\": {\n+\t\t\tformat: `{\"type\":\"json_schema\",\"name\":\"person\",\"description\":\"a person\",\"schema\":{\"type\":\"object\"},\"strict\":true}`,\n+\t\t\twant:   `{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"person\",\"description\":\"a person\",\"schema\":{\"type\":\"object\"},\"strict\":true}}`,\n+\t\t},\n+\t\t\"nested json_schema\": {\n+\t\t\tformat: `{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"person\",\"schema\":{\"type\":\"object\"}}}`,\n+\t\t\twant:   `{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"person\",\"schema\":{\"type\":\"object\"}}}`,\n+\t\t},\n+\t\t\"json_object\": {\n+\t\t\tformat: `{\"type\":\"json_object\"}`,\n+\t\t\twant:   `{\"type\":\"json_object\"}`,\n+\t\t},\n+\t}\n+\tfor name, tc := range cases {\n+\t\tt.Run(name, func(t *testing.T) {\n+\t\t\treq := &types.ResponsesRequest{\n+\t\t\t\tModel: \"public\",\n+\t\t\t\tInput: json.RawMessage(`\"hello\"`),\n+\t\t\t\tText:  json.RawMessage(`{\"format\":` + tc.format + `}`),\n+\t\t\t}\n+\t\t\tchatReq, err := responsesToChatRequest(context.Background(), req, \"upstream-model\", nil)\n+\t\t\trequire.NoError(t, err)\n+\t\t\tbody, err := json.Marshal(chatReq)\n+\t\t\trequire.NoError(t, err)\n+\t\t\tvar got map[string]json.RawMessage\n+\t\t\trequire.NoError(t, json.Unmarshal(body, &got))\n+\t\t\trequire.JSONEq(t, tc.want, string(got[\"response_format\"]))\n+\t\t})\n+\t}\n+}\n+\n func TestResponsesToChatRequestIgnoresNonStringInstructions(t *testing.T) {\n \treq := &types.ResponsesRequest{\n \t\tModel:        \"public\","
+  }
+ ],
+ "test_files": [
+  "aigateway/handler/responses_adapter_test.go"
+ ]
+}

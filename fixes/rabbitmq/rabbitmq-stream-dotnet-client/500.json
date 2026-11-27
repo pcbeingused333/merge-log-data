@@ -1,0 +1,26 @@
+{
+ "repo": "rabbitmq/rabbitmq-stream-dotnet-client",
+ "number": 500,
+ "url": "https://github.com/rabbitmq/rabbitmq-stream-dotnet-client/pull/500",
+ "title": "fix: pass InitialCredits to super stream partition consumers",
+ "merged_at": "2026-11-27T10:15:39Z",
+ "files": [
+  {
+   "filename": "RabbitMQ.Stream.Client/RawSuperStreamConsumer.cs",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -77,6 +77,7 @@ private RawConsumerConfig FromStreamConfig(string stream)\n             Crc32 = _config.Crc32,\n             Identifier = _config.Identifier,\n             FlowControl = _config.FlowControl,\n+            InitialCredits = _config.InitialCredits,\n             ConnectionClosedHandler = async (reason) =>\n             {\n                 _consumers.TryRemove(stream, out var consumer);"
+  },
+  {
+   "filename": "Tests/UnitTests.cs",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -7,6 +7,7 @@\n using System.Collections.Generic;\n using System.Net;\n using System.Net.Sockets;\n+using System.Reflection;\n using System.Text;\n using System.Threading;\n using System.Threading.Tasks;\n@@ -544,5 +545,20 @@ public async Task RawConsumerCreateShouldValidateBeforeAcquiringAConnection()\n             await Assert.ThrowsAsync<ArgumentException>(() =>\n                 RawConsumer.Create(new ClientParameters(), config, default));\n         }\n+\n+        [Fact]\n+        public void SuperStreamConsumerShouldPropagateInitialCreditsToThePartitionConsumers()\n+        {\n+            var config = new RawSuperStreamConsumerConfig(\"super\") { InitialCredits = 10 };\n+            // No partitions: the super consumer can be created without a broker\n+            var consumer = RawSuperStreamConsumer.Create(config, new Dictionary<string, StreamInfo>(),\n+                new ClientParameters());\n+            var fromStreamConfig = typeof(RawSuperStreamConsumer)\n+                .GetMethod(\"FromStreamConfig\", BindingFlags.Instance | BindingFlags.NonPublic)!;\n+\n+            var partitionConfig = (RawConsumerConfig)fromStreamConfig.Invoke(consumer, [\"super-0\"])!;\n+\n+            Assert.Equal(10, partitionConfig.InitialCredits);\n+        }\n     }\n }"
+  }
+ ],
+ "test_files": [
+  "Tests/UnitTests.cs"
+ ]
+}

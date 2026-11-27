@@ -1,0 +1,26 @@
+{
+ "repo": "i-am-bee/beeai-framework",
+ "number": 2027,
+ "url": "https://github.com/i-am-bee/beeai-framework/pull/2027",
+ "title": "fix(adapters): don't send the default temperature to Claude on Bedrock in TypeScript",
+ "merged_at": "2026-11-27T14:38:53Z",
+ "files": [
+  {
+   "filename": "typescript/src/adapters/amazon-bedrock/backend/chat.test.ts",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 4,
+   "patch": "@@ -45,9 +45,32 @@ describe(\"AmazonBedrockChatModel\", () => {\n     },\n   );\n \n-  it(\"still sends a temperature set by the user\", async () => {\n-    expect(await sentInferenceConfig(\"us.openai.gpt-6-sol\", { temperature: 0.5 })).toEqual({\n-      temperature: 0.5,\n-    });\n+  it.each([\n+    \"anthropic.claude-opus-4-7\",\n+    \"us.anthropic.claude-opus-4-8\",\n+    \"us.anthropic.claude-sonnet-5-v1:0\",\n+    \"global.anthropic.claude-opus-5-5\",\n+    \"us.anthropic.claude-haiku-5-5\",\n+    \"us.anthropic.claude-fable-5-1\",\n+  ])(\"does not send the default temperature to %s\", async (modelId) => {\n+    expect(await sentInferenceConfig(modelId)).not.toHaveProperty(\"temperature\");\n+  });\n+\n+  it.each([\n+    \"anthropic.claude-3-5-sonnet-20241022-v2:0\",\n+    \"us.anthropic.claude-sonnet-4-20250514-v1:0\",\n+    \"us.anthropic.claude-opus-4-6-v1\",\n+    \"us.anthropic.claude-haiku-4-5-20251001-v1:0\",\n+  ])(\"keeps the default temperature for %s\", async (modelId) => {\n+    expect(await sentInferenceConfig(modelId)).toEqual({ temperature: 0 });\n   });\n+\n+  it.each([\"us.openai.gpt-6-sol\", \"us.anthropic.claude-sonnet-5-v1:0\"])(\n+    \"still sends a temperature set by the user to %s\",\n+    async (modelId) => {\n+      expect(await sentInferenceConfig(modelId, { temperature: 0.5 })).toEqual({\n+        temperature: 0.5,\n+      });\n+    },\n+  );\n });"
+  },
+  {
+   "filename": "typescript/src/adapters/amazon-bedrock/backend/chat.ts",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 3,
+   "patch": "@@ -19,6 +19,10 @@ export type AmazonBedrockChatModelId = NonNullable<AmazonBedrockParameters[0]>;\n // Same split as @ai-sdk/amazon-bedrock: OpenAI models on Bedrock other than gpt-oss (GPT-5.x, GPT-6)\n // reject the `temperature` field on Converse.\n const OPENAI_WITHOUT_TEMPERATURE = /^(?:[^.]+\\.)?openai\\.(?!gpt-oss-)/;\n+// Claude Opus 4.7+, Sonnet 5+, Haiku 5+, Fable and Mythos reject any `temperature` other than 1.\n+// Same set as `_CLAUDE_WITHOUT_SAMPLING_PARAMS` in the Python package.\n+const CLAUDE_WITHOUT_TEMPERATURE =\n+  /claude-(?:fable|mythos|opus-4-[7-9]|(?:opus|sonnet|haiku)-(?:[5-9]|\\d\\d))/;\n \n export class AmazonBedrockChatModel extends VercelChatModel {\n   constructor(\n@@ -36,9 +40,10 @@ export class AmazonBedrockChatModel extends VercelChatModel {\n   ): Promise<Parameters<typeof generateText<Record<string, any>>>[0]> {\n     const transformed = await super.transformInput(input);\n     // Drop the framework's default `temperature: 0`; a temperature set by the user is still sent.\n-    return OPENAI_WITHOUT_TEMPERATURE.test(this.modelId)\n-      ? { temperature: undefined, ...transformed }\n-      : transformed;\n+    const rejectsTemperature =\n+      OPENAI_WITHOUT_TEMPERATURE.test(this.modelId) ||\n+      CLAUDE_WITHOUT_TEMPERATURE.test(this.modelId);\n+    return rejectsTemperature ? { temperature: undefined, ...transformed } : transformed;\n   }\n \n   static {"
+  }
+ ],
+ "test_files": [
+  "typescript/src/adapters/amazon-bedrock/backend/chat.test.ts"
+ ]
+}

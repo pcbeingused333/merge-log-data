@@ -1,0 +1,33 @@
+{
+ "repo": "dbcli/mycli",
+ "number": 2476,
+ "url": "https://github.com/dbcli/mycli/pull/2476",
+ "title": "fix: replace undecodable bytes in /pipe_once command output",
+ "merged_at": "2026-11-27T12:36:52Z",
+ "files": [
+  {
+   "filename": "changelog.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -6,6 +6,7 @@ Bug Fixes\n * Respect the LLM sample size limit when truncating short fields.\n * Give the destructive warning for a `DELETE` or `UPDATE` that starts with a `WITH` clause.\n * Ignore a UTF-8 byte order mark at the start of a --batch or /source file.\n+* Replace undecodable bytes in /pipe_once command output.\n \n \n v2.32.1 (2026/11/25)"
+  },
+  {
+   "filename": "mycli/packages/special_commands/io_commands.py",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -1047,6 +1047,7 @@ def set_pipe_once(arg: str, *, start_new_session: bool | None = None, **_) -> li\n         stdout=subprocess.PIPE,\n         stderr=subprocess.PIPE,\n         encoding=\"UTF-8\",\n+        errors='replace',\n         universal_newlines=True,\n         start_new_session=start_new_session,\n     )"
+  },
+  {
+   "filename": "mycli_test/pytests/test_special_io_commands.py",
+   "status": "modified",
+   "additions": 13,
+   "deletions": 0,
+   "patch": "@@ -2196,6 +2196,18 @@ def test_pipe_once_abort_stops_pipeline_children(tmp_path: Path) -> None:\n         process.communicate(timeout=5)\n \n \n+@pytest.mark.skipif(os.name == 'nt', reason='Requires a POSIX shell.')\n+def test_pipe_once_undecodable_output(monkeypatch: pytest.MonkeyPatch) -> None:\n+    secho = Mock()\n+    monkeypatch.setattr(io_commands.click, 'secho', secho)\n+    io_commands.set_pipe_once(r\"printf 'caf\\351 ok'; printf 'na\\357ve' >&2\")\n+\n+    io_commands.flush_pipe_once_if_written(None, force=True)\n+\n+    assert [call.args[0] for call in secho.call_args_list] == ['caf\\ufffd ok', 'na\\ufffdve']\n+    assert io_commands.PIPE_ONCE['process'] is None\n+\n+\n def test_set_pipe_once_and_flush_short_circuits(monkeypatch) -> None:\n     popen_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []\n     monkeypatch.setattr(io_commands, 'WIN', True)\n@@ -2216,6 +2228,7 @@ def fake_popen(*args, **kwargs) -> SimpleNamespace:\n                 'stdout': io_commands.subprocess.PIPE,\n                 'stderr': io_commands.subprocess.PIPE,\n                 'encoding': 'UTF-8',\n+                'errors': 'replace',\n                 'universal_newlines': True,\n                 'start_new_session': False,\n             },"
+  }
+ ],
+ "test_files": [
+  "mycli_test/pytests/test_special_io_commands.py"
+ ]
+}

@@ -1,0 +1,48 @@
+{
+ "repo": "schollz/croc",
+ "number": 1460,
+ "url": "https://github.com/schollz/croc/pull/1460",
+ "title": "fix: accept symlink targets with leading .. inside the receive directory",
+ "merged_at": "2026-11-27T14:32:18Z",
+ "files": [
+  {
+   "filename": "src/croc/croc.go",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 6,
+   "patch": "@@ -919,12 +919,8 @@ func normalizeReceiveFilePath(folder, name string) (string, string, error) {\n }\n \n func validateReceiveSymlinkTarget(folder, target string) error {\n-\tcleanTarget, err := receivefs.Normalize(target, false)\n-\tif err != nil {\n-\t\treturn fmt.Errorf(\"symlink target must be a local path: %w\", err)\n-\t}\n-\tif _, err = receivefs.Normalize(path.Join(folder, cleanTarget), false); err != nil {\n-\t\treturn fmt.Errorf(\"symlink target escapes receive directory: %w\", err)\n+\tif _, err := receivefs.NormalizeSymlinkTarget(folder, target); err != nil {\n+\t\treturn fmt.Errorf(\"symlink target must stay inside the receive directory: %w\", err)\n \t}\n \treturn nil\n }"
+  },
+  {
+   "filename": "src/croc/croc_test.go",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -542,6 +542,33 @@ func TestHostilePortableDestinationNamesRejected(t *testing.T) {\n \t}\n }\n \n+func TestReceiveSymlinkTargetParentComponents(t *testing.T) {\n+\ttests := []struct {\n+\t\tfolder, target string\n+\t\tok             bool\n+\t}{\n+\t\t{folder: \"d/sub\", target: \"../real.txt\", ok: true},\n+\t\t{folder: \"d/node_modules/.bin\", target: \"../pkg/bin/cli.js\", ok: true},\n+\t\t{folder: \"d/sub\", target: \"../../real.txt\", ok: true},\n+\t\t{folder: \"d/sub\", target: \"../../../x\"},\n+\t\t{folder: \".\", target: \"../x\"},\n+\t\t{folder: \"d/sub\", target: \"a/../../x\"},\n+\t\t{folder: \"d/sub\", target: \"sub/up/../..\"},\n+\t\t{folder: \"d/sub\", target: \"../.ssh/authorized_keys\"},\n+\t\t{folder: \"d/sub\", target: \"..//etc/hosts\"},\n+\t\t{folder: \"d/sub\", target: \"/etc/hosts\"},\n+\t}\n+\tfor _, tt := range tests {\n+\t\tfiles := []FileInfo{{Name: \"link\", FolderRemote: tt.folder, Symlink: tt.target}}\n+\t\t_, _, err := validateReceiveMetadata(files, nil)\n+\t\tif tt.ok {\n+\t\t\tassert.NoError(t, err, \"folder %q target %q\", tt.folder, tt.target)\n+\t\t} else {\n+\t\t\tassert.Error(t, err, \"folder %q target %q\", tt.folder, tt.target)\n+\t\t}\n+\t}\n+}\n+\n func TestMarkedArchiveRequiresCompleteValidationBeforeExtraction(t *testing.T) {\n \treceiveDirectory := t.TempDir()\n \tt.Chdir(receiveDirectory)"
+  },
+  {
+   "filename": "src/receivefs/path.go",
+   "status": "modified",
+   "additions": 29,
+   "deletions": 0,
+   "patch": "@@ -87,6 +87,35 @@ func Normalize(name string, allowRoot bool) (string, error) {\n \treturn strings.Join(normalized, \"/\"), nil\n }\n \n+// NormalizeSymlinkTarget validates the target of a symlink stored in linkDir.\n+// A target may start with \"..\" as long as it stays inside the receive root.\n+// \"..\" after another component is rejected, because that component may itself\n+// be a symlink and lexical resolution would not match the filesystem.\n+func NormalizeSymlinkTarget(linkDir, target string) (string, error) {\n+\tcleanDir, err := Normalize(linkDir, true)\n+\tif err != nil {\n+\t\treturn \"\", err\n+\t}\n+\tdepth := 0\n+\tif cleanDir != \".\" {\n+\t\tdepth = len(splitPath(cleanDir))\n+\t}\n+\trest := strings.ReplaceAll(target, \"\\\\\", \"/\")\n+\tparents := 0\n+\tfor strings.HasPrefix(rest, \"../\") {\n+\t\trest = strings.TrimPrefix(rest, \"../\")\n+\t\tparents++\n+\t}\n+\tif parents > depth {\n+\t\treturn \"\", fmt.Errorf(\"%w: %q escapes the receive directory\", ErrUnsafePath, target)\n+\t}\n+\tclean, err := Normalize(rest, false)\n+\tif err != nil {\n+\t\treturn \"\", err\n+\t}\n+\treturn strings.Repeat(\"../\", parents) + clean, nil\n+}\n+\n // ForbiddenComponent reports whether a normalized path component names a\n // sensitive receiver-owned directory. Matching uses the same portable Unicode\n // collision key as manifest duplicate detection. Git metadata is allowed so"
+  },
+  {
+   "filename": "src/receivefs/root.go",
+   "status": "modified",
+   "additions": 6,
+   "deletions": 2,
+   "patch": "@@ -170,11 +170,15 @@ func (r *Root) Symlink(target, name string) error {\n \tif err != nil {\n \t\treturn err\n \t}\n-\tcleanTarget, err := Normalize(target, false)\n+\tslashName, err := Normalize(name, false)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\tcleanTarget, err := NormalizeSymlinkTarget(path.Dir(slashName), target)\n \tif err != nil {\n \t\treturn fmt.Errorf(\"unsafe symlink target: %w\", err)\n \t}\n-\tif err = r.RejectSymlinkPath(path.Dir(name)); err != nil {\n+\tif err = r.RejectSymlinkPath(path.Dir(slashName)); err != nil {\n \t\treturn err\n \t}\n \treturn r.root.Symlink(filepath.FromSlash(cleanTarget), cleanName)"
+  },
+  {
+   "filename": "src/receivefs/root_test.go",
+   "status": "modified",
+   "additions": 25,
+   "deletions": 0,
+   "patch": "@@ -99,6 +99,31 @@ func TestRootWriteResistsParentReplacement(t *testing.T) {\n \t}\n }\n \n+func TestRootSymlinkParentTarget(t *testing.T) {\n+\tif runtime.GOOS == \"windows\" || runtime.GOOS == \"js\" {\n+\t\tt.Skip(\"symlink creation requires privileges or differs\")\n+\t}\n+\tdirectory := t.TempDir()\n+\troot, err := OpenRoot(directory)\n+\tif err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tdefer root.Close()\n+\tif err = root.MkdirAll(\"d/sub\", 0o700); err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\tif err = root.Symlink(\"../real.txt\", \"d/sub/link\"); err != nil {\n+\t\tt.Fatal(err)\n+\t}\n+\ttarget, err := root.Readlink(\"d/sub/link\")\n+\tif err != nil || target != \"../real.txt\" {\n+\t\tt.Fatalf(\"Readlink = %q, %v\", target, err)\n+\t}\n+\tif err = root.Symlink(\"../../../x\", \"d/sub/escape\"); !errors.Is(err, ErrUnsafePath) {\n+\t\tt.Fatalf(\"escaping target error = %v\", err)\n+\t}\n+}\n+\n func TestRootRenameReplacesFinalSymlinkNotTarget(t *testing.T) {\n \tif runtime.GOOS == \"js\" {\n \t\tt.Skip(\"symlink behavior differs on js\")"
+  }
+ ],
+ "test_files": [
+  "src/croc/croc_test.go",
+  "src/receivefs/root_test.go"
+ ]
+}
