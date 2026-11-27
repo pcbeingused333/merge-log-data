@@ -1,0 +1,26 @@
+{
+ "repo": "NPC-Worldwide/npcpy",
+ "number": 390,
+ "url": "https://github.com/NPC-Worldwide/npcpy/pull/390",
+ "title": "fix(lora): forward top_p and top_k to generate()",
+ "merged_at": "2026-11-27T05:48:13Z",
+ "files": [
+  {
+   "filename": "npcpy/gen/response.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -1025,10 +1025,14 @@ def get_lora_response(\n         temperature = kwargs.get(\"temperature\", 0.7)\n \n         # transformers rejects temperature=0 when do_sample=True; use greedy\n-        # decoding for temperature <= 0 and only pass temperature when sampling.\n+        # decoding for temperature <= 0 and only pass sampling args when sampling.\n         generate_kwargs = {\"do_sample\": bool(temperature and temperature > 0)}\n         if generate_kwargs[\"do_sample\"]:\n             generate_kwargs[\"temperature\"] = temperature\n+            if kwargs.get(\"top_p\") is not None:\n+                generate_kwargs[\"top_p\"] = kwargs[\"top_p\"]\n+            if kwargs.get(\"top_k\") is not None:\n+                generate_kwargs[\"top_k\"] = kwargs[\"top_k\"]\n \n         with torch.no_grad():\n             outputs = model_with_adapter.generate("
+  },
+  {
+   "filename": "tests/test_lora_temperature.py",
+   "status": "modified",
+   "additions": 14,
+   "deletions": 0,
+   "patch": "@@ -60,3 +60,17 @@ def test_positive_temperature_still_samples(response_module, tmp_path):\n     out, gen_kwargs = _run(response_module, tmp_path, temperature=0.4)\n     assert gen_kwargs[\"do_sample\"] is True\n     assert gen_kwargs[\"temperature\"] == 0.4\n+\n+\n+def test_top_p_and_top_k_reach_generate(response_module, tmp_path):\n+    out, gen_kwargs = _run(response_module, tmp_path, top_p=0.5, top_k=20)\n+    assert gen_kwargs[\"top_p\"] == 0.5\n+    assert gen_kwargs[\"top_k\"] == 20\n+\n+\n+def test_greedy_decoding_omits_top_p_and_top_k(response_module, tmp_path):\n+    out, gen_kwargs = _run(\n+        response_module, tmp_path, temperature=0, top_p=0.5, top_k=20\n+    )\n+    assert \"top_p\" not in gen_kwargs\n+    assert \"top_k\" not in gen_kwargs"
+  }
+ ],
+ "test_files": [
+  "tests/test_lora_temperature.py"
+ ]
+}

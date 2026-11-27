@@ -9,6 +9,30 @@
    "state": "COMMENTED",
    "submitted_at": "2026-11-26T18:47:31Z",
    "body": "<!-- ccr-overview-v2 -->\n\n### 🟡 Changes recommended\n\nA stale producer can close the new stream’s pipe after Close/Reset, causing io.ErrClosedPipe, and error-path tests do not verify that decompression fails.\n\n<details open>\n<summary><strong>2 open issues</strong></summary>\n\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png\" alt=\"High severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Capture the pipe writer before starting the producer](https://github.com/Azure/azure-kusto-go/pull/378#discussion_r4712363159) · New\n- <picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg\"><source media=\"(prefers-color-scheme: light)\" srcset=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg\"><img src=\"https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png\" alt=\"Medium severity\" width=\"62\" height=\"18\" align=\"texttop\"></picture> [Assert failed reads produce an invalid gzip stream](https://github.com/Azure/azure-kusto-go/pull/378#discussion_r4712363204) · New\n</details>\n\n<details>\n<summary><strong>What changed in this PR</strong></summary>\n\nFixes gzip-compressed ingestion silently accepting partial input by propagating source read failures through the compressed stream.\n\n**Changes:**\n- Close the output pipe with the underlying error while preserving normal end-of-stream behavior on success.\n- Skip gzip finalization when source reading fails.\n- Add a regression test and document the ingestion fix.\n\n| File | Description |\r\n| ---- | ----------- |\r\n| `CHANGELOG.md` | Documents the fix for partial ingestion after source read failures. |\r\n| `azkustoingest/​internal/​gzip/​gzip.go` | Propagates errors through the pipe and finalizes gzip only after successful reads. |\r\n| `azkustoingest/​internal/​gzip/​gzip_test.go` | Adds a failing-reader test that checks source error propagation. |\n</details>\n\n<sub>Review effort: Max</sub>"
+  },
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-27T07:44:07Z",
+   "body": ""
+  },
+  {
+   "role": "collaborator",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-27T07:46:20Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-27T08:24:23Z",
+   "body": ""
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-27T08:24:33Z",
+   "body": ""
   }
  ],
  "review_comments": [
@@ -23,6 +47,30 @@
    "path": "azkustoingest/internal/gzip/gzip_test.go",
    "created_at": "2026-11-26T18:47:30Z",
    "body": "Checking only the reader error would still pass if `zw.Close()` wrote a valid gzip trailer before the pipe reported that error. Capture the compressed bytes and assert that decompression cannot finish successfully, covering both a read that returns data with an error and an error after a successful read."
+  },
+  {
+   "role": "collaborator",
+   "path": "azkustoingest/internal/gzip/gzip.go",
+   "created_at": "2026-11-27T07:44:07Z",
+   "body": "@pcbeingused333 \r\nThere appears to be a stream-reuse issue here. Close() closes the output pipe reader but does not wait for a producer blocked in the source’s Read() to finish. If Reset() then replaces s.outputWrite, the old goroutine can resume and call s.outputWrite.CloseWithError(err) on the new stream’s pipe, causing that stream to fail.\r\n\r\nCould we capture the pipe writer before launching the goroutine and use that same captured writer for both zw.Reset(...) and CloseWithError(...)? A regression test should block the first source reader, call Close() and Reset() with a second source, then unblock the first reader and verify that the second stream remains unaffected."
+  },
+  {
+   "role": "collaborator",
+   "path": "azkustoingest/internal/gzip/gzip_test.go",
+   "created_at": "2026-11-27T07:46:20Z",
+   "body": "@pcbeingused333 \r\nIf the source contains 100 rows, but fails after 10 rows.\r\nAn incorrect implementation could:\r\n1. Compress those 10 rows.\r\n2. Finish gzip normally, making a valid gzip file containing 10 rows.\r\n3. Then report the source error.\r\n\r\nThe current test would pass, because it sees the expected error—even though the partial data was finalized into a valid gzip file.\r\n\r\nThe stronger test saves the compressed bytes and tries to decompress them. Since the source failed, those bytes should not form a successfully completed gzip stream."
+  },
+  {
+   "role": "author",
+   "path": "azkustoingest/internal/gzip/gzip.go",
+   "created_at": "2026-11-27T08:24:23Z",
+   "body": "Done. The producer now captures its source, pipe writer and size before the goroutine starts, so a stale one cannot touch the stream created by a later `Reset()`. I also made the size per stream, since the old goroutine could overwrite it too, and removed the unused `err` field. `TestStreamerResetWhileSourceBlocked` follows your scenario; it fails without the change and passes with it under `-race`.\n\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "author",
+   "path": "azkustoingest/internal/gzip/gzip_test.go",
+   "created_at": "2026-11-27T08:24:33Z",
+   "body": "Agreed. The test now keeps the compressed bytes and asserts that decompressing them fails, both for an error returned with data and for an error after a successful read.\n\nThis comment was drafted with Claude Code.\n"
   }
  ],
  "comments": []

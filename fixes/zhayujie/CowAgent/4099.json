@@ -1,0 +1,26 @@
+{
+ "repo": "zhayujie/CowAgent",
+ "number": 4099,
+ "url": "https://github.com/zhayujie/CowAgent/pull/4099",
+ "title": "fix(gemini): report cached prompt tokens in usage",
+ "merged_at": "2026-11-27T03:44:54Z",
+ "files": [
+  {
+   "filename": "models/gemini/google_gemini_bot.py",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 9,
+   "patch": "@@ -40,11 +40,16 @@ def _openai_usage(usage_meta) -> dict:\n     \"\"\"\n     if not isinstance(usage_meta, dict) or not usage_meta:\n         return {}\n-    return {\n+    usage = {\n         \"prompt_tokens\": usage_meta.get(\"promptTokenCount\", 0),\n         \"completion_tokens\": _completion_tokens(usage_meta),\n         \"total_tokens\": usage_meta.get(\"totalTokenCount\", 0),\n     }\n+    # Cache hits are part of promptTokenCount, and absent when nothing was cached.\n+    cached = usage_meta.get(\"cachedContentTokenCount\")\n+    if cached:\n+        usage[\"prompt_tokens_details\"] = {\"cached_tokens\": cached}\n+    return usage\n \n \n _THINKING_LEVEL_MODELS = (\"gemini-4\",)\n@@ -1004,14 +1009,10 @@ def _handle_gemini_rest_stream_response(self, response, model_name):\n                     )\n                 }]\n             }\n-            if last_usage_meta is not None:\n-                # Map Gemini's usageMetadata to the OpenAI usage shape the agent\n-                # reads (prompt_tokens is what the context indicator needs).\n-                final_chunk[\"usage\"] = {\n-                    \"prompt_tokens\": last_usage_meta.get(\"promptTokenCount\", 0),\n-                    \"completion_tokens\": _completion_tokens(last_usage_meta),\n-                    \"total_tokens\": last_usage_meta.get(\"totalTokenCount\", 0),\n-                }\n+            usage = _openai_usage(last_usage_meta)\n+            if usage:\n+                # prompt_tokens is what the context indicator needs.\n+                final_chunk[\"usage\"] = usage\n             yield final_chunk\n                     \n         except Exception as e:"
+  },
+  {
+   "filename": "tests/test_gemini_usage_thoughts_tokens.py",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -95,3 +95,27 @@ def test_sync_response_without_usage_metadata_keeps_the_usage_empty():\n     result = _bot()._handle_gemini_rest_sync_response(_SyncResponse(None), \"gemini-2.5-flash\")\n \n     assert result[\"usage\"] == {}\n+\n+\n+# Gemini counts cached prompt tokens inside promptTokenCount.\n+CACHED_USAGE = dict(USAGE, cachedContentTokenCount=24)\n+CACHED_OPENAI_USAGE = {\n+    \"prompt_tokens\": 31,\n+    \"completion_tokens\": 50,\n+    \"total_tokens\": 81,\n+    \"prompt_tokens_details\": {\"cached_tokens\": 24},\n+}\n+\n+\n+def test_sync_response_reports_cached_prompt_tokens():\n+    result = _bot()._handle_gemini_rest_sync_response(_SyncResponse(CACHED_USAGE), \"gemini-2.5-flash\")\n+\n+    assert result[\"usage\"] == CACHED_OPENAI_USAGE\n+\n+\n+def test_stream_final_chunk_reports_cached_prompt_tokens(monkeypatch):\n+    monkeypatch.setitem(USAGE, \"cachedContentTokenCount\", 24)\n+\n+    chunks = list(_bot()._handle_gemini_rest_stream_response(_StreamResponse(), \"gemini-2.5-flash\"))\n+\n+    assert chunks[-1][\"usage\"] == CACHED_OPENAI_USAGE"
+  }
+ ],
+ "test_files": [
+  "tests/test_gemini_usage_thoughts_tokens.py"
+ ]
+}

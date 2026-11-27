@@ -1,0 +1,26 @@
+{
+ "repo": "NPC-Worldwide/npcpy",
+ "number": 389,
+ "url": "https://github.com/NPC-Worldwide/npcpy/pull/389",
+ "title": "fix(skills): recognize frontmatter delimiters on their own lines",
+ "merged_at": "2026-11-27T05:47:49Z",
+ "files": [
+  {
+   "filename": "npcpy/npc_compiler.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 5,
+   "patch": "@@ -946,11 +946,8 @@ def _parse_skill_md(path):\n     with open(path, 'r', encoding='utf-8') as f:\n         content = f.read()\n \n-    if not content.startswith('---'):\n-        return None\n-\n-    parts = content.split('---', 2)\n-    if len(parts) < 3:\n+    parts = re.split(r'^---[ \\t]*\\r?$', content, maxsplit=2, flags=re.MULTILINE)\n+    if len(parts) < 3 or parts[0]:\n         return None\n \n     frontmatter = yaml.safe_load(parts[1])"
+  },
+  {
+   "filename": "tests/test_mcp_and_skills.py",
+   "status": "modified",
+   "additions": 30,
+   "deletions": 1,
+   "patch": "@@ -1,6 +1,8 @@\n \"\"\"Tests for MCP server integration and skills functionality.\"\"\"\n \n import asyncio\n+import base64\n+import json\n import os\n import tempfile\n import shutil\n@@ -10,7 +12,10 @@\n import pytest\n from pathlib import Path\n \n-from npcpy.npc_compiler import NPC, Jinx, Team, _parse_skill_md, _compile_skill_to_jinx\n+from npcpy.npc_compiler import (\n+    NPC, Jinx, Team, _parse_skill_md, _compile_skill_to_jinx,\n+    load_jinxes_from_directory,\n+)\n \n \n class TestSkillParsing:\n@@ -42,6 +47,30 @@ def test_parse_skill_md_basic(self, tmp_path):\n         assert 'section-two' in result['sections']\n         assert 'Content for section one' in result['sections']['section-one']\n \n+    def test_load_skill_with_inline_frontmatter_delimiter(self, tmp_path):\n+        skill_dir = tmp_path / \"test-skill\"\n+        skill_dir.mkdir()\n+        (skill_dir / \"SKILL.md\").write_text(\n+            '---\\n'\n+            'name: test-skill\\n'\n+            'description: \"draft --- final\"\\n'\n+            '---\\n'\n+            '\\n'\n+            '## details\\n'\n+            'Draft instructions.\\n'\n+            '---\\n'\n+            'Final instructions.\\n',\n+            encoding=\"utf-8\",\n+        )\n+\n+        jinx, = load_jinxes_from_directory(str(tmp_path))\n+        assert jinx.jinx_name == \"test-skill\"\n+        step = jinx._raw_steps[0]\n+        assert step[\"skill_description\"] == \"draft --- final\"\n+        assert json.loads(base64.b64decode(step[\"sections\"])) == {\n+            \"details\": \"Draft instructions.\\n---\\nFinal instructions.\",\n+        }\n+\n     def test_parse_skill_md_missing_frontmatter(self, tmp_path):\n         \"\"\"Test parsing fails gracefully without proper frontmatter.\"\"\"\n         skill_content = \"\"\"# No Frontmatter Skill"
+  }
+ ],
+ "test_files": [
+  "tests/test_mcp_and_skills.py"
+ ]
+}

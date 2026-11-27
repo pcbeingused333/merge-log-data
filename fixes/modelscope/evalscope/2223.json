@@ -1,0 +1,61 @@
+{
+ "repo": "modelscope/evalscope",
+ "number": 2223,
+ "url": "https://github.com/modelscope/evalscope/pull/2223",
+ "title": "fix(agent): report cached tokens in the bridge client's usage convention",
+ "merged_at": "2026-11-27T07:25:34Z",
+ "files": [
+  {
+   "filename": "evalscope/agent/external/bridge/_sse_common.py",
+   "status": "modified",
+   "additions": 21,
+   "deletions": 0,
+   "patch": "@@ -8,6 +8,8 @@\n \n from typing import List\n \n+from evalscope.api.model import ModelUsage\n+\n #: Max characters per text/reasoning delta frame.\n TEXT_CHUNK = 48\n \n@@ -24,3 +26,22 @@ def iter_chunks(text: str, max_len: int) -> List[str]:\n     \"\"\"Slice ``text`` into ``max_len`` segments; always yields at least one\n     entry (an empty string when ``text`` is empty).\"\"\"\n     return [text[i : i + max_len] for i in range(0, len(text), max_len)] or ['']\n+\n+\n+def prompt_tokens(usage: ModelUsage) -> int:\n+    \"\"\"Input tokens including cached ones (the OpenAI and Gemini convention).\n+\n+    Providers disagree on ``ModelUsage.input_tokens``: Anthropic leaves cache\n+    reads and writes out of it, OpenAI-compatible ones count them in. Only the\n+    former adds up to ``total_tokens`` once the cache counts are included.\n+    \"\"\"\n+    cached = (usage.input_tokens_cache_read or 0) + (usage.input_tokens_cache_write or 0)\n+    if cached and usage.input_tokens + cached + usage.output_tokens == usage.total_tokens:\n+        return usage.input_tokens + cached\n+    return usage.input_tokens\n+\n+\n+def uncached_input_tokens(usage: ModelUsage) -> int:\n+    \"\"\"Input tokens excluding cached ones (the Anthropic convention).\"\"\"\n+    cached = (usage.input_tokens_cache_read or 0) + (usage.input_tokens_cache_write or 0)\n+    return max(prompt_tokens(usage) - cached, 0)"
+  },
+  {
+   "filename": "evalscope/agent/external/bridge/sse_openai.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -26,7 +26,7 @@\n from evalscope.api.model import ModelOutput\n from evalscope.api.tool import ToolCall\n \n-from ._sse_common import PING_INTERVAL_S, TEXT_CHUNK, TOOL_INPUT_CHUNK, iter_chunks\n+from ._sse_common import PING_INTERVAL_S, TEXT_CHUNK, TOOL_INPUT_CHUNK, iter_chunks, prompt_tokens\n from .translate_openai import _split_text_and_reasoning, openai_finish_reason, unpack_openai_tool_call\n \n \n@@ -120,7 +120,7 @@ async def stream_openai_response(\n     if include_usage:\n         usage = output.usage\n         final['usage'] = {\n-            'prompt_tokens': usage.input_tokens if usage else 0,\n+            'prompt_tokens': prompt_tokens(usage) if usage else 0,\n             'completion_tokens': usage.output_tokens if usage else 0,\n             'total_tokens': usage.total_tokens if usage else 0,\n         }"
+  },
+  {
+   "filename": "evalscope/agent/external/bridge/translate_anthropic.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -20,6 +20,8 @@\n from evalscope.api.model import ModelOutput\n from evalscope.api.tool import ToolCall, ToolCallError, ToolFunction, ToolInfo, ToolParams\n \n+from ._sse_common import uncached_input_tokens\n+\n \n def unpack_tool_call(tool_call: Any) -> Tuple[str, Dict[str, Any]]:\n     \"\"\"Return ``(name, arguments)`` for a :class:`ToolCall`.\n@@ -276,7 +278,7 @@ def anthropic_stop_reason(output: ModelOutput) -> str:\n \n def anthropic_usage_payload(usage: Any) -> Dict[str, Any]:\n     payload: Dict[str, Any] = {\n-        'input_tokens': usage.input_tokens if usage else 0,\n+        'input_tokens': uncached_input_tokens(usage) if usage else 0,\n         'output_tokens': usage.output_tokens if usage else 0,\n     }\n     if usage and usage.input_tokens_cache_write is not None:"
+  },
+  {
+   "filename": "evalscope/agent/external/bridge/translate_gemini.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -26,6 +26,8 @@\n from evalscope.api.model import GenerateConfig, ModelOutput\n from evalscope.api.tool import ToolCall, ToolChoice, ToolFunction, ToolInfo, ToolParams\n \n+from ._sse_common import prompt_tokens\n+\n # -- Request → ChatMessage translation --\n \n \n@@ -283,7 +285,7 @@ def model_output_to_gemini_response(\n             }\n         ],\n         'usageMetadata': {\n-            'promptTokenCount': usage.input_tokens if usage else 0,\n+            'promptTokenCount': prompt_tokens(usage) if usage else 0,\n             'candidatesTokenCount': usage.output_tokens if usage else 0,\n             'totalTokenCount': usage.total_tokens if usage else 0,\n         },"
+  },
+  {
+   "filename": "evalscope/agent/external/bridge/translate_openai.py",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 1,
+   "patch": "@@ -28,6 +28,8 @@\n from evalscope.api.model import ModelOutput\n from evalscope.api.tool import ToolCall, ToolChoice, ToolFunction, ToolInfo, ToolParams\n \n+from ._sse_common import prompt_tokens\n+\n \n def openai_request_to_messages(body: Dict[str, Any]) -> List[ChatMessage]:\n     \"\"\"Convert an OpenAI Chat Completions request body to ``ChatMessage[]``.\n@@ -226,7 +228,7 @@ def model_output_to_openai_response(\n             }\n         ],\n         'usage': {\n-            'prompt_tokens': usage.input_tokens if usage else 0,\n+            'prompt_tokens': prompt_tokens(usage) if usage else 0,\n             'completion_tokens': usage.output_tokens if usage else 0,\n             'total_tokens': usage.total_tokens if usage else 0,\n         },"
+  },
+  {
+   "filename": "evalscope/agent/external/bridge/translate_responses.py",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 1,
+   "patch": "@@ -38,6 +38,7 @@\n from evalscope.api.tool import ToolCall, ToolChoice, ToolFunction, ToolInfo\n from evalscope.utils.logger import get_logger\n \n+from ._sse_common import prompt_tokens\n from .translate_openai import (\n     _parse_tool_arguments,\n     _safe_tool_params,\n@@ -460,7 +461,7 @@ def model_output_to_responses_payload(\n         'model': request_model or output.model or '',\n         'output': output_items,\n         'usage': {\n-            'input_tokens': usage.input_tokens if usage else 0,\n+            'input_tokens': prompt_tokens(usage) if usage else 0,\n             'output_tokens': usage.output_tokens if usage else 0,\n             'total_tokens': usage.total_tokens if usage else 0,\n         },"
+  },
+  {
+   "filename": "tests/agent/external/test_bridge_usage_cache.py",
+   "status": "added",
+   "additions": 77,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,77 @@\n+\"\"\"Cached input tokens must be reported in the bridge client's own convention.\n+\n+OpenAI-style providers count cached tokens inside ``input_tokens``; Anthropic\n+reports them separately. The bridge has to convert between the two.\n+\"\"\"\n+\n+import asyncio\n+import json\n+\n+import pytest\n+\n+from evalscope.agent.external.bridge.sse_anthropic import stream_anthropic_response\n+from evalscope.agent.external.bridge.sse_openai import stream_openai_response\n+from evalscope.agent.external.bridge.translate_anthropic import anthropic_usage_payload\n+from evalscope.agent.external.bridge.translate_gemini import model_output_to_gemini_response\n+from evalscope.agent.external.bridge.translate_openai import model_output_to_openai_response\n+from evalscope.agent.external.bridge.translate_responses import model_output_to_responses_payload\n+from evalscope.api.model import ModelOutput, ModelUsage\n+\n+# 1000 prompt tokens, 800 read from cache (and, for the last case, 100 written).\n+OPENAI_STYLE = ModelUsage(input_tokens=1000, output_tokens=50, total_tokens=1050, input_tokens_cache_read=800)\n+ANTHROPIC_STYLE = ModelUsage(input_tokens=200, output_tokens=50, total_tokens=1050, input_tokens_cache_read=800)\n+ANTHROPIC_STYLE_WRITE = ModelUsage(\n+    input_tokens=100, output_tokens=50, total_tokens=1050, input_tokens_cache_read=800, input_tokens_cache_write=100\n+)\n+NO_CACHE = ModelUsage(input_tokens=1000, output_tokens=50, total_tokens=1050)\n+# Some OpenAI-compatible providers omit completion_tokens.\n+NO_COMPLETION_COUNT = ModelUsage(input_tokens=1000, output_tokens=0, total_tokens=1200, input_tokens_cache_read=800)\n+\n+\n+@pytest.mark.parametrize(\n+    'usage, uncached',\n+    [(OPENAI_STYLE, 200), (ANTHROPIC_STYLE, 200), (ANTHROPIC_STYLE_WRITE, 100), (NO_CACHE, 1000)],\n+)\n+def test_anthropic_client_gets_uncached_input_tokens(usage: ModelUsage, uncached: int) -> None:\n+    payload = anthropic_usage_payload(usage)\n+\n+    assert payload['input_tokens'] == uncached\n+    assert payload.get('cache_read_input_tokens') == usage.input_tokens_cache_read\n+    assert payload.get('cache_creation_input_tokens') == usage.input_tokens_cache_write\n+\n+\n+@pytest.mark.parametrize(\n+    'usage', [OPENAI_STYLE, ANTHROPIC_STYLE, ANTHROPIC_STYLE_WRITE, NO_CACHE, NO_COMPLETION_COUNT]\n+)\n+def test_openai_and_gemini_clients_get_full_prompt_tokens(usage: ModelUsage) -> None:\n+    output = ModelOutput.from_content('mock', 'hi')\n+    output.usage = usage\n+\n+    chat = model_output_to_openai_response(output, request_model='mock')['usage']\n+    responses = model_output_to_responses_payload(output, request_model='mock')['usage']\n+    gemini = model_output_to_gemini_response(output, request_model='mock')['usageMetadata']\n+\n+    assert chat['prompt_tokens'] == 1000\n+    assert responses['input_tokens'] == 1000\n+    assert gemini['promptTokenCount'] == 1000\n+\n+\n+def test_streaming_usage_follows_the_client_convention() -> None:\n+    async def collect(stream, usage: ModelUsage, **kwargs) -> list:\n+        output = ModelOutput.from_content('mock', 'hi')\n+        output.usage = usage\n+\n+        async def generate() -> ModelOutput:\n+            return output\n+\n+        task = asyncio.ensure_future(generate())\n+        frames = b''.join([frame async for frame in stream(task, request_model='mock', **kwargs)]).decode()\n+        data = [line[6:] for line in frames.splitlines() if line.startswith('data: {')]\n+        return [json.loads(item) for item in data]\n+\n+    chat = asyncio.run(collect(stream_openai_response, ANTHROPIC_STYLE, include_usage=True))\n+    anthropic = asyncio.run(collect(stream_anthropic_response, OPENAI_STYLE))\n+\n+    assert chat[-1]['usage']['prompt_tokens'] == 1000\n+    delta = next(event for event in anthropic if event.get('type') == 'message_delta')\n+    assert delta['usage']['input_tokens'] == 200"
+  }
+ ],
+ "test_files": [
+  "tests/agent/external/test_bridge_usage_cache.py"
+ ]
+}

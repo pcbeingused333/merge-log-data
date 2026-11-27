@@ -1,0 +1,86 @@
+{
+ "repo": "dagucloud/dagu",
+ "number": 4243,
+ "url": "https://github.com/dagucloud/dagu/pull/4243",
+ "title": "Fail streaming chat on an error chunk",
+ "merged_at": "2026-11-27T03:02:40Z",
+ "files": [
+  {
+   "filename": "internal/llm/providers/gemini/gemini.go",
+   "status": "modified",
+   "additions": 8,
+   "deletions": 0,
+   "patch": "@@ -525,6 +525,13 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, event\n \t\t\tcontinue\n \t\t}\n \n+\t\t// A failure after the status was sent arrives as an error chunk\n+\t\t// that ends the stream.\n+\t\tif err := llm.StreamError(providerName, chunk.Error); err != nil {\n+\t\t\tevents <- llm.StreamEvent{Error: err, Done: true}\n+\t\t\treturn\n+\t\t}\n+\n \t\t// Capture usage if present\n \t\tif chunk.UsageMetadata != nil {\n \t\t\tchunkUsage := chunk.UsageMetadata.llm()\n@@ -658,6 +665,7 @@ type responsePart struct {\n }\n \n type generateContentResponse struct {\n+\tError      json.RawMessage `json:\"error,omitempty\"`\n \tCandidates []struct {\n \t\tContent struct {\n \t\t\tParts []responsePart `json:\"parts\"`"
+  },
+  {
+   "filename": "internal/llm/providers/gemini/gemini_test.go",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -704,3 +704,27 @@ func TestStreamResponse_Usage(t *testing.T) {\n \trequire.NotNil(t, usage)\n \tassert.Equal(t, llm.Usage{PromptTokens: 50, CompletionTokens: 15, TotalTokens: 65, CachedPromptTokens: 20, ReasoningTokens: 5}, *usage)\n }\n+\n+// An error sent after the 200 status must fail the stream, even when text has\n+// already arrived.\n+func TestStreamResponse_Error(t *testing.T) {\n+\tt.Parallel()\n+\n+\tstream := `data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"partial\"}]}}]}` + \"\\n\\n\" +\n+\t\t`data: {\"error\":{\"code\":503,\"message\":\"upstream overloaded\"}}` + \"\\n\\n\"\n+\n+\tprovider := &Provider{}\n+\tevents := make(chan llm.StreamEvent)\n+\tgo provider.streamResponse(context.Background(), io.NopCloser(strings.NewReader(stream)), events)\n+\n+\tvar got []llm.StreamEvent\n+\tfor event := range events {\n+\t\tgot = append(got, event)\n+\t}\n+\n+\trequire.Len(t, got, 2)\n+\tassert.Equal(t, \"partial\", got[0].Delta)\n+\tassert.True(t, got[1].Done)\n+\trequire.ErrorContains(t, got[1].Error, \"upstream overloaded\")\n+\tassert.True(t, llm.IsRetryable(got[1].Error))\n+}"
+  },
+  {
+   "filename": "internal/llm/providers/local/local.go",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 4,
+   "patch": "@@ -255,6 +255,13 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, event\n \t\t\tcontinue\n \t\t}\n \n+\t\t// A failure after the status was sent arrives as an error chunk\n+\t\t// that ends the stream.\n+\t\tif err := llm.StreamError(providerName, chunk.Error); err != nil {\n+\t\t\tevents <- llm.StreamEvent{Error: err, Done: true}\n+\t\t\treturn\n+\t\t}\n+\n \t\t// Capture usage if present\n \t\tif chunk.Usage != nil {\n \t\t\tchunkUsage := chunk.Usage.LLM()\n@@ -346,10 +353,11 @@ type chatCompletionResponse struct {\n }\n \n type streamChunk struct {\n-\tID      string `json:\"id\"`\n-\tObject  string `json:\"object\"`\n-\tCreated int64  `json:\"created\"`\n-\tModel   string `json:\"model\"`\n+\tError   json.RawMessage `json:\"error,omitempty\"`\n+\tID      string          `json:\"id\"`\n+\tObject  string          `json:\"object\"`\n+\tCreated int64           `json:\"created\"`\n+\tModel   string          `json:\"model\"`\n \tChoices []struct {\n \t\tIndex int `json:\"index\"`\n \t\tDelta struct {"
+  },
+  {
+   "filename": "internal/llm/providers/local/local_test.go",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -4,7 +4,10 @@\n package local\n \n import (\n+\t\"context\"\n \t\"encoding/json\"\n+\t\"io\"\n+\t\"strings\"\n \t\"testing\"\n \n \t\"github.com/dagucloud/dagu/v2/internal/llm\"\n@@ -43,3 +46,27 @@ func TestBuildRequestBody_StreamOptions(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+// An error sent after the 200 status must fail the stream, even when text has\n+// already arrived.\n+func TestStreamResponse_Error(t *testing.T) {\n+\tt.Parallel()\n+\n+\tstream := `data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}` + \"\\n\\n\" +\n+\t\t`data: {\"error\":{\"code\":503,\"message\":\"upstream overloaded\"}}` + \"\\n\\n\"\n+\n+\tprovider := &Provider{}\n+\tevents := make(chan llm.StreamEvent)\n+\tgo provider.streamResponse(context.Background(), io.NopCloser(strings.NewReader(stream)), events)\n+\n+\tvar got []llm.StreamEvent\n+\tfor event := range events {\n+\t\tgot = append(got, event)\n+\t}\n+\n+\trequire.Len(t, got, 2)\n+\tassert.Equal(t, \"partial\", got[0].Delta)\n+\tassert.True(t, got[1].Done)\n+\trequire.ErrorContains(t, got[1].Error, \"upstream overloaded\")\n+\tassert.True(t, llm.IsRetryable(got[1].Error))\n+}"
+  },
+  {
+   "filename": "internal/llm/providers/openai/openai.go",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 4,
+   "patch": "@@ -278,6 +278,13 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, event\n \t\t\tcontinue\n \t\t}\n \n+\t\t// A failure after the status was sent arrives as an error chunk\n+\t\t// that ends the stream.\n+\t\tif err := llm.StreamError(providerName, chunk.Error); err != nil {\n+\t\t\tevents <- llm.StreamEvent{Error: err, Done: true}\n+\t\t\treturn\n+\t\t}\n+\n \t\t// Capture usage if present\n \t\tif chunk.Usage != nil {\n \t\t\tchunkUsage := chunk.Usage.LLM()\n@@ -381,10 +388,11 @@ type responseMessage struct {\n }\n \n type streamChunk struct {\n-\tID      string `json:\"id\"`\n-\tObject  string `json:\"object\"`\n-\tCreated int64  `json:\"created\"`\n-\tModel   string `json:\"model\"`\n+\tError   json.RawMessage `json:\"error,omitempty\"`\n+\tID      string          `json:\"id\"`\n+\tObject  string          `json:\"object\"`\n+\tCreated int64           `json:\"created\"`\n+\tModel   string          `json:\"model\"`\n \tChoices []struct {\n \t\tIndex int `json:\"index\"`\n \t\tDelta struct {"
+  },
+  {
+   "filename": "internal/llm/providers/openai/openai_test.go",
+   "status": "modified",
+   "additions": 24,
+   "deletions": 0,
+   "patch": "@@ -42,6 +42,30 @@ func TestStreamResponse_LargeEvent(t *testing.T) {\n \trequire.Equal(t, []string{big}, deltas)\n }\n \n+// An error sent after the 200 status must fail the stream, even when text has\n+// already arrived.\n+func TestStreamResponse_Error(t *testing.T) {\n+\tt.Parallel()\n+\n+\tstream := `data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}` + \"\\n\\n\" +\n+\t\t`data: {\"error\":{\"code\":503,\"message\":\"upstream overloaded\"}}` + \"\\n\\n\"\n+\n+\tprovider := &Provider{}\n+\tevents := make(chan llm.StreamEvent)\n+\tgo provider.streamResponse(context.Background(), io.NopCloser(strings.NewReader(stream)), events)\n+\n+\tvar got []llm.StreamEvent\n+\tfor event := range events {\n+\t\tgot = append(got, event)\n+\t}\n+\n+\trequire.Len(t, got, 2)\n+\tassert.Equal(t, \"partial\", got[0].Delta)\n+\tassert.True(t, got[1].Done)\n+\trequire.ErrorContains(t, got[1].Error, \"upstream overloaded\")\n+\tassert.True(t, llm.IsRetryable(got[1].Error))\n+}\n+\n // Reasoning effort passes through, except that an unset effort is medium\n // and max becomes xhigh.\n func TestBuildRequestBody_ReasoningEffort(t *testing.T) {"
+  },
+  {
+   "filename": "internal/llm/providers/zai/zai.go",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 4,
+   "patch": "@@ -256,6 +256,13 @@ func (p *Provider) streamResponse(ctx context.Context, body io.ReadCloser, event\n \t\t\tcontinue\n \t\t}\n \n+\t\t// A failure after the status was sent arrives as an error chunk\n+\t\t// that ends the stream.\n+\t\tif err := llm.StreamError(providerName, chunk.Error); err != nil {\n+\t\t\tevents <- llm.StreamEvent{Error: err, Done: true}\n+\t\t\treturn\n+\t\t}\n+\n \t\t// Capture usage if present\n \t\tif chunk.Usage != nil {\n \t\t\tchunkUsage := chunk.Usage.LLM()\n@@ -379,10 +386,11 @@ type responseMessage struct {\n }\n \n type streamChunk struct {\n-\tID      string `json:\"id\"`\n-\tObject  string `json:\"object\"`\n-\tCreated int64  `json:\"created\"`\n-\tModel   string `json:\"model\"`\n+\tError   json.RawMessage `json:\"error,omitempty\"`\n+\tID      string          `json:\"id\"`\n+\tObject  string          `json:\"object\"`\n+\tCreated int64           `json:\"created\"`\n+\tModel   string          `json:\"model\"`\n \tChoices []struct {\n \t\tIndex int `json:\"index\"`\n \t\tDelta struct {"
+  },
+  {
+   "filename": "internal/llm/providers/zai/zai_test.go",
+   "status": "modified",
+   "additions": 27,
+   "deletions": 0,
+   "patch": "@@ -4,7 +4,10 @@\n package zai\n \n import (\n+\t\"context\"\n \t\"encoding/json\"\n+\t\"io\"\n+\t\"strings\"\n \t\"testing\"\n \n \t\"github.com/dagucloud/dagu/v2/internal/llm\"\n@@ -47,3 +50,27 @@ func TestBuildRequestBody_Thinking(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+// An error sent after the 200 status must fail the stream, even when text has\n+// already arrived.\n+func TestStreamResponse_Error(t *testing.T) {\n+\tt.Parallel()\n+\n+\tstream := `data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}` + \"\\n\\n\" +\n+\t\t`data: {\"error\":{\"code\":503,\"message\":\"upstream overloaded\"}}` + \"\\n\\n\"\n+\n+\tprovider := &Provider{}\n+\tevents := make(chan llm.StreamEvent)\n+\tgo provider.streamResponse(context.Background(), io.NopCloser(strings.NewReader(stream)), events)\n+\n+\tvar got []llm.StreamEvent\n+\tfor event := range events {\n+\t\tgot = append(got, event)\n+\t}\n+\n+\trequire.Len(t, got, 2)\n+\tassert.Equal(t, \"partial\", got[0].Delta)\n+\tassert.True(t, got[1].Done)\n+\trequire.ErrorContains(t, got[1].Error, \"upstream overloaded\")\n+\tassert.True(t, llm.IsRetryable(got[1].Error))\n+}"
+  },
+  {
+   "filename": "internal/llm/stream_error.go",
+   "status": "added",
+   "additions": 44,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,44 @@\n+// Copyright (C) 2026 Yota Hamada\n+// SPDX-License-Identifier: GPL-3.0-or-later\n+\n+package llm\n+\n+import (\n+\t\"encoding/json\"\n+\t\"net/http\"\n+)\n+\n+// StreamError converts the \"error\" field of a stream chunk to an error. It\n+// returns nil when the chunk carries no error. The field is an object with a\n+// message and, for some servers, a numeric HTTP status code, or a bare string.\n+// An error without a numeric status code is retryable.\n+func StreamError(provider string, raw json.RawMessage) error {\n+\tswitch string(raw) {\n+\tcase \"\", \"null\", `\"\"`:\n+\t\treturn nil\n+\t}\n+\n+\tvar message string\n+\tvar status int\n+\tif json.Unmarshal(raw, &message) != nil {\n+\t\tvar detail struct {\n+\t\t\tCode    any    `json:\"code\"`\n+\t\t\tMessage string `json:\"message\"`\n+\t\t}\n+\t\t_ = json.Unmarshal(raw, &detail)\n+\t\tmessage = detail.Message\n+\t\tif code, ok := detail.Code.(float64); ok && code >= http.StatusBadRequest && code < 600 {\n+\t\t\tstatus = int(code)\n+\t\t}\n+\t}\n+\tif message == \"\" {\n+\t\tmessage = string(raw)\n+\t}\n+\tapiErr := NewAPIError(provider, status, message)\n+\tif status == 0 {\n+\t\t// The provider failed after accepting the request, so a failure\n+\t\t// it does not classify is treated as transient.\n+\t\tapiErr.Retryable = true\n+\t}\n+\treturn apiErr\n+}"
+  },
+  {
+   "filename": "internal/llm/stream_error_test.go",
+   "status": "added",
+   "additions": 35,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,35 @@\n+// Copyright (C) 2026 Yota Hamada\n+// SPDX-License-Identifier: GPL-3.0-or-later\n+\n+package llm_test\n+\n+import (\n+\t\"encoding/json\"\n+\t\"testing\"\n+\n+\t\"github.com/dagucloud/dagu/v2/internal/llm\"\n+\t\"github.com/stretchr/testify/assert\"\n+)\n+\n+func TestStreamError(t *testing.T) {\n+\tt.Parallel()\n+\n+\tfor _, raw := range []string{\"\", \"null\", `\"\"`} {\n+\t\tassert.NoError(t, llm.StreamError(\"openai\", json.RawMessage(raw)), \"raw %q\", raw)\n+\t}\n+\n+\t// OpenAI sends string codes, and some local servers send a bare string.\n+\t// Without a numeric status, the error is retried.\n+\tfor provider, raw := range map[string]string{\n+\t\t\"openai\": `{\"code\":\"server_error\",\"message\":\"boom\"}`,\n+\t\t\"local\":  `\"boom\"`,\n+\t} {\n+\t\terr := llm.StreamError(provider, json.RawMessage(raw))\n+\t\tassert.EqualError(t, err, llm.NewAPIError(provider, 0, \"boom\").Error())\n+\t\tassert.True(t, llm.IsRetryable(err), \"raw %s\", raw)\n+\t}\n+\n+\t// A numeric client error code is not retried.\n+\tassert.False(t, llm.IsRetryable(\n+\t\tllm.StreamError(\"gemini\", json.RawMessage(`{\"code\":400,\"message\":\"bad\"}`))))\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/llm/providers/gemini/gemini_test.go",
+  "internal/llm/providers/local/local_test.go",
+  "internal/llm/providers/openai/openai_test.go",
+  "internal/llm/providers/zai/zai_test.go",
+  "internal/llm/stream_error_test.go"
+ ]
+}

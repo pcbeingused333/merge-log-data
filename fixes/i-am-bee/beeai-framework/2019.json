@@ -1,0 +1,33 @@
+{
+ "repo": "i-am-bee/beeai-framework",
+ "number": 2019,
+ "url": "https://github.com/i-am-bee/beeai-framework/pull/2019",
+ "title": "fix(adapters): stream only the ReActAgent final answer from the TypeScript OpenAI server",
+ "merged_at": "2026-11-26T22:56:18Z",
+ "files": [
+  {
+   "filename": "typescript/src/adapters/openai/serve/api.test.ts",
+   "status": "modified",
+   "additions": 47,
+   "deletions": 0,
+   "patch": "@@ -8,6 +8,7 @@ import { EventEmitter } from \"node:events\";\n import { z } from \"zod\";\n import { ChatCompletionAPI } from \"@/adapters/openai/serve/api.js\";\n import { ResponsesAPI } from \"@/adapters/openai/serve/responses_api.js\";\n+import { ReActAgent } from \"@/agents/react/agent.js\";\n import { ToolCallingAgent } from \"@/agents/toolCalling/agent.js\";\n import { ChatModel, ChatModelInput, ChatModelOutput } from \"@/backend/chat.js\";\n import { AssistantMessage } from \"@/backend/message.js\";\n@@ -85,6 +86,25 @@ function createLeadAgent(): AnyAgent {\n   return lead as unknown as AnyAgent;\n }\n \n+/** Streams a ReAct-formatted reply, token by token. */\n+class ReActModel extends ScriptedModel {\n+  async *_createStream(_input: ChatModelInput, _ctx: GetRunContext<typeof this>) {\n+    for (const token of [\"Thought: I know this.\\n\", \"Final Answer: \", \"react done\"]) {\n+      yield new ChatModelOutput([new AssistantMessage(token)]);\n+    }\n+  }\n+}\n+\n+function createReActAgent(): AnyAgent {\n+  const agent = new ReActAgent({\n+    llm: new ReActModel(),\n+    tools: [],\n+    memory: new UnconstrainedMemory(),\n+  });\n+  vi.spyOn(agent, \"clone\").mockResolvedValue(agent);\n+  return agent as unknown as AnyAgent;\n+}\n+\n async function stream(api: ChatCompletionAPI | ResponsesAPI, body: object): Promise<string> {\n   const req = Object.assign(new EventEmitter(), { body, headers: {} });\n   const chunks: string[] = [];\n@@ -120,6 +140,33 @@ describe(\"OpenAI-compatible server streaming\", () => {\n     expect(deltas).toEqual([\"lead done\"]);\n   });\n \n+  it(\"streams only the final answer of a ReActAgent (chat completions)\", async () => {\n+    const api = new ChatCompletionAPI(async () => createReActAgent());\n+    const output = await stream(api, {\n+      model: \"react\",\n+      stream: true,\n+      messages: [{ role: \"user\", content: \"go\" }],\n+    });\n+    const deltas = output\n+      .split(\"\\n\\n\")\n+      .filter((line) => line.startsWith(\"data: {\"))\n+      .map((line) => JSON.parse(line.slice(\"data: \".length)).choices[0].delta.content)\n+      .filter(Boolean);\n+\n+    expect(deltas).toEqual([\"react done\"]);\n+  });\n+\n+  it(\"streams only the final answer of a ReActAgent (responses)\", async () => {\n+    const api = new ResponsesAPI(async () => createReActAgent());\n+    const output = await stream(api, { model: \"react\", stream: true, input: \"go\" });\n+    const deltas = output\n+      .split(\"\\n\\n\")\n+      .filter((event) => event.startsWith(\"event: response.output_text.delta\\n\"))\n+      .map((event) => JSON.parse(event.split(\"\\ndata: \")[1]).delta);\n+\n+    expect(deltas).toEqual([\"react done\"]);\n+  });\n+\n   it(\"streams only the lead agent's answer after a handoff (responses)\", async () => {\n     const api = new ResponsesAPI(async () => createLeadAgent());\n     const output = await stream(api, { model: \"lead\", stream: true, input: \"go\" });"
+  },
+  {
+   "filename": "typescript/src/adapters/openai/serve/api.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -67,15 +67,15 @@ export class ChatCompletionAPI {\n             .observe((emitter) => {\n               // Match all events — required because the emitter is typed as\n               // Emitter<unknown> at the AnyAgent abstraction. We emit text deltas\n-              // from \"update\" (ReActAgent incremental tokens) and from \"success\"\n+              // from \"update\" (ReActAgent's final answer, not its thoughts or tool steps) and from \"success\"\n               // (ToolCallingAgent emits only start/success, with the final answer\n               // in state.result). This keeps streaming working for both agents.\n               // Only this run's events: a sub-agent's answer (e.g. after a handoff) is not the reply.\n               emitter.match(\n                 \"*.*\",\n                 async (eventData: any, event) => {\n                   let delta: string | undefined;\n-                  if (event.name === \"update\") {\n+                  if (event.name === \"update\" && eventData?.update?.key === \"final_answer\") {\n                     delta = eventData?.update?.value;\n                   } else if (event.name === \"success\") {\n                     delta = eventData?.state?.result?.text;"
+  },
+  {
+   "filename": "typescript/src/adapters/openai/serve/responses_api.ts",
+   "status": "modified",
+   "additions": 2,
+   "deletions": 2,
+   "patch": "@@ -172,15 +172,15 @@ export class ResponsesAPI {\n             .observe((emitter) => {\n               // Match all events — required because the emitter is typed as\n               // Emitter<unknown> at the AnyAgent abstraction. We emit text deltas\n-              // from \"update\" (ReActAgent incremental tokens) and from \"success\"\n+              // from \"update\" (ReActAgent's final answer, not its thoughts or tool steps) and from \"success\"\n               // (ToolCallingAgent emits only start/success, with the final answer\n               // in state.result). This keeps streaming working for both agents.\n               // Only this run's events: a sub-agent's answer (e.g. after a handoff) is not the reply.\n               emitter.match(\n                 \"*.*\",\n                 async (data: any, event) => {\n                   let delta: string | undefined;\n-                  if (event.name === \"update\") {\n+                  if (event.name === \"update\" && data?.update?.key === \"final_answer\") {\n                     delta = data?.update?.value;\n                   } else if (event.name === \"success\") {\n                     delta = data?.state?.result?.text;"
+  }
+ ],
+ "test_files": [
+  "typescript/src/adapters/openai/serve/api.test.ts"
+ ]
+}

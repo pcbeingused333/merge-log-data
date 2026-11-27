@@ -1,0 +1,33 @@
+{
+ "repo": "Azure/azure-kusto-go",
+ "number": 380,
+ "url": "https://github.com/Azure/azure-kusto-go/pull/380",
+ "title": "fix(kql): write typed null literals for null values",
+ "merged_at": "2026-11-27T07:24:25Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0\n \n ### Fixed\n \n+- Null values added as query parameters or through the KQL builder are now written as typed null literals (such as `dynamic(null)` or `int(null)`). A null `Dynamic` was written as an empty `dynamic()`, and the other null types caused a panic.\n - KQL builders and query parameters now format negative timespans with a single leading sign and preserve the day component.\n \n ## [1.2.4] - 2026-11-26"
+  },
+  {
+   "filename": "azkustodata/kql/value.go",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 1,
+   "patch": "@@ -6,13 +6,24 @@ import (\n \t\"github.com/Azure/azure-kusto-go/azkustodata/value\"\n \t\"github.com/google/uuid\"\n \t\"github.com/shopspring/decimal\"\n+\t\"reflect\"\n \t\"time\"\n )\n \n+// isNull reports whether val is nil, including a nil pointer or nil slice boxed in an interface,\n+// which is how null Kusto values are returned by GetValue.\n+func isNull(val interface{}) bool {\n+\tif val == nil {\n+\t\treturn true\n+\t}\n+\trv := reflect.ValueOf(val)\n+\treturn (rv.Kind() == reflect.Ptr || rv.Kind() == reflect.Slice) && rv.IsNil()\n+}\n+\n func QuoteValue(v value.Kusto) string {\n \tval := v.GetValue()\n \tt := v.GetType()\n-\tif val == nil {\n+\tif isNull(val) {\n \t\treturn fmt.Sprintf(\"%v(null)\", t)\n \t}\n "
+  },
+  {
+   "filename": "azkustodata/kql/value_null_test.go",
+   "status": "added",
+   "additions": 32,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,32 @@\n+package kql\n+\n+import (\n+\t\"testing\"\n+\n+\t\"github.com/Azure/azure-kusto-go/azkustodata/value\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+func TestNullValueLiterals(t *testing.T) {\n+\ttests := []struct {\n+\t\tvalue value.Kusto\n+\t\twant  string\n+\t}{\n+\t\t{value.NewNullBool(), \"bool(null)\"},\n+\t\t{value.NewNullDateTime(), \"datetime(null)\"},\n+\t\t{value.NewNullDecimal(), \"decimal(null)\"},\n+\t\t{value.NewNullDynamic(), \"dynamic(null)\"},\n+\t\t{value.NewNullGUID(), \"guid(null)\"},\n+\t\t{value.NewNullInt(), \"int(null)\"},\n+\t\t{value.NewNullLong(), \"long(null)\"},\n+\t\t{value.NewNullReal(), \"real(null)\"},\n+\t\t{value.NewNullTimespan(), \"timespan(null)\"},\n+\t}\n+\tfor _, test := range tests {\n+\t\tt.Run(test.want, func(t *testing.T) {\n+\t\t\tparams := NewParameters().AddValue(\"p\", test.value).ToParameterCollection()\n+\t\t\trequire.Equal(t, map[string]string{\"p\": test.want}, params)\n+\t\t\trequire.Equal(t, test.want, New(\"\").AddValue(test.value).String())\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "azkustodata/kql/value_null_test.go"
+ ]
+}

@@ -27,6 +27,24 @@
    "state": "COMMENTED",
    "submitted_at": "2026-11-21T00:16:53Z",
    "body": "⚠️ **Gate recommendation: approve with a non-blocking risk.**\n\nOrdinary dictionary writes retain fields first seen in later rows, while partial merges preserve columns omitted from the whole batch. Targeted regression and sync/async ingestion checks pass on this revision.\n\nThe [blob-row limitation](https://github.com/lancedb/lancedb/pull/4813#discussion_r4455649438) is unchanged: later ordinary fields can still be lost during blob conversion. Supplying nullable keys in the first row avoids the loss. [#4485](https://github.com/lancedb/lancedb/pull/4485) remains an open alternative covering blob conversion as well.\n"
+  },
+  {
+   "role": "member",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-27T06:51:04Z",
+   "body": "With an explicit `note: string not null` field, `create_table` rejects `[{\"id\": 1}, {\"id\": 2, \"note\": \"new\"}]` on the base. On this revision it succeeds, stores null for the first row, and reopens with `note` marked nullable. Later appends can then omit `note` too.\n\nPlease preserve the supplied field’s nullability during schema alignment. A regression test should reject the missing non-null value and check that a valid create still has a non-nullable `note` after reopen. Missing nullable fields and columns omitted from an entire partial-update batch should keep their current behavior."
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-27T07:55:31Z",
+   "body": "⚠️ **Gate recommendation: approve with a non-blocking risk.**\n\nVerified the [author’s update](https://github.com/lancedb/lancedb/pull/4813#issuecomment-7212836780): `create_table` now rejects the reported missing non-nullable `note` value, and a valid create preserves that constraint after reopening. Ordinary dictionary writes retain later fields, and partial merges preserve columns omitted from the whole batch.\n\nPrimitive fixed-size-list children still follow Lance’s existing [schema normalization](https://github.com/lancedb/lancedb/pull/5036): their child field reopens as nullable. Preserving the input flag during alignment does not make that child constraint durable.\n\nThe [blob-row limitation](https://github.com/lancedb/lancedb/pull/4813#discussion_r4455649438) also remains unchanged: later ordinary fields can still disappear during blob conversion. Including nullable keys in the first row avoids that loss; [#4485](https://github.com/lancedb/lancedb/pull/4485) remains an open alternative covering blob conversion.\n"
+  },
+  {
+   "role": "member",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-27T08:12:25Z",
+   "body": "Thanks for fixing the top-level `note` constraint. A missing value is now rejected, and a valid table keeps `note` non-nullable after reopen.\n\n`3539268b` also rejects a valid null parent. Build an Arrow table from `[{\"profile\": {\"country\": \"CN\"}}, {\"profile\": None}]`, write and read it with `pyarrow.parquet`, then call `create_table` with an explicit nullable `profile` struct whose `country` field is `string not null`. The Parquet reader returns a null child slot beneath the null `profile`. The base and previous head write and reopen both rows. On this revision the Arrow cast rejects the masked slot before the native writer runs.\n\nPlease preserve the child constraint in the stored schema and enforce it only where `profile` is present. A regression test should round-trip the null `profile` case and reject a present `profile` with a null `country`."
   }
  ],
  "review_comments": [
@@ -37,5 +55,11 @@
    "body": "Rows with blob fields still bypass the new helper, so an ordinary field first supplied in a later row is silently lost. `_blob_input_to_arrow` builds its table with `pa.Table.from_pylist(rows)` before returning here; the ordinary `add` path also calls that conversion first. This behavior is unchanged from the base, but those inputs do not receive this fix.\n\nIncluding the nullable key in the first row (with `None` if needed) avoids the loss. The shared conversion in [#4485](https://github.com/lancedb/lancedb/pull/4485) covers this path as well.\n\n<details>\n<summary>Reproducer</summary>\n\n```python\nimport lancedb\nimport pyarrow as pa\n\ndb = lancedb.connect(\"memory://\")\nschema = pa.schema([\n    pa.field(\"id\", pa.int64()),\n    pa.field(\"note\", pa.string()),\n    lancedb.blob(\"payload\"),\n])\ntable = db.create_table(\"example\", schema=schema)\ntable.add([\n    {\"id\": 1, \"payload\": b\"a\"},\n    {\"id\": 2, \"payload\": b\"b\", \"note\": \"keep me\"},\n])\nassert table.to_arrow()[\"note\"].to_pylist() == [None, \"keep me\"]\n# Observed on this head: [None, None]\n```\n\n</details>"
   }
  ],
- "comments": []
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-27T07:48:24Z",
+   "body": "Fixed: schema alignment no longer relaxes a field declared non-nullable (inferred input fields are always nullable, and that flag was being copied over). `create_table` now rejects the missing value with \"Casting field 'note' with null values to non-nullable\", and a valid create keeps `note` non-nullable after reopen; the new test covers both. This applies to nested children too, while missing nullable fields and columns omitted from a whole partial-update batch behave as before.\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
 }

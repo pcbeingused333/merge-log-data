@@ -1,0 +1,33 @@
+{
+ "repo": "Azure/azure-kusto-go",
+ "number": 381,
+ "url": "https://github.com/Azure/azure-kusto-go/pull/381",
+ "title": "fix(kql): escape characters outside the BMP correctly in string literals",
+ "merged_at": "2026-11-27T07:37:36Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 1,
+   "deletions": 0,
+   "patch": "@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0\n \n ### Fixed\n \n+- KQL string literals and query parameters now escape characters outside the Basic Multilingual Plane (such as emoji) with the eight-digit `\\U` form, instead of a `\\u` escape that decoded to a different string.\n - Null values added as query parameters or through the KQL builder are now written as typed null literals (such as `dynamic(null)` or `int(null)`). A null `Dynamic` was written as an empty `dynamic()`, and the other null types caused a panic.\n - KQL builders and query parameters now format negative timespans with a single leading sign and preserve the day component.\n "
+  },
+  {
+   "filename": "azkustodata/kql/string_utils.go",
+   "status": "modified",
+   "additions": 3,
+   "deletions": 0,
+   "patch": "@@ -70,6 +70,9 @@ func QuoteString(value string, hidden bool) string {\n \t\tdefault:\n \t\t\tif !ShouldBeEscaped(c) {\n \t\t\t\tliteral.WriteString(string(c))\n+\t\t\t} else if c > 0xFFFF {\n+\t\t\t\t// \\u takes exactly four hex digits, so code points outside the BMP need the eight-digit \\U form.\n+\t\t\t\tliteral.WriteString(fmt.Sprintf(\"\\\\U%08x\", c))\n \t\t\t} else {\n \t\t\t\tliteral.WriteString(fmt.Sprintf(\"\\\\u%04x\", c))\n \t\t\t}"
+  },
+  {
+   "filename": "azkustodata/kql/string_utils_test.go",
+   "status": "added",
+   "additions": 32,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,32 @@\n+package kql\n+\n+import (\n+\t\"testing\"\n+\n+\t\"github.com/stretchr/testify/assert\"\n+)\n+\n+func TestQuoteStringUnicodeEscapes(t *testing.T) {\n+\tt.Parallel()\n+\n+\ttests := []struct {\n+\t\tname     string\n+\t\tvalue    string\n+\t\texpected string\n+\t}{\n+\t\t{\"BMP\", \"\\u65e5\", `\"\\u65e5\"`},\n+\t\t{\"last BMP code point\", \"\\uffff\", `\"\\uffff\"`},\n+\t\t{\"first supplementary code point\", \"\\U00010000\", `\"\\U00010000\"`},\n+\t\t{\"emoji\", \"a\\U0001f642b\", `\"a\\U0001f642b\"`},\n+\t\t{\"last code point\", \"\\U0010ffff\", `\"\\U0010ffff\"`},\n+\t}\n+\n+\tfor _, test := range tests {\n+\t\tt.Run(test.name, func(t *testing.T) {\n+\t\t\tassert.Equal(t, test.expected, QuoteString(test.value, false))\n+\t\t})\n+\t}\n+\n+\tassert.Equal(t, `\"\\U0001f642\"`, New(\"\").AddString(\"\\U0001f642\").String())\n+\tassert.Equal(t, `\"\\U0001f642\"`, NewParameters().AddString(\"s\", \"\\U0001f642\").ToParameterCollection()[\"s\"])\n+}"
+  }
+ ],
+ "test_files": [
+  "azkustodata/kql/string_utils_test.go"
+ ]
+}

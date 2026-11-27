@@ -1,0 +1,26 @@
+{
+ "repo": "modelscope/evalscope",
+ "number": 2222,
+ "url": "https://github.com/modelscope/evalscope/pull/2222",
+ "title": "fix(agent): raise the bridge request body limit above 1 MiB",
+ "merged_at": "2026-11-27T06:11:06Z",
+ "files": [
+  {
+   "filename": "evalscope/agent/external/bridge/server.py",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 1,
+   "patch": "@@ -69,6 +69,10 @@\n #: CLIs like Hermes may request very large values derived from context_length.\n _MAX_OPENAI_MAX_TOKENS_CAP = 16384\n \n+#: Request body limit of the bridge. Agent requests carry the whole history, tool\n+#: output and base64 images, which easily exceeds aiohttp's 1 MiB default.\n+_MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024\n+\n #: Env names whose runtime is a Docker container — for these we rewrite\n #: the bridge's loopback host to ``host.docker.internal`` so the agent\n #: inside the container can reach the bridge on the host. Shared with\n@@ -252,7 +256,7 @@ async def _start_server(self) -> None:\n         if self._phase is not _ProxyPhase.STARTING:\n             raise _ProxyClosingError('ModelProxyServer is shutting down.')\n \n-        app = web.Application()\n+        app = web.Application(client_max_size=_MAX_REQUEST_BODY_BYTES)\n         app.router.add_post('/anthropic/v1/messages', self._handle_anthropic_messages)\n         app.router.add_post('/openai/v1/chat/completions', self._handle_openai_chat_completions)\n         app.router.add_post('/openai/v1/responses', self._handle_openai_responses)"
+  },
+  {
+   "filename": "tests/agent/external/test_openai_chat_round_trip.py",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -134,6 +134,22 @@ def _request():\n     assert set(body['usage']) == {'prompt_tokens', 'completion_tokens', 'total_tokens'}\n \n \n+def test_openai_chat_accepts_request_body_over_one_mib():\n+    \"\"\"Long agent histories exceed aiohttp's 1 MiB default body limit.\"\"\"\n+    expected = 'hello from mock'\n+\n+    async def _go():\n+        proxy = await ModelProxyServer.get_or_start()\n+        model = _build_model(_text_output(expected))\n+        async with proxy.trial_session(model=model, framework='mock') as session:\n+            url = f'{proxy.base_url}/openai/v1/chat/completions'\n+            payload = {'model': 'mock-openai', 'messages': [{'role': 'user', 'content': 'a' * (2 * 1024 * 1024)}]}\n+            return await asyncio.get_running_loop().run_in_executor(None, _post_json, url, payload, session.token)\n+\n+    body = AsyncioLoopRunner.run(_go())\n+    assert body['choices'][0]['message']['content'] == expected\n+\n+\n def test_openai_chat_completion_reasoning_content_json():\n     \"\"\"reasoning_content from a ContentReasoning block appears alongside content.\"\"\"\n "
+  }
+ ],
+ "test_files": [
+  "tests/agent/external/test_openai_chat_round_trip.py"
+ ]
+}

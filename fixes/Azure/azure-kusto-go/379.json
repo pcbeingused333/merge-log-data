@@ -1,0 +1,33 @@
+{
+ "repo": "Azure/azure-kusto-go",
+ "number": 379,
+ "url": "https://github.com/Azure/azure-kusto-go/pull/379",
+ "title": "fix(kql): format negative timespan literals",
+ "merged_at": "2026-11-27T07:13:32Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 0,
+   "patch": "@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0\n \n ## [Unreleased]\n \n+### Fixed\n+\n+- KQL builders and query parameters now format negative timespans with a single leading sign and preserve the day component.\n+\n ## [1.2.4] - 2026-11-26\n \n ### Added"
+  },
+  {
+   "filename": "azkustodata/kql/query_parameters_test.go",
+   "status": "modified",
+   "additions": 19,
+   "deletions": 0,
+   "patch": "@@ -101,3 +101,22 @@ func TestQueryParameters(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+func TestAddNegativeTimespan(t *testing.T) {\n+\ttests := []struct {\n+\t\tname     string\n+\t\tduration time.Duration\n+\t\tliteral  string\n+\t}{\n+\t\t{\"days and minutes\", -25*time.Hour - 2*time.Minute, \"timespan(-1.01:02:00.0000000)\"},\n+\t\t{\"fractional second\", -250 * time.Millisecond, \"timespan(-00:00:00.2500000)\"},\n+\t\t{\"minimum duration\", -1 << 63, \"timespan(-106751.23:47:16.8547758)\"},\n+\t}\n+\tfor _, test := range tests {\n+\t\tt.Run(test.name, func(t *testing.T) {\n+\t\t\tparameters := NewParameters().AddTimespan(\"offset\", test.duration)\n+\t\t\trequire.Equal(t, test.literal, parameters.ToParameterCollection()[\"offset\"])\n+\t\t\trequire.Equal(t, test.literal, New(\"\").AddTimespan(test.duration).String())\n+\t\t})\n+\t}\n+}"
+  },
+  {
+   "filename": "azkustodata/kql/string_utils.go",
+   "status": "modified",
+   "additions": 15,
+   "deletions": 12,
+   "patch": "@@ -90,24 +90,27 @@ func ShouldBeEscaped(c int32) bool {\n }\n \n func FormatTimespan(duration time.Duration) string {\n-\t// Calculate the number of days in the duration\n-\tdays := duration / (24 * time.Hour)\n-\n-\t// Calculate the remaining time after subtracting the days\n-\tremaining := duration - days*24*time.Hour\n+\tconst day = 24 * time.Hour\n+\tdays, remaining := duration/day, duration%day\n+\n+\tsign := \"\"\n+\tif duration < 0 {\n+\t\tsign = \"-\"\n+\t\t// Negate the parts separately because the minimum duration has no positive counterpart.\n+\t\tdays, remaining = -days, -remaining\n+\t}\n \n \tdaysStr := \"\"\n \tif days > 0 {\n \t\tdaysStr = fmt.Sprintf(\"%d.\", days)\n \t}\n \n-\t// Use the `fmt.Sprintf()` function to format the duration as a string\n-\treturn fmt.Sprintf(\"%s%02d:%02d:%02d.%07d\",\n-\t\tdaysStr,\n-\t\tint(remaining.Hours()),\n-\t\tint(remaining.Minutes())%60,\n-\t\tint(remaining.Seconds())%60,\n-\t\tint((remaining.Nanoseconds())%1000000000/100))\n+\treturn fmt.Sprintf(\"%s%s%02d:%02d:%02d.%07d\",\n+\t\tsign, daysStr,\n+\t\tremaining/time.Hour,\n+\t\tremaining/time.Minute%60,\n+\t\tremaining/time.Second%60,\n+\t\tremaining%time.Second/(100*time.Nanosecond))\n }\n \n func FormatDatetime(datetime time.Time) string {"
+  }
+ ],
+ "test_files": [
+  "azkustodata/kql/query_parameters_test.go"
+ ]
+}

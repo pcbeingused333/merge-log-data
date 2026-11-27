@@ -15,6 +15,30 @@
    "state": "COMMENTED",
    "submitted_at": "2026-11-04T15:19:21Z",
    "body": "⚠️ **Gate recommendation: approve with a non-blocking risk.**\n\nThe batching fixes oversized requests with older Cohere SDKs and preserves embedding order. On current SDKs, it reduces bulk-ingestion throughput by serializing batches that the SDK already sends concurrently. Retaining SDK-managed batching where available would avoid that cost."
+  },
+  {
+   "role": "member",
+   "state": "DISMISSED",
+   "submitted_at": "2026-11-27T06:52:07Z",
+   "body": "The SDK version matters here. With 200 texts and a local HTTP endpoint enforcing the 96-text limit, `cohere==5.0.0` and `5.1.2` send one oversized request. Both `4.57` and `5.1.4` already send three concurrent batches, as does the locked `7.0.5`. A fallback for everything older than `5.1.4` would therefore serialize working `4.57` installations too.\n\nPlease restrict manual batching to clients that lack it. A test using the real SDK with a local transport can check request sizes and vector order on `5.1.2`, and preserve concurrent requests on a batching-capable release."
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-27T07:56:32Z",
+   "body": ""
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-27T07:56:43Z",
+   "body": "✅ **Gate recommendation: approve.**\n\nThe [author’s update](https://github.com/lancedb/lancedb/pull/4834#issuecomment-7212784414) addresses the earlier throughput concern: batching-capable SDKs receive the full input, and only clients without batching use 96-text chunks. Checks with Cohere 4.57, 5.0.0, 5.1.2, 5.1.3, 5.1.4, and 7.0.5 confirmed ordered results and preserved SDK concurrency where supported."
+  },
+  {
+   "role": "bot",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-27T08:35:08Z",
+   "body": "✅ **Gate recommendation: approve.**\n\nThe merged revision preserves SDK-managed concurrency and uses 96-text requests for clients without batching. Focused checks with Cohere 5.1.2 and 7.0.5 confirm request limits, vector order, and concurrency where supported. The custom-endpoint API v2 integration tests also pass."
   }
  ],
  "review_comments": [
@@ -23,7 +47,19 @@
    "path": "python/python/lancedb/embeddings/cohere.py",
    "created_at": "2026-11-04T15:19:21Z",
    "body": "This loop serializes requests that current Cohere SDKs already batch concurrently. With `cohere==7.0.5` (the version in `uv.lock`), the original single `client.embed` call already sends 200 texts as 96/96/8 using the SDK's executor; that behavior was added in [cohere-python#437](https://github.com/cohere-ai/cohere-python/pull/437). The new loop waits for each request before submitting the next, so large table ingestions lose that parallelism.\n\nThis is a non-blocking throughput risk. Letting batching-capable SDKs handle the full input, with a fallback for older versions that need manual batching, would preserve existing performance.\n\n<details><summary>Executed reproducer using the real SDK and an offline HTTP transport</summary>\n\nWith `cohere==7.0.5`, this test observes three concurrent requests with the base implementation, but only one on this head; the final assertion fails on this head. All 200 output embeddings are still correct. The sleep simulates endpoint latency; the test makes no network calls.\n\n```python\nimport json\nimport threading\nimport time\nfrom unittest.mock import patch\n\nimport cohere\nimport httpx\nfrom lancedb.embeddings.cohere import CohereEmbeddingFunction\n\n\ndef test_cohere_retains_sdk_batch_parallelism():\n    active = peak = 0\n    lock = threading.Lock()\n\n    def handle(request):\n        nonlocal active, peak\n        texts = json.loads(request.content)['texts']\n        assert len(texts) <= 96\n        with lock:\n            active += 1\n            peak = max(peak, active)\n        time.sleep(0.05)  # Simulate endpoint latency; no network requests.\n        with lock:\n            active -= 1\n        return httpx.Response(200, json={\n            'id': 'mock', 'response_type': 'embeddings_floats',\n            'texts': texts, 'embeddings': [[float(t)] for t in texts],\n        })\n\n    with httpx.Client(transport=httpx.MockTransport(handle)) as transport:\n        client = cohere.Client(api_key='offline-test-key', httpx_client=transport)\n        with patch.object(CohereEmbeddingFunction, '_init_client'), patch.object(CohereEmbeddingFunction, 'client', client):\n            result = CohereEmbeddingFunction.create().compute_source_embeddings([str(i) for i in range(200)])\n    assert result == [[float(i)] for i in range(200)]\n    assert peak > 1, f'Expected concurrent SDK batches, observed {peak}'\n```\n\n</details>"
+  },
+  {
+   "role": "bot",
+   "path": "python/python/lancedb/embeddings/cohere.py",
+   "created_at": "2026-11-27T07:56:32Z",
+   "body": "Fixed in [5fdb2ff](https://github.com/lancedb/lancedb/commit/5fdb2ff2714966bd39e2d51ea1cb06c99e45a812): batching-capable clients now receive the full input, preserving concurrent requests, while clients without batching still use 96-text chunks. Verified both paths with real Cohere SDKs, including the 4.x client.\n\n<!-- lance-gatekeeper-review-feedback:v2 agent=2f302aea154b08164004d52b8a47df72 root=PRRC_kwDOJDTTIs8AAAABCmXWAw head=5fdb2ff2714966bd39e2d51ea1cb06c99e45a812 action=addressed -->"
   }
  ],
- "comments": []
+ "comments": [
+  {
+   "role": "author",
+   "created_at": "2026-11-27T07:45:16Z",
+   "body": "Done: manual batching now only applies to clients that lack it. LanceDB passes the full input when the client has `batch_size` (4.x) or `embed` takes a `batching` argument, and sends chunks of 96 otherwise. I check the capability rather than the version, because the published 5.1.3 source already batches too.\n\nAdded a test that runs the installed SDK against a local `httpx.MockTransport` and checks request sizes, vector order and, on batching-capable releases, that the three requests are concurrent. It passes with 5.0.0, 5.1.2, 5.1.4 and 7.0.5 (the previous head fails the concurrency check on 5.1.4 and 7.0.5). It is skipped on 4.x, whose client does not accept an httpx transport.\n\n\nThis comment was drafted with Claude Code.\n"
+  }
+ ]
 }
