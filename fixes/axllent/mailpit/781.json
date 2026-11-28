@@ -1,0 +1,26 @@
+{
+ "repo": "axllent/mailpit",
+ "number": 781,
+ "url": "https://github.com/axllent/mailpit/pull/781",
+ "title": "Fix: Send the time zone when loading more search results in the sidebar",
+ "merged_at": "2026-11-28T04:41:08Z",
+ "files": [
+  {
+   "filename": "server/ui-src/views/MessageView.test.js",
+   "status": "added",
+   "additions": 41,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,41 @@\n+import assert from \"node:assert/strict\";\n+import { readFileSync } from \"node:fs\";\n+import test from \"node:test\";\n+import { runInNewContext } from \"node:vm\";\n+import { parse } from \"@vue/compiler-sfc\";\n+import { transform } from \"esbuild\";\n+\n+const { descriptor } = parse(readFileSync(new URL(\"./MessageView.vue\", import.meta.url), \"utf8\"));\n+const { code } = await transform(descriptor.script.content, { format: \"cjs\" });\n+\n+const sideNavRequest = (searching, timeZone) => {\n+\tconst mailbox = { searching, timeZone };\n+\tconst imports = {\n+\t\t\"../stores/mailbox\": { mailbox },\n+\t\t\"../stores/pagination\": { pagination: { limit: 50, defaultLimit: 50 } },\n+\t};\n+\tconst context = {\n+\t\tmodule: { exports: {} },\n+\t\trequire: (id) => imports[id] || { default: {} },\n+\t\tURLSearchParams,\n+\t};\n+\trunInNewContext(code, context);\n+\tconst instance = { resolve: (path) => path };\n+\tcontext.module.exports.default.methods.initLoadMoreAPIParams.call(instance);\n+\treturn { uri: instance.apiSideNavURI, params: instance.apiSideNavParams };\n+};\n+\n+for (const query of [\"before:2026-11-24\", \"after:2026-11-24\"]) {\n+\ttest(`sidebar search for ${query} sends the configured time zone`, () => {\n+\t\tconst { uri, params } = sideNavRequest(query, \"America/Los_Angeles\");\n+\t\tassert.equal(uri, \"/api/v1/search\");\n+\t\tassert.equal(params.get(\"query\"), query);\n+\t\tassert.equal(params.get(\"tz\"), \"America/Los_Angeles\");\n+\t});\n+}\n+\n+test(\"sidebar requests without a date filter do not send a time zone\", () => {\n+\tassert.equal(sideNavRequest(\"subject:test\", \"America/Los_Angeles\").params.has(\"tz\"), false);\n+\tassert.equal(sideNavRequest(false, \"America/Los_Angeles\").params.has(\"tz\"), false);\n+\tassert.equal(sideNavRequest(\"before:2026-11-24\", \"\").params.has(\"tz\"), false);\n+});"
+  },
+  {
+   "filename": "server/ui-src/views/MessageView.vue",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -335,6 +335,11 @@ export default {\n \t\t\tif (mailbox.searching) {\n \t\t\t\tapiURI = this.resolve(`/api/v1/search`);\n \t\t\t\tp.query = mailbox.searching;\n+\t\t\t\t// date filters are evaluated in the user's time zone, matching the search view\n+\t\t\t\tconst s = mailbox.searching;\n+\t\t\t\tif (mailbox.timeZone !== \"\" && (s.indexOf(\"after:\") !== -1 || s.indexOf(\"before:\") !== -1)) {\n+\t\t\t\t\tp.tz = mailbox.timeZone;\n+\t\t\t\t}\n \t\t\t}\n \n \t\t\tif (pagination.limit !== pagination.defaultLimit) {"
+  }
+ ],
+ "test_files": [
+  "server/ui-src/views/MessageView.test.js"
+ ]
+}

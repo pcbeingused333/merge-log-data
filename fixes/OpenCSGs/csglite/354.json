@@ -1,0 +1,26 @@
+{
+ "repo": "OpenCSGs/csglite",
+ "number": 354,
+ "url": "https://github.com/OpenCSGs/csglite/pull/354",
+ "title": "fix(server): keep truncation finish_reason on tool-call replies",
+ "merged_at": "2026-11-28T04:24:55Z",
+ "files": [
+  {
+   "filename": "internal/server/handlers_chat_tools.go",
+   "status": "modified",
+   "additions": 7,
+   "deletions": 1,
+   "patch": "@@ -515,13 +515,19 @@ func normalizeOpenAIToolResponse(resp api.OpenAIChatResponse, tools []api.Tool)\n \t\t}}\n \t\tmsg.FunctionCall = nil\n \t}\n-\tif len(msg.ToolCalls) > 0 {\n+\tif len(msg.ToolCalls) > 0 && !isCutOffFinishReason(choice.FinishReason) {\n \t\tfinishReason := \"tool_calls\"\n \t\tchoice.FinishReason = &finishReason\n \t}\n \treturn resp\n }\n \n+// isCutOffFinishReason reports whether the backend stopped before the reply was\n+// complete, in which case any tool call arguments may be partial.\n+func isCutOffFinishReason(reason *string) bool {\n+\treturn reason != nil && (*reason == \"length\" || *reason == \"content_filter\")\n+}\n+\n func synthesizeToolCallsFromContent(content interface{}, tools []api.Tool) ([]api.ToolCall, bool) {\n \tif len(tools) == 0 {\n \t\treturn nil, false"
+  },
+  {
+   "filename": "internal/server/tool_finish_reason_test.go",
+   "status": "added",
+   "additions": 63,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,63 @@\n+package server\n+\n+import (\n+\t\"net/http\"\n+\t\"net/http/httptest\"\n+\t\"strings\"\n+\t\"testing\"\n+\n+\t\"github.com/opencsgs/csglite/pkg/api\"\n+)\n+\n+func TestToolResponseKeepsTruncationFinishReason(t *testing.T) {\n+\ttests := []struct {\n+\t\tname         string\n+\t\tpath         string\n+\t\tfinishReason string\n+\t\tstream       bool\n+\t\twant         string\n+\t}{\n+\t\t{\"openai length\", \"/v1/chat/completions\", \"length\", false, `\"finish_reason\":\"length\"`},\n+\t\t{\"openai stream length\", \"/v1/chat/completions\", \"length\", true, `\"finish_reason\":\"length\"`},\n+\t\t{\"openai content filter\", \"/v1/chat/completions\", \"content_filter\", false, `\"finish_reason\":\"content_filter\"`},\n+\t\t{\"openai stop with tool calls\", \"/v1/chat/completions\", \"stop\", false, `\"finish_reason\":\"tool_calls\"`},\n+\t\t{\"anthropic length\", \"/v1/messages\", \"length\", false, `\"stop_reason\":\"max_tokens\"`},\n+\t}\n+\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\tengine := &fakeChatCompletionEngine{resp: api.OpenAIChatResponse{\n+\t\t\t\tID: \"chatcmpl-t\", Object: \"chat.completion\", Created: 1, Model: \"test/model\",\n+\t\t\t\tChoices: []api.OpenAIChoice{{\n+\t\t\t\t\tMessage: &api.Message{Role: \"assistant\", ToolCalls: []api.ToolCall{{\n+\t\t\t\t\t\tIndex: intPointer(0), ID: \"call_1\", Type: \"function\",\n+\t\t\t\t\t\tFunction: api.ToolFunction{Name: \"write_file\", Arguments: `{\"text\":\"abc`},\n+\t\t\t\t\t}}},\n+\t\t\t\t\tFinishReason: stringPointer(tt.finishReason),\n+\t\t\t\t}},\n+\t\t\t}}\n+\t\t\ts := newAnthropicProxyTestServer(t, engine)\n+\n+\t\t\ttool := `{\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"parameters\":{\"type\":\"object\"}}}`\n+\t\t\thandler := s.handleOpenAIChatCompletions\n+\t\t\tif tt.path == \"/v1/messages\" {\n+\t\t\t\ttool = `{\"name\":\"write_file\",\"input_schema\":{\"type\":\"object\"}}`\n+\t\t\t\thandler = s.handleAnthropicMessages\n+\t\t\t}\n+\t\t\tstream := \"false\"\n+\t\t\tif tt.stream {\n+\t\t\t\tstream = \"true\"\n+\t\t\t}\n+\t\t\tbody := `{\"model\":\"test/model\",\"max_tokens\":16,\"messages\":[{\"role\":\"user\",\"content\":\"write\"}],\"tools\":[` +\n+\t\t\t\ttool + `],\"stream\":` + stream + `}`\n+\t\t\trecorder := httptest.NewRecorder()\n+\t\t\thandler(recorder, httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(body)))\n+\t\t\tif recorder.Code != http.StatusOK {\n+\t\t\t\tt.Fatalf(\"status = %d body=%s\", recorder.Code, recorder.Body.String())\n+\t\t\t}\n+\t\t\tif got := recorder.Body.String(); !strings.Contains(got, tt.want) {\n+\t\t\t\tt.Fatalf(\"response missing %s:\\n%s\", tt.want, got)\n+\t\t\t}\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/server/tool_finish_reason_test.go"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "repo": "BlockRunAI/Franklin",
+ "number": 252,
+ "url": "https://github.com/BlockRunAI/Franklin/pull/252",
+ "title": "fix(proxy): read input_tokens from message_start in streaming usage",
+ "merged_at": "2026-11-27T23:12:58Z",
+ "files": [
+  {
+   "filename": "src/proxy/server.ts",
+   "status": "modified",
+   "additions": 26,
+   "deletions": 13,
+   "patch": "@@ -74,6 +74,31 @@ import { isTestFixtureModel } from '../stats/test-fixture.js';\n \n const DEFAULT_MAX_TOKENS = 4096;\n \n+/**\n+ * Pull token usage out of an accumulated SSE stream. Anthropic reports\n+ * input_tokens in `message_start` (under `message.usage`) and the final\n+ * output_tokens in `message_delta` (top-level `usage`); OpenAI-style chunks\n+ * carry a top-level `usage`. Read both shapes, keeping the last non-zero value.\n+ */\n+export function parseStreamUsage(sse: string): { inputTokens: number; outputTokens: number } {\n+  let outputTokens = 0;\n+  let inputTokens = 0;\n+  for (const line of sse.split('\\n')) {\n+    if (!line.startsWith('data: ')) continue;\n+    const json = line.slice(6).trim();\n+    if (json === '[DONE]') continue;\n+    try {\n+      const parsed = JSON.parse(json);\n+      const usages = [parsed.usage, parsed.message?.usage];\n+      for (const u of usages) {\n+        if (u?.output_tokens) outputTokens = u.output_tokens;\n+        if (u?.input_tokens) inputTokens = u.input_tokens;\n+      }\n+    } catch { /* skip malformed */ }\n+  }\n+  return { inputTokens, outputTokens };\n+}\n+\n /**\n  * Decide the `max_tokens` the proxy forwards upstream.\n  *\n@@ -760,19 +785,7 @@ export function createProxy(options: ProxyOptions): http.Server {\n                 // Record stats from streaming response\n                 if (isStreaming && fullResponse) {\n                   // Extract token usage from SSE stream by parsing message_delta events\n-                  let outputTokens = 0;\n-                  let inputTokens = 0;\n-                  // Find all data: lines and parse JSON to extract usage\n-                  for (const line of fullResponse.split('\\n')) {\n-                    if (!line.startsWith('data: ')) continue;\n-                    const json = line.slice(6).trim();\n-                    if (json === '[DONE]') continue;\n-                    try {\n-                      const parsed = JSON.parse(json);\n-                      if (parsed.usage?.output_tokens) outputTokens = parsed.usage.output_tokens;\n-                      if (parsed.usage?.input_tokens) inputTokens = parsed.usage.input_tokens;\n-                    } catch { /* skip malformed */ }\n-                  }\n+                  const { inputTokens, outputTokens } = parseStreamUsage(fullResponse);\n                   if (outputTokens > 0) {\n                     trackOutputTokens(finalModel, outputTokens);\n                     const latencyMs = Date.now() - requestStartTime;"
+  },
+  {
+   "filename": "test/local.mjs",
+   "status": "modified",
+   "additions": 12,
+   "deletions": 0,
+   "patch": "@@ -13195,3 +13195,15 @@ test('modalCreatePriceUsd bills a lifetime above 300 s hourly at any size, CPU i\n   assert.deepEqual(modalCreatePricing('T4', 8, undefined, 10), { priceUsd: 0.05, model: 'flat', flatFloor: true });\n   assert.deepEqual(modalCreatePricing('T4', 1, 1024, 300), { priceUsd: 0.05, model: 'flat' }, 'genuinely flat-eligible: no floor flag');\n });\n+\n+test('proxy streaming usage reads input_tokens from message_start', async () => {\n+  const { parseStreamUsage } = await import('../dist/proxy/server.js');\n+  const sse = [\n+    'event: message_start',\n+    'data: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"usage\":{\"input_tokens\":1234,\"output_tokens\":1}}}',\n+    'event: message_delta',\n+    'data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":56}}',\n+    'data: [DONE]',\n+  ].join('\\n');\n+  assert.deepEqual(parseStreamUsage(sse), { inputTokens: 1234, outputTokens: 56 });\n+});"
+  }
+ ],
+ "test_files": [
+  "test/local.mjs"
+ ]
+}

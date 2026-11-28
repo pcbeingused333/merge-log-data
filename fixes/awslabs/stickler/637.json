@@ -1,0 +1,33 @@
+{
+ "repo": "awslabs/stickler",
+ "number": 637,
+ "url": "https://github.com/awslabs/stickler/pull/637",
+ "title": "fix(636): export tuple fields as tuples in to_stickler_config()",
+ "merged_at": "2026-11-27T22:28:21Z",
+ "files": [
+  {
+   "filename": "CHANGELOG.md",
+   "status": "modified",
+   "additions": 5,
+   "deletions": 0,
+   "patch": "@@ -163,6 +163,11 @@ Each release links to full notes on the\n \n ### Fixed\n \n+- **`to_stickler_config()` exports a tuple field as a tuple.** It was written\n+  as `\"str\"`, so the model rebuilt by `model_from_json()` rejected the original\n+  value. Tuples of primitives keep their element types (`Tuple[float, float]`);\n+  others are written as `tuple`. `to_json_schema()` is unchanged.\n+\n - **`BBoxIoUComparator` on a list field scores the box, not its coordinates.**\n   A field holding one box as a list (`List[float]`, `Optional[List[float]]`,\n   `Sequence[float]`, bare `list`, or a JSON Schema `array` or config `list`"
+  },
+  {
+   "filename": "src/stickler/structured_object_evaluator/models/json_schema_field_converter.py",
+   "status": "modified",
+   "additions": 18,
+   "deletions": 0,
+   "patch": "@@ -170,6 +170,22 @@ def _stickler_mapping_type(annotation: Any) -> str:\n     return \"dict\"\n \n \n+def _stickler_tuple_type(annotation: Any) -> str:\n+    \"\"\"``Tuple[float, int]`` for a tuple of named primitives, else ``tuple``.\n+\n+    ``model_from_json`` resolves both spellings. It has none for ``...`` or for\n+    an element it cannot be handed by name, so those fall back to ``tuple``,\n+    which keeps the field a tuple and drops the length and element checks.\n+    \"\"\"\n+    names = [\n+        \"Any\" if arg is Any else PYTHON_TYPE_TO_STICKLER_TYPE.get(arg)\n+        for arg in get_args(annotation)\n+    ]\n+    if names and all(names):\n+        return f\"Tuple[{', '.join(names)}]\"\n+    return \"tuple\"\n+\n+\n class JsonSchemaFieldConverter:\n     \"\"\"Compatibility entry point for schema import and field export.\n \n@@ -295,6 +311,8 @@ def field_to_stickler_config(\n         # that could hold no mapping, including the `{}` its factory exports.\n         if ConfigurationHelper.is_mapping_annotation(field_type):\n             stickler_type = _stickler_mapping_type(field_type)\n+        elif field_type is tuple or get_origin(field_type) is tuple:\n+            stickler_type = _stickler_tuple_type(field_type)\n         else:\n             stickler_type = PYTHON_TYPE_TO_STICKLER_TYPE.get(field_type, \"str\")\n         field_config = {\"type\": stickler_type}"
+  },
+  {
+   "filename": "tests/structured_object_evaluator/test_tuple_config_export.py",
+   "status": "added",
+   "additions": 48,
+   "deletions": 0,
+   "patch": "@@ -0,0 +1,48 @@\n+\"\"\"A tuple field survives to_stickler_config() -> model_from_json() (#636).\"\"\"\n+\n+import json\n+from typing import Any, Optional, Tuple\n+\n+import pytest\n+\n+from stickler import BBoxIoUComparator, ComparableField, StructuredModel\n+\n+\n+@pytest.mark.parametrize(\n+    \"annotation, exported, value\",\n+    [\n+        (\n+            Tuple[float, float, float, float],\n+            \"Tuple[float, float, float, float]\",\n+            (0.0, 0.0, 10.0, 10.0),\n+        ),\n+        (tuple[str, int], \"Tuple[str, int]\", (\"a\", 1)),\n+        (Tuple[Any, bool], \"Tuple[Any, bool]\", ([1], True)),\n+        # No config spelling for these argument lists: stays a tuple.\n+        (Tuple[float, ...], \"tuple\", (1.0, 2.0)),\n+        (Tuple[Optional[int], int], \"tuple\", (None, 1)),\n+        (tuple, \"tuple\", (1, \"a\")),\n+    ],\n+)\n+def test_tuple_field_round_trips_through_config(annotation, exported, value):\n+    class Model(StructuredModel):\n+        item: annotation = ComparableField()\n+\n+    config = Model.to_stickler_config()\n+    assert config[\"fields\"][\"item\"][\"type\"] == exported\n+\n+    rebuilt = StructuredModel.model_from_json(json.loads(json.dumps(config)))\n+    assert rebuilt(item=value).item == value\n+\n+\n+def test_optional_tuple_box_keeps_its_comparator():\n+    class Model(StructuredModel):\n+        box: Optional[Tuple[float, float, float, float]] = ComparableField(\n+            default=None, comparator=BBoxIoUComparator(), threshold=0.5\n+        )\n+\n+    rebuilt = StructuredModel.model_from_json(Model.to_stickler_config())\n+    box = (0.0, 0.0, 10.0, 10.0)\n+\n+    assert rebuilt().box is None\n+    assert rebuilt(box=box).compare_with(rebuilt(box=box))[\"overall_score\"] == 1.0"
+  }
+ ],
+ "test_files": [
+  "tests/structured_object_evaluator/test_tuple_config_export.py"
+ ]
+}

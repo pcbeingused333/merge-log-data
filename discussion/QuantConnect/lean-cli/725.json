@@ -3,13 +3,91 @@
  "number": 725,
  "url": "https://github.com/QuantConnect/lean-cli/pull/725",
  "state": "open",
- "reviews": [],
- "review_comments": [],
+ "reviews": [
+  {
+   "role": "bot",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-27T22:31:47Z",
+   "body": "Requesting changes: the code looks right, but the change has no end-to-end run yet, and the tests don't check the case where the library check gets it wrong.\n\n**What I checked.** Both `--push` branches of `get_cloud_project` now go through `push_project`, the same as `lean cloud push --project`. A library that can't be pushed only gets a warning, and only a failed push of the project itself stops the command, as decided on #749. CI is green. I checked the skip against real API responses, using the released CLI and my own script. I don't run code from pull requests by outside contributors. Two libraries match their cloud copy on name, libraries, metadata and files, so both would be skipped: one the CLI pushed, and one created in the cloud and then pulled (CRLF, no final newline). `files/read` lists a nested library's `Library.py` under the same name with `isLibrary` set, so filtering those files out is needed.\n\n**1. No end-to-end run.** The description has only mocked tests, but both the skip and the warning depend on the real API. Please run these and put the outcomes in the description:\n- `lean cloud backtest <project> --push` with an unchanged library: the library isn't updated, and the backtest runs.\n- The same with a changed library: the library is pushed before the project, and the backtest runs the new library code.\n- The same with a changed library whose push fails: a warning, and the command goes on.\n\n**2. Tests skip the case that does harm.** If the check wrongly treats a changed library as unchanged, the cloud runs the old library code with no warning. Of the things that must force a push, the tests only cover changed file content. Please add tests where the files match but something else differs, such as a local file added or deleted, a changed library reference, or a changed description. Also, `test_get_cloud_project_push_warns_and_continues_when_changed_library_cannot_be_pushed` doesn't assert that the warning is logged.\n\nI set `risk:high`: the change alters what `lean cloud push --project` and every `--push` command write to the cloud for each referenced library, and there's no end-to-end run yet. The run above and the tests in item 2 are what would lower it.\n"
+  },
+  {
+   "role": "bot",
+   "state": "APPROVED",
+   "submitted_at": "2026-11-27T22:59:31Z",
+   "body": "Approving: both findings from my last review are resolved, and CI is green.\n\n- **End-to-end run:** the description now covers an unchanged library (skipped, and the backtest runs), a library in the form a pull writes (skipped), a changed library (pushed before the project, and the backtest runs the new code), and a library push that fails (a warning, the project is still pushed, and the command goes on). A real read-only refusal wasn't reproduced. That's fine: the skip returns before any write request, and a refused update goes through the same `except` in `_push_projects` as the forced failure.\n- **Tests for a wrong skip:** `test_get_cloud_project_push_pushes_library_whose_files_match_when_something_else_changed` covers a file added, a file deleted, a library reference removed, a changed description and changed parameters. Each case needs its own part of `_is_cloud_project_up_to_date`. The warning test now asserts the exact warning.\n\nI changed the label from `risk:high` to `risk:low`. The change is small and easy to revert: about 70 lines in `PushManager`, `CloudProjectManager` and `pull_manager`. `--push` now pushes the way `lean cloud push --project` already does. The evidence is tests that run the real push path for every skip and push case, green CI, and an end-to-end run against the API."
+  },
+  {
+   "role": "bot",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-27T23:07:59Z",
+   "body": "Requesting changes before merging:\n\n- **Keep implicit library sync from changing cloud encryption, and make the comparison read-only.** The comparison should fetch only the library’s own files and recognize byte-identical CRLF files without a final newline.\n- **Keep a library failure from breaking an otherwise valid project push.** I verified that the base resolver uploads the project with the existing library ID when the library is symlinked outside the workspace or has an invalid nested reference. The new path can abort before the project update. I also reproduced a refused library update after a local rename: the directory is moved but the reference still points to the old path, so the project fails too.\n- **Verify removal of the last nested reference.** The new test observes `libraries=[]` at the mock, but that field is missing on the wire. The cloud keeps the removed reference.\n\n@Martin-Molinero **Decision needed:** Should `--push` stop before compiling when a library upload has already modified some cloud files?\n\nThe agreed warning-only behavior works for a refused write that leaves the library intact. The existing file-by-file fallback can also succeed on one file and fail on the next; the new path logs the warning and can continue into a backtest or live deploy with mixed library code.\n\n- **A. Stop on a known partial upload** (recommended): continue after refusals that didn't change the library, but don't run against a known partial upload. Distinguish those outcomes and test both.\n- **B. Continue after either outcome:** keep exact `lean cloud push` parity, but document that a run can use mixed library code and test that behavior explicitly.\n\nReply with the option you choose, or another way to go.\n\n`risk:high`: this can change a library’s encryption or leave a cloud run using a partially uploaded dependency. The end-to-end results in the description cover the normal sync path and a failure before any write; they don't cover these cases. Please include regression tests and report the end-to-end outcome for a write refusal and for the chosen partial-upload behavior."
+  }
+ ],
+ "review_comments": [
+  {
+   "role": "bot",
+   "path": "lean/components/cloud/push_manager.py",
+   "created_at": "2026-11-27T22:31:47Z",
+   "body": "When this returns True for a library that changed, the library is skipped and the cloud runs its old code with no warning. The tests only cover changed file content here. Please add cases where the files match but this must still return False: a local file added or deleted, a different `libraries` list, or a changed description."
+  },
+  {
+   "role": "bot",
+   "path": "tests/components/cloud/test_cloud_project_manager.py",
+   "created_at": "2026-11-27T22:31:47Z",
+   "body": "This checks the order of the updates but not the warning. Please also assert that `Cannot push 'Library/Python Library'` is logged: it's the only thing that tells users their library changes didn't reach the cloud."
+  },
+  {
+   "role": "bot",
+   "path": "lean/components/cloud/push_manager.py",
+   "created_at": "2026-11-27T23:07:59Z",
+   "body": "Please preserve the cloud library’s encryption state on an implicit push, even when the local copy differs. If it can’t be uploaded in that state, warn and leave the library untouched. Add a regression test for an encrypted cloud library with a differently configured local copy, asserting that no library write is sent."
+  },
+  {
+   "role": "bot",
+   "path": "lean/components/cloud/push_manager.py",
+   "created_at": "2026-11-27T23:07:59Z",
+   "body": "Please use a non-mutating listing scoped to this library’s own files. `files/read` includes transitive files by default; dropping them after the response still downloads 55 library file sets for a chain of 10 unchanged libraries, instead of 10. Send `includeLibraries=false` for this comparison, and verify that the read leaves cloud files untouched."
+  },
+  {
+   "role": "bot",
+   "path": "lean/components/cloud/push_manager.py",
+   "created_at": "2026-11-27T23:07:59Z",
+   "body": "An unchanged file with identical `# first\\r\\n# second` bytes on both sides still triggers an update. `Path.read_text()` converts the local CRLF to LF without adding a final newline, so it matches neither raw cloud content nor the pull form (which adds a newline). Compare the cloud content using universal newlines before also checking the pull form, and test this exact-copy case."
+  },
+  {
+   "role": "bot",
+   "path": "lean/components/cloud/push_manager.py",
+   "created_at": "2026-11-27T23:07:59Z",
+   "body": "Treat errors in dependency discovery and path formatting as library warnings when the main project can still resolve its references. A library with a valid cloud ID but a malformed nested reference raises during `get_project_libraries()` before the handler; a library symlinked outside the workspace raises at `relative_to()` before the handler too. The base resolver can push the main project in both cases. Keep per-library discovery errors isolated and use an absolute path fallback for logging."
+  },
+  {
+   "role": "bot",
+   "path": "lean/components/cloud/push_manager.py",
+   "created_at": "2026-11-27T23:07:59Z",
+   "body": "The new path is recorded only after `_push_project` returns. With local `Library/Café` pointing to an existing read-only cloud library, the local rename to `Library/Caf` happens first. The rejected library write leaves the project config pointing at the missing `Library/Café`; the main push then fails reading its cloud ID. Record the move even when the cloud update fails, or roll it back, and test refused updates after a rename."
+  },
+  {
+   "role": "bot",
+   "path": "tests/components/cloud/test_cloud_project_manager.py",
+   "created_at": "2026-11-27T23:07:59Z",
+   "body": "This removes the only nested reference. `ProjectClient.update` puts `libraries=[]` into form data, but `requests` omits empty lists and the API only reconciles libraries when that field is present. So the mock sees a push while the old reference remains. Please make removal of the last reference persist and cover it at the request boundary, not just by asserting the library project ID was updated."
+  }
+ ],
  "comments": [
   {
    "role": "bot",
    "created_at": "2026-11-17T20:19:37Z",
    "body": "Thanks @pcbeingused333. Your fix commit is cherry-picked, with your authorship, into #749. That PR adapts the test to the current resolver, which now follows a project directory renamed by the push (#734), and adds tests that run the real push path for a changed library and for a failed library upload."
+  },
+  {
+   "role": "member",
+   "created_at": "2026-11-27T21:54:50Z",
+   "body": "Thanks for this fix. I rebased the branch on master (which now includes #687) and added a commit (7b53b716) with the decision on the open question from #749, about libraries the user can only read:\n\n- **`--push` behaves like `lean cloud push`.** Both push branches of `get_cloud_project` now call the existing `PushManager.push_project`, which pushes the project's libraries the same way. A referenced library that can't be pushed gets the usual warning and the command goes on. Only a failed push of the project itself raises `PushFailedError`. `push_project` now returns whether the project was pushed. `push_projects` is unchanged.\n- **Skipping unchanged libraries**, from your second commit, with two fixes to the comparison:\n  - `files/read` lists the files of the library's own libraries (`isLibrary`) with its files, so a library that references other libraries never matched. Those entries are now left out.\n  - `lean cloud pull` writes cloud files with unix line endings and a final newline, so a pulled library that wasn't changed never matched its cloud copy. A local file now also matches when it is what a pull of the cloud copy writes. Pull's conversion moved into `get_pulled_file_content` in `pull_manager.py`, so both use the same code.\n- The rebase dropped the two merge commits. The only change they carried, the `push_and_rename` stub in the live deploy test, is in the new commit. It now patches `push_project`.\n\nNew tests in `test_cloud_project_manager.py`, through the real push path:\n- a library whose cloud copy is the pulled form of the local files is skipped\n- a library whose own libraries are listed with its files is skipped\n- a changed library that can't be pushed only warns, and the project is still pushed\n- a project that can't be pushed after its libraries still raises\n\nEach of the skip and warning tests fails when its fix is reverted. Full suite: 2949 passed, 75 skipped, 0 failed. `static_analysis.py` passes.\n"
+  },
+  {
+   "role": "member",
+   "created_at": "2026-11-27T22:42:57Z",
+   "body": "Thanks for the review. Both points are addressed in 5c106f1c and the description.\n\n**1. End-to-end run.** I ran it from this branch against the real API. The full table is in the description's \"End-to-end\" section:\n- Unchanged library: `lean cloud backtest <project> --push` logged `'Library/LeanCli725E2ELib' is already up to date in the cloud, not pushing it`, and the backtest ran with the library's `v1`.\n- Also unchanged, in the pulled form: I rewrote the cloud file the way the web IDE stores it (CRLF, no final newline) and ran `lean cloud pull`. The next push skipped the library, and the cloud file kept its web IDE form.\n- Changed library: the library was pushed `[1/2]` before the project `[2/2]`, and the backtest ran the new `v2`.\n- Changed library whose push fails: the `Cannot push` warning, the project still pushed, exit code 0, and the backtest ran with the library's cloud code (`v2`, not the local `v3`).\n\nOne limit: the account I used has a single user, so I couldn't get a real read-only share. I made the library push fail locally instead, by marking the library `encrypted` without a key, which the CLI refuses before sending any request. The failure goes through the same `except` in `PushManager` as a refused `projects/update`.\n\n**2. Tests for a wrong skip.** New `test_get_cloud_project_push_pushes_library_whose_files_match_when_something_else_changed`. The library's files match the cloud copy, and the library must still be pushed when, in turn:\n- a local file was added\n- a local file was deleted\n- a library reference was removed\n- the description changed\n- the parameters changed\n\nI removed each part of the check in `_is_cloud_project_up_to_date` in turn (metadata, library references, the set of file names), and the cases for that part fail. The warning test now asserts the exact `Cannot push 'Library/Python Library': You do not have write permission on this project.` warning, and fails when the warning isn't logged.\n"
   }
  ]
 }

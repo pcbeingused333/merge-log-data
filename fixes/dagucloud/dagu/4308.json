@@ -1,0 +1,26 @@
+{
+ "repo": "dagucloud/dagu",
+ "number": 4308,
+ "url": "https://github.com/dagucloud/dagu/pull/4308",
+ "title": "fix(runtime): report each inline step retry",
+ "merged_at": "2026-11-28T02:49:09Z",
+ "files": [
+  {
+   "filename": "internal/runtime/runner.go",
+   "status": "modified",
+   "additions": 4,
+   "deletions": 5,
+   "patch": "@@ -799,11 +799,10 @@ ExecRepeat: // repeat execution\n \t\t\t\t_ = os.Remove(stagingPath)\n \t\t\t\tstagingPath = \"\"\n \t\t\t}\n-\t\t\tif cont != nil {\n-\t\t\t\tcont.retried()\n-\t\t\t\tif cont.reportDue() {\n-\t\t\t\t\tr.report(ctx, progressCh, node)\n-\t\t\t\t}\n+\t\t\t// Persist the new retry count; both calls accept a nil cont.\n+\t\t\tcont.retried()\n+\t\t\tif cont.reportDue() {\n+\t\t\t\tr.report(ctx, progressCh, node)\n \t\t\t}\n \t\t\tcontinue ExecRepeat\n \t\t}"
+  },
+  {
+   "filename": "internal/runtime/runner_test.go",
+   "status": "modified",
+   "additions": 37,
+   "deletions": 0,
+   "patch": "@@ -5974,3 +5974,40 @@ func TestWaitStep(t *testing.T) {\n \t\tresult.assertNodeStatus(t, \"final\", ir.NodeNotStarted)\n \t})\n }\n+\n+// Each inline retry is reported, so that its count is persisted before the\n+// step finishes.\n+func TestRunner_ReportsEachRetry(t *testing.T) {\n+\tt.Parallel()\n+\n+\thelper := setupRunner(t)\n+\tplan := helper.newPlan(t, newStep(\"fail\",\n+\t\twithCommand(\"false\"),\n+\t\twithRetryPolicy(3, 0),\n+\t))\n+\tdag := &ir.DAG{Name: \"test_dag\", WorkingDir: plan.workDir}\n+\tlogFile := filepath.Join(helper.cfg.LogDir, dag.Name+\".log\")\n+\tctx := runtime.NewContext(helper.Context, dag, helper.cfg.DAGRunID, logFile)\n+\n+\tprogressCh := make(chan runtime.ProgressUpdate)\n+\tdrained := make(chan []int, 1)\n+\tgo func() {\n+\t\tvar counts []int\n+\t\tfor update := range progressCh {\n+\t\t\t// Read before the ack, while the runner waits for it.\n+\t\t\tif state := update.Node.State(); state.Status == ir.NodeRunning {\n+\t\t\t\tcounts = append(counts, state.RetryCount)\n+\t\t\t}\n+\t\t\tupdate.Ack(nil)\n+\t\t}\n+\t\tdrained <- counts\n+\t}()\n+\terr := helper.runner.Run(ctx, plan.Plan, progressCh)\n+\tclose(progressCh)\n+\n+\trequire.Error(t, err)\n+\tcounts := <-drained\n+\tfor retry := 1; retry <= 3; retry++ {\n+\t\trequire.Contains(t, counts, retry)\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/runtime/runner_test.go"
+ ]
+}

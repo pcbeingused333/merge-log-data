@@ -1,0 +1,26 @@
+{
+ "repo": "ENTERPILOT/GoModel",
+ "number": 1620,
+ "url": "https://github.com/ENTERPILOT/GoModel/pull/1620",
+ "title": "fix(gemini): forward seed on native generateContent requests",
+ "merged_at": "2026-11-27T23:02:01Z",
+ "files": [
+  {
+   "filename": "internal/providers/gemini/native.go",
+   "status": "modified",
+   "additions": 16,
+   "deletions": 0,
+   "patch": "@@ -6,6 +6,7 @@ import (\n \t\"fmt\"\n \t\"log/slog\"\n \t\"maps\"\n+\t\"math\"\n \t\"mime\"\n \t\"net/http\"\n \t\"net/url\"\n@@ -859,6 +860,7 @@ func geminiGenerationConfig(req *core.ChatRequest) map[string]any {\n \t\tcopyJSONNumber(req.ExtraFields.Lookup(\"top_k\"), cfg, \"topK\")\n \t\tcopyJSONNumber(req.ExtraFields.Lookup(\"candidate_count\"), cfg, \"candidateCount\")\n \t}\n+\tcopyGeminiSeed(req.ExtraFields.Lookup(\"seed\"), cfg)\n \t// presence_penalty and frequency_penalty are never forwarded: every\n \t// current generateContent model (Gemini 2.5, 3.x, 4, Gemma 4, the image\n \t// models) answers HTTP 400 \"Penalty is not enabled for this model\", and\n@@ -955,6 +957,20 @@ func copyJSONNumber(raw json.RawMessage, cfg map[string]any, key string) {\n \t}\n }\n \n+// copyGeminiSeed forwards seed as generationConfig.seed. Gemini declares it\n+// int32 and answers HTTP 400 for anything else, while OpenAI clients may send\n+// any integer, so a seed that is not a whole number in the int32 range is\n+// dropped rather than failing the request. Whole numbers written as 42.0 or\n+// 1e2 are accepted.\n+func copyGeminiSeed(raw json.RawMessage, cfg map[string]any) {\n+\ttext := strings.Trim(string(bytes.TrimSpace(raw)), `\"`)\n+\tseed, err := strconv.ParseFloat(text, 64)\n+\tif err != nil || seed != math.Trunc(seed) || seed < math.MinInt32 || seed > math.MaxInt32 {\n+\t\treturn\n+\t}\n+\tcfg[\"seed\"] = int32(seed)\n+}\n+\n // maxStopSequences is the longest stop list Gemini accepts, on the native\n // generateContent API and the OpenAI-compatible endpoint alike: a sixth entry\n // answers HTTP 400 \"the number of stop_sequences must not exceed 5\". A longer"
+  },
+  {
+   "filename": "internal/providers/gemini/native_sampling_test.go",
+   "status": "modified",
+   "additions": 60,
+   "deletions": 0,
+   "patch": "@@ -121,3 +121,63 @@ func TestGeminiGenerationConfig_CapsStopSequences(t *testing.T) {\n \t\t})\n \t}\n }\n+\n+// seed is part of generateContent's GenerationConfig and is not one of the\n+// sampling parameters Gemini 3 dropped, so it is forwarded for every model.\n+func TestGeminiGenerationConfig_ForwardsSeed(t *testing.T) {\n+\tfor _, model := range []string{\"gemini-2.5-flash\", \"gemini-3.8-flash\", \"gemma-4-31b-it\"} {\n+\t\tt.Run(model, func(t *testing.T) {\n+\t\t\tvar req core.ChatRequest\n+\t\t\tbody := fmt.Sprintf(`{\"model\":%q,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"seed\":7}`, model)\n+\t\t\trequire.NoError(t, json.Unmarshal([]byte(body), &req))\n+\n+\t\t\tcfg := geminiGenerationConfig(&req)\n+\n+\t\t\tassert.Equal(t, int32(7), cfg[\"seed\"])\n+\t\t})\n+\t}\n+}\n+\n+// Gemini's seed is int32; a seed it would answer HTTP 400 for is dropped.\n+func TestGeminiGenerationConfig_SeedRange(t *testing.T) {\n+\ttests := []struct {\n+\t\tseed string\n+\t\twant any\n+\t}{\n+\t\t{seed: `0`, want: int32(0)},\n+\t\t{seed: `-5`, want: int32(-5)},\n+\t\t{seed: `\"42\"`, want: int32(42)},\n+\t\t{seed: `2147483647`, want: int32(2147483647)},\n+\t\t{seed: `-2147483648`, want: int32(-2147483648)},\n+\t\t{seed: `42.0`, want: int32(42)},\n+\t\t{seed: `1e2`, want: int32(100)},\n+\t\t{seed: `2147483647.0`, want: int32(2147483647)},\n+\t\t{seed: `2147483648`},\n+\t\t{seed: `2147483647.5`},\n+\t\t{seed: `1e10`},\n+\t\t{seed: `1.5e0`},\n+\t\t{seed: `\"NaN\"`},\n+\t\t{seed: `\"Inf\"`},\n+\t\t{seed: `-2147483649`},\n+\t\t{seed: `9223372036854775807`},\n+\t\t{seed: `1.5`},\n+\t\t{seed: `\"abc\"`},\n+\t\t{seed: `null`},\n+\t\t{seed: `true`},\n+\t}\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.seed, func(t *testing.T) {\n+\t\t\tvar req core.ChatRequest\n+\t\t\tbody := `{\"model\":\"gemini-2.5-flash\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"seed\":` + tt.seed + `}`\n+\t\t\trequire.NoError(t, json.Unmarshal([]byte(body), &req))\n+\n+\t\t\tcfg := geminiGenerationConfig(&req)\n+\n+\t\t\tif tt.want == nil {\n+\t\t\t\tassert.NotContains(t, cfg, \"seed\")\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t\tassert.Equal(t, tt.want, cfg[\"seed\"])\n+\t\t})\n+\t}\n+}"
+  }
+ ],
+ "test_files": [
+  "internal/providers/gemini/native_sampling_test.go"
+ ]
+}

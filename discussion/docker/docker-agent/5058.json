@@ -15,6 +15,18 @@
    "state": "COMMENTED",
    "submitted_at": "2026-11-27T19:01:10Z",
    "body": ""
+  },
+  {
+   "role": "collaborator",
+   "state": "CHANGES_REQUESTED",
+   "submitted_at": "2026-11-27T22:10:30Z",
+   "body": "Thanks for fixing #5055. The SQLite test covers changing and reverting the model in the root session, plus saving a change made by a nested sub-agent. The remaining issue is keeping worktree-local model changes out of the parent session.\n\nPrior threads: #4720710449 is addressed: delegation now passes the root session explicitly instead of storing it in context."
+  },
+  {
+   "role": "author",
+   "state": "COMMENTED",
+   "submitted_at": "2026-11-28T01:51:30Z",
+   "body": ""
   }
  ],
  "review_comments": [
@@ -29,6 +41,18 @@
    "path": "pkg/runtime/model_picker.go",
    "created_at": "2026-11-27T19:01:10Z",
    "body": "Yes. I pushed a commit that drops the context value: `newSubSession` now links each sub-session to its root with `session.WithRootOf(parent)`, and `recordModelOverride` reads `sess.Root()`. The link is an unexported field on `Session`, so it is not persisted. If you'd rather not add it to `Session`, I'm happy to try another shape.\n\nThis comment was drafted with Claude Code.\n"
+  },
+  {
+   "role": "collaborator",
+   "path": "pkg/runtime/model_picker.go",
+   "created_at": "2026-11-27T22:10:29Z",
+   "body": "[blocking] The new root link lets an isolated worktree task update the parent’s saved model even when `RunAgent` is called directly, without a parent stream in the context. `runCollecting` runs the task on a separate runtime with a copied team (`agent_delegation.go:492–514`), so `revert_model` clears only the copy’s live override but deletes the parent’s saved override here. The parent keeps using its selected model until resume, then unexpectedly falls back to the default. Keep both `change_model` and `revert_model` local to the isolated runtime, and add a regression test that starts with a saved parent override and verifies it survives an isolated revert."
+  },
+  {
+   "role": "author",
+   "path": "pkg/runtime/model_picker.go",
+   "created_at": "2026-11-28T01:51:30Z",
+   "body": "Good catch. `change_model` and `revert_model` now record nothing when they run on an isolated runtime, so both stay local to the task. `TestBackgroundWorktreeModelSwitchStaysLocal` starts with a saved parent override, runs an isolated task through `RunAgent` that calls each tool, and checks the stored override is unchanged; both cases failed before the fix.\n\nThis comment was drafted with Claude Code.\n"
   }
  ],
  "comments": []
